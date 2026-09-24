@@ -36,6 +36,9 @@ const SH = 1024;
  * Probe block field map (byte offsets from PROBE), for hosts and the verify
  * op. u32 little-endian unless noted.
  */
+export /** mode-3 prediction scratch: the line's sprite X list (10 bytes) */
+const M3SPR = 0x11480;
+
 export const PROBE_FIELDS = {
   frames: 0, steps: 4, trapped: 8, trappc: 12, pc: 16,
   oamdmaCount: 20, oamdmaLastPage: 24,
@@ -103,7 +106,8 @@ function bigRingWat(big) {
     (i32.store offset=12 (local.get $tr) ${pair("h", "l")})
     (i32.store offset=16 (local.get $tr) ${pair("b", "c")})
     (i32.store offset=20 (local.get $tr) ${pair("d", "e")})
-    (i32.store offset=24 (local.get $tr) ${pair("a", "f")})`;
+    (i32.store offset=24 (local.get $tr) ${pair("a", "f")})
+    (i32.store offset=28 (local.get $tr) (global.get $abscc))`;
 }
 
 /** RAM-code provenance table base and the page count, given the arm count. */
@@ -121,7 +125,7 @@ export const BIGRING_MAX = 65536;
  * options.traceEntries: where the whole-frame instruction ring goes (above
  * everything gbOriginAndPages placed, so the default map is untouched) and
  * the page count with it. A u32 count of entries written at `cursor`, then
- * the entries (32 bytes): {pc, rombank, sp, hl, bc, de, a<<8|f}, written for
+ * the entries (32 bytes): {pc, rombank, sp, hl, bc, de, a<<8|f, clock}, written for
  * EVERY dispatched instruction, before the RAM interpreter takes the ones it
  * runs (the default ring records compiled arms only, so an HRAM routine such
  * as an OAM DMA wait loop is missing from it).
@@ -264,6 +268,501 @@ function stepWat(cgb) {
     (global.set $blanklcd (i32.const 1))
     (i32.const 0))
 
+  (global $m2done (mut i32) (i32.const 0))
+  ;; gambatte LCD statReg_ (the last STAT written) and the event model
+  (global $statreg (mut i32) (i32.const 0))
+  (global $tly (mut i32) (i32.const 0))
+  (global $tttn (mut i32) (i32.const 0))
+  (global $lyct (mut i32) (i32.const -1))
+  (global $lycr (mut i32) (i32.const 0))
+  (global $lycs (mut i32) (i32.const 0))
+  (global $lycrs (mut i32) (i32.const 0))
+  (global $lycss (mut i32) (i32.const 0))
+  (global $m2t (mut i32) (i32.const -1))
+  (global $m2s (mut i32) (i32.const 0))
+  (global $m1s (mut i32) (i32.const 0))
+  (global $m0s (mut i32) (i32.const 0))
+  (global $m0l (mut i32) (i32.const 0))
+  (global $m0arm (mut i32) (i32.const 0))
+  (global $m0next (mut i32) (i32.const 0))
+  (global $onet (mut i32) (i32.const -1))
+  (global $m0done (mut i32) (i32.const 1))
+  (global $hdmadone (mut i32) (i32.const 1))
+  ;; this line's mode-3 end (xpos 167) in video dots from the line start, and
+  ;; the HBlank STAT / HDMA event times in CPU cycles from the line start
+  (global $m0dot (mut i32) (i32.const 252))
+  (global $m0irqat (mut i32) (i32.const 0))
+  (global $hdmaat (mut i32) (i32.const 0))
+  (global $wemaster (mut i32) (i32.const 0))
+
+  ;; gambatte ppu.cpp's mode-3 PREDICTION for the current line: video
+  ;; cycles from the line start until the pixel pipeline reaches xpos
+  ;; \$target. m3StartLineCycle 83, then M3Start (SCX&7 + 1 - cgb), then
+  ;; M3Loop::Tile (one per pixel, +6 where the window starts, and the
+  ;; sprite fetch penalties of addSpriteCycles over the line's sprites in X
+  ;; order).
+  (func $m3predict (param $target i32) (result i32)
+    (local $lcdc i32) (local $scx7 i32) (local $c i32) (local $nwx i32) (local $wx i32)
+    (local $h i32) (local $n i32) (local $i i32) (local $y i32) (local $x i32) (local $j i32)
+    (local $first i32) (local $prev i32) (local $fno i32) (local $k i32)
+    (local.set $lcdc (i32.load8_u (i32.const ${IO + 0x40})))
+    (local.set $scx7 (i32.and (i32.load8_u (i32.const ${IO + 0x43})) (i32.const 7)))
+    (local.set $c (i32.add (i32.add (i32.const ${83 + 1}) (local.get $scx7)) (local.get $target)))
+    ${cgb ? '(local.set $c (i32.sub (local.get $c) (i32.const 1)))' : ''}
+    (local.set $nwx (i32.const 0xFF))
+    (local.set $wx (i32.load8_u (i32.const ${IO + 0x4B})))
+    (if (i32.and (i32.and (i32.lt_u (local.get $wx) (local.get $target))
+                          (i32.ne (i32.and (local.get $lcdc) (i32.const 0x20)) (i32.const 0)))
+                 (i32.and (i32.or (global.get $wemaster)
+                                  (i32.eq (i32.load8_u (i32.const ${IO + 0x4A})) (global.get $ln)))
+                          ${cgb ? '(i32.const 1)' : '(i32.ne (local.get $wx) (i32.const 166))'}))
+      (then (local.set $nwx (local.get $wx)) (local.set $c (i32.add (local.get $c) (i32.const 6)))))
+    ${cgb ? '' : '(if (i32.eqz (i32.and (local.get $lcdc) (i32.const 2))) (then (return (local.get $c))))'}
+    ;; the line's sprites: up to 10 in OAM order, stable-sorted by X
+    (local.set $h (if (result i32) (i32.and (local.get $lcdc) (i32.const 4)) (then (i32.const 16)) (else (i32.const 8))))
+    (local.set $i (i32.const 0))
+    (block $sd (loop $sl
+      (br_if $sd (i32.ge_u (local.get $i) (i32.const 40)))
+      (br_if $sd (i32.ge_u (local.get $n) (i32.const 10)))
+      (local.set $y (i32.load8_u (i32.add (i32.const ${OAM}) (i32.shl (local.get $i) (i32.const 2)))))
+      (if (i32.lt_u (i32.sub (global.get $ln) (i32.sub (local.get $y) (i32.const 16))) (local.get $h))
+        (then
+          (local.set $x (i32.load8_u (i32.add (i32.const ${OAM + 1}) (i32.shl (local.get $i) (i32.const 2)))))
+          ;; insertion: after every earlier entry with x <= this x
+          (local.set $j (local.get $n))
+          (block $id (loop $il
+            (br_if $id (i32.eqz (local.get $j)))
+            (br_if $id (i32.le_u (i32.load8_u (i32.add (i32.const ${M3SPR - 1}) (local.get $j))) (local.get $x)))
+            (i32.store8 (i32.add (i32.const ${M3SPR}) (local.get $j))
+              (i32.load8_u (i32.add (i32.const ${M3SPR - 1}) (local.get $j))))
+            (local.set $j (i32.sub (local.get $j) (i32.const 1)))
+            (br $il)))
+          (i32.store8 (i32.add (i32.const ${M3SPR}) (local.get $j)) (local.get $x))
+          (local.set $n (i32.add (local.get $n) (i32.const 1)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $sl)))
+    (if (i32.eqz (local.get $n)) (then (return (local.get $c))))
+    (local.set $first (i32.and (i32.sub (i32.const 8) (local.get $scx7)) (i32.const 7)))
+    (local.set $prev (i32.and (i32.sub (i32.const 0) (local.get $first)) (i32.const -8)))
+    (local.set $fno (if (result i32) (i32.lt_u (local.get $scx7) (i32.const 5)) (then (local.get $scx7)) (else (i32.const 5))))
+    (local.set $x (i32.load8_u (i32.const ${M3SPR})))
+    (if (i32.and (i32.lt_s (i32.add (local.get $fno) (local.get $x)) (i32.const 5))
+                 (i32.le_u (local.get $x) (local.get $nwx)))
+      (then (local.set $c (i32.add (local.get $c) (i32.sub (i32.const 11) (i32.add (local.get $fno) (local.get $x)))))
+            (local.set $k (i32.const 1))))
+    (if (i32.lt_s (local.get $nwx) (local.get $target))
+      (then
+        (local.set $k (call $m3spr (local.get $k) (local.get $n) (local.get $nwx) (local.get $first) (local.get $prev)))
+        (local.set $first (i32.add (local.get $nwx) (i32.const 1)))
+        (local.set $prev (i32.const 1))))
+    (local.set $k (call $m3spr (local.get $k) (local.get $n) (local.get $target) (local.get $first) (local.get $prev)))
+    (i32.add (local.get $c) (global.get $m3acc)))
+
+  (global $m3acc (mut i32) (i32.const 0))
+  ;; addSpriteCycles: sprites from $k with X <= $max; the penalties go to
+  ;; $m3acc (reset by $m3setup); returns the next sprite
+  (func $m3spr (param $k i32) (param $n i32) (param $max i32) (param $first i32) (param $prev i32) (result i32)
+    (local $x i32) (local $d i32) (local $tile i32) (local $c i32)
+    (block $d0 (loop $l0
+      (br_if $d0 (i32.ge_u (local.get $k) (local.get $n)))
+      (local.set $x (i32.load8_u (i32.add (i32.const ${M3SPR}) (local.get $k))))
+      (br_if $d0 (i32.gt_u (local.get $x) (local.get $max)))
+      (local.set $c (i32.const 6))
+      (local.set $d (i32.and (i32.sub (local.get $x) (local.get $first)) (i32.const 7)))
+      (local.set $tile (i32.and (i32.sub (local.get $x) (local.get $first)) (i32.const -8)))
+      (if (i32.and (i32.lt_u (local.get $d) (i32.const 5)) (i32.ne (local.get $tile) (local.get $prev)))
+        (then (local.set $c (i32.sub (i32.const 11) (local.get $d)))))
+      (local.set $prev (local.get $tile))
+      (global.set $m3acc (i32.add (global.get $m3acc) (local.get $c)))
+      (local.set $k (i32.add (local.get $k) (i32.const 1)))
+      (br $l0)))
+    (local.get $k))
+
+  ;; per visible line: the mode-0 time and the HBlank STAT / HDMA event times
+  (func $m3setup
+    (local $x166 i32)
+    (if (i32.or (i32.ge_u (global.get $ln) (i32.const 144))
+                (i32.eqz (i32.and (i32.load8_u (i32.const ${IO + 0x40})) (i32.const 0x80))))
+      (then (global.set $m0done (i32.const 1)) (global.set $hdmadone (i32.const 1))
+            (global.set $m0dot (i32.const 252)) (return)))
+    ;; weMaster: the window is live from the line where LY == WY (checked at
+    ;; the end of the previous line and after the LY change), from line 0 on
+    (if (i32.eqz (global.get $ln))
+      (then (global.set $wemaster (i32.and (i32.ne (i32.and (i32.load8_u (i32.const ${IO + 0x40})) (i32.const 0x20)) (i32.const 0))
+                                           (i32.eqz (i32.load8_u (i32.const ${IO + 0x4A}))))))
+      (else (if (i32.and (i32.ne (i32.and (i32.load8_u (i32.const ${IO + 0x40})) (i32.const 0x20)) (i32.const 0))
+                         (i32.or (i32.eq (i32.load8_u (i32.const ${IO + 0x4A})) (global.get $ln))
+                                 (i32.eq (i32.load8_u (i32.const ${IO + 0x4A})) (i32.sub (global.get $ln) (i32.const 1)))))
+              (then (global.set $wemaster (i32.const 1))))))
+    (global.set $m3acc (i32.const 0))
+    (global.set $m0dot (call $m3predict (i32.const 167)))
+    (global.set $m3acc (i32.const 0))
+    (local.set $x166 (call $m3predict (i32.const 166)))
+    ;; double speed: the PPU runs m2_ds_offset (3) video cycles behind LY
+    ;; (ppu.cpp: vcycs = videoCycles - ds * m2_ds_offset)
+    (global.set $m0dot (i32.add (global.get $m0dot) (i32.mul (global.get $speed) (i32.const 3))))
+    (local.set $x166 (i32.add (local.get $x166) (i32.mul (global.get $speed) (i32.const 3))))
+    (global.set $m0irqat (i32.add (i32.shl (local.get $x166) (global.get $speed))
+                                  (i32.sub (i32.const ${cgb ? 1 : 0}) (global.get $speed))))
+    (global.set $hdmaat (i32.add (i32.shl (global.get $m0dot) (global.get $speed))
+                                 (i32.sub (i32.const 1) (global.get $speed))))
+    (global.set $m0done (i32.const 0))
+    (global.set $m0arm (global.get $m0next))
+    (global.set $hdmadone (i32.const 0)))
+  (global $lyc0done (mut i32) (i32.const 0))
+
+  ;; STAT events that fall INSIDE a line (gambatte video.cpp):
+  ;; mode 2 for lines 1..143 four cycles before the line starts
+  ;; (mode2IrqSchedule, doMode2IrqEvent), and LYC=0 eight video cycles into
+  ;; line 153 (lyc_irq.cpp schedule). Checked after every instruction; a
+  ;; request is taken before the next instruction.
+  ;; ---- the LCD's STAT/LYC event model, ported from gambatte video.cpp,
+  ;; lyc_irq.cpp and m0_irq.h. Event times are ABSOLUTE ($abscc = gambatte's
+  ;; cycleCounter); the LY change is the cart's line start, so lytime =
+  ;; $abscc + $cyc. Latched registers ($lycr/$lycs, $m2s, $m1s, $m0s/$m0l)
+  ;; follow gambatte's latch rules for writes close to an event.
+  ;; DIS = never.
+
+  ;; LY and lytime as gambatte's LY counter has them at cycle $cc (past the
+  ;; cart's line end, LY has already advanced): LY returned, lytime in $tly
+  (func $lyat (param $cc i32) (result i32)
+    (local $ly i32)
+    (global.set $tly (i32.add (global.get $abscc) (global.get $cyc)))
+    (local.set $ly (global.get $ln))
+    (if (i32.ge_s (i32.sub (local.get $cc) (global.get $tly)) (i32.const 0))
+      (then
+        (global.set $tly (i32.add (global.get $tly) (global.get $linelen)))
+        (local.set $ly (i32.add (local.get $ly) (i32.const 1)))
+        (if (i32.ge_u (local.get $ly) (i32.const 154)) (then (local.set $ly (i32.const 0))))))
+    (local.get $ly))
+
+  ;; LyCounter::nextFrameCycle
+  (func $nfc (param $fc i32) (param $cc i32) (result i32)
+    (local $ly i32) (local $tmp i32)
+    (local.set $ly (call $lyat (local.get $cc)))
+    (local.set $tmp (i32.add (global.get $tly)
+      (i32.shl (i32.add (i32.mul (i32.sub (i32.const 153) (local.get $ly)) (i32.const 456)) (local.get $fc))
+               (global.get $speed))))
+    (if (i32.gt_u (i32.sub (local.get $tmp) (local.get $cc)) (i32.shl (i32.const 70224) (global.get $speed)))
+      (then (local.set $tmp (i32.sub (local.get $tmp) (i32.shl (i32.const 70224) (global.get $speed))))))
+    (local.get $tmp))
+
+  ;; lyc_irq.cpp schedule()
+  (func $lycsched (param $st i32) (param $lyc i32) (param $cc i32) (result i32)
+    (if (result i32) (i32.and (i32.ne (i32.and (local.get $st) (i32.const 0x40)) (i32.const 0))
+                              (i32.lt_u (local.get $lyc) (i32.const 154)))
+      (then (call $nfc (if (result i32) (local.get $lyc)
+                          (then (i32.mul (local.get $lyc) (i32.const 456)))
+                          (else (i32.const ${153 * 456 + 8})))
+                       (local.get $cc)))
+      (else (i32.const -1))))
+
+  (func $minu (param $a i32) (param $b i32) (result i32)
+    (if (result i32) (i32.lt_u (local.get $a) (local.get $b)) (then (local.get $a)) (else (local.get $b))))
+
+  ;; LycIrq::regChange
+  (func $lycregchange (param $st i32) (param $lyc i32) (param $cc i32)
+    (local $src i32) (local $d i32)
+    (local.set $src (call $lycsched (local.get $st) (local.get $lyc) (local.get $cc)))
+    (global.set $lycss (local.get $st))
+    (global.set $lycrs (local.get $lyc))
+    (global.set $lyct (call $minu (global.get $lyct) (local.get $src)))
+    (local.set $d (i32.sub (global.get $lyct) (local.get $cc)))
+    ${cgb ? `(if (i32.or (i32.gt_u (local.get $d) (i32.const 8))
+                (i32.and (i32.ne (local.get $src) (global.get $lyct))
+                         (i32.gt_u (local.get $d) (i32.sub (i32.const 4) (i32.shl (global.get $speed) (i32.const 2))))))
+      (then (global.set $lycr (local.get $lyc))))
+    (if (i32.gt_u (local.get $d) (i32.sub (i32.const 4) (i32.shl (global.get $speed) (i32.const 2))))
+      (then (global.set $lycs (local.get $st))))` : `(if (i32.or (i32.gt_u (local.get $d) (i32.const 4)) (i32.ne (local.get $src) (global.get $lyct)))
+      (then (global.set $lycr (local.get $lyc))))
+    (if (i32.or (i32.gt_u (local.get $d) (i32.const 4)) (i32.ne (global.get $lycr) (i32.const 0)))
+      (then (global.set $lycs (local.get $st))))
+    (global.set $lycs (i32.or (i32.and (global.get $lycs) (i32.const 0x40)) (i32.and (local.get $st) (i32.const 0xBF))))`})
+
+  ;; video.cpp mode2IrqSchedule
+  (func $m2sched (param $st i32) (param $cc i32) (result i32)
+    (local $ly i32) (local $next i32)
+    (if (i32.eqz (i32.and (local.get $st) (i32.const 0x20))) (then (return (i32.const -1))))
+    (local.set $ly (call $lyat (local.get $cc)))
+    (local.set $next (i32.sub (global.get $tly) (local.get $cc)))
+    (if (i32.or (i32.or (i32.ge_u (local.get $ly) (i32.const 143))
+                        (i32.and (i32.eq (local.get $ly) (i32.const 142)) (i32.le_u (local.get $next) (i32.const 4))))
+                (i32.ne (i32.and (local.get $st) (i32.const 0x08)) (i32.const 0)))
+      (then (local.set $next (i32.add (local.get $next)
+              (i32.mul (i32.sub (i32.const 153) (local.get $ly)) (global.get $linelen)))))
+      (else
+        (if (i32.le_u (local.get $next) (i32.const 4)) (then (local.set $next (i32.add (local.get $next) (global.get $linelen)))))
+        (local.set $next (i32.sub (local.get $next) (i32.const 4)))))
+    (i32.add (local.get $cc) (local.get $next)))
+
+  ;; (re)start every LCD event at LCD enable or power-on (lcdcChange,
+  ;; loadState): the latches take the written registers
+  (func $lcdevreset (param $cc i32) (param $enable i32)
+    (global.set $lycss (global.get $statreg))
+    (global.set $lycrs (i32.load8_u (i32.const ${IO + 0x45})))
+    (global.set $lycs (global.get $lycss))
+    (global.set $lycr (global.get $lycrs))
+    (global.set $m0s (global.get $statreg))
+    (global.set $m0l (global.get $lycr))
+    (global.set $m1s (global.get $statreg))
+    (global.set $m2s (global.get $statreg))
+    (if (i32.and (local.get $enable)
+          (i32.and (i32.eqz (global.get $lycr)) (i32.ne (i32.and (global.get $statreg) (i32.const 0x40)) (i32.const 0))))
+      (then (call $irq (i32.const 2))))
+    (global.set $lyct (call $minu (call $lycsched (global.get $lycs) (global.get $lycr) (local.get $cc))
+                                  (call $lycsched (global.get $lycss) (global.get $lycrs) (local.get $cc))))
+    (global.set $m2t (call $m2sched (global.get $statreg) (local.get $cc)))
+    (global.set $onet (i32.const -1)))
+
+  ;; the start of LY's line, and the mode-0 time, at cycle $cc (for the
+  ;; write handlers below): this line's predicted mode 0
+  (func $m0timeat (param $cc i32) (result i32)
+    (drop (call $lyat (local.get $cc)))
+    (i32.add (i32.sub (global.get $tly) (global.get $linelen)) (i32.shl (global.get $m0dot) (global.get $speed))))
+
+  ;; the pending mode-0 STAT event's time, or DIS
+  (func $m0evt (result i32)
+    (if (result i32) (i32.and (i32.eqz (global.get $m0done)) (global.get $m0arm))
+      (then (i32.add (i32.sub (i32.add (global.get $abscc) (global.get $cyc)) (global.get $linelen)) (global.get $m0irqat)))
+      (else (i32.const -1))))
+
+  ;; getLycCmpLy: LY for the LYC compare (153 compares as 0 after its first
+  ;; 8 cycles) -> returned; its time to the next change in $tttn
+  (func $lyccmp (param $cc i32) (result i32)
+    (local $ly i32)
+    (local.set $ly (call $lyat (local.get $cc)))
+    (global.set $tttn (i32.sub (global.get $tly) (local.get $cc)))
+    (if (i32.eq (local.get $ly) (i32.const 153))
+      (then
+        (if (i32.gt_s (i32.sub (global.get $tttn) (i32.shl (i32.const 448) (global.get $speed))) (i32.const 0))
+          (then (global.set $tttn (i32.sub (global.get $tttn) (i32.shl (i32.const 448) (global.get $speed)))))
+          (else (local.set $ly (i32.const 0))
+                (global.set $tttn (i32.add (global.get $tttn) (global.get $linelen)))))))
+    (local.get $ly))
+
+  ;; $FF41 written at $cc: LCD::lcdstatChange
+  (func $statwrite (param $data i32) (param $cc i32)
+    (local $old i32) (local $ttn i32) (local $ly i32) (local $cly i32) (local $lycp i32) (local $m1t i32) (local $irq i32)
+    (local.set $old (global.get $statreg))
+    (global.set $statreg (local.get $data))
+    (call $lycregchange (local.get $data) (global.get $lycrs) (local.get $cc))
+    (if (i32.and (i32.load8_u (i32.const ${IO + 0x40})) (i32.const 0x80))
+      (then
+        (local.set $ly (call $lyat (local.get $cc)))
+        (local.set $ttn (i32.sub (global.get $tly) (local.get $cc)))
+        (local.set $cly (call $lyccmp (local.get $cc)))
+        ${cgb ? `(if (i32.and (local.get $data) (i32.and (i32.xor (local.get $old) (i32.const -1)) (i32.const 0x78)))
+          (then
+            (local.set $lycp (i32.and (i32.eq (local.get $cly) (global.get $lycr))
+                                      (i32.gt_s (global.get $tttn) (i32.sub (i32.const 4) (i32.shl (global.get $speed) (i32.const 2))))))
+            (if (i32.eqz (i32.and (local.get $lycp) (i32.ne (i32.and (local.get $old) (i32.const 0x40)) (i32.const 0))))
+              (then
+                (if (i32.lt_u (local.get $ly) (i32.const 144))
+                  (then
+                    (if (i32.or (i32.lt_u (i32.add (local.get $cc) (i32.shl (global.get $speed) (i32.const 1))) (call $m0timeat (local.get $cc)))
+                                (i32.le_s (local.get $ttn) (i32.const 4)))
+                      (then (if (i32.and (local.get $lycp) (i32.ne (i32.and (local.get $data) (i32.const 0x40)) (i32.const 0)))
+                              (then (local.set $irq (i32.const 1)))))
+                      (else (if (i32.eqz (i32.and (local.get $old) (i32.const 0x08)))
+                              (then (if (i32.or (i32.ne (i32.and (local.get $data) (i32.const 0x08)) (i32.const 0))
+                                                (i32.and (local.get $lycp) (i32.ne (i32.and (local.get $data) (i32.const 0x40)) (i32.const 0))))
+                                      (then (local.set $irq (i32.const 1)))))))))
+                  (else (if (i32.eqz (i32.and (local.get $old) (i32.const 0x10)))
+                    (then
+                      (if (i32.and (i32.ne (i32.and (local.get $data) (i32.const 0x10)) (i32.const 0))
+                                   (i32.or (i32.lt_u (local.get $ly) (i32.const 153))
+                                           (i32.gt_s (local.get $ttn) (i32.sub (i32.const 4) (i32.shl (global.get $speed) (i32.const 2))))))
+                        (then (local.set $irq (i32.const 1)))
+                        (else (if (i32.and (local.get $lycp) (i32.ne (i32.and (local.get $data) (i32.const 0x40)) (i32.const 0)))
+                                (then (local.set $irq (i32.const 1))))))))))))
+            (if (i32.and (i32.and (i32.eq (i32.and (local.get $data) (i32.const 0x28)) (i32.const 0x20))
+                                  (i32.eqz (i32.and (local.get $old) (i32.const 0x20))))
+                         (i32.or (i32.and (i32.le_s (local.get $ttn) (i32.const 4)) (i32.lt_u (local.get $ly) (i32.const 143)))
+                                 (i32.and (i32.eq (local.get $ttn) (i32.const 912)) (i32.lt_u (local.get $ly) (i32.const 144)))))
+              (then (local.set $irq (i32.const 1))))))` : `(if (i32.lt_u (local.get $ly) (i32.const 144))
+          (then
+            (if (i32.lt_u (i32.add (local.get $cc) (i32.const 1)) (call $m0timeat (local.get $cc)))
+              (then (if (i32.and (i32.eq (local.get $cly) (global.get $lycr)) (i32.eqz (i32.and (local.get $old) (i32.const 0x40))))
+                      (then (local.set $irq (i32.const 1)))))
+              (else (if (i32.and (i32.eqz (i32.and (local.get $old) (i32.const 0x08)))
+                                 (i32.eqz (i32.and (i32.eq (local.get $cly) (global.get $lycr)) (i32.ne (i32.and (local.get $old) (i32.const 0x40)) (i32.const 0)))))
+                      (then (local.set $irq (i32.const 1)))))))
+          (else (if (i32.and (i32.eqz (i32.and (local.get $old) (i32.const 0x10)))
+                             (i32.eqz (i32.and (i32.eq (local.get $cly) (global.get $lycr)) (i32.ne (i32.and (local.get $old) (i32.const 0x40)) (i32.const 0)))))
+                  (then (local.set $irq (i32.const 1))))))`}
+        (if (local.get $irq) (then (call $irq (i32.const 2))))
+        ;; enabling mode 0 with no mode-0 event pending arms one
+        (if (i32.and (i32.ne (i32.and (local.get $data) (i32.const 0x08)) (i32.const 0))
+                     (i32.eq (call $m0evt) (i32.const -1)))
+          (then (global.set $m0arm (i32.const 1)) (global.set $m0next (i32.const 0x08))))
+        (global.set $m2t (call $m2sched (local.get $data) (local.get $cc)))))
+    ;; the mode 2 / mode 1 / mode 0 sources latch the new STAT unless their
+    ;; event is (almost) due
+    (global.set $m2s (if (result i32) (i32.gt_u (i32.sub (global.get $m2t) (local.get $cc)) ${cgb ? '(i32.sub (i32.const 4) (i32.shl (global.get $speed) (i32.const 2)))' : '(i32.const 0)'})
+      (then (local.get $data))
+      (else (i32.or (i32.and (global.get $m2s) (i32.const 0x10)) (i32.and (local.get $data) (i32.const 0xEF))))))
+    (local.set $m1t (if (result i32) (i32.and (i32.load8_u (i32.const ${IO + 0x40})) (i32.const 0x80))
+      (then (call $nfc (i32.const ${144 * 456}) (local.get $cc))) (else (i32.const -1))))
+    (global.set $m1s (if (result i32) (i32.gt_u (i32.sub (local.get $m1t) (local.get $cc)) ${cgb ? '(i32.sub (i32.const 4) (i32.shl (global.get $speed) (i32.const 2)))' : '(i32.const 0)'})
+      (then (local.get $data))
+      (else (i32.or (i32.and (global.get $m1s) (i32.const 0x08)) (i32.and (local.get $data) (i32.const 0xF7))))))
+    (if (i32.gt_u (i32.sub (call $m0evt) (local.get $cc)) (i32.const ${cgb ? 2 : 0}))
+      (then (global.set $m0s (local.get $data)))))
+
+  ;; $FF45 written at $cc: LCD::lycRegChange
+  (func $lycwrite (param $data i32) (param $cc i32)
+    (local $old i32) (local $ttn i32) (local $ly i32) (local $cly i32) (local $m0t i32)
+    (local.set $old (global.get $lycr))
+    (if (i32.eq (local.get $data) (local.get $old)) (then (return)))
+    (local.set $m0t (call $m0evt))
+    (if (i32.gt_u (i32.sub (local.get $m0t) (local.get $cc)) ${cgb ? '(i32.sub (i32.const 6) (global.get $speed))' : '(i32.const 1)'})
+      (then (global.set $m0l (local.get $data))))
+    (call $lycregchange (global.get $lycss) (local.get $data) (local.get $cc))
+    (if (i32.eqz (i32.and (i32.load8_u (i32.const ${IO + 0x40})) (i32.const 0x80))) (then (return)))
+    (local.set $ly (call $lyat (local.get $cc)))
+    (local.set $ttn (i32.sub (global.get $tly) (local.get $cc)))
+    (if (i32.and (i32.and (i32.ne (i32.and (global.get $statreg) (i32.const 0x40)) (i32.const 0))
+                          (i32.lt_u (local.get $data) (i32.const 154)))
+                 (if (result i32) (i32.lt_u (local.get $ly) (i32.const 144))
+                   (then (i32.or (i32.or (i32.eqz (i32.and (global.get $statreg) (i32.const 0x08)))
+                                         (i32.lt_u (local.get $cc) (call $m0timeat (local.get $cc))))
+                                 (i32.le_s (local.get $ttn) (i32.const ${cgb ? 8 : 4}))))
+                   (else (i32.or (i32.eqz (i32.and (global.get $statreg) (i32.const 0x10)))
+                                 ${cgb ? '(i32.and (i32.and (i32.eq (local.get $ly) (i32.const 153)) (i32.le_s (local.get $ttn) (i32.const 4))) (i32.eqz (global.get $speed)))' : '(i32.const 0)'}))))
+      (then
+        (local.set $cly (call $lyccmp (local.get $cc)))
+        (if (i32.le_s (global.get $tttn) (i32.const ${cgb ? 8 : 4}))
+          (then (local.set $cly
+            (if (result i32) (i32.or (i32.ne (local.get $old) (local.get $cly))
+                                     ${cgb ? '(i32.and (i32.le_s (global.get $tttn) (i32.const 4)) (i32.eqz (global.get $speed)))' : '(i32.const 0)'})
+              (then (if (result i32) (i32.eq (local.get $cly) (i32.const 153)) (then (i32.const 0)) (else (i32.add (local.get $cly) (i32.const 1)))))
+              (else (i32.const 0xFF))))))
+        (if (i32.eq (local.get $data) (local.get $cly))
+          (then ${cgb ? `(if (global.get $speed)
+                   (then (call $irq (i32.const 2)))
+                   (else (global.set $onet (i32.add (local.get $cc) (i32.const 5)))))` : '(call $irq (i32.const 2))'})))))
+
+  ;; Process every LCD event due by now that belongs to the current line
+  ;; (before the LY change), in time order, then take a requested interrupt
+  ;; before the next instruction. Called after every instruction and after
+  ;; each line start.
+  (func $statev
+    (local $now i32) (local $lyt i32) (local $t i32) (local $k i32) (local $hit i32)
+    (local $e i32) (local $ly i32) (local $L i32) (local $cmp i32) (local $next i32)
+    (if (i32.eqz (i32.and (i32.load8_u (i32.const ${IO + 0x40})) (i32.const 0x80))) (then (return)))
+    (block $out (loop $again
+      (local.set $now (global.get $abscc))
+      (local.set $lyt (i32.add (global.get $abscc) (global.get $cyc)))
+      (local.set $k (i32.const 0))
+      (local.set $t (i32.const -1))
+      ;; candidate: due (t <= now) and in this line (t < lytime), earliest first
+      (local.set $e (global.get $lyct))
+      (if (i32.and (i32.and (i32.le_s (i32.sub (local.get $e) (local.get $now)) (i32.const 0))
+                            (i32.lt_s (i32.sub (local.get $e) (local.get $lyt)) (i32.const 0)))
+                   (i32.ne (local.get $e) (i32.const -1)))
+        (then (local.set $t (local.get $e)) (local.set $k (i32.const 1))))
+      (local.set $e (global.get $m2t))
+      (if (i32.and (i32.and (i32.and (i32.le_s (i32.sub (local.get $e) (local.get $now)) (i32.const 0))
+                                     (i32.lt_s (i32.sub (local.get $e) (local.get $lyt)) (i32.const 0)))
+                            (i32.ne (local.get $e) (i32.const -1)))
+                   (i32.lt_u (local.get $e) (local.get $t)))
+        (then (local.set $t (local.get $e)) (local.set $k (i32.const 2))))
+      (local.set $e (global.get $onet))
+      (if (i32.and (i32.and (i32.and (i32.le_s (i32.sub (local.get $e) (local.get $now)) (i32.const 0))
+                                     (i32.lt_s (i32.sub (local.get $e) (local.get $lyt)) (i32.const 0)))
+                            (i32.ne (local.get $e) (i32.const -1)))
+                   (i32.lt_u (local.get $e) (local.get $t)))
+        (then (local.set $t (local.get $e)) (local.set $k (i32.const 3))))
+      (if (i32.and (i32.eqz (global.get $m0done)) (global.get $m0arm))
+        (then
+          (local.set $e (i32.add (i32.sub (local.get $lyt) (global.get $linelen)) (global.get $m0irqat)))
+          (if (i32.and (i32.le_s (i32.sub (local.get $e) (local.get $now)) (i32.const 0))
+                       (i32.lt_u (local.get $e) (local.get $t)))
+            (then (local.set $t (local.get $e)) (local.set $k (i32.const 4))))))
+      (if (global.get $hdmanow)
+        (then (local.set $k (i32.const 5)))
+        (else
+          (if (i32.eqz (global.get $hdmadone))
+            (then
+              (local.set $e (i32.add (i32.sub (local.get $lyt) (global.get $linelen)) (global.get $hdmaat)))
+              (if (i32.and (i32.le_s (i32.sub (local.get $e) (local.get $now)) (i32.const 0))
+                           (i32.lt_u (local.get $e) (local.get $t)))
+                (then (local.set $t (local.get $e)) (local.set $k (i32.const 5))))))))
+      (br_if $out (i32.eqz (local.get $k)))
+      ;; LYC (LycIrq::doEvent)
+      (if (i32.eq (local.get $k) (i32.const 1))
+        (then
+          (if (i32.and (i32.or (global.get $lycs) (global.get $lycss)) (i32.const 0x40))
+            (then
+              (local.set $cmp (if (result i32) (i32.lt_u (i32.sub (local.get $lyt) (local.get $t)) (global.get $linelen))
+                                (then (i32.const 0)) (else (global.get $ln))))
+              (if (i32.and (i32.eq (global.get $lycr) (local.get $cmp))
+                           (i32.eqz (i32.and (global.get $lycs)
+                             (if (result i32) (i32.lt_u (i32.sub (global.get $lycr) (i32.const 1)) (i32.const 143))
+                               (then (i32.const 0x20)) (else (i32.const 0x10))))))
+                (then (call $irq (i32.const 2)) (local.set $hit (i32.const 1))))))
+          (global.set $lycr (global.get $lycrs))
+          (global.set $lycs (global.get $lycss))
+          (global.set $lyct (call $lycsched (global.get $lycs) (global.get $lycr) (local.get $t)))))
+      ;; mode 2 (LCD::doMode2IrqEvent)
+      (if (i32.eq (local.get $k) (i32.const 2))
+        (then
+          (local.set $ly (if (result i32) (i32.lt_u (i32.sub (local.get $lyt) (local.get $t)) (i32.const 8))
+            (then (if (result i32) (i32.eq (global.get $ln) (i32.const 153)) (then (i32.const 0))
+                    (else (i32.add (global.get $ln) (i32.const 1)))))
+            (else (global.get $ln))))
+          (if (i32.and (i32.or (i32.ne (local.get $ly) (i32.const 0)) (i32.eqz (i32.and (global.get $m2s) (i32.const 0x10))))
+                       (i32.or (i32.eqz (i32.and (global.get $m2s) (i32.const 0x40)))
+                               (if (result i32) (global.get $lycr)
+                                 (then (i32.ne (local.get $ly) (i32.add (global.get $lycr) (i32.const 1))))
+                                 (else (i32.gt_u (local.get $ly) (i32.const 1))))))
+            (then (call $irq (i32.const 2)) (local.set $hit (i32.const 1))))
+          (global.set $m2s (global.get $statreg))
+          (if (i32.eqz (i32.and (global.get $statreg) (i32.const 0x08)))
+            (then
+              (local.set $next (i32.add (local.get $t) (global.get $linelen)))
+              (if (i32.eqz (local.get $ly)) (then (local.set $next (i32.sub (local.get $next) (i32.const 4))))
+                (else (if (i32.eq (local.get $ly) (i32.const 143))
+                  (then (local.set $next (i32.add (local.get $next)
+                          (i32.add (i32.mul (global.get $linelen) (i32.const 10)) (i32.const 4))))))))
+              (global.set $m2t (local.get $next)))
+            (else (global.set $m2t (i32.add (local.get $t) (i32.shl (i32.const 70224) (global.get $speed))))))))
+      ;; one-shot STAT request (lycRegChange on CGB single speed)
+      (if (i32.eq (local.get $k) (i32.const 3))
+        (then (call $irq (i32.const 2)) (local.set $hit (i32.const 1)) (global.set $onet (i32.const -1))))
+      ;; mode 0 (M0Irq::doEvent)
+      (if (i32.eq (local.get $k) (i32.const 4))
+        (then
+          (global.set $m0done (i32.const 1))
+          (if (i32.and (i32.ne (i32.and (i32.or (global.get $m0s) (global.get $statreg)) (i32.const 0x08)) (i32.const 0))
+                       (i32.or (i32.eqz (i32.and (global.get $m0s) (i32.const 0x40)))
+                               (i32.ne (global.get $ln) (global.get $m0l))))
+            (then (call $irq (i32.const 2)) (local.set $hit (i32.const 1))))
+          (global.set $m0s (global.get $statreg))
+          (global.set $m0l (global.get $lycr))
+          (global.set $m0next (i32.and (global.get $statreg) (i32.const 0x08)))))
+      ;; one HBlank DMA block at the mode 0 time + 1 - ds (hdmaTimeFromM0Time),
+      ;; or at once when enabled inside this line's HDMA period
+      (if (i32.eq (local.get $k) (i32.const 5))
+        (then
+          (global.set $hdmanow (i32.const 0))
+          (global.set $hdmadone (i32.const 1))
+          (if (global.get $hdma_on)
+            (then
+              ;; the CPU is stalled for the block (16 x 2<<ds) and 4 more
+              ;; (gambatte intevent_dma): the clocks advance through it
+              (local.set $L (global.get $cyc))
+              (call $hdma_block)
+              (global.set $cyc (i32.sub (global.get $cyc) (i32.const 4)))
+              (call $tick (i32.sub (local.get $L) (global.get $cyc)))))))
+      (br $again)))
+    (if (i32.and (local.get $hit)
+          (i32.and (global.get $ime)
+            (i32.ne (i32.and (i32.load8_u (i32.const ${IO + 0xFF}))
+                             (i32.and (i32.load8_u (i32.const ${IO + 0x0F})) (i32.const 0x1F)))
+                    (i32.const 0))))
+      (then (global.set $irqonly (i32.const 1)) (call $step) (global.set $irqonly (i32.const 0)))))
+
   (func $irq (param $m i32)
     (i32.store8 (i32.const ${IO + 0x0F})
       (i32.or (i32.load8_u (i32.const ${IO + 0x0F})) (local.get $m))))
@@ -320,6 +819,9 @@ function stepWat(cgb) {
           (i32.and (i32.load8_u (i32.const ${IO + 0x0F}))
                    (i32.xor (i32.shl (i32.const 1) (local.get $bit)) (i32.const 0xFF))))
         (global.set $ime (i32.const 0))
+        ;; taken straight out of HALT: the CGB wake costs 4 first
+        ;; (gambatte Memory::event, intevent_interrupts)
+        ${cgb ? '(if (global.get $halted) (then (global.set $cyc (i32.sub (global.get $cyc) (i32.const 4)))))' : ''}
         (global.set $halted (i32.const 0))
         (global.set $sp (i32.and (i32.sub (global.get $sp) (i32.const 2)) (i32.const 0xFFFF)))
         (call $wr8 (global.get $sp) (i32.and (global.get $pc) (i32.const 0xFF)))
@@ -398,6 +900,10 @@ function initWat(cgb) {
     (global.set $abscc (i32.const 0x18FCC))
     ${sram}
     (i32.store (i32.const ${IOREG + 0x1F0}) (i32.const 0x0806040A))
+    ;; the LCD event model from the power-on registers (gambatte loadState)
+    (global.set $statreg (i32.load8_u (i32.const ${IOREG + 0x41})))
+    (global.set $m0next (i32.and (global.get $statreg) (i32.const 0x08)))
+    (call $lcdevreset (global.get $abscc) (i32.const 0))
 `;
   }
   const init = P.cgbObjpInit();
@@ -423,6 +929,10 @@ function initWat(cgb) {
     ${sram}
     ;; TAC clock select -> TIMA tick shift (gambatte timaClock {10,4,6,8})
     (i32.store (i32.const ${IOREG + 0x1F0}) (i32.const 0x0806040A))
+    ;; the LCD event model from the power-on registers (gambatte loadState)
+    (global.set $statreg (i32.load8_u (i32.const ${IOREG + 0x41})))
+    (global.set $m0next (i32.and (global.get $statreg) (i32.const 0x08)))
+    (call $lcdevreset (global.get $abscc) (i32.const 0))
 `;
 }
 
@@ -433,7 +943,7 @@ function initWat(cgb) {
  * LYC/mode-2/VBlank STAT sources at its start, the scanline drawn during
  * mode 3, the HBlank STAT source and one HDMA block, then the rest.
  */
-function frameWat() {
+function frameWat(cgb) {
   const IO = IOREG;
   return `
     ;; LIBRETRO FRAME DUPES. gambatte's retro_run first checks
@@ -451,6 +961,8 @@ function frameWat() {
         (i32.store (i32.const ${PROBE + 224})
           (i32.add (i32.load (i32.const ${PROBE + 224})) (i32.const 1)))
         (return)))
+    ;; gambatte CPU::process starts every run with Memory::updateInput
+    (call $updinput)
     (local.set $i (i32.const 0))
     (block $fd (loop $fl
       ;; A frame handed out MID-LINE (the blit at line 144 after its start
@@ -467,33 +979,19 @@ function frameWat() {
         (then (global.get $ln)) (else (i32.const 0))))
       (if (i32.and (i32.load8_u (i32.const ${IO + 0x40})) (i32.const 0x80))
         (then
-          ;; LYC=0 MATCHES ON LINE 153: LY reads 0 for (nearly) all of line
-          ;; 153 (gambatte video.cpp compares 153 as 0), so the LYC=0 STAT
-          ;; interrupt fires a line early and line 0 raises no new edge.
-          (if (i32.or
-                (i32.and (i32.eq (global.get $ly) (i32.load8_u (i32.const ${IO + 0x45})))
-                         (i32.or (i32.ne (global.get $ly) (i32.const 0))
-                                 (i32.eqz (i32.and (i32.load8_u (i32.const ${IO + 0x41})) (i32.const 4)))))
-                (i32.and (i32.eq (global.get $ly) (i32.const 153))
-                         (i32.eqz (i32.load8_u (i32.const ${IO + 0x45})))))
-            (then
-              (i32.store8 (i32.const ${IO + 0x41})
-                (i32.or (i32.load8_u (i32.const ${IO + 0x41})) (i32.const 4)))
-              (if (i32.and (i32.load8_u (i32.const ${IO + 0x41})) (i32.const 0x40))
-                (then (call $irq (i32.const 2)))))
-            (else (if (i32.eq (global.get $ly) (i32.load8_u (i32.const ${IO + 0x45})))
-              (then (nop))
-              (else
-              (i32.store8 (i32.const ${IO + 0x41})
-                (i32.and (i32.load8_u (i32.const ${IO + 0x41})) (i32.const 0xFB)))))))
-          (if (i32.lt_u (global.get $ln) (i32.const 144))
-            (then (if (i32.and (i32.load8_u (i32.const ${IO + 0x41})) (i32.const 0x20))
-                    (then (call $irq (i32.const 2))))))
+          ;; Mode 1 (gambatte LCD::event MODE1_IRQ): VBlank, and STAT when the
+          ;; latched STAT has mode 1 enabled and mode 0 not
           (if (i32.eq (global.get $ln) (i32.const 144))
             (then
-              (call $irq (i32.const 1))
-              (if (i32.and (i32.load8_u (i32.const ${IO + 0x41})) (i32.const 0x10))
-                (then (call $irq (i32.const 2))))))))
+              (call $irq (if (result i32) (i32.eq (i32.and (global.get $m1s) (i32.const 0x18)) (i32.const 0x10))
+                           (then (i32.const 3)) (else (i32.const 1))))
+              (global.set $m1s (global.get $statreg))))))
+      (if (global.get $ln) (then (global.set $lcdinactive (i32.const 0))))
+      ;; this line's mode 3 length, as gambatte predicts it (SCX, window, sprites)
+      (call $m3setup)
+      ;; in-line events the instruction that crossed into this line already
+      ;; passed (an LYC=0 at 153 + 8 behind a 12-cycle instruction)
+      (call $statev)
       (if (i32.eqz (global.get $ln)) (then (global.set $wline (i32.const 0))))
       ;; An interrupt the line's start just requested is taken NOW, before
       ;; the next instruction: gambatte dispatches at the event's cycle
@@ -519,6 +1017,7 @@ function frameWat() {
         (br_if $d0 (global.get $lcdrestart))
         (call $step)
         (if (call $offevent) (then (global.set $resume (i32.const 1)) (br $fd)))
+        (call $statev)
         (global.set $steps (i32.add (global.get $steps) (i32.const 1)))
         (br $l0)))
       (br_if $fl (global.get $lcdrestart))
@@ -531,13 +1030,14 @@ function frameWat() {
       (if (i32.lt_u (global.get $ln) (i32.const 144))
         (then (global.set $rxnext (i32.const 0))))
       ;; ---- mode 3 ----
-      (local.set $i (i32.sub (global.get $linelen) (i32.shl (i32.const 252) (global.get $speed))))
+      (local.set $i (i32.sub (global.get $linelen) (i32.shl (global.get $m0dot) (global.get $speed))))
       (block $d (loop $l
         (br_if $d (i32.le_s (global.get $cyc) (local.get $i)))
         (br_if $d (global.get $trapped))
         (br_if $d (global.get $lcdrestart))
         (call $step)
         (if (call $offevent) (then (global.set $resume (i32.const 1)) (br $fd)))
+        (call $statev)
         (global.set $steps (i32.add (global.get $steps) (i32.const 1)))
         (br $l)))
       (if (global.get $lcdrestart)
@@ -549,26 +1049,14 @@ function frameWat() {
           (if (global.get $winflag)
             (then (global.set $wline (i32.add (global.get $wline) (i32.const 1)))
                   (global.set $winflag (i32.const 0))))))
-      ;; ---- HBlank: STAT source and one HDMA block ----
-      (if (i32.and (i32.lt_u (global.get $ln) (i32.const 144))
-                   (i32.ne (i32.and (i32.load8_u (i32.const ${IO + 0x40})) (i32.const 0x80))
-                           (i32.const 0)))
-        (then
-          (if (i32.and (i32.load8_u (i32.const ${IO + 0x41})) (i32.const 0x08))
-            (then (call $irq (i32.const 2))))
-          (if (global.get $hdma_on) (then (call $hdma_block)))
-          ;; the HBlank STAT request is taken before the next instruction too
-          (if (i32.and (global.get $ime)
-                (i32.ne (i32.and (i32.load8_u (i32.const ${IO + 0xFF}))
-                                 (i32.and (i32.load8_u (i32.const ${IO + 0x0F})) (i32.const 0x1F)))
-                        (i32.const 0)))
-            (then (global.set $irqonly (i32.const 1)) (call $step) (global.set $irqonly (i32.const 0))))))
+      ;; HBlank's STAT request and HDMA block are events at their own cycles ($statev)
       (block $d2 (loop $l2
         (br_if $d2 (i32.le_s (global.get $cyc) (i32.const 0)))
         (br_if $d2 (global.get $trapped))
         (br_if $d2 (global.get $lcdrestart))
         (call $step)
         (if (call $offevent) (then (global.set $resume (i32.const 1)) (br $fd)))
+        (call $statev)
         (global.set $steps (i32.add (global.get $steps) (i32.const 1)))
         (br $l2)))
       (br_if $fl (global.get $lcdrestart))
@@ -598,6 +1086,18 @@ function frameWat() {
                 (else (global.set $blanklcd (i32.const 1))))))))
       (br $fl)))
     (global.set $rres (i32.sub (global.get $rres) (i32.const 70224)))
+    ;; gambatte CPU::runFor: past 2^31 the cycle counter is rebased
+    ;; (Memory::resetCounters: dec = (cc & ~0x7FFF) - 0x8000), and every
+    ;; absolute event time with it
+    (if (i32.lt_s (global.get $abscc) (i32.const 0))
+      (then
+        (local.set $i (i32.sub (i32.and (global.get $abscc) (i32.const -32768)) (i32.const 0x8000)))
+        (global.set $abscc (i32.sub (global.get $abscc) (local.get $i)))
+        (if (global.get $timairq) (then (global.set $timairq (i32.sub (global.get $timairq) (local.get $i)))))
+        (if (global.get $serev) (then (global.set $serev (i32.sub (global.get $serev) (local.get $i)))))
+        (if (i32.ne (global.get $lyct) (i32.const -1)) (then (global.set $lyct (i32.sub (global.get $lyct) (local.get $i)))))
+        (if (i32.ne (global.get $m2t) (i32.const -1)) (then (global.set $m2t (i32.sub (global.get $m2t) (local.get $i)))))
+        (if (i32.ne (global.get $onet) (i32.const -1)) (then (global.set $onet (i32.sub (global.get $onet) (local.get $i)))))))
     (i32.store (i32.const ${PROBE + 0})
       (i32.add (i32.load (i32.const ${PROBE + 0})) (i32.const 1)))
     (i32.store (i32.const ${PROBE + 4})  (global.get $steps))
@@ -825,6 +1325,7 @@ export function* emitGbWat(img, blocks, o) {
   yield part(cgb ? P.renderWat(FB) : P.dmgRenderWat(FB));
   yield part(P.initstateDataWat(cgb));
   yield part(`  (data (i32.const ${P.OPLEN}) "${watBytes(opLenTable(img, blocks))}")`);
+  yield part(`  (data (i32.const ${P.IOTAB}) "${watBytes(P.ioTable(cgb))}")`);
   yield part(ramTemplatesWat(img, blocks));
 
   // ---- one arm per ROM offset ----
@@ -1017,7 +1518,7 @@ export function* emitGbWat(img, blocks, o) {
 
   (func (export "wc_render")
     (local $i i32) (local $ln i32)
-    ${frameWat()}
+    ${frameWat(cgb)}
     ;; A DMG frame is 70,224 cycles: 154 scanlines of 456. Stepping a fixed
     ;; instruction count instead of spending cycles is what stalled the
     ;; Genesis carts for a whole session.

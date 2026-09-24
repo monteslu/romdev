@@ -166,6 +166,8 @@ export function recompileSection(rom, sha1, opts = {}) {
       offset: big.offset, entries: big.entries, stride: big.stride,
       cursor: { offset: big.cursor, mode: "count", writable: true, note: "every dispatched instruction, RAM-interpreted ones included" },
       pc: lo(0),
+      // gambatte's cycle counter before the instruction ($abscc starts at its power-on value)
+      clock: { offset: 28 },
       fields: { rombank: { offset: 4 }, sp: lo(8), hl: lo(12), bc: lo(16), de: lo(20), af: lo(24) },
       note: "options.traceEntries: registers before each instruction; sp/hl/bc/de are compared with gambatte's per-instruction columns",
     };

@@ -43,6 +43,32 @@ export const LINEBUF = 0x11100;
 export const OBJCLAIM = 0x11200;
 export const OPLEN = 0x11300;    // 256-byte instruction-length table (emit.js opLenTable)
 export const CRAMX = 0x38000;
+/** gambatte's $FF00-$FF7F write rules (see $iostore): 128 x {mode, OR mask} */
+export const IOTAB = 0x11500;
+
+/**
+ * The $iostore table for a CGB or DMG build, from gambatte
+ * Memory::nontrivial_ff_write.
+ * @param {boolean} cgb
+ */
+export function ioTable(cgb) {
+  const t = new Uint8Array(256);
+  const set = (p, mode, or = 0) => { t[p * 2] = mode; t[p * 2 + 1] = or; };
+  set(0x01, 1); set(0x05, 1); set(0x06, 1); set(0x07, 1, 0xF8); set(0x0F, 1, 0xE0);
+  set(0x10, 2, 0x80); set(0x11, 3, 0x3F); set(0x12, 2); set(0x14, 2, 0xBF);
+  set(0x16, 3, 0x3F); set(0x17, 2); set(0x19, 2, 0xBF);
+  set(0x1A, 2, 0x7F); set(0x1C, 2, 0x9F); set(0x1E, 2, 0xBF);
+  set(0x21, 2); set(0x22, 2); set(0x23, 2, 0xBF); set(0x24, 2); set(0x25, 2);
+  set(0x26, 5);
+  for (let p = 0x30; p < 0x40; p++) set(p, 1);
+  set(0x41, 4); set(0x42, 1); set(0x43, 1); set(0x45, 1); set(0x47, 1); set(0x48, 1); set(0x49, 1);
+  set(0x4A, 1); set(0x4B, 1);
+  if (cgb) {
+    set(0x56, 1, 0x3E); set(0x68, 1, 0x40); set(0x6A, 1, 0x40); set(0x6C, 1, 0xFE);
+    set(0x72, 1); set(0x73, 1); set(0x74, 1); set(0x75, 1, 0x8F);
+  }
+  return t;
+}
 
 // ---- fitted timing constants ------------------------------------------
 // These were SMSWAT_GB_* environment knobs while they were being fitted.
@@ -133,6 +159,10 @@ export function globalsWat() {
   (global $linelen (mut i32) (i32.const 456))
   (global $rtc_sel (mut i32) (i32.const 0))
   (global $serev (mut i32) (i32.const 0))
+  (global $hdmanow (mut i32) (i32.const 0))
+  ;; gambatte ioamhram[0x141] & 7 (see the $FF41 read) and the first line after LCD enable
+  (global $statlow (mut i32) (i32.const 0))
+  (global $lcdinactive (mut i32) (i32.const 0))
   (global $sercnt (mut i32) (i32.const 8))
   (global $serfast (mut i32) (i32.const 0))
 `;
@@ -258,16 +288,53 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
     (global.set $lastrom (local.get $save))
     (i32.shl (i32.load8_u (i32.add (i32.const ${OPLEN}) (local.get $op))) (i32.const 2)))
 
-  (func $stat_mode (result i32)
-    (local $used i32)
+  ;; gambatte LCD::getStat at the ACCESS cycle ($ioff into the instruction):
+  ;; the mode bits and the LYC coincidence flag, computed from where the
+  ;; access falls - past the end of the cart's current line it is already
+  ;; the next line, as gambatte's LY counter has advanced by then.
+  ;;   ly > 143: mode 1, except the last 4 cycles (0 at double speed) of 153
+  ;;   first 80 video cycles: mode 2 (0 right after LCD enable)
+  ;;   mode 3 while cc + ds - cgb + 2 is before the line's mode-0 time
+  ;;   bit 2: LYC == LY with 153 comparing as 0 after its first 8 cycles
+  (func $getstat (result i32)
+    (local $used i32) (local $ly i32) (local $ttn i32) (local $st i32)
     (if (i32.eqz (i32.and (i32.load8_u (i32.const ${IOREG + 0x40})) (i32.const 0x80)))
       (then (return (i32.const 0))))
-    (if (i32.ge_u (global.get $ln) (i32.const 144)) (then (return (i32.const 1))))
-    (local.set $used (i32.shr_u (i32.add (i32.sub (global.get $linelen) (global.get $cyc)) (i32.mul (call $ioff) (i32.const ${STATIOFF})))
-                                (global.get $speed)))
-    (if (i32.lt_s (local.get $used) (i32.const 80)) (then (return (i32.const 2))))
-    (if (i32.lt_s (local.get $used) (i32.const 252)) (then (return (i32.const 3))))
-    (i32.const 0))
+    (local.set $used (i32.add (i32.sub (global.get $linelen) (global.get $cyc)) (i32.mul (call $ioff) (i32.const ${STATIOFF}))))
+    (local.set $ly (global.get $ln))
+    (if (i32.ge_s (local.get $used) (global.get $linelen))
+      (then
+        (local.set $used (i32.sub (local.get $used) (global.get $linelen)))
+        (local.set $ly (i32.add (local.get $ly) (i32.const 1)))
+        (if (i32.ge_u (local.get $ly) (i32.const 154)) (then (local.set $ly (i32.const 0))))))
+    (local.set $ttn (i32.sub (global.get $linelen) (local.get $used)))
+    (if (i32.gt_u (local.get $ly) (i32.const 143))
+      (then
+        (if (i32.or (i32.lt_u (local.get $ly) (i32.const 153))
+                    (i32.gt_s (local.get $ttn) (i32.sub (i32.const 4) (i32.shl (global.get $speed) (i32.const 2)))))
+          (then (local.set $st (i32.const 1)))))
+      (else
+        (if (i32.lt_s (i32.sub (i32.const 456) (i32.shr_s (local.get $ttn) (global.get $speed))) (i32.const 80))
+          (then (if (i32.eqz (i32.and (global.get $lcdinactive) (i32.eqz (local.get $ly))))
+                  (then (local.set $st (i32.const 2)))))
+          (else
+            (if (i32.and (i32.eq (local.get $ly) (global.get $ln))
+                         (i32.lt_s (i32.add (local.get $used) (i32.add (global.get $speed) (i32.const ${cgb ? 1 : 2})))
+                                   (i32.shl (global.get $m0dot) (global.get $speed))))
+              (then (local.set $st (i32.const 3))))))))
+    (if (i32.eq (local.get $ly) (i32.const 153))
+      (then
+        (if (i32.gt_s (i32.sub (local.get $ttn) (i32.shl (i32.const 448) (global.get $speed))) (i32.const 0))
+          (then (local.set $ttn (i32.sub (local.get $ttn) (i32.shl (i32.const 448) (global.get $speed)))))
+          (else (local.set $ly (i32.const 0))
+                (local.set $ttn (i32.add (local.get $ttn) (global.get $linelen)))))))
+    (if (i32.and (i32.eq (i32.load8_u (i32.const ${IOREG + 0x45})) (local.get $ly))
+                 (i32.gt_s (local.get $ttn) (i32.sub (i32.const 4) (i32.shl (global.get $speed) (i32.const 2)))))
+      (then (local.set $st (i32.or (local.get $st) (i32.const 4)))))
+    (local.get $st))
+
+  (func $stat_mode (result i32)
+    (i32.and (call $getstat) (i32.const 3)))
 
   ;; $FF00 from wasmcart pad 0 (WCPad.buttons, u16 at the host's inputPtr).
   ;; ACTIVE LOW. P14 (bit 4) low selects the d-pad (right,left,up,down in
@@ -277,9 +344,15 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
   ;; Boy's A is the EAST button (WC_BTN_B, bit 1) and its B the SOUTH button
   ;; (WC_BTN_A, bit 0), exactly where a libretro RetroPad puts them, so one
   ;; input schedule presses the same button on the cart and on gambatte.
-  (func $joypad (result i32)
-    (local $sel i32) (local $b i32) (local $n i32)
-    (local.set $sel (i32.and (i32.load8_u (i32.const ${IOREG})) (i32.const 0x30)))
+  ;; P1 as gambatte keeps it (Memory::updateInput): the low nibble of
+  ;; $FF00 is the state latched at each update, and a new press seen when
+  ;; the latched nibble was all released requests the joypad interrupt.
+  ;; Updated at the start of every host frame that runs, on $FF00 reads, and
+  ;; when a write changes the select bits.
+  (func $updinput
+    (local $sel i32) (local $b i32) (local $n i32) (local $old i32)
+    (local.set $old (i32.load8_u (i32.const ${IOREG})))
+    (local.set $sel (i32.and (local.get $old) (i32.const 0x30)))
     (local.set $b (i32.load16_u (i32.const ${padptr})))
     (local.set $n (i32.const 0x0F))
     (if (i32.eqz (i32.and (local.get $sel) (i32.const 0x10)))
@@ -294,7 +367,15 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
                 (i32.shl (i32.and (local.get $b) (i32.const 1)) (i32.const 1)))
         (i32.or (i32.shr_u (i32.and (local.get $b) (i32.const 0x80)) (i32.const 5))
                 (i32.shr_u (i32.and (local.get $b) (i32.const 0x40)) (i32.const 3)))))))))
-    (i32.or (i32.or (i32.const 0xC0) (local.get $sel)) (local.get $n)))
+    (if (i32.and (i32.ne (local.get $n) (i32.const 0x0F))
+                 (i32.eq (i32.and (local.get $old) (i32.const 0x0F)) (i32.const 0x0F)))
+      (then (i32.store8 (i32.const ${IOREG + 0x0F})
+              (i32.or (i32.load8_u (i32.const ${IOREG + 0x0F})) (i32.const 0x10)))))
+    (i32.store8 (i32.const ${IOREG}) (i32.or (i32.and (local.get $old) (i32.const 0xF0)) (local.get $n))))
+
+  (func $joypad (result i32)
+    (call $updinput)
+    (i32.load8_u (i32.const ${IOREG})))
 
   (func $rd8 (param $a i32) (result i32)
     (local $x i32)
@@ -347,10 +428,12 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
       (then (call $serupd (i32.add (global.get $abscc) (call $ioff)))))
     (if (i32.eq (local.get $x) (i32.const 0xFF0F))
       (then (return (i32.or (i32.load8_u (i32.const ${IOREG + 0x0F})) (i32.const 0xE0)))))
+    ;; gambatte: ioamhram[0x141] | getStat. The stored low bits are cleared
+    ;; at LCD enable and hold the LYC flag latched at LCD disable ($statlow).
     (if (i32.eq (local.get $x) (i32.const 0xFF41))
-      (then (return (i32.or (i32.const 0x80)
-        (i32.or (i32.and (i32.load8_u (i32.const ${IOREG + 0x41})) (i32.const 0x7C))
-                (call $stat_mode))))))
+      (then (return (i32.or (i32.or (i32.const 0x80)
+                                    (i32.and (i32.load8_u (i32.const ${IOREG + 0x41})) (i32.const 0x78)))
+                            (i32.or (global.get $statlow) (call $getstat))))))
     ;; LY as gambatte's LCD::getLyReg reads it: line 153 reads 0 (after its
     ;; first 8 cycles at double speed), and the last 4 cycles of any other
     ;; line already read the NEXT line. A sky-gradient raster effect starts on
@@ -442,6 +525,18 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
             (i32.store8 (i32.add (i32.const ${IOREG})
         (i32.sub (local.get $x) (i32.const 0xFF00))) (local.get $v)) (return)))
     ;; ---- I/O ----
+    (if (i32.eq (local.get $x) (i32.const 0xFF41))
+      (then (call $statwrite (local.get $v) (i32.add (global.get $abscc) (call $ioff)))))
+    (if (i32.eq (local.get $x) (i32.const 0xFF45))
+      (then (call $lycwrite (local.get $v) (i32.add (global.get $abscc) (call $ioff)))))
+    (if (i32.eq (local.get $x) (i32.const 0xFF00))
+      (then
+        (if (i32.and (i32.xor (local.get $v) (i32.load8_u (i32.const ${IOREG}))) (i32.const 0x30))
+          (then
+            (i32.store8 (i32.const ${IOREG})
+              (i32.or (i32.and (i32.load8_u (i32.const ${IOREG})) (i32.const 0xCF)) (i32.and (local.get $v) (i32.const 0x30))))
+            (call $updinput)))
+        (return)))
     (if (i32.eq (local.get $x) (i32.const 0xFF46))
       (then (call $oamdma (local.get $v)) (return)))
     (if (i32.or (i32.and (i32.ge_u (local.get $x) (i32.const 0xFF40))
@@ -503,16 +598,21 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
             ;; interrupt is requested at once if enabled.
             (i32.store8 (i32.const ${IOREG + 0x41})
               (i32.and (i32.load8_u (i32.const ${IOREG + 0x41})) (i32.const 0xF8)))
-            (if (i32.and (i32.eqz (i32.load8_u (i32.const ${IOREG + 0x45})))
-                         (i32.ne (i32.and (i32.load8_u (i32.const ${IOREG + 0x41})) (i32.const 0x40)) (i32.const 0)))
-              (then (call $irq (i32.const 2))))
+            (global.set $statlow (i32.const 0))
+            (global.set $lcdinactive (i32.const 1))
             (global.set $skipnext (i32.eqz (global.get $blanklcd)))
             ;; line 0 starts AT THE WRITE, which is $ioff cycles into the
             ;; instruction (gambatte lyCounter.reset(0, cc) at the write's cc);
             ;; the instruction's full cost is subtracted after this.
             (global.set $cycbias (i32.add (global.get $cycbias)
               (i32.sub (i32.add (global.get $linelen) (call $ioff)) (global.get $cyc))))
-            (global.set $cyc (i32.add (global.get $linelen) (call $ioff)))))
+            (global.set $cyc (i32.add (global.get $linelen) (call $ioff)))
+            ;; the LCD events restart with the new LY counter (lcdcChange)
+            (i32.store8 (i32.const ${IOREG + 0x40}) (local.get $v))
+            (call $lcdevreset (i32.add (global.get $abscc) (call $ioff)) (i32.const 1))
+            (global.set $m0next (i32.and (global.get $statreg) (i32.const 0x08)))
+            (global.set $m0done (i32.const 1))
+            (global.set $hdmadone (i32.const 1))))
         ;; LCD switched OFF: LY reads 0 and gambatte schedules its next frame
         ;; event 4 lines (1824 cycles) out; that event only arms the blank
         ;; state, and blank frames then follow every 70224 cycles. Counted
@@ -521,6 +621,7 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
         (if (i32.and (i32.ne (i32.and (local.get $old) (i32.const 0x80)) (i32.const 0))
                      (i32.eqz (i32.and (local.get $v) (i32.const 0x80))))
           (then
+            (global.set $statlow (i32.and (call $getstat) (i32.const 4)))
             (global.set $ly (i32.const 0))
             (global.set $offcd (i32.add (i32.shl (i32.const 1824) (global.get $speed))
               (i32.add (i32.sub (global.get $linelen) (global.get $cyc)) (call $ioff))))))
@@ -568,8 +669,44 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
               (if (result i32) (i32.eqz (i32.and (local.get $v) (i32.const 7)))
                 (then (i32.const 1)) (else (i32.and (local.get $v) (i32.const 7)))))
             (return)))
-    (i32.store8 (i32.add (i32.const ${IOREG})
-      (i32.sub (local.get $x) (i32.const 0xFF00))) (local.get $v)))
+    (call $iostore (i32.sub (local.get $x) (i32.const 0xFF00)) (local.get $v)))
+
+  ;; The rest of $FF00-$FF7F, register by register as gambatte's
+  ;; Memory::nontrivial_ff_write stores them (IOTAB: mode, OR mask):
+  ;;   0 not stored (write-only, unused, or absent on this model)
+  ;;   1 stored as data | mask
+  ;;   2 sound register: stored as data | mask only while the APU is on
+  ;;   3 NR11/NR21: APU off -> ignored on CGB, length bits only on DMG
+  ;;   4 STAT: (old & 0x87) | (data & 0x78)
+  ;;   5 NR52: switching off writes 0 through every register $FF10-$FF25
+  (func $iostore (param $p i32) (param $v i32)
+    (local $m i32) (local $or i32) (local $on i32) (local $i i32)
+    (local.set $m (i32.load8_u (i32.add (i32.const ${IOTAB}) (i32.shl (local.get $p) (i32.const 1)))))
+    (local.set $or (i32.load8_u (i32.add (i32.const ${IOTAB + 1}) (i32.shl (local.get $p) (i32.const 1)))))
+    (local.set $on (i32.and (i32.load8_u (i32.const ${IOREG + 0x26})) (i32.const 0x80)))
+    (block $done
+      (br_if $done (i32.eqz (local.get $m)))
+      (if (i32.eq (local.get $m) (i32.const 2)) (then (br_if $done (i32.eqz (local.get $on)))))
+      (if (i32.eq (local.get $m) (i32.const 3))
+        (then (if (i32.eqz (local.get $on))
+                (then ${cgb ? '(br $done)' : '(local.set $v (i32.and (local.get $v) (i32.const 0x3F)))'}))))
+      (if (i32.eq (local.get $m) (i32.const 4))
+        (then (local.set $v (i32.or (i32.and (i32.load8_u (i32.const ${IOREG + 0x41})) (i32.const 0x87))
+                                    (i32.and (local.get $v) (i32.const 0x78))))))
+      (if (i32.eq (local.get $m) (i32.const 5))
+        (then
+          (if (i32.and (i32.and (i32.xor (local.get $v) (i32.load8_u (i32.const ${IOREG + 0x26}))) (i32.const 0x80))
+                       (i32.eqz (i32.and (local.get $v) (i32.const 0x80))))
+            (then
+              (local.set $i (i32.const 0x10))
+              (block $d (loop $l
+                (br_if $d (i32.ge_u (local.get $i) (i32.const 0x26)))
+                (call $iostore (local.get $i) (i32.const 0))
+                (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                (br $l)))))
+          (local.set $v (i32.or (i32.and (local.get $v) (i32.const 0x80))
+                                (i32.and (i32.load8_u (i32.const ${IOREG + 0x26})) (i32.const 0x7F))))))
+      (i32.store8 (i32.add (i32.const ${IOREG}) (local.get $p)) (i32.or (local.get $v) (local.get $or)))))
 
   ;; ---- RAM CODE BY PROVENANCE ($origin_note) ---------------------------
   ;; Games copy routines from ROM into HRAM/WRAM and call them there (the OAM
@@ -785,7 +922,7 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
     (call $ppu_catch (i32.sub (local.get $used) (i32.const ${80 + PIXDELAY}))))
 
   (func $stop
-    (local $old i32)
+    (local $old i32) (local $d i32)
     (local.set $old (global.get $speed))
     ;; gambatte Memory::stop spends 4 (+4 at double speed) cycles on top of
     ;; the opcode fetch the cycle table charges: cc += 4 + 4 * ds.
@@ -794,6 +931,17 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
       (then
         (global.set $speed (i32.xor (global.get $speed) (i32.const 1)))
         (global.set $key1prep (i32.const 0))
+        ;; gambatte PPU::speedChange keeps the VIDEO position: the rest of
+        ;; the current line (in video cycles, 456 per line) now takes
+        ;; rest << newspeed CPU cycles. The switch happens after the opcode
+        ;; fetch (4, charged after this body) and the cycles spent above.
+        (local.set $d (global.get $cyc))
+        (global.set $cyc (i32.add (i32.shl (i32.shr_s (i32.sub (global.get $cyc) (i32.const 4)) (local.get $old))
+                                           (global.get $speed))
+                                  (i32.const 4)))
+        ;; the rescale is not time passing: keep it out of the clocks
+        (global.set $cycbias (i32.add (global.get $cycbias) (i32.sub (global.get $cyc) (local.get $d))))
+        (global.set $linelen (i32.shl (i32.const 456) (global.get $speed)))
         (if (i32.eqz (i32.and (i32.load8_u (i32.const ${IOREG + 0x40})) (i32.const 0x80)))
           ;; counted from gambatte's cc after STOP: the fetch (4, charged
           ;; after this body) plus the cycles just spent
@@ -838,6 +986,7 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
       (then (global.set $hdma_on (i32.const 0)))))
 
   (func $hdma_start (param $v i32)
+    (local $w i32)
     ;; Writing bit 7 = 0 while an HBlank DMA runs CANCELS it.
     (if (i32.and (global.get $hdma_on) (i32.eqz (i32.and (local.get $v) (i32.const 0x80))))
       (then
@@ -859,7 +1008,19 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
         (if (i32.eqz (i32.and (i32.load8_u (i32.const ${IOREG + 0x40})) (i32.const 0x80)))
           (then
             (global.set $hdma_len (i32.const 1))
-            (call $hdma_block)))
+            (call $hdma_block)
+            (global.set $cyc (i32.sub (global.get $cyc) (i32.const 4)))
+            (return)))
+        ;; Enabled INSIDE this line's HDMA period (gambatte LCD::enableHdma,
+        ;; isHdmaPeriod: LY < 144, more than 4 cycles before the next line,
+        ;; at or after the mode-0 time + 1 - ds): one block is requested at
+        ;; once, moved after this instruction ($statev), and the next is the
+        ;; next line's.
+        (local.set $w (i32.add (i32.sub (global.get $linelen) (global.get $cyc)) (call $ioff)))
+        (if (i32.and (i32.and (i32.lt_u (global.get $ln) (i32.const 144))
+                              (i32.gt_s (i32.sub (global.get $linelen) (local.get $w)) (i32.const 4)))
+                     (i32.ge_s (local.get $w) (global.get $hdmaat)))
+          (then (global.set $hdmanow (i32.const 1)) (global.set $hdmadone (i32.const 1))))
         (return)))
     ;; General DMA: everything now.
     (block $d (loop $l
