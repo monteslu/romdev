@@ -801,7 +801,9 @@ function frameWat(mapper) {
     ;; fceumm_ramstate default "fill $ff"
     (memory.fill (i32.const 0) (i32.const 0xFF) (i32.const 0x800))
     (global.set $s (i32.const 0xFD))
-    (global.set $fi (i32.const 1))${mapper.init ? `
+    (global.set $fi (i32.const 1))${mapper.chrRamFill ? `
+    ;; iNES_Init: CHR RAM is FCEU_MemoryRand-filled like work RAM ($FF)
+    ${mapper.chrRamFill}` : ""}${mapper.init ? `
     ;; the mapper's power-on mapping
     ${mapper.init}` : ""}
     (global.set $pc (i32.or (call $rd8 (i32.const 0xFFFC))
@@ -872,6 +874,10 @@ export async function* emitWat(rom, opts = {}) {
   const prg = rom.subarray(d.prgOffset, d.prgOffset + d.prgSize);
   const chr = rom.subarray(d.chrOffset, d.chrOffset + d.chrSize);
   const mapper = MAPPERS[d.mapper].make(d, prg);
+  if (d.chrRam) {
+    mapper.chrRamFill = `(memory.fill (i32.const ${CHR}) (i32.const 0xFF) (i32.const 0x2000))` +
+      (mapper.chrStore ? ` (memory.fill (i32.const ${mapper.chrStore}) (i32.const 0xFF) (i32.const 0x2000))` : "");
+  }
   const n = prg.length;
   const view = { fixedByte: mapper.fixedByte, romWritesMatter: mapper.romWritesMatter };
 

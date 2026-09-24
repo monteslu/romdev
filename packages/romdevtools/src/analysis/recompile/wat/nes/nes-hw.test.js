@@ -276,6 +276,14 @@ lda #$10\nsta $2006\nlda #$00\nsta $2006\nlda $2007\nlda $2007\nsta $${(zz + 1).
 /** MMC1 serial write: 5 x (sta reg, lsr) */
 const mmc1 = (reg, v) => `lda #$${v.toString(16)}\n` + Array.from({ length: 5 }, (_, i) => `sta $${reg.toString(16)}\n${i < 4 ? "lsr\n" : ""}`).join("");
 
+test("CHR RAM powers up filled like work RAM ($FF, fceumm FCEU_MemoryRand ramstate 0)", async () => {
+  const r = rom({ main: PRO + chrRead(0x30) + "lda #$0E\nsta $2006\nlda #$00\nsta $2006\nlda $2007\nlda $2007\nsta $32\n" + LOOP });
+  r[5] = 0; // CHR RAM
+  const x = await run(r.subarray(0, 16 + 0x4000), 2);
+  assert.deepEqual([...x.ram.slice(0x30, 0x33)], [0xFF, 0xFF, 0xFF]);
+  assertCpu(x, { pc: 49214, a: 255, x: 255, y: 0, s: 255, p: 132, count: -192 });
+});
+
 test("mapper 2 (UxROM): $8000 window follows the latch, $C000 is the last bank, 8KB WRAM", async () => {
   const r = await run(romMap({
     prgBanks: 8, chrBanks: 0, flags6: 0x21,
