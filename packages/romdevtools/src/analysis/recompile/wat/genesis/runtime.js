@@ -1013,6 +1013,9 @@ export function vdpWat(opts = {}) {
     (i32.load8_u (i32.add (i32.const ${CLIP}) (i32.add (i32.mul (local.get $k) (i32.const 3)) (local.get $f)))))
 
   (func $vdp_reset
+    ;; registers cleared; H-INT is disabled on startup (reg[10] = $FF)
+    (memory.fill (i32.const ${VREG}) (i32.const 0) (i32.const 32))
+    (i32.store8 (i32.const ${VREG + 10}) (i32.const 0xFF))
     (global.set $v_pending (i32.const 0)) (global.set $v_code (i32.const 0))
     (global.set $v_addr (i32.const 0)) (global.set $v_addr_latch (i32.const 0))
     (global.set $v_border (i32.const 0)) (global.set $v_hint_pending (i32.const 0))

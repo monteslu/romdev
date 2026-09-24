@@ -266,3 +266,11 @@ test("code run from a re-based bank (mapper_512k_w) and from backup RAM runs wha
   const r = await gpgxParity({ platform: "genesis", rom, maxFrames: 3 });
   assert.equal(r.diverged, false, divergenceText(r));
 });
+
+test("the VDP powers on with H-INT off (vdp_reset: registers cleared, R10 = $FF)", T, async () => {
+  // enable H-INT and V-INT without ever writing R10: gpgx takes no line interrupt
+  const main = [...W(0x33fc, 0x8014), ...L(0xc00004), ...W(0x33fc, 0x8164), ...L(0xc00004), ...W(0x46fc, 0x2000, 0x60fe)];
+  const rom = mdImage(main, { at: [[0x70, L(0x300)], [0x78, L(0x310)], [0x300, W(0x5287, 0x4e73)], [0x310, W(0x5286, 0x4e73)]] });
+  const r = await gpgxParity({ platform: "genesis", rom, maxFrames: 4 });
+  assert.equal(r.diverged, false, divergenceText(r));
+});
