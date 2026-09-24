@@ -80,6 +80,7 @@ test("describe: LoROM header, copier header, SRAM mask", () => {
   assert.equal(c.romSize, 0x8000);
   assert.equal(c.sramMask, 0x7fff);     // no SRAM: the 32KB scratch window
   assert.equal(c.layout.regions.sram, undefined);
+  assert.equal(d.layout.diagnosticRegions.sram.length, 8192);
 });
 
 test("describe refuses coprocessor carts and names the chip", async () => {

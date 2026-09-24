@@ -196,15 +196,16 @@ function cartLayout(lay, sramSize) {
     cgram: { offset: CGRAM, length: 0x200, ref: "snes_cgram" },
     oam: { offset: OAM, length: 0x220, ref: "snes_oam" },
   };
-  if (sramSize) regions.sram = { offset: SRAMB, length: Math.min(sramSize, 0x8000), ref: "save_ram" };
+  // ARAM holds what the IPL boot protocol uploaded. No SPC700 runs the
+  // driver, so once it starts snes9x's ARAM moves on and this does not.
+  // SRAM starts zeroed in the cart and snes9x fills it differently at power
+  // on, so it differs until a game writes all of it. Both are diagnostic,
+  // not pass/fail regions.
+  const diagnosticRegions = { aram: { offset: lay.ARAM, length: 0x10000, ref: "snes_aram" } };
+  if (sramSize) diagnosticRegions.sram = { offset: SRAMB, length: Math.min(sramSize, 0x8000), ref: "save_ram" };
   return {
     regions,
-    // ARAM holds what the IPL boot protocol uploaded. No SPC700 runs the
-    // driver, so once it starts snes9x's ARAM moves on and this does not:
-    // diagnostic, not a pass/fail region.
-    diagnosticRegions: {
-      aram: { offset: lay.ARAM, length: 0x10000, ref: "snes_aram" },
-    },
+    diagnosticRegions,
     probe: {
       offset: PROBE,
       fields: Object.fromEntries(Object.entries(PROBE_FIELDS).map(([k, o]) => [k, { offset: PROBE + o, size: 4 }])),
