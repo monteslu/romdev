@@ -350,3 +350,27 @@ test("input schedule: compact string and object forms, shifting, edges applied b
   assert.ok(alt.some((p) => p.buttons.includes("start") && p.frame === 100), "start presses are kept");
   assert.ok(!alt.some((p) => p.frame === 200 && p.buttons.join() === "right" && p.hold === 50), "play presses are replaced");
 });
+
+test("frame tool: verifyRecompile needs atFrames; step takes count as an alias; trace formats are routed", async () => {
+  const { z } = await import("zod");
+  const { registerFrameTools } = await import("../src/mcp/tools/frame.js");
+  const { _setHostForTest, clearHost } = await import("../src/mcp/state.js");
+  const key = "verify-recompile-dispatch", tools = {};
+  registerFrameTools({ tool: (n, _d, _s, h) => { tools[n] = h; } }, z, key);
+  const host = { status: { platform: "fake", loaded: true, frameCount: 0, fbWidth: 1, fbHeight: 1 }, stepFrames(n) { this.status.frameCount += n; return n; } };
+  _setHostForTest(key, host);
+  try {
+    const cart = new URL("./fixtures/hello.wasc", import.meta.url).pathname;
+    const r = await tools.frame({ op: "verifyRecompile", cart, reference: cart, platform: "nes" });
+    assert.equal(r.isError, true);
+    assert.match(r.content[0].text, /atFrames/);
+    const s = JSON.parse((await tools.frame({ op: "step", count: 7, frames: 1 })).content[0].text);
+    assert.equal(s.framesRun, 7);
+    const bad = await tools.frame({ op: "step", count: 7, frames: 3 });
+    assert.match(bad.content[0].text, /frames OR count/);
+    const shot = await tools.frame({ op: "screenshot", format: "compact", inline: true });
+    assert.match(shot.content[0].text, /stepInstructions trace format/);
+    const big = await tools.frame({ op: "stepInstructions", count: 5000 });
+    assert.match(big.content[0].text, /4096 cap/);
+  } finally { clearHost(key); }
+});

@@ -13,6 +13,7 @@ import { decodeOAM, decodePpuRegs, ppuRegsPopulated } from "../../platforms/snes
 import { stepInstructionCore, stepInstructionsCore, attachObserverFrame } from "./watch-memory.js";
 import { getRenderingContextCore } from "./rendering-context.js";
 import { humanCoDriveWarning } from "./playtest.js";
+import { runVerifyRecompile, runRecompileDiverge } from "./verify-recompile-op.js";
 
 // Normalize each platform's render-context into a CONSERVATIVE renderEnabled
 // (true | false | null). null = "can't tell from the registers" - verify never
@@ -688,6 +689,13 @@ export function registerFrameTools(server, z, sessionKey) {
   // (The frameCount COUNTER keeps climbing - a known core behavior of
   // unserializeState - but the actual emulated state is rewound.)
   async function findDiverge(args) {
+    // Recompile mode: a wasmcart built from a ROM vs that ROM's reference
+    // core, loaded fresh, stepped on one schedule and one frame axis, with
+    // every region/field of the cart's romdev.recompile layout compared on
+    // every frame. Selected by passing the cart (or its layout regions).
+    if (args.cart || args.reference || args.fields || (args.regions && typeof args.regions === "object")) {
+      return jsonContent(await runRecompileDiverge(sessionKey, { ...args }));
+    }
     const { findDivergence } = await import("../../host/find-divergence.js");
     return jsonContent(findDivergence(getHost(sessionKey), getHostB(sessionKey), args));
   }
@@ -846,7 +854,7 @@ export function registerFrameTools(server, z, sessionKey) {
 
   server.tool(
     "frame",
-    "Advance the emulator and capture frames. `op`: 'step' | 'screenshot' | 'stepAndShot' | 'sideBySide' | 'compareRam' | 'findDiverge' | 'compareRender' | 'portStatus' | 'stepInstruction' | 'verify'.\n" +
+    "Advance the emulator and capture frames. `op`: 'step' | 'screenshot' | 'stepAndShot' | 'sideBySide' | 'compareRam' | 'findDiverge' | 'compareRender' | 'portStatus' | 'stepInstruction' | 'stepInstructions' | 'verify' | 'verifyRecompile'.\n" +
     "'step': advance N `frames` as fast as possible - NO pacing/audio/vsync. Cores run at WASM speed, so frames:3600 " +
     "(1 min of game time) finishes in ~5-30ms, cheaper than a screenshot. Don't be timid - skip a title with 300, a " +
     "level with 7200; prefer ONE big call.\n" +
@@ -874,7 +882,13 @@ export function registerFrameTools(server, z, sessionKey) {
     "WHEN and WHERE. Snapshots both slots, steps them in lockstep up to `maxFrames`, and reports the first frame + first " +
     "byte address at which the work-RAM splits ({atFrame, address, a, b}). Non-destructive: both hosts are RESTORED to " +
     "their pre-search state. Run it from a known-identical point (state-restore both first) so 'first split' is meaningful. " +
-    "The agent then disasms the code that writes that address on both sides. Requires slot B.\n" +
+    "The agent then disasms the code that writes that address on both sides. Requires slot B. " +
+    "RECOMPILE MODE (pass `cart` + `reference`, or `regions`): a wasmcart recompiled from a ROM vs the ROM's reference core, both " +
+    "loaded fresh, stepped on the SAME `input` schedule and frame axis as verifyRecompile, and every region + scalar field of the " +
+    "cart's romdev.recompile layout (CPU registers vs cpu({op:'read'}) paths or reference struct offsets, cycle counters, " +
+    "VRAM/RAM/palette/OAM) compared EVERY frame (or every `stride`) from `startFrame`; returns the first differing frame with " +
+    "the region's first differing byte and the differing fields. Replaces native emulator trace differs: thousands of frames " +
+    "in seconds, all in romdev.\n" +
     "'compareRender': the PRESENTATION oracle - compare the decoded RENDERING STATE of slot A vs slot B (BG/sprites " +
     "enabled? which tilemap/palette? forced blank?) instead of bytes. This is what an agent building/tuning the graphics " +
     "shim needs: it says in plain terms WHAT the port's presentation is missing vs. the original. Same-platform ports get " +
@@ -900,11 +914,26 @@ export function registerFrameTools(server, z, sessionKey) {
     "stepped yet (it won't cry wolf on boot - step first). issues[] flags blankScreen/nearlyBlank/renderDisabled. " +
     "renderDisabled is only raised when the registers SAY so (never on an undecodable platform). Pass/fail with no " +
     "image tokens; for WHAT to fix, getPlatformDoc({platform, doc:'mental_model'}).\n" +
+    "'verifyRecompile': ONE call that verifies a recompiled wasmcart against its reference core. Loads `cart` (.wasc or bare " +
+    ".wasm) in slot A and the source ROM `reference` in slot B (platform from the cart's romdev.recompile section or " +
+    "`platform`), drives BOTH with one `input` schedule ('frame:buttons:hold,...' in REFERENCE frames; the wasmcart host maps " +
+    "button names by POSITION, so `a` is the same physical button on both), aligns the frame axes itself (core settle frames " +
+    "vs the wasmcart host's one settle frame and the cart's declared warmupFrames; the offset is in `alignment`, override " +
+    "with cartFrameOffset), and at each of `atFrames` scores exact / content (non-backdrop) / moving (pixels that changed in " +
+    "the reference over `movingWindow` frames) inside the reference's window of the cart framebuffer (centred, or cartOrigin), " +
+    "optionally sweeping +-`sweep` cart frames to report the peak and its sharpness. Byte-compares every region of the cart's " +
+    "romdev.recompile section (or caller `regions`: {name:{offset,length,ref,refOffset?,transform?,mask?}}) against the " +
+    "reference's memory regions and reads `fields`/`probe` (probe.trapped fails the run). Writes [cart|ref|diff] PNGs " +
+    "(mismatches magenta) to outputDir. Runs must-fail CONTROLS on separate cart instances: vramZero (zero the cart's VRAM " +
+    "regions, render one frame), wrongFrame (score against the reference wrongFrameDelta frames earlier, at the most-moving " +
+    "sample), wrongInput (a second cart run on a perturbed schedule). Verdict VERIFIED needs every scored frame >= 95% content " +
+    "on >= 2000 content px (and >= 95% moving where >= 200 px moved), every control failing, no trap; reasons[] names each " +
+    "miss. Returns a per-frame markdown `table`. Afterwards slot A = the cart and slot B = the reference at the last frame.\n" +
     "IMAGE CONTRACT (screenshot/stepAndShot): the image goes to `path` (default, returns {path}) OR inline:true - " +
     "you MUST pass one. Keeps PNGs out of context unless asked.",
     {
-      op: z.enum(["step", "screenshot", "stepAndShot", "sideBySide", "compareRam", "findDiverge", "compareRender", "portStatus", "stepInstruction", "stepInstructions", "verify"]).describe("step frames; capture a screenshot; step+capture in one call; capture both hosts side-by-side (A|B); compareRam = diff slot-A vs slot-B work-RAM (the logic-port oracle); findDiverge = find the first frame+byte where the two slots split (root-cause finder); compareRender = diff the decoded rendering state of the two slots (the presentation oracle); portStatus = ONE fused 'state of your port' verdict + next action (the capstone); single-step one CPU instruction; stepInstructions = bulk single-step N instructions into one ordered trace; or verify the game is actually rendering/alive (no vision needed)."),
-      count: z.number().int().min(1).max(4096).default(16).describe("op=stepInstructions: how many CPU instructions to single-step into the trace (default 16, max 4096)."),
+      op: z.enum(["step", "screenshot", "stepAndShot", "sideBySide", "compareRam", "findDiverge", "compareRender", "portStatus", "stepInstruction", "stepInstructions", "verify", "verifyRecompile"]).describe("step frames; capture a screenshot; step+capture in one call; capture both hosts side-by-side (A|B); compareRam = diff slot-A vs slot-B work-RAM (the logic-port oracle); findDiverge = find the first frame+byte where the two slots split (root-cause finder; with `cart` it runs the recompile per-frame state differ); compareRender = diff the decoded rendering state of the two slots (the presentation oracle); portStatus = ONE fused 'state of your port' verdict + next action (the capstone); single-step one CPU instruction; stepInstructions = bulk single-step N instructions into one ordered trace; verify the game is actually rendering/alive (no vision needed); verifyRecompile = verify a recompiled wasmcart against its reference core (scores, state compare, controls, verdict)."),
+      count: z.number().int().min(1).max(1_000_000).optional().describe("op=stepInstructions/step: stepInstructions = how many CPU instructions to single-step into the trace (default 16, max 4096); step = accepted as an alias for `frames`, since the unit is fixed by the op."),
       withRegisters: z.boolean().default(false).describe("op=stepInstructions: include the CPU register file at each step (heavier payload; omit if you only need pc/width/bytes for boundary+immediate-width analysis)."),
       stepFormat: z.enum(["full", "compact"]).default("full").describe("op=stepInstructions: 'full' = per-step objects (pc/flow/width/nextPc); 'compact' = one string per step (`$PC flow->$target`) + a `pcRanges` loop-map with hit counts (~90% fewer tokens for triage)."),
       frames: z.number().int().min(1).max(1_000_000).default(1).describe("op=step/stepAndShot/sideBySide/compareRam/compareRender: frames to advance (1-1,000,000). For the slot-A/B compare ops, BOTH hosts step the same amount. 36000 (10 min) usually completes in <1s - don't be conservative."),
@@ -916,8 +945,35 @@ export function registerFrameTools(server, z, sessionKey) {
       compareLength: z.number().int().min(1).max(16777216).optional().describe("op=findDiverge: number of bytes to compare. Required for wasmcart; map the emulated RAM explicitly, not the whole heap."),
       restore: z.boolean().default(true).describe("op=findDiverge: restore both machine states after searching. Native WASM runtimes cannot generally snapshot hidden VM state; pass false explicitly to advance both slots instead."),
       maxRanges: z.number().int().min(1).max(256).default(24).describe("op=compareRam: cap on the diverging address ranges returned (largest first)."),
-      maxFrames: z.number().int().min(1).max(100000).default(600).describe("op=findDiverge: max frames to step in lockstep looking for the first divergence (default 600 = ~10s)."),
-      format: z.enum(["png", "ascii"]).default("png").describe("op=screenshot: 'png' (default, real image) or 'ascii' (lossy text render)."),
+      maxFrames: z.number().int().min(1).max(100000).default(600).describe("op=findDiverge: max frames to step in lockstep looking for the first divergence (default 600 = ~10s). In recompile mode: frames compared (each `stride` apart)."),
+      cart: z.string().optional().describe("op=verifyRecompile/findDiverge: path to the recompiled cart (.wasc, or a bare .wasm that is wrapped in memory). Its `romdev.recompile` custom section, when present, supplies the reference platform, ROM sha1, warmupFrames, screen origin, button convention and the regions/fields to compare. Omitted: the wasmcart already in a slot."),
+      reference: z.string().optional().describe("op=verifyRecompile/findDiverge: path to the SOURCE ROM, run on its reference core in slot B. Refused when the cart's section records a different ROM sha1. Omitted: the ROM already in the other slot."),
+      platform: z.string().optional().describe("op=verifyRecompile/findDiverge: the reference core's loadMedia platform ('sms', 'gg', 'nes', 'gb', 'gbc', 'genesis', 'snes', 'gba'). Default: the cart section's `reference`/`platform`."),
+      atFrames: z.array(z.number().int().min(1)).min(1).max(64).optional().describe("op=verifyRecompile: REFERENCE frames (frames stepped after loadMedia on the reference core) to score, ascending. Pick late frames with real, moving pictures: a title screen proves little."),
+      input: z.union([z.string(), z.array(z.object({ frame: z.number().int().min(0), buttons: z.union([z.string(), z.array(z.string()), z.record(z.string(), z.boolean())]), hold: z.number().int().min(1).optional() }))]).optional().describe("op=verifyRecompile/findDiverge: ONE input schedule applied to both sides, in REFERENCE frames: 'frame:buttons:hold,...' (e.g. '700:start:10,900:right+b:15') or [{frame, buttons:'a+right'|['a']|{a:true}, hold}]. libretro names (a,b,x,y,l,r,start,select,up,down,left,right) or spatial names (south,east,west,north); the cart gets each press at frame+offset, by physical position."),
+      wrongInput: z.union([z.string(), z.array(z.object({ frame: z.number().int().min(0), buttons: z.union([z.string(), z.array(z.string()), z.record(z.string(), z.boolean())]), hold: z.number().int().min(1).optional() }))]).optional().describe("op=verifyRecompile: schedule for the wrong-input control (default: the start/select presses kept, every other press replaced by a fixed pseudo-random play script). The control must FAIL."),
+      cartFrameOffset: z.number().int().min(-10000).max(10000).optional().describe("op=verifyRecompile/findDiverge: override the computed alignment (cart frame = reference frame + offset). Default: reference settle frames - wasmcart settle frame (1) - the cart's warmupFrames."),
+      sweep: z.number().int().min(0).max(30).optional().describe("op=verifyRecompile: also score cart frames +-sweep around each aligned frame and report the peak offset and its sharpness (peak minus best neighbour). A sharp peak at 0 means the cart tracks the reference; the verdict always scores the ALIGNED pair. Default 0."),
+      cartOrigin: z.array(z.number().int().min(0)).length(2).optional().describe("op=verifyRecompile: [x,y] of the reference picture inside the cart framebuffer (e.g. [48,24] for a Game Gear cart rendering the full 256x192 raster). Default: the section's screen.origin, else centred."),
+      cartButtonMap: z.record(z.string(), z.string()).optional().describe("op=verifyRecompile/findDiverge: rename buttons for the CART side only, for a legacy cart that reads wasmcart pad bits by name instead of position (e.g. {a:'b', b:'a'}). A section with buttons:'byName' implies exactly that swap."),
+      regions: z.record(z.string(), z.object({ offset: z.number().int().min(0), length: z.number().int().min(1), ref: z.string(), refOffset: z.number().int().min(0).optional(), transform: z.enum(["swap16", "lowbyte16", "highbyte16"]).optional(), mask: z.number().int().min(0).max(255).optional() })).optional().describe("op=verifyRecompile/findDiverge: cart linear-memory spans to byte-compare against reference memory regions, {name:{offset,length,ref:'<region>',refOffset?,transform?,mask?}}. Merged over the cart's romdev.recompile section (same name = caller wins); the only source for a cart without the section. transform applies to the reference bytes (lowbyte16 = keep the low byte of each u16 word, e.g. gpgx's SMS CRAM); mask ANDs both sides."),
+      fields: z.record(z.string(), z.object({ offset: z.number().int().min(0), size: z.number().int().optional(), signed: z.boolean().optional(), mask: z.number().int().min(0).optional(), ref: z.union([z.string(), z.object({ cpu: z.string().optional(), region: z.string().optional(), offset: z.number().int().min(0).optional(), size: z.number().int().optional() })]).optional() })).optional().describe("op=verifyRecompile/findDiverge: scalar cart fields (little-endian, size 1/2/4 at `offset`) compared with the reference: ref 'cpu:<path>' reads cpu({op:'read'}) (e.g. 'cpu:pc', 'cpu:registers.A', 'cpu:coreInternal.count'), or '<region>+<offset>' / {region, offset} reads a reference memory region (e.g. genesis_m68k+5208 for Musashi's pc). mask ANDs both values."),
+      probe: z.record(z.string(), z.object({ offset: z.number().int().min(0), size: z.number().int().optional() })).optional().describe("op=verifyRecompile: cart-only probe fields reported per frame; a nonzero `trapped` fails the verdict."),
+      warmupFrames: z.number().int().min(0).max(1000).optional().describe("op=verifyRecompile/findDiverge: frames the cart runs inside its FIRST wc_render beyond the one the host counts (overrides the section's warmupFrames)."),
+      vramZero: z.array(z.string()).optional().describe("op=verifyRecompile: region names the VRAM-zero control wipes (default: regions named *vram*/*chr*/*nametable*)."),
+      controls: z.array(z.enum(["vramZero", "wrongFrame", "wrongInput"])).optional().describe("op=verifyRecompile: which must-fail controls to run (default all three). Dropping one is a claim you can defend: a still screen makes wrongFrame unfailable."),
+      movingWindow: z.number().int().min(1).max(600).optional().describe("op=verifyRecompile: frames back for the moving-pixel mask (default 10)."),
+      wrongFrameDelta: z.number().int().min(1).max(10000).optional().describe("op=verifyRecompile: how far from the right frame the wrong-frame control's reference is (default 30)."),
+      minContentPct: z.number().min(0).max(100).optional().describe("op=verifyRecompile: bar for strict content % (default 95)."),
+      minContentPx: z.number().int().min(0).optional().describe("op=verifyRecompile: minimum reference content pixels for a frame to count as evidence (default 2000)."),
+      minMovingPct: z.number().min(0).max(100).optional().describe("op=verifyRecompile: bar for moving-pixel % (default 95)."),
+      minMovingPx: z.number().int().min(0).optional().describe("op=verifyRecompile: moving pixels needed before the moving bar applies to a frame (default 200)."),
+      requireStateMatch: z.boolean().optional().describe("op=verifyRecompile: any region/field difference fails the verdict (default false: differences are reported in stateDiffs, the pixels decide)."),
+      outputDir: z.string().optional().describe("op=verifyRecompile: directory for the [cart|ref|diff] PNGs (default a temp dir, reported as outputDir)."),
+      tag: z.string().optional().describe("op=verifyRecompile: PNG filename prefix (default the cart's basename)."),
+      startFrame: z.number().int().min(0).optional().describe("op=findDiverge: recompile mode - first reference frame compared; earlier frames run but are not compared (use it to bisect a late divergence cheaply)."),
+      stride: z.number().int().min(1).max(10000).optional().describe("op=findDiverge: recompile mode - compare every Nth frame (default 1). A hit at stride N is between the reported frame and the last identical one; rerun there with stride 1."),
+      format: z.enum(["png", "ascii", "full", "compact"]).default("png").describe("op=screenshot: 'png' (default, real image) or 'ascii' (lossy text render). op=stepInstructions: 'full' or 'compact' is accepted here as the trace format (same as stepFormat)."),
       source: z.enum(["composite", "core", "both"]).optional().describe("op=screenshot/stepAndShot, with an Active Bezel loaded: which picture to capture. 'composite' (default when a bezel is active) = the final scene the package rendered, which is what the human sees. 'core' = the RAW emulator framebuffer, ignoring the bezel. 'both' returns the two together - the comparison that shows whether the package's interpretation actually matches the game. Without a bezel, every value returns the core frame."),
       path: z.string().optional().describe("op=screenshot/stepAndShot: absolute path to write to (required unless inline:true). `outputPath` is accepted as an alias - memory({op:'read'}) spells it that way, and one name failing on the other tool cost round trips."),
       outputPath: z.string().optional().describe("Alias for `path` (op=screenshot/stepAndShot), so the spelling memory({op:'read'}) uses works here too."),
@@ -936,8 +992,15 @@ export function registerFrameTools(server, z, sessionKey) {
         ? { ...rawArgs, path: rawArgs.outputPath }
         : rawArgs;
       switch (args.op) {
-        case "step":            return doStep(args);
-        case "screenshot":      return doScreenshot(args);
+        case "step": {
+          // `count` is accepted as an alias: stepInstructions spells "how
+          // many" that way and the unit is fixed by the op.
+          if (args.count != null && args.frames !== 1 && args.count !== args.frames) throw new Error(`frame({op:'step'}): pass frames OR count, not both (${args.frames} vs ${args.count}).`);
+          return doStep(args.count != null ? { ...args, frames: args.count } : args);
+        }
+        case "screenshot":
+          if (args.format === "full" || args.format === "compact") throw new Error(`frame({op:'screenshot'}): format:'${args.format}' is a stepInstructions trace format; a screenshot takes 'png' or 'ascii'.`);
+          return doScreenshot(args);
         case "stepAndShot":     return doStepAndShot(args);
         case "sideBySide":      return await doSideBySide(args);
         case "compareRam":      return compareRam(args);
@@ -945,7 +1008,10 @@ export function registerFrameTools(server, z, sessionKey) {
         case "compareRender":   return await compareRender(args);
         case "portStatus":      return await portStatus(args);
         case "stepInstruction": return await stepInstructionCore(sessionKey);
-        case "stepInstructions": return await stepInstructionsCore(sessionKey, { count: args.count, withRegisters: args.withRegisters, format: args.stepFormat });
+        case "stepInstructions":
+          if (args.count != null && args.count > 4096) throw new Error(`frame({op:'stepInstructions'}): count ${args.count} is over the 4096 cap - trace in chunks of <= 4096.`);
+          return await stepInstructionsCore(sessionKey, { count: args.count ?? 16, withRegisters: args.withRegisters, format: args.format === "full" || args.format === "compact" ? args.format : args.stepFormat });
+        case "verifyRecompile": return jsonContent(await runVerifyRecompile(sessionKey, { ...args }));
         case "verify":          return await doVerify(args);
         default: throw new Error(`frame: unknown op '${args.op}'`);
       }

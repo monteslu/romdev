@@ -79,6 +79,10 @@ export function registerLifecycleTools(server, z, sessionKey) {
         ...(bytes ? { bytes: bytes.length } : { path: host.status.mediaPath }),
         fbWidth: host.status.fbWidth, fbHeight: host.status.fbHeight,
         ...(deterministicSeed !== undefined ? { deterministicSeed: host.status.deterministicSeed } : {}),
+        // A cart whose WCInfo leaves inputPtr/timePtr at 0 gets no input or
+        // clock (the host refuses to write them over linear offset 0). Say so
+        // at load, where it is cheapest to act on.
+        ...(host.status.abiWarnings?.length ? { abiWarnings: host.status.abiWarnings } : {}),
         capabilities: caps,
       };
       // Push the first frame to the /livestream observer, same as an emulator load.
