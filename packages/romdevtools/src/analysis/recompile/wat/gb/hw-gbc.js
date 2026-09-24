@@ -382,7 +382,7 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
     (i32.load8_u (i32.const ${IOREG})))
 
   (func $rd8 (param $a i32) (result i32)
-    (local $x i32)
+    (local $x i32) (local $lyd i32) (local $lyl i32)
     (local.set $x (i32.and (local.get $a) (i32.const 0xFFFF)))
     ;; Every ROM read leaves its offset in $lastrom (+1) - the provenance a
     ;; RAM write compares against (see $origin_note).
@@ -451,23 +451,34 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
       (then (return (i32.or (i32.or (i32.const 0x80)
                                     (i32.and (i32.load8_u (i32.const ${IOREG + 0x41})) (i32.const 0x78)))
                             (i32.or (global.get $statlow) (call $getstat))))))
-    ;; LY as gambatte's LCD::getLyReg reads it: line 153 reads 0 (after its
-    ;; first 8 cycles at double speed), and the last 4 cycles of any other
-    ;; line already read the NEXT line. A sky-gradient raster effect starts on
+    ;; LY as gambatte's LCD::getLyReg reads it, at the access cycle: an
+    ;; access at or past the end of the cart's current line is already on
+    ;; the next line (getLyReg updates the LY counter first), and the rules
+    ;; apply to THAT line. Line 153 reads 0 (after its first 8 cycles at
+    ;; double speed); the last 4 cycles of any other line already read the
+    ;; NEXT line. So a read that lands just past the end of line 152 reads 0
+    ;; at single speed, not 153. A sky-gradient raster effect starts on
     ;; \`wait LY == 0\`, which on this rule exits a line early.
     (if (i32.eq (local.get $x) (i32.const 0xFF44))
       (then
         (if (i32.eqz (i32.and (i32.load8_u (i32.const ${IOREG + 0x40})) (i32.const 0x80)))
           (then (return (i32.const 0))))
-        (if (i32.eq (global.get $ln) (i32.const 153))
+        (local.set $lyd (i32.sub (global.get $cyc) (i32.mul (call $ioff) (i32.const ${LYIOFF}))))
+        (local.set $lyl (global.get $ln))
+        (if (i32.le_s (local.get $lyd) (i32.const 0))
+          (then
+            (local.set $lyd (i32.add (local.get $lyd) (global.get $linelen)))
+            (local.set $lyl (if (result i32) (i32.eq (local.get $lyl) (i32.const 153))
+                              (then (i32.const 0)) (else (i32.add (local.get $lyl) (i32.const 1)))))))
+        (if (i32.eq (local.get $lyl) (i32.const 153))
           (then
             (if (i32.eqz (global.get $speed)) (then (return (i32.const 0))))
-            (if (i32.le_s (i32.sub (global.get $cyc) (i32.mul (call $ioff) (i32.const ${LYIOFF}))) (i32.const ${912 - 8}))
+            (if (i32.le_s (local.get $lyd) (i32.const ${912 - 8}))
               (then (return (i32.const 0))))
             (return (i32.const 153))))
-        (if (i32.le_s (i32.sub (global.get $cyc) (i32.mul (call $ioff) (i32.const ${LYIOFF}))) (i32.const ${LYEARLY}))
-          (then (return (i32.add (global.get $ln) (i32.const 1)))))
-        (return (global.get $ln))))
+        (if (i32.le_s (local.get $lyd) (i32.const ${LYEARLY}))
+          (then (return (i32.add (local.get $lyl) (i32.const 1)))))
+        (return (local.get $lyl))))
     (if (i32.eq (local.get $x) (i32.const 0xFF4D))
       (then (return (i32.or (i32.or (i32.shl (global.get $speed) (i32.const 7))
                                     (global.get $key1prep)) (i32.const 0x7E)))))
