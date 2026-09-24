@@ -172,6 +172,31 @@ test("a DMG cart runs on the DMG PPU: BGP=$FF paints every pixel black", async (
   assert.equal(black, 160 * 144);
 });
 
+test("the frame is handed out at gambatte's point: inside the VBlank interrupt entry", async () => {
+  // ld a,1; ldh ($FF),a (IE = VBlank); ei; spin. gambatte's blit runs the
+  // events due at that cycle, so its CPU is handed out at $0040 with the spin
+  // loop's pc stacked; the cart must stop at the same point.
+  const code = [0x3E, 0x01, 0xE0, 0xFF, 0xFB, 0x18, 0xFE];
+  const rom = makeRom(code);
+  const instrs = [[0x100, "nop", "", 1], [0x101, "jp", "$0150", 3],
+    [0x150, "ld", "a,$01", 2], [0x152, "ldh", "($FF),a", 2], [0x154, "ei", "", 1], [0x155, "jr", "$0155", 2],
+    [0x40, "reti", "", 1]];
+  const { dv, probe } = await runCart(rom, handBlocks(rom, instrs), 4);
+  assert.equal(probe("trapped"), 0);
+  assert.equal(probe("pc"), 0x40, "handed out inside the interrupt entry");
+  const sp = probe("sp");
+  assert.equal(sp, 0xFFFC, "power-on sp $FFFE, one return address pushed");
+  // HRAM is at its own CPU address in linear memory
+  assert.equal(dv.getUint16(sp, true), 0x155,
+    "the stacked return address is the spin loop's pc");
+});
+
+test("STOP is two bytes (gambatte skips the byte after the opcode)", () => {
+  const b = new Map();
+  addRecord(b, { off: 0x200, mnemonic: "stop", ops: "", len: 1, alignment: "primary" });
+  assert.equal(b.get(0x200).n, 2);
+});
+
 test("an undecodable instruction TRAPS at its pc, never slides on", async () => {
   const rom = makeRom([0xD3]);
   const instrs = [[0x100, "nop", "", 1], [0x101, "jp", "$0150", 3], [0x150, "defb", "$D3", 1]];

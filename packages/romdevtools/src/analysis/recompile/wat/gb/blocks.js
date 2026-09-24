@@ -65,7 +65,12 @@ export function addRecord(blocks, r) {
     return true;
   }
   const m = r.mnemonic.toLowerCase();
-  blocks.set(off, { m, o: normOps(m, r.ops || "", r.len), n: r.len });
+  // STOP is TWO bytes on the LR35902 (`10 00`): gambatte skips the byte after
+  // the opcode (cpu.cpp case 0x10: pc + 1 after the fetch). objdump prints
+  // it as a one-byte `stop`, which woke the cart onto the padding byte: one
+  // extra nop and a pc one short of gambatte's while it slept.
+  const n = m === "stop" ? 2 : r.len;
+  blocks.set(off, { m, o: normOps(m, r.ops || "", r.len), n });
   return false;
 }
 

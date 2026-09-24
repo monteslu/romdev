@@ -132,6 +132,9 @@ export function globalsWat() {
   (global $wline (mut i32) (i32.const 0))
   (global $linelen (mut i32) (i32.const 456))
   (global $rtc_sel (mut i32) (i32.const 0))
+  (global $serev (mut i32) (i32.const 0))
+  (global $sercnt (mut i32) (i32.const 8))
+  (global $serfast (mut i32) (i32.const 0))
 `;
 }
 
@@ -228,7 +231,7 @@ export function memWat(o) {
   return o.cgb === false ? dropBranches(t, CGB_ONLY_REGS) : t;
 }
 
-function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, origin }) {
+function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, origin, cgb = true }) {
   const mask = Math.max(1, imgLen) - 1;
   return `
   ;; linear address of a WRAM CPU address in $C000-$FDFF (echo folded)
@@ -308,6 +311,9 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
                             (i32.sub (local.get $x) (i32.const 0x4000)))
                    (i32.const ${mask}))))
         (return (i32.load8_u (i32.add (i32.const ${romimg - 1}) (global.get $lastrom))))))
+    ;; ...nor readable (reads $FF)
+    (if (i32.lt_u (local.get $x) (i32.const 0xA000))
+      (then (if (i32.eq (call $stat_mode) (i32.const 3)) (then (return (i32.const 0xFF))))))
     (if (i32.lt_u (local.get $x) (i32.const 0xA000))
       (then (return (i32.load8_u (i32.add (i32.add (i32.const ${VRAM0})
         (i32.sub (local.get $x) (i32.const 0x8000)))
@@ -337,6 +343,8 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
     (if (i32.eq (local.get $x) (i32.const 0xFF04))
       (then (return (i32.and (i32.shr_u (i32.add (global.get $divcnt) (i32.mul (call $ioff) (i32.const ${DIVIOFF}))) (i32.const 8))
                              (i32.const 0xFF)))))
+    (if (i32.or (i32.eq (local.get $x) (i32.const 0xFF01)) (i32.eq (local.get $x) (i32.const 0xFF02)))
+      (then (call $serupd (i32.add (global.get $abscc) (call $ioff)))))
     (if (i32.eq (local.get $x) (i32.const 0xFF0F))
       (then (return (i32.or (i32.load8_u (i32.const ${IOREG + 0x0F})) (i32.const 0xE0)))))
     (if (i32.eq (local.get $x) (i32.const 0xFF41))
@@ -406,6 +414,10 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
           (i32.add (i32.load (i32.const ${probe + 1016})) (i32.const 1)))))
     (if (i32.lt_u (local.get $x) (i32.const 0x8000))
       (then ${romWrite(mbc, imgLen)}))
+    ;; VRAM is not writable while the PPU is in mode 3 (gambatte
+    ;; LCD::vramAccessible); the write is dropped.
+    (if (i32.lt_u (local.get $x) (i32.const 0xA000))
+      (then (if (i32.eq (call $stat_mode) (i32.const 3)) (then (return)))))
     (if (i32.lt_u (local.get $x) (i32.const 0xA000))
       (then (i32.store8 (i32.add (i32.add (i32.const ${VRAM0})
         (i32.sub (local.get $x) (i32.const 0x8000)))
@@ -437,18 +449,24 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
                 (i32.or (i32.eq (local.get $x) (i32.const 0xFF69))
                         (i32.eq (local.get $x) (i32.const 0xFF6B))))
       (then (call $ppu_write_hook)))
-    ;; SC: a transfer on the INTERNAL clock completes (no partner: SB reads
-    ;; $FF). External clock never completes, as on hardware with no cable.
+    ;; SC: a transfer on the INTERNAL clock takes 8 bit times (512 cycles
+    ;; each, 16 in CGB fast mode) and shifts 1s into SB (no partner), then
+    ;; requests the serial interrupt - gambatte Memory::nontrivial_ff_write
+    ;; case 0x02 / updateSerial (built without HAVE_NETWORK). External clock
+    ;; never completes, as on hardware with no cable.
     (if (i32.eq (local.get $x) (i32.const 0xFF02))
       (then
+        (call $serupd (i32.add (global.get $abscc) (call $ioff)))
+        (global.set $sercnt (i32.const 8))
+        (global.set $serev (i32.const 0))
         (if (i32.eq (i32.and (local.get $v) (i32.const 0x81)) (i32.const 0x81))
           (then
-            (i32.store8 (i32.const ${IOREG + 0x01}) (i32.const 0xFF))
-            (i32.store8 (i32.const ${IOREG + 0x02}) (i32.and (local.get $v) (i32.const 0x7F)))
-            (i32.store8 (i32.const ${IOREG + 0x0F})
-              (i32.or (i32.load8_u (i32.const ${IOREG + 0x0F})) (i32.const 8)))
-            (return)))
-        (i32.store8 (i32.const ${IOREG + 0x02}) (local.get $v)) (return)))
+            (local.set $i (i32.add (global.get $abscc) (call $ioff)))
+            (global.set $serfast (i32.and (local.get $v) (i32.const ${cgb ? 2 : 0})))
+            (global.set $serev (if (result i32) (global.get $serfast)
+              (then (i32.add (i32.and (local.get $i) (i32.const -8)) (i32.const 0x80)))
+              (else (i32.add (i32.and (local.get $i) (i32.const -256)) (i32.const 0x1000)))))))
+        (i32.store8 (i32.const ${IOREG + 0x02}) (i32.or (local.get $v) (i32.const ${cgb ? 0x7C : 0x7E}))) (return)))
     ;; DIV reset at the write's cycle: the instruction's full cost is added
     ;; afterwards, so start at -(write offset)
     (if (i32.eq (local.get $x) (i32.const 0xFF04))
@@ -480,6 +498,14 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
           (then
             (global.set $lcdrestart (i32.const 1))
             (global.set $ln (i32.const 0))
+            ;; gambatte LCD::lcdcChange on enable: the STAT coincidence flag
+            ;; is cleared (ioamhram[0x141] &= 0xF8) and an LYC=0 STAT
+            ;; interrupt is requested at once if enabled.
+            (i32.store8 (i32.const ${IOREG + 0x41})
+              (i32.and (i32.load8_u (i32.const ${IOREG + 0x41})) (i32.const 0xF8)))
+            (if (i32.and (i32.eqz (i32.load8_u (i32.const ${IOREG + 0x45})))
+                         (i32.ne (i32.and (i32.load8_u (i32.const ${IOREG + 0x41})) (i32.const 0x40)) (i32.const 0)))
+              (then (call $irq (i32.const 2))))
             (global.set $skipnext (i32.eqz (global.get $blanklcd)))
             ;; line 0 starts AT THE WRITE, which is $ioff cycles into the
             ;; instruction (gambatte lyCounter.reset(0, cc) at the write's cc);
@@ -489,13 +515,15 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
             (global.set $cyc (i32.add (global.get $linelen) (call $ioff)))))
         ;; LCD switched OFF: LY reads 0 and gambatte schedules its next frame
         ;; event 4 lines (1824 cycles) out; that event only arms the blank
-        ;; state, and blank frames then follow every 70224 cycles.
+        ;; state, and blank frames then follow every 70224 cycles. Counted
+        ;; from the WRITE's cycle ($ioff into the instruction), as $offcd is
+        ;; measured from the line start (the frame loop's $offevent).
         (if (i32.and (i32.ne (i32.and (local.get $old) (i32.const 0x80)) (i32.const 0))
                      (i32.eqz (i32.and (local.get $v) (i32.const 0x80))))
           (then
             (global.set $ly (i32.const 0))
             (global.set $offcd (i32.add (i32.shl (i32.const 1824) (global.get $speed))
-              (i32.sub (i32.sub (global.get $linelen) (global.get $cyc)) (call $ioff))))))
+              (i32.add (i32.sub (global.get $linelen) (global.get $cyc)) (call $ioff))))))
         (i32.store8 (i32.const ${IOREG + 0x40}) (local.get $v)) (return)))
     (if (i32.eq (local.get $x) (i32.const 0xFF4D))
       (then (global.set $key1prep (i32.and (local.get $v) (i32.const 1))) (return)))
@@ -693,6 +721,30 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
         (return (i32.const 1))))
     (call $tmpl_run (local.get $op)))
 
+  ;; serial transfer progress at absolute cycle $cc (gambatte updateSerial,
+  ;; non-network build): done -> SB = ((SB+1) << bits left) - 1, SC bit 7
+  ;; cleared, serial interrupt; else shift in the bits already clocked.
+  (func $serupd (param $cc i32)
+    (local $tgt i32)
+    (if (i32.eqz (global.get $serev)) (then (return)))
+    (if (i32.ge_s (i32.sub (local.get $cc) (global.get $serev)) (i32.const 0))
+      (then
+        (i32.store8 (i32.const ${IOREG + 0x01})
+          (i32.sub (i32.shl (i32.add (i32.load8_u (i32.const ${IOREG + 0x01})) (i32.const 1))
+                            (global.get $sercnt)) (i32.const 1)))
+        (i32.store8 (i32.const ${IOREG + 0x02})
+          (i32.and (i32.load8_u (i32.const ${IOREG + 0x02})) (i32.const 0x7F)))
+        (global.set $serev (i32.const 0))
+        (call $irq (i32.const 8))
+        (return)))
+    (local.set $tgt (if (result i32) (global.get $serfast)
+      (then (i32.shr_u (i32.add (i32.sub (global.get $serev) (local.get $cc)) (i32.const 0xF)) (i32.const 4)))
+      (else (i32.shr_u (i32.add (i32.sub (global.get $serev) (local.get $cc)) (i32.const 0x1FF)) (i32.const 9)))))
+    (i32.store8 (i32.const ${IOREG + 0x01})
+      (i32.sub (i32.shl (i32.add (i32.load8_u (i32.const ${IOREG + 0x01})) (i32.const 1))
+                        (i32.sub (global.get $sercnt) (local.get $tgt))) (i32.const 1)))
+    (global.set $sercnt (local.get $tgt)))
+
   (func $setbank
     (if (global.get $bankmode)
       (then
@@ -735,13 +787,18 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
   (func $stop
     (local $old i32)
     (local.set $old (global.get $speed))
+    ;; gambatte Memory::stop spends 4 (+4 at double speed) cycles on top of
+    ;; the opcode fetch the cycle table charges: cc += 4 + 4 * ds.
+    (global.set $cyc (i32.sub (global.get $cyc) (i32.add (i32.const 4) (i32.shl (local.get $old) (i32.const 2)))))
     (if (global.get $key1prep)
       (then
         (global.set $speed (i32.xor (global.get $speed) (i32.const 1)))
         (global.set $key1prep (i32.const 0))
         (if (i32.eqz (i32.and (i32.load8_u (i32.const ${IOREG + 0x40})) (i32.const 0x80)))
+          ;; counted from gambatte's cc after STOP: the fetch (4, charged
+          ;; after this body) plus the cycles just spent
           (then (global.set $offcd (i32.add (i32.shl (i32.const 70224) (local.get $old))
-                  (i32.sub (global.get $linelen) (global.get $cyc))))))))
+                  (i32.add (i32.sub (global.get $linelen) (global.get $cyc)) (i32.const 4))))))))
     (global.set $halted (i32.const 1))
     (global.set $stopcd (i32.add (i32.const 0x20000) (i32.shl (local.get $old) (i32.const 3)))))
 
