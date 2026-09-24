@@ -1122,21 +1122,25 @@ function charge(n) {
 
 /** How control leaves an arm. `extra` = taken-minus-not-taken cost, charged on the branching path. */
 function emitFlow(f, extra = 0) {
+  // WZ (MEMPTR) updates the exact lowering annotated (z80.js withMemptr)
+  const always = f.wzAlways !== undefined ? `(global.set $wz (i32.const ${f.wzAlways & 0xFFFF})) ` : "";
+  const taken = f.wzTaken !== undefined ? ` (global.set $wz (i32.const ${f.wzTaken & 0xFFFF}))` : "";
+  const pop = f.wzPop ? " (global.set $wz (global.get $pc))" : "";
   switch (f.kind) {
-    case "jp": return `    (global.set $pc (i32.const ${f.target}))`;
+    case "jp": return `    ${always}(global.set $pc (i32.const ${f.target}))${taken}`;
     case "jp_ind": return `    (global.set $pc ${f.expr})`;
-    case "jp_cc": return `    (if ${f.cond}\n` +
-      `      (then ${charge(extra)} (global.set $pc (i32.const ${f.target})))\n` +
+    case "jp_cc": return `    ${always}(if ${f.cond}\n` +
+      `      (then ${charge(extra)} (global.set $pc (i32.const ${f.target}))${taken})\n` +
       `      (else (global.set $pc (i32.const ${f.next}))))`;
-    case "call": return `    (call $push16 (i32.const ${f.ret}))\n` +
+    case "call": return `    ${always}(call $push16 (i32.const ${f.ret}))\n` +
       `    (global.set $pc (i32.const ${f.target}))`;
-    case "call_cc": return `    (if ${f.cond}\n` +
+    case "call_cc": return `    ${always}(if ${f.cond}\n` +
       `      (then ${charge(extra)} (call $push16 (i32.const ${f.ret}))\n` +
       `            (global.set $pc (i32.const ${f.target})))\n` +
       `      (else (global.set $pc (i32.const ${f.next}))))`;
-    case "ret": return "    (global.set $pc (call $pop16))";
+    case "ret": return `    (global.set $pc (call $pop16))${pop}`;
     case "ret_cc": return `    (if ${f.cond}\n` +
-      `      (then ${charge(extra)} (global.set $pc (call $pop16)))\n` +
+      `      (then ${charge(extra)} (global.set $pc (call $pop16))${pop})\n` +
       `      (else (global.set $pc (i32.const ${f.next}))))`;
     case "halt": return `    (global.set $pc (i32.const ${f.target !== undefined ? f.target : f.next}))`;
     default: throw new Error(`sms recompile: unknown flow kind ${f.kind}`);
@@ -1610,6 +1614,7 @@ export async function* emitWat(rom, opts = {}) {
     "  (global $pauseb (mut i32) (i32.const 0))",
     "  (global $im (mut i32) (i32.const 0))",
     "  (global $vscroll (mut i32) (i32.const 0))",
+    "  (global $wz (mut i32) (i32.const 0))",
     "  (global $halted (mut i32) (i32.const 0))",
     "  (global $joy1 (mut i32) (i32.const 0xFF))",
     "  (global $joy2 (mut i32) (i32.const 0xFF))",
@@ -1677,6 +1682,7 @@ export async function* emitWat(rom, opts = {}) {
       "                        (global.set $pc (call $rd16 (i32.or (i32.shl (global.get $ireg) (i32.const 8)) (i32.const 0xFF)))))",
       "                  (else (local.set $budget (i32.sub (local.get $budget) (i32.const 13)))",
       "                        (global.set $pc (i32.const 0x38))))",
+      "                (global.set $wz (global.get $pc))",
       "                (br_if $exit (i32.le_s (local.get $budget) (i32.const 0)))))))",
       "      (global.set $eidelay (i32.const 0))"]),
     // A halted Z80 still burns the line as 4 T re-executions, each an opcode

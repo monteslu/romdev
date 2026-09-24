@@ -980,6 +980,7 @@ export function miscWat(opts = {}) {
       (then (local.set $f (i32.or (local.get $f) (i32.const 4)))))
     (global.set $f (local.get $f)))`, `    (if (local.get $bc)
       (then (local.set $f (i32.or (local.get $f) (i32.const 4)))))
+    (global.set $wz (i32.and (i32.add (global.get $wz) (local.get $dir)) (i32.const 0xFFFF)))
     (if (i32.and (local.get $f) (i32.const 0x10))
       (then (local.set $r (i32.and (i32.sub (local.get $r) (i32.const 1)) (i32.const 0xFF)))))
     (local.set $f (i32.or (local.get $f)
@@ -988,10 +989,18 @@ export function miscWat(opts = {}) {
     if (patched === body) throw new Error("sms recompile: could not patch $cpi_step");
     exact = exact.replace(body, patched);
   }
+  // OUTI/OUTD: WZ = BC +- 1 after B is decremented (gpgx OUTI/OUTD)
+  for (const [fn, d] of [["outi_step", 1], ["outd_step", -1]]) {
+    const body = funcText(exact, fn);
+    const dec = "    (global.set $b (i32.and (i32.sub (global.get $b) (i32.const 1)) (i32.const 0xFF)))\n";
+    if (!body.includes(dec)) throw new Error(`sms recompile: could not patch $${fn}`);
+    exact = exact.replace(body, body.replace(dec, dec + `    (global.set $wz (i32.and (i32.add (i32.or (i32.shl (global.get $b) (i32.const 8)) (global.get $c)) (i32.const ${d})) (i32.const 0xFFFF)))\n`));
+  }
   return exact + `
   (func $ini_step (param $dir i32)
     (local $hl i32) (local $io i32) (local $t i32) (local $f i32)
     (local.set $io (call $io_read (global.get $c)))
+    (global.set $wz (i32.and (i32.add (i32.or (i32.shl (global.get $b) (i32.const 8)) (global.get $c)) (local.get $dir)) (i32.const 0xFFFF)))
     (global.set $b (i32.and (i32.sub (global.get $b) (i32.const 1)) (i32.const 0xFF)))
     (local.set $hl (i32.or (i32.shl (global.get $h) (i32.const 8)) (global.get $l)))
     (call $wr8 (local.get $hl) (local.get $io))
@@ -1328,6 +1337,7 @@ export function pauseNmiWat(platform) {
                     (global.set $iff (i32.const 0))
                     (call $push16 (global.get $pc))
                     (global.set $pc (i32.const 0x66))
+                    (global.set $wz (i32.const 0x66))
                     (global.set $carry (i32.sub (global.get $carry) (i32.const 11))))))
             (else (global.set $pauseb (i32.const 0))))
 `;

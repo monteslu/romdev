@@ -204,3 +204,33 @@ test("vertical scroll is latched once a frame: an R9 write mid-frame shows from 
   assert.equal(r.picture.status, "OK", JSON.stringify(r.picture));
   assert.equal(r.picture.exactPct, 100, JSON.stringify(r.picture));
 });
+
+test("BIT n,(HL) copies the high byte of WZ (MEMPTR) into F bits 5 and 3, WZ set as gpgx sets it", T, async () => {
+  const B = [0xCB, 0x46, 0xF5]; // bit 0,(hl); push af
+  const HL = [0x21, 0x00, 0xC2]; // ld hl,$C200
+  const main = z80([
+    [0xF3, 0x31, 0xF0, 0xDF, 0x21, 0x00, 0xC2, 0x36, 0x81],             // di; ld sp; ld hl,$C200; ld (hl),$81
+    [0x3A, 0x00, 0x2A], B,                                                // ld a,($2A00)
+    [0x3E, 0x5A, 0x32, 0x34, 0x12], B,                                    // ld ($1234),a
+    [0x01, 0x00, 0x3F, 0x0A], B,                                          // ld bc,$3F00; ld a,(bc)
+    [0x11, 0x00, 0x08, 0x12], B,                                          // ld de,$0800; ld (de),a
+    ["jp", "s5"], "s5:", B,
+    ["jr", null, "s6"], "s6:", B,
+    ["call", "sub"], B,
+    [0x21, 0x00, 0x28, 0x11, 0x08, 0x08, 0x19], HL, B,                    // add hl,de
+    [0xDB, 0x7E], B,                                                      // in a,($7E)
+    [0x3E, 0x9F, 0xD3, 0x7F], B,                                          // out ($7F),a
+    [0xDD, 0x21, 0x00, 0xC3, 0xDD, 0x77, 0x05], B,                        // ld (ix+5),a
+    [0xED, 0x5B, 0x00, 0x10], B,                                          // ld de,($1000)
+    [0xED, 0x6F], B,                                                      // rld
+    [0xED, 0xA1], HL, B,                                                  // cpi
+    [0x11, 0x10, 0xC2, 0x01, 0x02, 0x00, 0xED, 0xB0], HL, B,              // ldir x2
+    [0xEF], B,                                                            // rst $28
+    [0xE3, 0xE3], B,                                                      // ex (sp),hl x2
+    [0x06, 0x02], "dj:", ["djnz", "dj"], B,                              // djnz taken once
+    "end:", ["jr", null, "end"],
+    "sub:", [0xC9]], 0x100);
+  const rom = smsImage([0xC3, 0x00, 0x01], { at: [[0x28, [0xC9]], [0x100, main]] });
+  const r = await gpgxParity({ platform: "sms", rom, maxFrames: 5 });
+  assert.equal(r.diverged, false, divergenceText(r));
+});

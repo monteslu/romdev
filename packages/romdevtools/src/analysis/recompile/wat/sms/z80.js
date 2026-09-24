@@ -234,6 +234,60 @@ function need(o, n, what) {
  * @returns {[string, object|null]} [wat, flow]; flow says how control leaves the block
  */
 export function lower(mnem, ops, addr, size, mode = {}) {
+  const r = lowerInner(mnem, ops, addr, size, mode);
+  return mode.exact ? withMemptr(mnem, ops, addr, r) : r;
+}
+
+/**
+ * genesis_plus_gx's internal WZ (MEMPTR) register, kept in $wz: every
+ * instruction that sets it in z80.c sets it here, because BIT n,(HL) copies
+ * its high byte into F bits 5 and 3 and games push F. Control-flow updates
+ * are annotated on the flow (wzAlways / wzTaken / wzPop) for emitFlow.
+ * @param {string} mnem @param {string} ops @param {number} addr
+ * @param {[string, object|null]} r
+ */
+function withMemptr(mnem, ops, addr, r) {
+  let [wat, flow] = r;
+  const o = ops ? ops.split(",").map((x) => x.trim()) : [];
+  const set = (e) => `(global.set $wz (i32.and ${e} (i32.const 0xFFFF)))`;
+  const inc = (e) => set(`(i32.add ${e} (i32.const 1))`);
+  const hiA = (lo) => set(`(i32.or (i32.and ${lo} (i32.const 0xFF)) (i32.shl (global.get $a) (i32.const 8)))`);
+  let pre = "", post = "";
+  // (IX+d)/(IY+d): EAX/EAY set WZ to the effective address
+  const idx = o.map((x) => idxDisp(x)).find(Boolean);
+  if (idx) pre = set(`(i32.add ${get16(idx.p)} (i32.const ${idx.d}))`);
+  const nn = (x) => imm(x.slice(1, -1));
+  const isAbs = (x) => x.startsWith("(") && !isidx(x) && !["(hl)", "(bc)", "(de)", "(sp)", "(c)", "(ix)", "(iy)"].includes(x);
+  if (mnem === "ld" && o.length === 2) {
+    const [d, s] = o;
+    if (d === "a" && (s === "(bc)" || s === "(de)")) post = inc(get16(s.slice(1, -1)));
+    else if ((d === "(bc)" || d === "(de)") && s === "a") post = hiA(`(i32.add ${get16(d.slice(1, -1))} (i32.const 1))`);
+    else if (d === "a" && isAbs(s)) post = set(`(i32.const ${nn(s) + 1})`);
+    else if (isAbs(d) && s === "a") post = hiA(`(i32.const ${nn(d) + 1})`);
+    else if ((R16.has(d) && isAbs(s)) || (isAbs(d) && R16.has(s))) post = set(`(i32.const ${nn(isAbs(d) ? d : s) + 1})`);
+  } else if ((mnem === "add" || mnem === "adc" || mnem === "sbc") && o.length === 2 && ["hl", "ix", "iy"].includes(o[0]) && R16.has(o[1])) {
+    pre = inc(get16(o[0]));
+  } else if (mnem === "ex" && o[0] === "(sp)") {
+    post = set(get16(o[1]));
+  } else if (mnem === "in" && o.length === 2 && o[0] === "a") {
+    pre = o[1] === "(c)" ? inc(get16("bc")) : inc(`(i32.or (i32.shl (global.get $a) (i32.const 8)) (i32.const ${nn(o[1]) & 0xFF}))`);
+  } else if (mnem === "out" && o.length === 2 && o[1] === "a") {
+    pre = o[0] === "(c)" ? inc(get16("bc")) : hiA(`(i32.const ${(nn(o[0]) + 1) & 0xFF})`);
+  } else if (mnem === "rld" || mnem === "rrd") {
+    pre = inc(get16("hl"));
+  }
+  if (flow) {
+    flow = { ...flow };
+    if (mnem === "jp" && flow.target !== undefined) flow.wzAlways = flow.target;
+    else if (mnem === "call" || mnem === "rst") flow.wzAlways = flow.target;
+    else if (mnem === "jr" || mnem === "djnz") flow.wzTaken = flow.target;
+    else if (mnem === "ret" || mnem === "reti" || mnem === "retn") flow.wzPop = true;
+    else if (["ldir", "lddr", "cpir", "cpdr"].includes(mnem)) flow.wzTaken = (addr + 1) & 0xFFFF;
+  }
+  return [[pre, wat, post].filter(Boolean).join(" "), flow];
+}
+
+function lowerInner(mnem, ops, addr, size, mode = {}) {
   const o = ops ? ops.split(",").map((x) => x.trim()) : [];
   const nxt = (addr + size) & 0xFFFF;
 
@@ -407,9 +461,9 @@ export function lower(mnem, ops, addr, size, mode = {}) {
     if (mnem === "bit" && mode.exact) {
       // gpgx BIT: F bits 5 and 3 from the register tested, or for (ix+d)
       // from the high byte of the address. BIT n,(hl) takes them from the
-      // internal MEMPTR register, which is not modelled (left clear).
+      // high byte of the internal WZ (MEMPTR) register (withMemptr).
       const x = typeof r === "string" ? idxDisp(r) : null;
-      const xy = r === "(hl)" ? "(i32.const 0)"
+      const xy = r === "(hl)" ? "(i32.and (i32.shr_u (global.get $wz) (i32.const 8)) (i32.const 0x28))"
         : x ? `(i32.and (i32.shr_u (i32.and (i32.add ${get16(x.p)} (i32.const ${x.d})) (i32.const 0xFFFF)) (i32.const 8)) (i32.const 0x28))`
           : `(i32.and ${get8(r)} (i32.const 0x28))`;
       return [`(local.set $t (i32.and ${get8(r)} (i32.const ${mask}))) ` +
