@@ -321,6 +321,23 @@ test("an IF write on the cycle of a line's LYC event sees it (LCD::update before
   await assertLockstep(makeRom(main), 30);
 });
 
+for (const cgb of [false, true]) {
+  test(`${cgb ? "CGB" : "DMG"}: an LYC or STAT write on the cycle of a line's LYC event sees it (LCD::update before the write)`, { skip, timeout: 180000 }, async () => {
+    // STAT=$40 (LYC), IE=0. loop: IF=0 ; LYC = LY+1 ; wait C*4 cycles ;
+    // LYC = $90 (or STAT = $40 on odd passes) ; E=IF ; C++
+    const main = [0xF3, 0x3E, 0x40, 0xE0, 0x41, 0xAF, 0xE0, 0xFF,
+      0xAF, 0xE0, 0x0F,                        // loop: xor a ; ldh (IF),a
+      0xF0, 0x44, 0x3C, 0xE0, 0x45,            // ldh a,(LY) ; inc a ; ldh (LYC),a
+      0x41, 0x05, 0x20, 0xFD,                  // ld b,c ; w: dec b ; jr nz,w
+      0xCB, 0x41, 0x20, 0x06,                  // bit 0,c ; jr nz,stat
+      0x3E, 0x90, 0xE0, 0x45, 0x18, 0x04,      // ld a,$90 ; ldh (LYC),a ; jr done
+      0x3E, 0x40, 0xE0, 0x41,                  // stat: ld a,$40 ; ldh (STAT),a
+      0xF0, 0x0F, 0x5F,                        // done: ldh a,(IF) ; ld e,a
+      0x0C, 0x18, 0xE0];                       // inc c ; jr loop
+    await assertLockstep(makeRom(main, {}, 0, { cgb }), 30);
+  });
+}
+
 test("CGB: the line after a speed switch predicts mode 0 from where the PPU is", { skip, timeout: 180000 }, async () => {
   // KEY1=1 ; stop ; then STAT into E, switch again every 64 samples
   const main = [0xF3, 0xAF, 0xE0, 0xFF,

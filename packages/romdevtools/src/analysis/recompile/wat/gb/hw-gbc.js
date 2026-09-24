@@ -697,10 +697,13 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
             (i32.store8 (i32.add (i32.const ${IOREG})
         (i32.sub (local.get $x) (i32.const 0xFF00))) (local.get $v)) (return)))
     ;; ---- I/O ----
+    ;; LCD::lcdstatChange / lycRegChange run update(cc) first: the LCD
+    ;; events due by the write cycle (a line's LYC event on that very cycle
+    ;; still compares the old LYC) are processed before the write
     (if (i32.eq (local.get $x) (i32.const 0xFF41))
-      (then (call $statwrite (local.get $v) (i32.add (global.get $abscc) (call $ioff)))))
+      (then (call $ifsync) (call $statwrite (local.get $v) (i32.add (global.get $abscc) (call $ioff)))))
     (if (i32.eq (local.get $x) (i32.const 0xFF45))
-      (then (call $lycwrite (local.get $v) (i32.add (global.get $abscc) (call $ioff)))))
+      (then (call $ifsync) (call $lycwrite (local.get $v) (i32.add (global.get $abscc) (call $ioff)))))
     (if (i32.eq (local.get $x) (i32.const 0xFF00))
       (then
         (if (i32.and (i32.xor (local.get $v) (i32.load8_u (i32.const ${IOREG}))) (i32.const 0x30))
