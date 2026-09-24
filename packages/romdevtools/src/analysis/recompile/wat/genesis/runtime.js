@@ -2314,7 +2314,8 @@ ${o.eeprom ? eepromWat(o.eeprom) : ""}  (func ${o.eeprom ? "$cart_b8" : "$cart_r
             (i32.store8 offset=1 (local.get $o) (local.get $v)))))
 
   ;; a bank that no longer holds its own mirror means code there is not the
-  ;; code the arms were compiled for ($step traps when it runs)
+  ;; code the ROM arms were compiled for ($step looks for the arms compiled
+  ;; for what the reference ran there)
   (func $cart_setbank (param $i i32) (param $e i32)
     (i32.store (i32.add (i32.const ${CARTMAP}) (i32.shl (local.get $i) (i32.const 2))) (local.get $e))
     (if (i32.and (i32.ge_s (local.get $e) (i32.const 0))
@@ -2327,7 +2328,8 @@ ${o.sramOn ? `    (if (i32.and (local.get $d) (i32.const 1))
       (then
         (if (i32.ge_s (call $cartmap (i32.const 0x200000)) (i32.const 0))
           (then (global.set $sramreg0 (i32.and (i32.shr_u (call $cartmap (i32.const 0x200000)) (i32.const 16)) (i32.const 0xFF)))))
-        (i32.store (i32.const ${CARTMAP + 0x20 * 4}) (select (i32.const -2) (i32.const -1) (i32.and (local.get $d) (i32.const 2))))${o.eeprom ? `
+        (i32.store (i32.const ${CARTMAP + 0x20 * 4}) (select (i32.const -2) (i32.const -1) (i32.and (local.get $d) (i32.const 2))))
+        (global.set $remapped (i32.const 1))${o.eeprom ? `
         (i32.store8 (i32.const ${CARTR + 0x20}) (i32.const 0)) (i32.store8 (i32.const ${CARTW + 0x20}) (i32.const 0))` : ""})
       (else
         (if (i32.lt_s (call $cartmap (i32.const 0x200000)) (i32.const 0))
@@ -2592,5 +2594,6 @@ export function cartInitWat(romsize, sramBank) {
     (global.set $remapped (i32.const 0))
     (memory.fill (i32.const ${SRAMBUF}) (i32.const 0xFF) (i32.const 0x10000))
 ${sramBank != null ? `    (i32.store (i32.const ${CARTMAP + sramBank * 4}) (i32.const -1))
+    (global.set $remapped (i32.const 1))
 ${sramBank === 0x20 ? `    (global.set $sramreg0 (i32.const ${(0x200000 & rmask) >> 16}))\n` : ""}` : ""}`;
 }

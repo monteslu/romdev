@@ -247,3 +247,22 @@ test("serial EEPROM boards (eeprom_i2c.c): EA, SEGA, Acclaim 16M/32M and Codemas
     assert.equal(r.diverged, false, `${b.product}: ${divergenceText(r)}`);
   }
 });
+
+test("code run from a re-based bank (mapper_512k_w) and from backup RAM runs what the reference ran there", T, async () => {
+  const main = [
+    ...W(0x41fa, 0x00fe), ...W(0x43f9), ...L(0x200000), ...W(0x7003, 0x32d8, 0x51c8, 0xfffc), // copy R to backup RAM
+    ...W(0x4eb9), ...L(0x200000),                                              // jsr $200000
+    ...W(0x13fc, 0x0002), ...L(0xa130f3), ...W(0x4eb9), ...L(0x080100),        // slot 1 <- page 2; jsr $080100
+    ...W(0x13fc, 0x0001), ...L(0xa130f3), ...W(0x4eb9), ...L(0x080100),        // back to page 1; jsr again
+    ...W(0x60fe),
+  ];
+  const rom = mdImage(main, { size: 0x180000, at: [
+    // gpgx fetches code from backup RAM byte-swapped: these words run as
+    // addq.l #1,d6 / move.w #$1234,d5 / rts there
+    [0x300, W(0x8652, 0x3c3a, 0x3412, 0x754e)],
+    [0x080100, W(0x363c, 0x9abc, 0x4e75)],
+    [0x100100, W(0x383c, 0x5678, 0x45fa, 0x0000, 0x6100, 0x0006, 0x4e75, 0x4e71, 0x5484, 0x4e75)],
+  ] });
+  const r = await gpgxParity({ platform: "genesis", rom, maxFrames: 3 });
+  assert.equal(r.diverged, false, divergenceText(r));
+});

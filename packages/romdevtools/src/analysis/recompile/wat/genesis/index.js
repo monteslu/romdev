@@ -392,18 +392,97 @@ export async function discoverRamCodeTrace(romPath, o = {}) {
     const settle = 5;
     const driver = new ScheduleDriver(host, parseInputSchedule(o.input ?? ""));
     const windows = new Map();
+    // cartridge banks a mapper re-based (or gave to backup RAM) while code ran
+    // there: gpgx's memory_map[bank].base against cart.rom (bank 0's base at
+    // power-on), read before and after every frame
+    const { readFileSync } = await import("node:fs");
+    const cmask = padRom(normalizeRom(new Uint8Array(readFileSync(romPath)))).length - 1;
+    const bases = () => {
+      const b = host.readMemory("genesis_m68k", 0, 0x40 * 20);
+      return Array.from({ length: 0x40 }, (_, i) => (b[i * 20] | (b[i * 20 + 1] << 8) | (b[i * 20 + 2] << 16) | (b[i * 20 + 3] << 24)) >>> 0);
+    };
+    const cartRom = bases()[0];
+    const remap = new Map();
+    // the mapper writes ($A130xx) of each frame, with the writing pc, replayed
+    // against the trace so each pc gets the mapping it ran under
+    const mod = host.mod;
+    const watch = host.rangeWatchSupported();
+    const img0 = normalizeRom(new Uint8Array(readFileSync(romPath)));
+    const ssf2 = cartMapper(img0).kind === "ssf2";
+    const sramOn = sramConfig(img0).on || !!(eepromConfig(img0)?.eeprom);
+    const evbuf = watch ? mod._malloc(4096 * 12 + 8) : 0;
+    const timeWrites = () => {
+      const n = mod._romdev_range_get(evbuf, 4096, evbuf + 4096 * 12);
+      const u = new Uint32Array(mod.HEAPU8.buffer, evbuf, n * 3);
+      const ev = [];
+      for (let i = 0; i < n; i++) {
+        const a = u[i * 3 + 1] & 0xffffff, v = u[i * 3 + 2] & 0xff, pc = u[i * 3] & 0xffffff;
+        // a word write shows as its two bytes: one time_w call, even address
+        const last = ev[ev.length - 1];
+        if (last && !(last.a & 1) && a === last.a + 1 && pc === last.pc && !last.word) { last.v = (last.v << 8) | v; last.word = true; continue; }
+        ev.push({ pc, a, v, word: false });
+      }
+      return ev;
+    };
+    // gpgx default_time_w / mapper_ssf2_w on a copy of the bank table
+    // (offsets from cart.rom; -1 = backup RAM)
+    const timeW = (m, a, v, saved) => {
+      if (ssf2) { if (a & 0x0e) for (let i = 0; i < 8; i++) m[((a << 2) & 0x38) + i] = ((v << 19) & cmask) + (i << 16); return; }
+      if (a < 0xa13060) { for (let i = 0; i < 64; i++) m[i] = ((a + i) & 0x3f) << 16; return; }
+      if (a > 0xa130f1) { for (let i = 0; i < 8; i++) m[((a << 2) & 0x38) + i] = ((v << 19) & cmask) + (i << 16); return; }
+      if (v & 1) { if (m[0x20] !== -1 && saved.sram) { saved.reg0 = m[0x20]; m[0x20] = -1; } }
+      else if (m[0x20] === -1) m[0x20] = saved.reg0;
+    };
     let from = 0, instructions = 0;
     for (let f = 1; f <= frames + settle; f++) {
       const rf = f - settle;
       if (rf >= 0) driver._apply(driver._want(rf));
+      const before = bases();
+      if (watch) mod._romdev_range_set(0xa13000, 0xa130ff, 2, 1);
       await host.stepFrames(1);
+      const after = bases();
+      const ev = watch ? timeWrites() : [];
       const tr = host.readTrace(from);
       if (tr.lost) throw new Error(`genesis recompile: the reference trace overflowed (${tr.lost} instructions lost in one frame)`);
       from = tr.to;
       instructions += tr.pc.length;
-      let ram = null;
+      let ram = null, sram = null;
+      // the replayed table: offsets from cart.rom, or -1 for backup RAM
+      const rel = (m) => m.map((b) => { const o = b - cartRom; return o >= 0 && o <= cmask ? o : -1; });
+      const cur = rel(before), relAfter = rel(after);
+      const saved = { sram: sramOn, reg0: (0x20 << 16) & cmask };
+      let e = 0;
       for (const pc of tr.pc) {
-        if ((pc & 0xffffff) < 0xe00000) continue;
+        const pa = pc & 0xffffff;
+        let tables = null;
+        if (pa < 0x400000) {
+          const bank = pa >>> 16, own = (pa & 0x3f0000) & cmask;
+          // no mapper write this frame: the frame's two ends
+          if (cur[bank] !== own) tables = [[cur[bank], bank < 0x3f ? cur[bank + 1] : -1]];
+          if (!ev.length && relAfter[bank] !== own) (tables ??= []).push([relAfter[bank], bank < 0x3f ? relAfter[bank + 1] : -1]);
+        }
+        while (e < ev.length && ev[e].pc === pa) { timeW(cur, ev[e].a, ev[e].v, saved); e++; }
+        if (tables) {
+          for (const [off, next] of tables) {
+            let key;
+            if (off >= 0) key = `rom:${off}:${next}`;
+            else {
+              // not the ROM: backup RAM (sram.sram), read through save_ram
+              // (libretro sizes it to the last byte that is not $FF while running)
+              if (!sram) {
+                sram = new Uint8Array(0x10000).fill(0xff);
+                try { const n = host.regionSize("save_ram"); if (n > 0) sram.set(host.readMemory("save_ram", 0, Math.min(n, 0x10000))); } catch { /* no backup RAM */ }
+              }
+              key = "sram:";
+              for (let k = 0; k < 10; k++) key += sram[(pa + k) & 0xffff].toString(16).padStart(2, "0");
+            }
+            let set = remap.get(pc >>> 0);
+            if (!set) remap.set(pc >>> 0, (set = new Set()));
+            set.add(key);
+          }
+          continue;
+        }
+        if (pa < 0xe00000) continue;
         if (!ram) ram = host.readMemory("system_ram", 0, 0x10000);
         const a = pc & 0xffff;
         let key = "";
@@ -413,7 +492,8 @@ export async function discoverRamCodeTrace(romPath, o = {}) {
         set.add(key);
       }
     }
-    return { windows, frames, instructions };
+    if (evbuf) { mod._romdev_range_set(0, 0, 0, 0); mod._free(evbuf); }
+    return { windows, remap, frames, instructions };
   } finally {
     try { host.dispose?.(); } catch { /* best effort */ }
   }
@@ -650,7 +730,7 @@ export async function* emitWat(rom, opts = {}) {
   const ROMSIZE = ROMDATA.length;
   const ROMWORDS = ROMSIZE / 2;
   const PCTAB = ROMIMG + ROMSIZE;
-  const PACKED = PCTAB + (ROMWORDS + RAMWORDS) * 4;
+  let PACKED = PCTAB + (ROMWORDS + RAMWORDS) * 4;
   const fetchRom = (p) => {
     p &= ROMSIZE - 1;
     return (ROMDATA[p] << 8) | ROMDATA[(p + 1) & (ROMSIZE - 1)];
@@ -701,6 +781,42 @@ export async function* emitWat(rom, opts = {}) {
     if (vs.length === 1 && vs[0].source === "copy") arms.push([idx, vs[0].pc, vs[0].f16]);
     else arms.push([idx, vs[0].pc, vs[0].f16, vs]);
   }
+  // code the reference ran from a cartridge bank a mapper re-based or gave to
+  // backup RAM: one guarded arm per pc (arm index ROMWORDS + RAMWORDS + j,
+  // j = rank of the pc in ALTTAB), each variant guarded by what that bank
+  // maps to (and, for backup RAM, the words it was compiled from)
+  const altPcs = [];
+  if (traced && traced.remap.size) {
+    const pcs = [...traced.remap.keys()].sort((x, y) => (x & 0xffffff) - (y & 0xffffff));
+    for (const pc of pcs) {
+      const bank = (pc >>> 16) & 0x3f;
+      const vs = [];
+      for (const key of traced.remap.get(pc)) {
+        if (key.startsWith("rom:")) {
+          const [b, n] = key.slice(4).split(":").map(Number);
+          const f16 = (p) => {
+            const pb = (p >>> 16) & 0x3f;
+            const base = pb === bank ? b : pb === bank + 1 && n >= 0 && n < ROMSIZE ? n : -1;
+            return base < 0 ? 0x10000 : fetchRom(base + (p & 0xffff));
+          };
+          vs.push({ pc, f16, source: "remap", bank, b, n });
+        } else {
+          // gpgx fetches instructions as host-order words of the memory_map
+          // base: sram.sram holds 68000-order bytes, so code run from backup
+          // RAM is fetched byte-swapped (data reads are not)
+          const bytes = Uint8Array.from(key.slice(5).match(/../g), (h) => parseInt(h, 16));
+          const f16 = (p) => {
+            const d = (p - pc) >>> 0;
+            return d + 1 < bytes.length ? bytes[d] | (bytes[d + 1] << 8) : 0x10000;
+          };
+          vs.push({ pc, f16, source: "sram", bank });
+        }
+      }
+      arms.push([ROMWORDS + RAMWORDS + altPcs.length, pc, vs[0].f16, vs, "alt"]);
+      altPcs.push(pc & 0xffffff);
+    }
+    PACKED += altPcs.length * 4;
+  }
   const narms = arms.length;
   const nsh = Math.ceil(narms / SH);
   const M = D.m68k.tables;
@@ -712,7 +828,8 @@ export async function* emitWat(rom, opts = {}) {
   const zlay = RT.z80Layout();
   tabsegs.push(...RT.z80Segments(zlay, D.z80.cc));
   const ring = traceRingFor(opts);
-  const tracebuf = (PACKED + narms * 8 + 0xffff) & ~0xffff;
+  const ALTTAB = PACKED + narms * 8;
+  const tracebuf = (ALTTAB + altPcs.length * 4 + 0xffff) & ~0xffff;
   const pages = Math.floor((tracebuf + ring.entries * ring.stride) / 0x10000) + 1;
 
   yield `(module\n  (memory (export "memory") ${pages})\n  `;
@@ -744,10 +861,10 @@ export async function* emitWat(rom, opts = {}) {
     const sh = arms.slice(si * SH, (si + 1) * SH);
     const bodies = [];
     let nl = 1;
-    for (const [, pc, f16, variants] of sh) {
+    for (const [, pc, f16, variants, kind] of sh) {
       let body, nloc;
       if (variants) {
-        ({ body, nlocals: nloc } = guardedRamArm(D, variants));
+        ({ body, nlocals: nloc } = kind === "alt" ? guardedAltArm(D, variants) : guardedRamArm(D, variants));
         ramVariantCount += variants.length;
       } else {
         try {
@@ -796,6 +913,20 @@ export async function* emitWat(rom, opts = {}) {
         (i32.store (i32.add (i32.const ${tracebuf + 12}) (i32.shl (i32.load (i32.const ${STATE + 0xFC})) (i32.const 4))) (global.get $mcend))
         (i32.store (i32.const ${STATE + 0xFC}) (i32.and (i32.add (i32.load (i32.const ${STATE + 0xFC})) (i32.const 1)) (i32.const ${TRACEN - 1}))))))`}
   (func (export "dbg_tracebuf") (result i32) (i32.const ${tracebuf}))
+  ;; binary search of the ${altPcs.length} re-based-bank pcs (ALTTAB, sorted): their arm id, or 0
+  (func $alt_id (param $p i32) (result i32)
+    (local $lo i32) (local $hi i32) (local $mid i32) (local $v i32)
+    (local.set $hi (i32.const ${altPcs.length}))
+    (block $d (loop $l
+      (br_if $d (i32.ge_u (local.get $lo) (local.get $hi)))
+      (local.set $mid (i32.shr_u (i32.add (local.get $lo) (local.get $hi)) (i32.const 1)))
+      (local.set $v (i32.load (i32.add (i32.const ${ALTTAB}) (i32.shl (local.get $mid) (i32.const 2)))))
+      (if (i32.eq (local.get $v) (local.get $p))
+        (then (return (i32.load (i32.add (i32.const ${PCTAB + (ROMWORDS + RAMWORDS) * 4}) (i32.shl (local.get $mid) (i32.const 2)))))))
+      (if (i32.lt_u (local.get $v) (local.get $p)) (then (local.set $lo (i32.add (local.get $mid) (i32.const 1))))
+        (else (local.set $hi (local.get $mid))))
+      (br $l)))
+    (i32.const 0))
   (func $step
     (local $id i32) (local $p i32)
     (local.set $p (global.get $pc))
@@ -803,17 +934,19 @@ export async function* emitWat(rom, opts = {}) {
     (call $trace (local.get $p))
     (if (i32.and (local.get $p) (i32.const 1)) (then (call $trap) (return)))
     (local.set $p (i32.and (local.get $p) (i32.const 0xFFFFFF)))
-    ;; a bank a mapper re-based no longer holds the code these arms were
-    ;; compiled from: stop loudly (trappc = the pc) instead of running it
+    ;; a bank a mapper re-based (or gave to backup RAM) no longer holds the
+    ;; code the ROM arms were compiled from: the arms compiled for what the
+    ;; reference ran there, else stop loudly (trappc = the pc)
+    (block $alt
     (if (i32.and (global.get $remapped) (i32.lt_u (local.get $p) (i32.const 0x400000)))
       (then (if (i32.ne (call $cartmap (local.get $p)) (i32.and (i32.and (local.get $p) (i32.const 0x3F0000)) (i32.const ${ROMSIZE - 1})))
-              (then (call $trap) (return)))))
-    (if (i32.lt_u (local.get $p) (i32.const 0x400000))
+              (then (local.set $id (call $alt_id (local.get $p))) (br $alt)))))
+    (if (i32.lt_u (local.get $p) (i32.const ${Math.max(0x400000, ROMSIZE > 0x400000 ? Math.min(ROMSIZE, 0xa00000) : 0x400000)}))
       (then (local.set $id (i32.load (i32.add (i32.const ${PCTAB})
               (i32.shl (i32.shr_u (i32.and (local.get $p) (i32.const ${ROMSIZE - 1})) (i32.const 1)) (i32.const 2))))))
       (else (if (i32.ge_u (local.get $p) (i32.const 0xE00000))
         (then (local.set $id (i32.load (i32.add (i32.const ${PCTAB + ROMWORDS * 4})
-                (i32.shl (i32.shr_u (i32.and (local.get $p) (i32.const 0xFFFF)) (i32.const 1)) (i32.const 2)))))))))
+                (i32.shl (i32.shr_u (i32.and (local.get $p) (i32.const 0xFFFF)) (i32.const 1)) (i32.const 2))))))))))
     (if (i32.eqz (local.get $id)) (then (call $trap) (return)))
     (local.set $id (i32.sub (local.get $id) (i32.const 1)))
     (global.set $steps (i32.add (global.get $steps) (i32.const 1)))
@@ -831,6 +964,12 @@ export async function* emitWat(rom, opts = {}) {
     dv.setUint32(k * 8 + 4, k + 1, true);
   });
   yield `  (data (i32.const ${PACKED}) "${watBytes(ents)}")\n`;
+  if (altPcs.length) {
+    const at = new Uint8Array(altPcs.length * 4);
+    const adv = new DataView(at.buffer);
+    altPcs.forEach((pc, j) => adv.setUint32(j * 4, pc, true));
+    yield `  (data (i32.const ${ALTTAB}) "${watBytes(at)}")\n`;
+  }
   for (const [off, b] of tabsegs) yield `  (data (i32.const ${off}) "${watBytes(b)}")\n`;
   yield `  (data (i32.const ${ROMIMG}) "${watBytes(ROMDATA)}")\n`;
   yield frameWat(narms, PACKED, PCTAB, img, ROMSIZE, SRAM.bank, EEP).replace("(call $initmap)", `(call $initmap) (i32.store (i32.const ${STATE + 0xf4}) (i32.const ${tracebuf}))`);
@@ -888,6 +1027,50 @@ function guardedRamArm(D, variants) {
     const word = (p) => `(i32.or (i32.shl (i32.load8_u (i32.const ${p & 0xffff})) (i32.const 8)) (i32.load8_u (i32.const ${(p + 1) & 0xffff})))`;
     const conds = [...fetched].map(([p, w]) => `(i32.eq ${word(p)} (i32.const ${w}))`);
     if (pcs.size > 1) conds.unshift(`(i32.eq (global.get $curpc) (i32.const ${v.pc | 0}))`);
+    const guard = conds.reduce((acc, c) => (acc ? `(i32.and ${acc} ${c})` : c), "");
+    parts.push(`(if ${guard} (then ${body} (return)))`);
+  }
+  parts.push("(call $trap)");
+  return { body: parts.join("\n    "), nlocals };
+}
+
+/**
+ * One arm for a pc in a cartridge bank the reference ran re-based: each
+ * variant is guarded by what the banks it fetched from map to now ($cartmap:
+ * the ROM offset it was compiled from) or, for backup RAM, by the backup RAM
+ * words it was compiled from. No match traps.
+ * @param {object} D gpgx data
+ * @param {{pc:number, f16:(p:number)=>number, source:string, bank:number, b?:number, n?:number}[]} variants
+ */
+function guardedAltArm(D, variants) {
+  const seen = new Set();
+  const parts = [];
+  let nlocals = 0;
+  for (const v of variants) {
+    const fetched = new Map();
+    const fx = (p) => { const w = v.f16(p); fetched.set(p >>> 0, w); return w; };
+    let body;
+    try {
+      const r = translateM68k(D.m68k, fx(v.pc), v.pc, fx);
+      body = r.body;
+      if (r.nlocals > nlocals) nlocals = r.nlocals;
+    } catch (e) {
+      if (!(e instanceof TrError)) throw e;
+      continue;
+    }
+    if ([...fetched.values()].some((w) => w > 0xffff)) continue;
+    const banks = new Set([...fetched.keys()].map((p) => (p >>> 16) & 0x3f));
+    let conds;
+    if (v.source === "remap") {
+      conds = [...banks].map((bk) => `(i32.eq (i32.load (i32.const ${RT.CARTMAP + bk * 4})) (i32.const ${bk === v.bank ? v.b : v.n}))`);
+    } else {
+      const word = (p) => `(i32.or (i32.load8_u (i32.const ${RT.SRAMBUF + (p & 0xffff)})) (i32.shl (i32.load8_u (i32.const ${RT.SRAMBUF + ((p + 1) & 0xffff)})) (i32.const 8)))`;
+      conds = [...[...banks].map((bk) => `(i32.lt_s (i32.load (i32.const ${RT.CARTMAP + bk * 4})) (i32.const 0))`),
+        ...[...fetched].map(([p, w]) => `(i32.eq ${word(p)} (i32.const ${w}))`)];
+    }
+    const key = conds.join(",");
+    if (seen.has(key)) continue;
+    seen.add(key);
     const guard = conds.reduce((acc, c) => (acc ? `(i32.and ${acc} ${c})` : c), "");
     parts.push(`(if ${guard} (then ${body} (return)))`);
   }
