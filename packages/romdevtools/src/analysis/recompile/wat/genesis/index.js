@@ -157,6 +157,61 @@ export function sramConfig(img) {
   return { on, detected, start, end, bank: mapped ? start >>> 16 : null, note };
 }
 
+// eeprom_i2c.c i2c_specs: address bits, array size mask, page write mask
+const I2C_SPECS = {
+  X24C01: [7, 0x7f, 0x03], X24C02: [8, 0xff, 0x03], "24C01": [8, 0x7f, 0x07], "24C02": [8, 0xff, 0x07],
+  "24C04": [8, 0x1ff, 0x0f], "24C08": [8, 0x3ff, 0x0f], "24C16": [8, 0x7ff, 0x0f], "24C32": [16, 0xfff, 0x1f],
+  "24C64": [16, 0x1fff, 0x1f], "24C65": [16, 0x1fff, 0x3f], "24C128": [16, 0x3fff, 0x3f], "24C256": [16, 0x7fff, 0x3f],
+  "24C512": [16, 0xffff, 0x7f],
+};
+// eeprom_i2c.c i2c_database: [product id, initial SSP (0 = any), header checksum (0 = any), board, EEPROM]
+const I2C_GAMES = [
+  ["T-50176", 0, 0, "ea", "X24C01"], ["T-50396", 0, 0, "ea", "X24C01"], ["T-50446", 0, 0, "ea", "X24C01"],
+  ["T-50516", 0, 0, "ea", "X24C01"], ["T-50606", 0, 0, "ea", "X24C01"],
+  [" T-12046", 0, 0, "sega", "X24C01"], [" T-12053", 0, 0, "sega", "X24C01"], ["MK-1215", 0, 0, "sega", "X24C01"],
+  ["MK-1228", 0, 0, "sega", "X24C01"], ["G-5538", 0, 0, "sega", "X24C01"], ["PR-1993", 0, 0, "sega", "X24C01"],
+  [" G-4060", 0, 0, "sega", "X24C01"], ["00001211", 0, 0, "sega", "X24C01"], ["00004076", 0, 0, "sega", "X24C01"],
+  ["G-4524", 0, 0, "sega", "X24C01"], ["00054503", 0, 0, "sega", "X24C01"],
+  ["T-81033", 0, 0, "acclaim16", "X24C02"], ["T-081326", 0, 0, "acclaim16", "X24C02"],
+  ["T-081276", 0, 0, "acclaim32", "24C02"], ["T-81406", 0, 0, "acclaim32", "24C04"], ["T-081586", 0, 0, "acclaim32", "24C16"],
+  ["T-81476", 0, 0, "acclaim32", "24C65"], ["T-81576", 0, 0, "acclaim32", "24C65"],
+  ["T-120106", 0, 0, "jcart", "24C08"], ["00000000", 0x444e4c44, 0x168b, "jcart", "24C08"],
+  ["00000000", 0x444e4c44, 0x165e, "jcart", "24C16"], ["T-120096", 0, 0, "jcart", "24C16"],
+  ["T-120146", 0, 0, "jcart", "24C65"], ["00000000", 0xfffffffc, 0x168b, "jcart", null],
+  ["00000000", 0xfffffffc, 0x165e, "jcart", null], ["T-120066", 0, 0, "jcart", null], ["T-123456", 0, 0, "jcart", null],
+  ["XXXXXXXX", 0, 0xdf39, "jcart", null],
+];
+// board wiring: [SCL in bit, SDA in bit, SDA out bit]
+const I2C_BITS = { ea: [6, 7, 7], sega: [1, 0, 0], acclaim16: [1, 0, 1], acclaim32: [0, 0, 0], jcart: [1, 0, 7] };
+
+/**
+ * eeprom_i2c_init: the serial EEPROM (and J-Cart) boards gpgx recognises,
+ * by product code (with the initial SSP / header checksum for the
+ * Codemasters carts), else a header whose backup RAM field says EEPROM.
+ * @param {Uint8Array} img
+ * @returns {null | {mapper:string, eeprom:boolean, jcart:boolean, jcartReads:boolean, addressBits:number, sizeMask:number, pagewriteMask:number, sclIn:number, sdaIn:number, sdaOut:number, sixButton:boolean, chip:string|null}}
+ */
+export function eepromConfig(img) {
+  const product = headerText(img, 0x182, 0x18e);
+  const checksum = (img[0x18e] << 8) | img[0x18f];
+  const sp = ((img[0] << 24) | (img[1] << 16) | (img[2] << 8) | img[3]) >>> 0;
+  const sram = sramConfig(img);
+  const make = (mapper, chip) => {
+    const [addressBits, sizeMask, pagewriteMask] = chip ? I2C_SPECS[chip] : [0, 0, 0];
+    const [sclIn, sdaIn, sdaOut] = I2C_BITS[mapper];
+    const jcart = mapper === "jcart" && !product.includes("T-120106") && !product.includes("T-120146");
+    return { mapper, chip, eeprom: !!chip, jcart, jcartReads: jcart, addressBits, sizeMask, pagewriteMask, sclIn, sdaIn, sdaOut, sixButton: sixButtonPads(img) };
+  };
+  for (let i = I2C_GAMES.length - 1; i >= 0; i--) {
+    const [id, gsp, chk, mapper, chip] = I2C_GAMES[i];
+    if (!product.includes(id)) continue;
+    if (id[0] === " " && sram.end - sram.start > 2) break;
+    if ((chk === 0 || chk === checksum) && (gsp === 0 || gsp === sp)) return make(mapper, chip);
+  }
+  if (sram.detected && (img[0x1b2] === 0xe8 || sram.end - sram.start < 2)) return make("sega", "X24C01");
+  return null;
+}
+
 /**
  * md_cart_init's mapper choice, for the ones this backend models ('default'
  * = default_time_w, 'ssf2' = mapper_ssf2_w) or the reason it refuses.
@@ -474,6 +529,8 @@ export function describe(rom, opts = {}) {
     // connects 6-button pads, anything else 3-button ones
     sixButton: sixButtonPads(img),
     sram: sramConfig(img),
+    // eeprom_i2c_init: serial EEPROM / J-Cart boards (the backup RAM is then not memory-mapped)
+    eeprom: eepromConfig(img),
     mapper: cartMapper(img),
     ramCode,
     arms: narms,
@@ -662,8 +719,10 @@ export async function* emitWat(rom, opts = {}) {
   yield RT.globalsWat();
   yield RT.cpuWat();
   yield RT.memWat(ROMIMG, ROMSIZE);
-  const SRAM = sramConfig(img), MAPPER = cartMapper(img);
-  yield RT.cartWat(ROMIMG, ROMSIZE, { sramOn: SRAM.on && SRAM.start < 0x400000, ssf2: MAPPER.kind === "ssf2" });
+  const SRAM = sramConfig(img), MAPPER = cartMapper(img), EEP = eepromConfig(img);
+  // a serial EEPROM is sram.custom: the backup RAM is not memory-mapped
+  if (EEP && EEP.eeprom) SRAM.bank = null;
+  yield RT.cartWat(ROMIMG, ROMSIZE, { sramOn: (SRAM.on || !!(EEP && EEP.eeprom)) && SRAM.start < 0x400000, ssf2: MAPPER.kind === "ssf2", eeprom: EEP });
   yield RT.ioWat({ sixButton: sixButtonPads(img) });
   const PAL = palTiming(img);
   yield RT.vdpWat({ pal: PAL });
@@ -774,7 +833,7 @@ export async function* emitWat(rom, opts = {}) {
   yield `  (data (i32.const ${PACKED}) "${watBytes(ents)}")\n`;
   for (const [off, b] of tabsegs) yield `  (data (i32.const ${off}) "${watBytes(b)}")\n`;
   yield `  (data (i32.const ${ROMIMG}) "${watBytes(ROMDATA)}")\n`;
-  yield frameWat(narms, PACKED, PCTAB, img, ROMSIZE, SRAM.bank).replace("(call $initmap)", `(call $initmap) (i32.store (i32.const ${STATE + 0xf4}) (i32.const ${tracebuf}))`);
+  yield frameWat(narms, PACKED, PCTAB, img, ROMSIZE, SRAM.bank, EEP).replace("(call $initmap)", `(call $initmap) (i32.store (i32.const ${STATE + 0xf4}) (i32.const ${tracebuf}))`);
   yield ")\n";
   if (breakAt !== null && !broken) throw new Error(`genesis recompile: options.breakArm $${breakAt.toString(16)} is not an instruction address of this cart`);
   if (opts.stats) Object.assign(opts.stats, { arms: narms, lowered: narms - bad, trapped: bad, shards: nsh, ramCodeArms: narms - Math.ceil(img.length / 2),
@@ -858,7 +917,7 @@ function regTraceWat(tracebuf, entries) {
         (i32.store (i32.const ${STATE + 0xFC}) (i32.and (i32.add (i32.load (i32.const ${STATE + 0xFC})) (i32.const 1)) (i32.const ${entries - 1}))))))`;
 }
 
-function frameWat(narms, PACKED, PCTAB, img, ROMSIZE, sramBank) {
+function frameWat(narms, PACKED, PCTAB, img, ROMSIZE, sramBank, eep) {
   return `
   ;; m68k_run: interrupt check on entry, bus refresh before each instruction,
   ;; and the one-instruction IRQ latency of m68k_set_irq_delay.
@@ -920,11 +979,14 @@ function frameWat(narms, PACKED, PCTAB, img, ROMSIZE, sramBank) {
     (if (i32.eqz (global.get $v_h_counter))
       (then (global.set $v_hint_pending (i32.const 0x10))
             (if (i32.and ${R(0)} (i32.const 0x10)) (then (call $update_irq (i32.const 4))))))
-    (call $input_refresh)
+    (call $input_refresh)${eep && eep.jcart ? " (call $jpad_refresh)" : ""}
     ;; osd_input_update: the pad state the game sees for this whole frame,
     ;; both ports (wasmcart pads 0 and 1)
     (global.set $pad0 (call $pad_bits (i32.load16_u (i32.const ${ABI + 288}))))
-    (global.set $pad1 (call $pad_bits (i32.load16_u (i32.const ${ABI + 304}))))
+    (global.set $pad1 (call $pad_bits (i32.load16_u (i32.const ${ABI + 304}))))${eep && eep.jcart ? `
+    ;; J-Cart pads 3 and 4: wasmcart pads 2 and 3
+    (global.set $pad2 (call $pad_bits (i32.load16_u (i32.const ${ABI + 320}))))
+    (global.set $pad3 (call $pad_bits (i32.load16_u (i32.const ${ABI + 336}))))` : ""}
     (if (i32.ne (global.get $v_v_counter) (global.get $vp_h))
       (then
         (global.set $v_v_counter (global.get $vp_h))
@@ -943,7 +1005,7 @@ function frameWat(narms, PACKED, PCTAB, img, ROMSIZE, sramBank) {
     (local.set $line (i32.add (global.get $vp_h) (i32.const 1)))
     (block $d (loop $l
       (global.set $v_v_counter (local.get $line))
-      (call $input_refresh)
+      (call $input_refresh)${eep && eep.jcart ? " (call $jpad_refresh)" : ""}
       (call $m68k_run (i32.add (global.get $mcvdp) (i32.const 3420)))
     (if (i32.eq (global.get $zstate) (i32.const 1)) (then (call $z80_run (i32.add (global.get $mcvdp) (i32.const 3420)))))
       (global.set $mcvdp (i32.add (global.get $mcvdp) (i32.const 3420)))
@@ -954,7 +1016,7 @@ function frameWat(narms, PACKED, PCTAB, img, ROMSIZE, sramBank) {
     (global.set $v_status (i32.and (global.get $v_status) (i32.const -9)))
     (if (global.get $v_dma_length) (then (call $dma_update (global.get $mcvdp))))
     (if (i32.and ${R(1)} (i32.const 0x40)) (then (if (i32.and ${R(1)} (i32.const 4)) (then (call $parse_satb (i32.const -1))))))
-    (call $input_refresh)
+    (call $input_refresh)${eep && eep.jcart ? " (call $jpad_refresh)" : ""}
     (call $m68k_run (i32.add (global.get $mcvdp) (i32.const 3420)))
     (if (i32.eq (global.get $zstate) (i32.const 1)) (then (call $z80_run (i32.add (global.get $mcvdp) (i32.const 3420)))))
     (global.set $mcvdp (i32.add (global.get $mcvdp) (i32.const 3420)))
@@ -963,7 +1025,7 @@ function frameWat(narms, PACKED, PCTAB, img, ROMSIZE, sramBank) {
       (global.set $v_v_counter (local.get $line))
       (if (global.get $v_dma_length) (then (call $dma_update (global.get $mcvdp))))
       (call $render_line (local.get $line))
-      (call $input_refresh)
+      (call $input_refresh)${eep && eep.jcart ? " (call $jpad_refresh)" : ""}
       (if (i32.eqz (global.get $v_h_counter))
         (then (global.set $v_h_counter ${R(10)})
               (global.set $v_hint_pending (i32.const 0x10))
@@ -985,7 +1047,13 @@ function frameWat(narms, PACKED, PCTAB, img, ROMSIZE, sramBank) {
       (else (global.set $th0_lat (i32.const 0))))
     (if (i32.gt_s (global.get $th1_lat) (global.get $mcvdp))
       (then (global.set $th1_lat (i32.sub (global.get $th1_lat) (global.get $mcvdp))))
-      (else (global.set $th1_lat (i32.const 0))))
+      (else (global.set $th1_lat (i32.const 0))))${eep && eep.jcart ? `
+    (if (i32.gt_s (i32.load (i32.const ${RT.JPADS + 4})) (global.get $mcvdp))
+      (then (i32.store (i32.const ${RT.JPADS + 4}) (i32.sub (i32.load (i32.const ${RT.JPADS + 4})) (global.get $mcvdp))))
+      (else (i32.store (i32.const ${RT.JPADS + 4}) (i32.const 0))))
+    (if (i32.gt_s (i32.load (i32.const ${RT.JPADS + 20})) (global.get $mcvdp))
+      (then (i32.store (i32.const ${RT.JPADS + 20}) (i32.sub (i32.load (i32.const ${RT.JPADS + 20})) (global.get $mcvdp))))
+      (else (i32.store (i32.const ${RT.JPADS + 20}) (i32.const 0))))` : ""}
     (i32.store (i32.const ${ZREGS + 64}) (i32.sub (i32.load (i32.const ${ZREGS + 64})) (global.get $mcvdp)))
     ;; sound_update: run FM to the frame end; timers and BUSY carry over
     (call $fm_update (global.get $mcvdp))
@@ -1055,7 +1123,7 @@ function frameWat(narms, PACKED, PCTAB, img, ROMSIZE, sramBank) {
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $l)))
     (global.set $region (i32.const ${regionCode(img)}))
-${RT.cartInitWat(ROMSIZE, sramBank)}    (call $vdp_reset)
+${RT.cartInitWat(ROMSIZE, sramBank)}${eep ? RT.eepromInitWat(eep) : ""}    (call $vdp_reset)
     (call $io_reset)
     (global.set $zstate (i32.const 0))
     (global.set $zmap (i32.const 0))

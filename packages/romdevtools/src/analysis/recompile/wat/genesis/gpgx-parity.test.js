@@ -188,3 +188,62 @@ test("address errors: an odd word/long access takes vector 3 with gpgx's bus-err
   const r = await gpgxParity({ platform: "genesis", rom, maxFrames: 12 });
   assert.equal(r.diverged, false, divergenceText(r));
 });
+
+/**
+ * Bit-banged I2C on one EEPROM board, one line change per bus write: a page
+ * write that wraps at the chip's page size, then a random read of the page
+ * back into work RAM ($FF0000+, one bus read per bit and per ack).
+ * @param {{set:(sda:number, scl:number, which:'sda'|'scl')=>number[], read:number[], bits:number, pre?:number[]}} b
+ */
+function i2cProgram(b, addr, page, data) {
+  const out = [...W(0x41f9), ...L(0xff0000), ...(b.pre || [])];
+  let sda = 1, scl = 1;
+  const line = (which, v) => { if (which === "sda") sda = v; else scl = v; out.push(...b.set(sda, scl, which)); };
+  const start = () => { if (!sda) { line("scl", 0); line("sda", 1); } if (!scl) line("scl", 1); line("sda", 0); line("scl", 0); };
+  const stop = () => { line("scl", 0); line("sda", 0); line("scl", 1); line("sda", 1); };
+  const byte = (v) => {
+    for (let i = 7; i >= 0; i--) { line("sda", (v >> i) & 1); line("scl", 1); line("scl", 0); }
+    line("sda", 1); line("scl", 1); out.push(...b.read); line("scl", 0); // slave ack
+  };
+  const readByte = (last) => {
+    line("sda", 1);
+    for (let i = 0; i < 8; i++) { line("scl", 1); out.push(...b.read); line("scl", 0); }
+    line("sda", last ? 1 : 0); line("scl", 1); line("scl", 0);
+  };
+  const header = (rw, a) => {
+    if (b.bits === 7) byte(((a & 0x7f) << 1) | rw);
+    else if (b.bits === 8) byte(0xa0 | (((a >> 8) & 7) << 1) | rw);
+    else byte(0xa0 | rw);
+  };
+  const address = (a) => { if (b.bits === 16) byte((a >> 8) & 0xff); if (b.bits !== 7) byte(a & 0xff); };
+  start(); header(0, addr); address(addr);
+  for (const d of data) byte(d);
+  stop();
+  const base = addr & ~page;
+  start();
+  if (b.bits !== 7) { header(0, base); address(base); start(); }
+  header(1, base);
+  for (let i = 0; i <= page; i++) readByte(i === page);
+  stop();
+  out.push(...W(0x60fe));
+  return out;
+}
+
+test("serial EEPROM boards (eeprom_i2c.c): EA, SEGA, Acclaim 16M/32M and Codemasters wirings, 7-, 8- and 16-bit addressing, page wrap", T, async () => {
+  const mb = (v, a) => [...W(0x13fc, v), ...L(a)];
+  const mw = (v, a) => [...W(0x33fc, v), ...L(a)];
+  const boards = [
+    { product: "T-50176 -00", bits: 7, page: 3, set: (d, c) => mb((c << 6) | (d << 7), 0x200001), read: [...W(0x10f9), ...L(0x200001)] },
+    { product: "MK-1215 -00", bits: 7, page: 3, set: (d, c) => mb((c << 1) | d, 0x200001), read: [...W(0x10f9), ...L(0x200001)] },
+    { product: "T-081326 00", bits: 8, page: 3, set: (d, c) => mw((c << 1) | d, 0x200000), read: [...W(0x30f9), ...L(0x200000)] },
+    { product: "T-81476 -00", bits: 16, page: 0x3f, set: (d, c, w) => (w === "sda" ? mb(d, 0x200001) : mb(c, 0x200000)),
+      read: [...W(0x30f9), ...L(0x200000)], pre: mw(0, 0x200000) },
+    { product: "T-120106-50", bits: 8, page: 15, set: (d, c) => mw((c << 1) | d, 0x300000), read: [...W(0x10f9), ...L(0x380001)] },
+  ];
+  for (const b of boards) {
+    const addr = b.bits === 16 ? 0x1234 & ~b.page | (b.page - 1) : b.bits === 8 ? 0x2f5 & ~b.page | (b.page - 1) : 0x46 & ~b.page | (b.page - 1);
+    const rom = mdImage(i2cProgram(b, addr, b.page, [0x5a, 0xc3, 0x81]), { header: { 0x182: b.product } });
+    const r = await gpgxParity({ platform: "genesis", rom, maxFrames: 4 });
+    assert.equal(r.diverged, false, `${b.product}: ${divergenceText(r)}`);
+  }
+});

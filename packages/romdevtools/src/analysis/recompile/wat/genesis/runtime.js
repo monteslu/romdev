@@ -61,6 +61,9 @@ export const ZT = 0x100000; // Z80 flag tables + cycle tables (see z80Layout)
 export const LINEPIX = 0x142000; // per-line composed codes, 240 x 320
 export const CARTMAP = 0x3f000; // 64 x i32: what each 64KB bank of $000000-$3FFFFF maps (ROM offset, or -1/-2 = backup RAM)
 export const SRAMBUF = 0x40000; // backup RAM, 64KB, 68000 byte order (gpgx sram.sram)
+export const CARTR = 0x3f100; // 64 x u8: cartridge-bank read handler (0 = memory_map base, 1 = I2C EEPROM, 2 = J-Cart + EEPROM)
+export const CARTW = 0x3f140; // 64 x u8: write handler (0 = base, 1 = I2C byte/word, 2 = I2C word only, 3 = Acclaim 32M PAL, 4 = J-Cart, 5 = unused)
+export const JPADS = 0x3f180; // J-Cart pads (gpgx devices 5 and 6): 2 x {state, latency, counter, timeout} i32
 const LB0 = LINEBUF, LB1 = LINEBUF + 0x200;
 const FIFOT32 = 0x26800; // 28 x i32 (after PIXLUT)
 const FIFOT40 = 0x26880; // 32 x i32
@@ -321,7 +324,7 @@ const GLOBAL_NAMES = ["sp0", "sp4", "pc", "fx", "fn", "fz", "fv", "fc", "fs", "f
   // 6-button pads (gamepad.c Counter / Timeout per port)
   "th0_cnt", "th0_to", "th1_cnt", "th1_to",
   // m68ki_cpu.instr_mode / run_mode (address error frames)
-  "instrmode", "runmode"];
+  "instrmode", "runmode", "pad2", "pad3"];
 
 export function globalsWat() {
   const g = [];
@@ -2284,14 +2287,14 @@ export function cartWat(romimg, romsize, o) {
   (global $remapped (mut i32) (i32.const 0))
   (func $cartmap (param $a i32) (result i32)
     (i32.load (i32.add (i32.const ${CARTMAP}) (i32.shl (i32.and (i32.shr_u (local.get $a) (i32.const 16)) (i32.const 0x3F)) (i32.const 2)))))
-  (func $cart_rd8 (param $a i32) (result i32)
+${o.eeprom ? eepromWat(o.eeprom) : ""}  (func ${o.eeprom ? "$cart_b8" : "$cart_rd8"} (param $a i32) (result i32)
     (local $e i32) (local $o i32)
     (local.set $e (call $cartmap (local.get $a)))
     (if (i32.lt_s (local.get $e) (i32.const 0))
       (then (return (i32.load8_u (i32.add (i32.const ${SRAMBUF}) (i32.and (local.get $a) (i32.const 0xFFFF)))))))
     (local.set $o (i32.add (local.get $e) (i32.and (local.get $a) (i32.const 0xFFFF))))
     ${romAt("(local.get $o)")})
-  (func $cart_rd16 (param $a i32) (result i32)
+  (func ${o.eeprom ? "$cart_b16" : "$cart_rd16"} (param $a i32) (result i32)
     (local $e i32) (local $o i32)
     (local.set $e (call $cartmap (local.get $a)))
     (if (i32.lt_s (local.get $e) (i32.const 0))
@@ -2300,10 +2303,10 @@ export function cartWat(romimg, romsize, o) {
     (local.set $o (i32.add (local.get $e) (i32.and (local.get $a) (i32.const 0xFFFE))))
     (i32.or (i32.shl ${romAt("(local.get $o)")} (i32.const 8))
             ${romAt("(i32.add (local.get $o) (i32.const 1))")}))
-  (func $cart_wr8 (param $a i32) (param $v i32)
+  (func ${o.eeprom ? "$cart_wb8" : "$cart_wr8"} (param $a i32) (param $v i32)
     (if (i32.eq (call $cartmap (local.get $a)) (i32.const -1))
       (then (i32.store8 (i32.add (i32.const ${SRAMBUF}) (i32.and (local.get $a) (i32.const 0xFFFF))) (local.get $v)))))
-  (func $cart_wr16 (param $a i32) (param $v i32)
+  (func ${o.eeprom ? "$cart_wb16" : "$cart_wr16"} (param $a i32) (param $v i32)
     (local $o i32)
     (if (i32.eq (call $cartmap (local.get $a)) (i32.const -1))
       (then (local.set $o (i32.add (i32.const ${SRAMBUF}) (i32.and (local.get $a) (i32.const 0xFFFE))))
@@ -2324,10 +2327,12 @@ ${o.sramOn ? `    (if (i32.and (local.get $d) (i32.const 1))
       (then
         (if (i32.ge_s (call $cartmap (i32.const 0x200000)) (i32.const 0))
           (then (global.set $sramreg0 (i32.and (i32.shr_u (call $cartmap (i32.const 0x200000)) (i32.const 16)) (i32.const 0xFF)))))
-        (i32.store (i32.const ${CARTMAP + 0x20 * 4}) (select (i32.const -2) (i32.const -1) (i32.and (local.get $d) (i32.const 2)))))
+        (i32.store (i32.const ${CARTMAP + 0x20 * 4}) (select (i32.const -2) (i32.const -1) (i32.and (local.get $d) (i32.const 2))))${o.eeprom ? `
+        (i32.store8 (i32.const ${CARTR + 0x20}) (i32.const 0)) (i32.store8 (i32.const ${CARTW + 0x20}) (i32.const 0))` : ""})
       (else
         (if (i32.lt_s (call $cartmap (i32.const 0x200000)) (i32.const 0))
-          (then (call $cart_setbank (i32.const 0x20) (i32.shl (global.get $sramreg0) (i32.const 16)))))))` : "    (drop (local.get $d))"})
+          (then (call $cart_setbank (i32.const 0x20) (i32.shl (global.get $sramreg0) (i32.const 16)))${o.eeprom ? `
+                (i32.store8 (i32.const ${CARTR + 0x20}) (i32.const 0)) (i32.store8 (i32.const ${CARTW + 0x20}) (i32.const 0))` : ""}))))` : "    (drop (local.get $d))"})
 
   ;; mapper_512k_w: eight 512KB windows over $000000-$3FFFFF
   (func $mapper_512k_w (param $a i32) (param $d i32)
@@ -2356,6 +2361,218 @@ ${o.ssf2 ? `    (if (i32.and (local.get $a) (i32.const 0x0E)) (then (call $mappe
     (if (i32.gt_u (local.get $a) (i32.const 0xA130F1)) (then (call $mapper_512k_w (local.get $a) (local.get $d)) (return)))
     (call $mapper_sega_w (local.get $d))`})
 `;
+}
+
+/**
+ * Serial EEPROM boards (gpgx cart_hw/eeprom_i2c.c): the 24Cxx state machine
+ * clocked by SCL/SDA writes, and the board wirings (EA, SEGA, Acclaim 16M
+ * and 32M, Codemasters J-Cart) as per-bank read/write handlers (CARTR /
+ * CARTW) in front of the memory_map base reads. The array is sram.sram.
+ * @param {{mapper:string, addressBits:number, sizeMask:number, pagewriteMask:number, sclIn:number, sdaIn:number, sdaOut:number, eeprom:boolean, jcart:boolean, sixButton:boolean}} e
+ */
+export function eepromWat(e) {
+  const G = (n) => `(global.get $e_${n})`;
+  const S = (n, v) => `(global.set $e_${n} ${v})`;
+  const c = (v) => `(i32.const ${v})`;
+  const fall = `(i32.and (i32.ne ${G("oscl")} ${c(0)}) (i32.eqz ${G("scl")}))`;
+  const rise = `(i32.and (i32.eqz ${G("oscl")}) (i32.ne ${G("scl")} ${c(0)}))`;
+  const inc9 = (then) => `(if (i32.lt_u ${G("cyc")} ${c(9)}) (then ${S("cyc", `(i32.add ${G("cyc")} ${c(1)})`)}) (else ${S("cyc", c(1))} ${then}))`;
+  const arr = `(i32.add ${c(SRAMBUF)} (i32.and (i32.or ${G("dev")} ${G("word")}) ${c(0xffff)}))`;
+  const jpad = (k, f) => `${JPADS + k * 16 + f}`;
+  return `
+  (global $e_sda (mut i32) (i32.const 1)) (global $e_scl (mut i32) (i32.const 1))
+  (global $e_osda (mut i32) (i32.const 1)) (global $e_oscl (mut i32) (i32.const 1))
+  (global $e_cyc (mut i32) (i32.const 0)) (global $e_rw (mut i32) (i32.const 0))
+  (global $e_dev (mut i32) (i32.const 0)) (global $e_word (mut i32) (i32.const 0))
+  (global $e_buf (mut i32) (i32.const 0)) (global $e_state (mut i32) (i32.const 0))
+  (func $eep_start
+    (if (i32.and (i32.and (i32.ne ${G("oscl")} ${c(0)}) (i32.ne ${G("scl")} ${c(0)}))
+                 (i32.and (i32.ne ${G("osda")} ${c(0)}) (i32.eqz ${G("sda")})))
+      (then ${S("cyc", c(0))} ${e.addressBits === 7 ? `${S("word", c(0))} ${S("state", c(3))}` : `${S("dev", c(0))} ${S("state", c(2))}`})))
+  (func $eep_stop
+    (if (i32.and (i32.and (i32.ne ${G("oscl")} ${c(0)}) (i32.ne ${G("scl")} ${c(0)}))
+                 (i32.and (i32.eqz ${G("osda")}) (i32.ne ${G("sda")} ${c(0)})))
+      (then ${S("state", c(0))})))
+  ;; eeprom_i2c_update
+  (func $eep_update
+    (local $s i32)
+    (local.set $s ${G("state")})
+    (block $done
+      (if (i32.eqz (local.get $s)) (then (call $eep_start) (br $done)))
+      (if (i32.eq (local.get $s) ${c(1)}) (then (call $eep_stop) (br $done)))
+      (call $eep_start) (call $eep_stop)
+      (if (i32.eq (local.get $s) ${c(3)}) (then
+        (if ${fall} (then ${inc9(`${S("state", `(select ${c(7)} ${c(6)} ${G("rw")})`)} ${S("buf", c(0))}`)})
+          (else (if ${rise} (then
+            (if (i32.lt_u ${G("cyc")} ${c(8)})
+              (then ${S("word", `(i32.or ${G("word")} (i32.shl ${G("sda")} (i32.sub ${c(7)} ${G("cyc")})))`)})
+              (else (if (i32.eq ${G("cyc")} ${c(8)}) (then ${S("rw", G("sda"))}))))))))
+        (br $done)))
+      (if (i32.eq (local.get $s) ${c(2)}) (then
+        (if ${fall} (then ${inc9(`${S("dev", `(i32.shl ${G("dev")} ${c(e.addressBits)})`)}
+              (if ${G("rw")} (then ${S("state", c(7))})
+                (else ${S("word", c(0))} ${S("state", c(e.addressBits === 16 ? 4 : 5))}))`)})
+          (else (if ${rise} (then
+            (if (i32.and (i32.gt_u ${G("cyc")} ${c(4)}) (i32.lt_u ${G("cyc")} ${c(8)}))
+              (then ${S("dev", `(i32.or ${G("dev")} (i32.shl ${G("sda")} (i32.sub ${c(7)} ${G("cyc")})))`)})
+              (else (if (i32.eq ${G("cyc")} ${c(8)}) (then ${S("rw", G("sda"))}))))))))
+        (br $done)))
+      (if (i32.eq (local.get $s) ${c(4)}) (then
+        (if ${fall} (then ${inc9(S("state", c(5)))})
+          (else (if ${rise} (then
+            (if (i32.lt_u ${G("cyc")} ${c(9)}) (then
+              (if (i32.lt_u ${c(e.sizeMask)} (i32.shl ${c(1)} (i32.sub ${c(16)} ${G("cyc")})))
+                (then ${S("dev", `(i32.shr_u ${G("dev")} ${c(1)})`)})
+                (else ${S("word", `(i32.or ${G("word")} (i32.shl ${G("sda")} (i32.sub ${c(16)} ${G("cyc")})))`)}))))))))
+        (br $done)))
+      (if (i32.eq (local.get $s) ${c(5)}) (then
+        (if ${fall} (then ${inc9(`${S("state", c(6))} ${S("buf", c(0))}`)})
+          (else (if ${rise} (then
+            (if (i32.lt_u ${G("cyc")} ${c(9)}) (then
+              (if (i32.lt_u ${c(e.sizeMask)} (i32.shl ${c(1)} (i32.sub ${c(8)} ${G("cyc")})))
+                (then ${S("dev", `(i32.shr_u ${G("dev")} ${c(1)})`)})
+                (else ${S("word", `(i32.or ${G("word")} (i32.shl ${G("sda")} (i32.sub ${c(8)} ${G("cyc")})))`)}))))))))
+        (br $done)))
+      (if (i32.eq (local.get $s) ${c(7)}) (then
+        (if ${fall} (then ${inc9("")})
+          (else (if ${rise} (then
+            (if (i32.eq ${G("cyc")} ${c(9)}) (then
+              (if ${G("sda")} (then ${S("state", c(1))})
+                (else ${S("word", `(i32.and (i32.add ${G("word")} ${c(1)}) ${c(e.sizeMask)})`)}))))))))
+        (br $done)))
+      (if (i32.eq (local.get $s) ${c(6)}) (then
+        (if ${fall} (then ${inc9("")})
+          (else (if ${rise} (then
+            (if (i32.lt_u ${G("cyc")} ${c(9)})
+              (then ${S("buf", `(i32.or ${G("buf")} (i32.shl ${G("sda")} (i32.sub ${c(8)} ${G("cyc")})))`)})
+              (else (i32.store8 ${arr} ${G("buf")}) ${S("buf", c(0))}
+                    ${S("word", `(i32.or (i32.and ${G("word")} ${c(~e.pagewriteMask)}) (i32.and (i32.add ${G("word")} ${c(1)}) ${c(e.pagewriteMask)}))`)})))))))))
+    ${S("oscl", G("scl"))} ${S("osda", G("sda"))})
+  ;; eeprom_i2c_out
+  (func $eep_out (result i32)
+    (if (i32.eq ${G("state")} ${c(7)})
+      (then (if (i32.lt_u ${G("cyc")} ${c(9)})
+              (then (return (i32.and (i32.shr_u (i32.load8_u ${arr}) (i32.sub ${c(8)} ${G("cyc")})) ${c(1)}))))
+            (return ${G("sda")})))
+    (if (i32.eq ${G("cyc")} ${c(9)}) (then (return ${c(0)})))
+    ${G("sda")})
+  (func $eep_w (param $d i32)
+    ${S("sda", `(i32.and (i32.shr_u (local.get $d) ${c(e.sdaIn)}) ${c(1)})`)}
+    ${S("scl", `(i32.and (i32.shr_u (local.get $d) ${c(e.sclIn)}) ${c(1)})`)}
+    (call $eep_update))
+${e.mapper === "acclaim32" ? `
+  ;; mapper_acclaim_32M_write8/16: /LWR -> SDA, /UWR -> SCL; a word write
+  ;; with D0 set gives $200000-$2FFFFF back to the ROM, clear to the EEPROM
+  (func $acc32_w8 (param $a i32) (param $d i32)
+    (if (i32.and (local.get $a) ${c(1)}) (then ${S("sda", `(i32.and (local.get $d) ${c(1)})`)})
+      (else ${S("scl", `(i32.and (local.get $d) ${c(1)})`)}))
+    (call $eep_update))
+  (func $acc32_w16 (param $d i32)
+    (memory.fill ${c(CARTR + 0x20)} (select ${c(0)} ${c(1)} (i32.and (local.get $d) ${c(1)})) ${c(16)}))` : ""}${e.jcart ? `
+  ;; J-Cart pads 3 and 4 (gpgx gamepad devices 5 and 6: gamepad_read /
+  ;; gamepad_write with this port's state), pad bits from the ABI's pads 2/3
+  (func $jpad_read (param $k i32) (result i32)
+    (local $p i32) (local $data i32) (local $pad i32) (local $step i32)
+    (local.set $p (i32.add ${c(JPADS)} (i32.shl (local.get $k) ${c(4)})))
+    (local.set $pad (select (global.get $pad3) (global.get $pad2) (local.get $k)))
+    (local.set $data (i32.or (i32.load (local.get $p)) ${c(0x3F)}))
+    (local.set $step (i32.or (i32.load offset=8 (local.get $p)) (i32.shr_u (local.get $data) ${c(6)})))
+    (if (i32.lt_s (global.get $mc) (i32.load offset=4 (local.get $p)))
+      (then (local.set $step (i32.and (local.get $step) ${c(-2)}))))
+    (if (i32.eq (local.get $step) ${c(4)})
+      (then (return (i32.and (local.get $data) (i32.xor (i32.or (i32.and (i32.shr_u (local.get $pad) ${c(2)}) ${c(0x30)}) ${c(0x0F)}) ${c(-1)})))))
+    (if (i32.eq (local.get $step) ${c(7)})
+      (then (return (i32.and (local.get $data) (i32.xor (i32.or (i32.and (local.get $pad) ${c(0x30)}) (i32.and (i32.shr_u (local.get $pad) ${c(8)}) ${c(0x0F)})) ${c(-1)})))))
+    (if (i32.eq (local.get $step) ${c(6)})
+      (then (return (i32.and (local.get $data) (i32.xor (i32.and (i32.shr_u (local.get $pad) ${c(2)}) ${c(0x30)}) ${c(-1)})))))
+    (if (i32.and (local.get $step) ${c(1)})
+      (then (local.set $data (i32.and (local.get $data) (i32.xor (i32.and (local.get $pad) ${c(0x3F)}) ${c(-1)}))))
+      (else (local.set $data (i32.and (local.get $data)
+              (i32.xor (i32.or (i32.or (i32.and (local.get $pad) ${c(3)}) (i32.and (i32.shr_u (local.get $pad) ${c(2)}) ${c(0x30)})) ${c(0x0C)}) ${c(-1)})))))
+    (local.get $data))
+  (func $jpad_write (param $k i32) (param $data i32)
+    (local $p i32)
+    (local.set $p (i32.add ${c(JPADS)} (i32.shl (local.get $k) ${c(4)})))
+    (i32.store offset=4 (local.get $p) ${c(0)})${e.sixButton ? `
+    (if (i32.and (i32.ne (local.get $data) ${c(0)}) (i32.eqz (i32.load (local.get $p))))
+      (then (if (i32.lt_u (i32.load offset=8 (local.get $p)) ${c(8)})
+              (then (i32.store offset=8 (local.get $p) (i32.add (i32.load offset=8 (local.get $p)) ${c(2)}))
+                    (i32.store offset=12 (local.get $p) ${c(0)})))))` : ""}
+    (i32.store (local.get $p) (local.get $data)))
+  (func $jpad_refresh${e.sixButton ? `
+    (local $p i32) (local $k i32)
+    (block $d (loop $l
+      (br_if $d (i32.ge_u (local.get $k) ${c(2)}))
+      (local.set $p (i32.add ${c(JPADS)} (i32.shl (local.get $k) ${c(4)})))
+      (if (i32.gt_u (i32.load offset=12 (local.get $p)) ${c(25)})
+        (then (i32.store offset=8 (local.get $p) ${c(0)}) (i32.store offset=12 (local.get $p) ${c(0)}))
+        (else (i32.store offset=12 (local.get $p) (i32.add (i32.load offset=12 (local.get $p)) ${c(1)}))))
+      (local.set $k (i32.add (local.get $k) ${c(1)}))
+      (br $l)))` : ""})
+  ;; jcart_read: D6 = TH, D14 fixed low
+  (func $jcart_read (result i32)
+    (i32.or (call $jpad_read ${c(0)}) (i32.shl (i32.and (call $jpad_read ${c(1)}) ${c(0x3F)}) ${c(8)})))
+  (func $jcart_write (param $d i32)
+    (local.set $d (i32.shl (i32.and (local.get $d) ${c(1)}) ${c(6)}))
+    (call $jpad_write ${c(0)} (local.get $d))
+    (call $jpad_write ${c(1)} (local.get $d)))` : ""}
+  (func $cart_rd8 (param $a i32) (result i32)
+    (local $h i32)
+    (local.set $h (i32.load8_u (i32.add ${c(CARTR)} (i32.and (i32.shr_u (local.get $a) ${c(16)}) ${c(0x3F)}))))
+    (if (i32.eq (local.get $h) ${c(1)})
+      (then (if (i32.and (local.get $a) ${c(1)}) (then (return (i32.shl (call $eep_out) ${c(e.sdaOut)}))))
+            (return (call $bus8 (local.get $a)))))${e.jcart ? `
+    (if (i32.eq (local.get $h) ${c(2)})
+      (then (if (i32.and (local.get $a) ${c(1)})
+              (then (return (i32.or (i32.shl (call $eep_out) ${c(7)}) (i32.and (call $jcart_read) ${c(0x7F)})))))
+            (return (i32.shr_u (call $jcart_read) ${c(8)}))))` : ""}
+    (call $cart_b8 (local.get $a)))
+  (func $cart_rd16 (param $a i32) (result i32)
+    (local $h i32)
+    (local.set $h (i32.load8_u (i32.add ${c(CARTR)} (i32.and (i32.shr_u (local.get $a) ${c(16)}) ${c(0x3F)}))))
+    (if (i32.eq (local.get $h) ${c(1)}) (then (return (i32.shl (call $eep_out) ${c(e.sdaOut)}))))${e.jcart ? `
+    (if (i32.eq (local.get $h) ${c(2)}) (then (return (i32.or (i32.shl (call $eep_out) ${c(7)}) (call $jcart_read)))))` : ""}
+    (call $cart_b16 (local.get $a)))
+  (func $cart_wr8 (param $a i32) (param $v i32)
+    (local $h i32)
+    (local.set $h (i32.load8_u (i32.add ${c(CARTW)} (i32.and (i32.shr_u (local.get $a) ${c(16)}) ${c(0x3F)}))))
+    (if (i32.eqz (local.get $h)) (then (call $cart_wb8 (local.get $a) (local.get $v)) (return)))
+    (if (i32.eq (local.get $h) ${c(1)}) (then (if (i32.and (local.get $a) ${c(1)}) (then (call $eep_w (local.get $v)))) (return)))
+    (if (i32.eq (local.get $h) ${c(2)}) (then (call $eep_w (local.get $v)) (return)))${e.mapper === "acclaim32" ? `
+    (if (i32.eq (local.get $h) ${c(3)}) (then (call $acc32_w8 (local.get $a) (local.get $v)) (return)))` : ""}${e.jcart ? `
+    (if (i32.eq (local.get $h) ${c(4)}) (then (call $jcart_write (local.get $v)) (return)))` : ""})
+  (func $cart_wr16 (param $a i32) (param $v i32)
+    (local $h i32)
+    (local.set $h (i32.load8_u (i32.add ${c(CARTW)} (i32.and (i32.shr_u (local.get $a) ${c(16)}) ${c(0x3F)}))))
+    (if (i32.eqz (local.get $h)) (then (call $cart_wb16 (local.get $a) (local.get $v)) (return)))
+    (if (i32.le_u (local.get $h) ${c(2)}) (then (call $eep_w (local.get $v)) (return)))${e.mapper === "acclaim32" ? `
+    (if (i32.eq (local.get $h) ${c(3)}) (then (call $acc32_w16 (local.get $v)) (return)))` : ""}${e.jcart ? `
+    (if (i32.eq (local.get $h) ${c(4)}) (then (call $jcart_write (local.get $v)) (return)))` : ""})
+`;
+}
+
+/**
+ * Power-on handler tables for an EEPROM board (the *_init functions of
+ * eeprom_i2c.c), as WAT statements.
+ * @param {{mapper:string, eeprom:boolean, jcart:boolean, jcartReads:boolean}} e
+ */
+export function eepromInitWat(e) {
+  const fill = (t, from, to, v) => `    (memory.fill (i32.const ${t + from}) (i32.const ${v}) (i32.const ${to - from}))\n`;
+  let s = fill(CARTR, 0, 0x40, 0) + fill(CARTW, 0, 0x40, 0);
+  if (e.mapper === "ea" || e.mapper === "sega") s += fill(CARTR, 0x20, 0x40, 1) + fill(CARTW, 0x20, 0x40, 1);
+  else if (e.mapper === "acclaim16") s += fill(CARTR, 0x20, 0x40, 1) + fill(CARTW, 0x20, 0x40, 2);
+  else if (e.mapper === "acclaim32") s += fill(CARTW, 0x20, 0x30, 3);
+  else if (e.mapper === "jcart") {
+    if (e.eeprom) s += fill(CARTW, 0x30, 0x38, 2);
+    if (e.jcartReads) s += fill(CARTR, 0x38, 0x40, 2) + fill(CARTW, 0x38, 0x40, 4);
+    else s += fill(CARTR, 0x38, 0x40, 1) + fill(CARTW, 0x38, 0x40, 5);
+  }
+  s += `    (global.set $e_sda (i32.const 1)) (global.set $e_osda (i32.const 1)) (global.set $e_scl (i32.const 1)) (global.set $e_oscl (i32.const 1))
+    (global.set $e_state (i32.const 0)) (global.set $e_cyc (i32.const 0)) (global.set $e_rw (i32.const 0))
+    (global.set $e_dev (i32.const 0)) (global.set $e_word (i32.const 0)) (global.set $e_buf (i32.const 0))\n`;
+  if (e.jcart) s += `    (memory.fill (i32.const ${JPADS}) (i32.const 0) (i32.const 32))
+    (i32.store (i32.const ${JPADS}) (i32.const 0x40)) (i32.store (i32.const ${JPADS + 16}) (i32.const 0x40))\n`;
+  return s;
 }
 
 /**
