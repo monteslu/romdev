@@ -529,3 +529,124 @@ test("mapper 4 (MMC3): the scanline IRQ counter (latch, reload, ack/enable) fire
   assert.deepEqual([...r.ram.slice(0x1FC, 0x200)], [33, 32, 38, 192]);
   assertCpu(r, { pc: 49190, a: 33, x: 0, y: 32, s: 255, p: 160, count: -144 });
 });
+
+// ---- audio (fceumm sound.c low-quality renderer + SexyFilter, apu.js) ------------
+
+/** Run 5 settle frames, then `frames` frames, returning the int16 stereo stream after the settle. */
+async function runAudio(romBytes, frames, opts = {}) {
+  const { bytes } = await assembleWat(emitWat(romBytes, opts));
+  const { instance } = await WebAssembly.instantiate(bytes, {});
+  const e = instance.exports;
+  const info = e.wc_get_info(); e.wc_init();
+  const dv = () => new DataView(e.memory.buffer);
+  const u32 = (a) => dv().getUint32(a, true);
+  const aptr = u32(info + 16), cap = u32(info + 20), wptr = u32(info + 24);
+  assert.equal(u32(info + 52), 48000);
+  assert.equal(u32(info + 48) & 1, 0, "s16 ring");
+  let read = 0; const out = [];
+  const drain = (keep) => { const w = u32(wptr); while (read !== w) { if (keep) out.push(dv().getInt16(aptr + read * 4, true), dv().getInt16(aptr + read * 4 + 2, true)); read = (read + 1) % cap; } };
+  for (let i = 0; i < 5; i++) { e.wc_render(); drain(false); }
+  for (let i = 0; i < frames; i++) { e.wc_render(); drain(true); }
+  const s = Int16Array.from(out);
+  const { createHash } = await import("node:crypto");
+  return { n: s.length, sha: createHash("sha256").update(Buffer.from(s.buffer)).digest("hex"), s };
+}
+
+const APU_MAIN = `sei
+cld
+ldx #$FF
+txs
+lda #$1F
+sta $4015
+lda #$9A
+sta $4000
+lda #$A1
+sta $4001
+lda #$80
+sta $4002
+lda #$18
+sta $4003
+lda #$5F
+sta $4004
+lda #$00
+sta $4005
+lda #$20
+sta $4006
+lda #$41
+sta $4007
+lda #$7F
+sta $4008
+lda #$40
+sta $400A
+lda #$40
+sta $400B
+lda #$1C
+sta $400C
+lda #$85
+sta $400E
+lda #$58
+sta $400F
+lda #$0F
+sta $4010
+lda #$40
+sta $4011
+lda #$00
+sta $4012
+lda #$10
+sta $4013
+lda #$1F
+sta $4015
+lda #$80
+sta $2000
+loop:
+inc $10
+jmp loop`;
+const APU_NMI = `inc $20
+lda $20
+and #$0F
+bne n1
+lda #$18
+sta $4003
+lda $20
+sta $4011
+lda #$1F
+sta $4015
+n1:
+lda $20
+and #$1F
+bne n2
+lda $400E
+lda #$05
+sta $400E
+lda #$C0
+sta $4017
+lda #$28
+sta $400F
+n2:
+lda $20
+and #$3F
+bne n3
+lda #$40
+sta $4017
+lda #$D3
+sta $4004
+lda #$19
+sta $4007
+n3:
+rti`;
+
+test("audio: every channel, envelope, sweep, linear counter, noise mode, DMC and $4011 write is sample-exact with fceumm's stream", async () => {
+  const r = rom({ main: APU_MAIN, nmi: APU_NMI });
+  const a = await runAudio(r, 150);
+  // fceumm through romdev audioDebug({op:'record'}) over the same 150 frames after loadMedia:
+  // 119795 stereo frames, sha256 of the s16 stream
+  assert.equal(a.n, 239590);
+  assert.equal(a.sha, "c4fe7ce5fb1042f421054a7494ac4a3a57756b6d8c68ed26d9417ed635531429");
+  for (let i = 0; i < a.n; i += 2) if (a.s[i] !== a.s[i + 1]) assert.fail(`L != R at ${i}`);
+  // must-fail controls: dropping any one channel changes the stream
+  for (const ch of ["sq1", "sq2", "tri", "noise", "dmc"]) {
+    const m = await runAudio(r, 150, { muteChannels: [ch] });
+    assert.equal(m.n, 239590);
+    assert.notEqual(m.sha, a.sha, `muting ${ch} left the stream unchanged`);
+  }
+});

@@ -43,10 +43,15 @@ import {
   NTRAM, PAL, OAM, EMPH, luts, globalsWat, ppuWat,
 } from "./ppu.js";
 import { MAPPERS, ntSelFixed } from "./mappers.js";
+import { AUDIO, AUDIO_CAP, AUDIO_CURSOR, WAVE, WL1, WL2, NOISETAB, MUTE, MUTE_CHANNELS, soundConstants, apuGlobalsWat, apuWat } from "./apu.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FCEUMM = JSON.parse(readFileSync(path.join(__dirname, "fceumm-tables.json"), "utf8"));
 const CYCLES = JSON.parse(readFileSync(path.join(__dirname, "..", "..", "m6502-cycles.json"), "utf8"));
+/** RectDuties[4] as bytes, next to the other audio tables. */
+const DUTIES = NOISETAB + 0x60; // 0xF6CA0, 4 bytes (apu.js MUTE is at 0xF6CC0)
+/** fceumm's sound constants (sound.c SetSoundVariables, filter.c SexyFilter) + table addresses. */
+const SOUND = { ...soundConstants(FCEUMM.audio), WAVE, WL1, WL2, NOISETAB, DUTIES };
 
 export const platforms = ["nes"];
 
@@ -74,7 +79,7 @@ export const ABI = FB + FB_W * FB_H * 4 + 0x1000;
 export const PROBE_FIELDS = ["steps", "trapped", "trappc", "pc", "frame", "nnmi", "ts",
   "a", "x", "y", "s", "p", "ppu0", "ppu1", "ppustatus",
   "refaddr", "tmpaddr", "xoff", "joy", "trapop", "nvram",
-  "ringi", "nbrk", "nemph", "cnt", "apu4017", "dmcsize", "dmcirq", "nirq", "sirq", "mapwarn", "ndyn"];
+  "ringi", "nbrk", "nemph", "cnt", "apu4017", "dmcsize", "dmcirq", "nirq", "sirq", "mapwarn", "ndyn", "sndframes", "ndmcout"];
 
 /**
  * The cart's `romdev.recompile` layout (schema: recompile/recompile-section.js):
@@ -107,6 +112,9 @@ export const layout = {
     .map((f) => [f, { offset: p4(f), size: 4 }])),
   // The Python verifier's VRAM-zero control wiped nametables + CHR.
   vramZero: ["nametables", "chr"],
+  // fceumm's audio_batch_cb stream: 48 kHz s16, mono as L = R (apu.js)
+  audio: { sampleRate: 48000, channels: 2, format: "s16", reference: "output",
+    muteMask: { offset: MUTE, size: 1, channels: MUTE_CHANNELS } },
 };
 
 /**
@@ -492,6 +500,9 @@ function memWat(mapper) {
           (then (global.set $joybit (i32.const 0)) (global.set $joybit2 (i32.const 0))))
         (global.set $laststrobe (i32.and (local.get $v) (i32.const 1)))
         (return)))
+    ;; audio: fceumm's Do* flushes and the audio-only register state first
+    (if (i32.and (i32.ge_u (local.get $a) (i32.const 0x4000)) (i32.le_u (local.get $a) (i32.const 0x4015)))
+      (then (call $snd_write (local.get $a) (local.get $v))))
     ;; Write_PSG: $4003/$4007/$400B/$400F load an ENABLED channel's length
     (if (i32.eq (i32.and (local.get $a) (i32.const 0xFFF3)) (i32.const 0x4003))
       (then (call $len_load (i32.shr_u (i32.and (local.get $a) (i32.const 0xC)) (i32.const 2)) (local.get $v))))
@@ -568,6 +579,8 @@ function memWat(mapper) {
   (func $frame_update
     (if (i32.and (i32.eq (global.get $fcnt) (i32.const 3)) (i32.ne (i32.and (global.get $irqfm) (i32.const 2)) (i32.const 0)))
       (then (global.set $fhcnt (i32.add (global.get $fhcnt) (i32.const ${FHINC})))))
+    ;; FrameSoundStuff(fcnt): DoSQ1/DoSQ2/DoNoise/DoTriangle first
+    (call $snd_frame_stuff_pre)
     (if (i32.eqz (i32.and (global.get $fcnt) (i32.const 1)))
       (then
         (if (i32.and (i32.eqz (i32.and (i32.load8_u (i32.const ${APUREG + 8})) (i32.const 0x80))) (i32.gt_s (global.get $len2) (i32.const 0)))
@@ -578,6 +591,7 @@ function memWat(mapper) {
           (then (global.set $len0 (i32.sub (global.get $len0) (i32.const 1)))))
         (if (i32.and (i32.eqz (i32.and (i32.load8_u (i32.const ${APUREG + 4})) (i32.const 0x20))) (i32.gt_s (global.get $len1) (i32.const 0)))
           (then (global.set $len1 (i32.sub (global.get $len1) (i32.const 1)))))))
+    (call $snd_frame_stuff (i32.eqz (i32.and (global.get $fcnt) (i32.const 1))))
     (global.set $fcnt (i32.and (i32.add (global.get $fcnt) (i32.const 1)) (i32.const 3)))
     (if (i32.and (i32.eqz (global.get $fcnt)) (i32.eqz (i32.and (global.get $irqfm) (i32.const 3))))
       (then
@@ -616,6 +630,7 @@ function memWat(mapper) {
     (global.set $dmcacc (i32.sub (global.get $dmcacc) (local.get $cycles)))
     (block $d (loop $l
       (br_if $d (i32.gt_s (global.get $dmcacc) (i32.const 0)))
+      (if (global.get $dmchavesample) (then (call $snd_dmc_step)))
       (global.set $dmcacc (i32.add (global.get $dmcacc) (global.get $dmcperiod)))
       (global.set $dmcbitcount (i32.and (i32.add (global.get $dmcbitcount) (i32.const 1)) (i32.const 7)))
       (global.set $dmcshift (i32.shr_u (global.get $dmcshift) (i32.const 1)))
@@ -828,6 +843,12 @@ function frameWat(mapper) {
     ;; inputPtr (field 7) and timePtr (field 10) are written by the host
     ;; every frame with NO zero check: both must point somewhere harmless.
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 28)) (i32.const ${INPUT}))
+    ;; audio: int16 stereo ring (flags bit 0 clear), cursor in frames, 48 kHz
+    (i32.store (i32.add (i32.const ${ABI}) (i32.const 16)) (i32.const ${AUDIO}))
+    (i32.store (i32.add (i32.const ${ABI}) (i32.const 20)) (i32.const ${AUDIO_CAP}))
+    (i32.store (i32.add (i32.const ${ABI}) (i32.const 24)) (i32.const ${AUDIO_CURSOR}))
+    (i32.store (i32.add (i32.const ${ABI}) (i32.const 48)) (i32.const 0))
+    (i32.store (i32.add (i32.const ${ABI}) (i32.const 52)) (i32.const 48000))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 40)) (i32.const ${TIME}))
     (i32.const ${ABI}))
 
@@ -891,6 +912,8 @@ function frameWat(mapper) {
           (i32.const 2)))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $pl)))
+    ;; FCEUI_Emulate: FlushEmulateSound after FCEUPPU_Loop
+    (call $snd_flush)
     (global.set $nframe (i32.add (global.get $nframe) (i32.const 1)))
     (call $probe))
 `;
@@ -960,9 +983,14 @@ export async function* emitWat(rom, opts = {}) {
 
   yield "(module\n";
   yield `  (memory (export "memory") ${mapper.pages})\n`;
-  yield cpuGlobals() + mapper.globals + "\n";
+  yield cpuGlobals() + mapper.globals + apuGlobalsWat(SOUND) + "\n";
   yield globalsWat() + "\n";
   yield memWat(mapper) + "\n";
+  yield apuWat({ k: SOUND, APUREG }) + "\n";
+  if (opts.muteChannels && opts.muteChannels.length) {
+    // DEBUG / MUST-FAIL CONTROL: channels silenced from power-on
+    yield `  (data (i32.const ${MUTE}) "${watBytes(Uint8Array.of(opts.muteChannels.reduce((m, c) => m | (1 << (typeof c === "number" ? c : MUTE_CHANNELS.indexOf(c))), 0)))}")\n`;
+  }
   if (mapper.funcs) yield mapper.funcs + "\n";
   yield dynopWat(mapper) + "\n";
   yield ppuWat({
@@ -974,6 +1002,10 @@ export async function* emitWat(rom, opts = {}) {
   yield `  (data (i32.const ${CYCTAB}) "${watBytes(Uint8Array.from(CYCLES.base))}")\n`;
   yield `  (data (i32.const ${DMCTAB}) "${watBytes(u32le(FCEUMM.ntscDmcPeriod))}")\n`;
   yield `  (data (i32.const ${LENTAB}) "${watBytes(Uint8Array.from(FCEUMM.lengthTable))}")\n`;
+  yield `  (data (i32.const ${WL1}) "${watBytes(u32le(SOUND.wlookup1))}")\n`;
+  yield `  (data (i32.const ${WL2}) "${watBytes(u32le(SOUND.wlookup2))}")\n`;
+  yield `  (data (i32.const ${NOISETAB}) "${watBytes(u32le(FCEUMM.audio.noiseFreq))}")\n`;
+  yield `  (data (i32.const ${DUTIES}) "${watBytes(Uint8Array.from(FCEUMM.audio.rectDuties))}")\n`;
   for (const [addr, data] of luts()) yield `  (data (i32.const ${addr}) "${watBytes(data)}")\n`;
 
   const nsh = Math.ceil(n / SHARD);

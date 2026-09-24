@@ -1,10 +1,10 @@
 {
  "provenance": {
-  "source": "fceumm (libretro-fceumm) src/sound.c NTSCDMCTable[0x10], lengthtable[0x20]; src/palettes/palettes.h palette[0..63]; src/palette.c ApplyDeemphasisClassic rtmul/gtmul/btmul",
+  "source": "fceumm (libretro-fceumm) src/sound.c NTSCDMCTable[0x10], lengthtable[0x20]; src/palettes/palettes.h palette[0..63]; src/palette.c ApplyDeemphasisClassic rtmul/gtmul/btmul; audio: sound.c NTSCNoiseFreqTable, RectDuties, SetSoundVariables' wlookup1/wlookup2 formula constants, x6502.h NTSC_CPU",
   "fceummCommit": "3a84a6fd0ba20dd4877c06b1d58741172148395f",
   "method": "verbatim table extraction by scripts/recompile-gen/generate-nes-wat-tables.mjs",
   "note": "palette is 0xRRGGBB, the default NTSC palette fceumm renders with (default_palette[0]). deemphasis multipliers are C floats: entry = (int)(channel * mul[bits-1]) in float32, clamped to 255 (ApplyDeemphasisComplete fills palette[64..511]).",
-  "extractedAt": "2026-09-24T15:48:27.300Z"
+  "extractedAt": "2026-09-24T17:25:09.770Z"
  },
  "ntscDmcPeriod": [
   428,
@@ -151,6 +151,45 @@
    0.979,
    0.101,
    0.75
+  ]
+ },
+ "audio": {
+  "ntscCpu": 1789772.7272727273,
+  "noiseFreq": [
+   4,
+   8,
+   16,
+   32,
+   64,
+   96,
+   128,
+   160,
+   202,
+   254,
+   380,
+   508,
+   762,
+   1016,
+   2034,
+   4068
+  ],
+  "rectDuties": [
+   1,
+   2,
+   4,
+   6
+  ],
+  "wl1": [
+   95.52,
+   8128,
+   100,
+   4
+  ],
+  "wl2": [
+   163.67,
+   24329,
+   100,
+   4
   ]
  }
 }

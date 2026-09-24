@@ -46,6 +46,21 @@ if (lengthTable.length !== 32 || lengthTable.some((v) => !Number.isInteger(v) ||
 // odd entries 3..31 are 2,4,...,30
 for (let i = 3; i < 32; i += 2) if (lengthTable[i] !== i - 1) throw new Error(`lengthtable[${i}] = ${lengthTable[i]}`);
 
+// audio (the low-quality renderer, sound.c SetSoundVariables / RDo*LQ)
+const noiseFreq = arrayBody(sound, "NTSCNoiseFreqTable[0x10]").split(",").map((t) => t.trim()).filter(Boolean).map(Number);
+if (noiseFreq.length !== 16 || noiseFreq[0] !== 4 || noiseFreq.some((v, i) => i && v <= noiseFreq[i - 1])) throw new Error("bad NTSCNoiseFreqTable");
+const rectDuties = arrayBody(sound, "RectDuties[4]").split(",").map((t) => t.trim()).filter(Boolean).map(Number);
+if (rectDuties.join() !== "1,2,4,6") throw new Error(`RectDuties ${rectDuties}`);
+const wlk = (name) => {
+  const m = sound.match(new RegExp(`${name}\\[x\\] = \\(double\\)16 \\* 16 \\* 16 \\* 4 \\* ([0-9.]+) / \\(\\(double\\)(\\d+) / \\(double\\)x \\+ (\\d+)\\);\\s*if \\(!FSettings.soundq\\) ${name}\\[x\\] >>= (\\d+);`));
+  if (!m) throw new Error(`${name} formula not found`);
+  return m.slice(1, 5).map(Number);
+};
+const x6502h = readFileSync(path.join(dir, "x6502.h"), "utf8");
+const cpu = x6502h.match(/#define NTSC_CPU \(dendy \? [0-9.]+ : ([0-9.]+)\)/);
+if (!cpu) throw new Error("NTSC_CPU not found");
+const audio = { ntscCpu: Number(cpu[1]), noiseFreq, rectDuties, wl1: wlk("wlookup1"), wl2: wlk("wlookup2") };
+
 const pals = readFileSync(path.join(dir, "palettes", "palettes.h"), "utf8");
 const body = arrayBody(pals, "pal palette[512]");
 const triples = [...body.matchAll(/\{\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\}/g)].slice(0, 64)
@@ -120,7 +135,7 @@ try {
 
 writeFileSync(out, JSON.stringify({
   provenance: {
-    source: "fceumm (libretro-fceumm) src/sound.c NTSCDMCTable[0x10], lengthtable[0x20]; src/palettes/palettes.h palette[0..63]; src/palette.c ApplyDeemphasisClassic rtmul/gtmul/btmul",
+    source: "fceumm (libretro-fceumm) src/sound.c NTSCDMCTable[0x10], lengthtable[0x20]; src/palettes/palettes.h palette[0..63]; src/palette.c ApplyDeemphasisClassic rtmul/gtmul/btmul; audio: sound.c NTSCNoiseFreqTable, RectDuties, SetSoundVariables' wlookup1/wlookup2 formula constants, x6502.h NTSC_CPU",
     fceummCommit: commit,
     method: "verbatim table extraction by scripts/recompile-gen/generate-nes-wat-tables.mjs",
     note: "palette is 0xRRGGBB, the default NTSC palette fceumm renders with (default_palette[0]). deemphasis multipliers are C floats: entry = (int)(channel * mul[bits-1]) in float32, clamped to 255 (ApplyDeemphasisComplete fills palette[64..511]).",
@@ -130,6 +145,7 @@ writeFileSync(out, JSON.stringify({
   lengthTable,
   paletteRgb: triples,
   deemphasis,
+  audio,
 }, null, 1) + "\n");
 const correctOut = path.join(path.dirname(out), "fceumm-ines-correct.json");
 writeFileSync(correctOut, JSON.stringify({
