@@ -27,10 +27,11 @@ OUT="$PROJECT_DIR/src/cores/wasm"
 fetch_pinned cores.mgba "$DIR"
 
 cd "$DIR"
+require_git_toplevel
 git checkout -- src/gba/memory.c src/gba/audio.c src/platform/libretro/libretro.c src/arm/arm.c 2>/dev/null || true
 if ! git apply --recount --check "$PATCH_FILE" 2>/dev/null; then
-  if grep -q "romdev_watchpoint_set" src/platform/libretro/libretro.c; then
-    echo "Patch already present (sentinel romdev_watchpoint_set found); skipping apply."
+  if patch_already_applied "$PATCH_FILE"; then
+    echo "Patch already present (reverse-applies cleanly); skipping apply."
   else
     echo "FATAL: patch failed to apply and sentinel not present." >&2
     exit 1
@@ -53,7 +54,13 @@ cp "$RDBG_SRC/romdev_audio_stream.h" "$DIR/src/platform/libretro/romdev_audio_st
 
 emmake make -f Makefile.libretro platform=emscripten clean >/dev/null 2>&1 || true
 find . -maxdepth 2 -name "*_libretro_emscripten.a" -delete 2>/dev/null || true
-emmake make -f Makefile.libretro platform=emscripten -j"$(nproc)"
+# -fwrapv, as mGBA's own CMakeLists.txt compiles it: the ARM flag macros
+# (ARM_V_ADDITION and friends on int operands) rely on wrapping signed
+# overflow. Makefile.libretro leaves it out, and with it missing clang folded
+# Thumb ADD's overflow test away (V stayed clear on 0x7FFFFFFF + 1; jsmolka
+# gba-tests thumb.gba failed test 102 on the core and passed on a recompiled
+# cart).
+emmake make -f Makefile.libretro platform=emscripten PLATFORM_DEFINES=-fwrapv -j"$(nproc)"
 
 # Compile the shared romdev_debug.c so its exports can be archived in.
 emcc -c -O2 -I"$RDBG_SRC" "$DIR/romdev_debug.c" -o "$DIR/romdev_debug.o"
