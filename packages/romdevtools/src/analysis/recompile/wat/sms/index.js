@@ -1321,6 +1321,7 @@ export async function* emitWat(rom, opts = {}) {
     "  (global $iff (mut i32) (i32.const 0))",
     "  (global $iff2 (mut i32) (i32.const 0))",
     "  (global $pauseb (mut i32) (i32.const 0))",
+    "  (global $im (mut i32) (i32.const 0))",
     "  (global $halted (mut i32) (i32.const 0))",
     "  (global $joy1 (mut i32) (i32.const 0xFF))",
     "  (global $joy2 (mut i32) (i32.const 0xFF))",
@@ -1371,8 +1372,10 @@ export async function* emitWat(rom, opts = {}) {
     "      (br_if $exit (i32.le_s (local.get $budget) (i32.const 0)))",
     "      (br_if $exit (global.get $trapped))",
     // Interrupts are sampled before EVERY instruction, as genesis_plus_gx's
-    // z80_run does, except the one right after EI. Acceptance (IM1) costs
-    // 13 T; a line whose budget that exhausts ends before the handler runs.
+    // z80_run does, except the one right after EI. Acceptance costs 13 T in
+    // IM 1 and IM 0 (the bus reads $FF: RST $38) and 19 T in IM 2, whose
+    // vector is the word at (I << 8) | $FF (gpgx take_interrupt); a line
+    // whose budget that exhausts ends before the handler runs.
     ...(cfg.legacy ? [] : [
       "      (if (i32.and (i32.ne (global.get $iff) (i32.const 0)) (i32.eqz (global.get $eidelay)))",
       "        (then (if (call $irq_line)",
@@ -1381,8 +1384,11 @@ export async function* emitWat(rom, opts = {}) {
       "                (global.set $iff2 (i32.const 0))",
       "                (global.set $halted (i32.const 0))",
       "                (call $push16 (global.get $pc))",
-      "                (local.set $budget (i32.sub (local.get $budget) (i32.const 13)))",
-      "                (global.set $pc (i32.const 0x38))",
+      "                (if (i32.eq (global.get $im) (i32.const 2))",
+      "                  (then (local.set $budget (i32.sub (local.get $budget) (i32.const 19)))",
+      "                        (global.set $pc (call $rd16 (i32.or (i32.shl (global.get $ireg) (i32.const 8)) (i32.const 0xFF)))))",
+      "                  (else (local.set $budget (i32.sub (local.get $budget) (i32.const 13)))",
+      "                        (global.set $pc (i32.const 0x38))))",
       "                (br_if $exit (i32.le_s (local.get $budget) (i32.const 0)))))))",
       "      (global.set $eidelay (i32.const 0))"]),
     // A halted Z80 still burns the line as 4 T re-executions, each an opcode

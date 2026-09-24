@@ -482,7 +482,8 @@ export function lower(mnem, ops, addr, size, mode = {}) {
   if (mnem === "di") return [mode.exact ? "(global.set $iff (i32.const 0)) (global.set $iff2 (i32.const 0))" : "(global.set $iff (i32.const 0))", null];
   // ei: see `mode.exact` above for the EI delay.
   if (mnem === "ei") return [mode.exact ? "(global.set $iff (i32.const 1)) (global.set $iff2 (i32.const 1)) (global.set $eidelay (i32.const 1))" : "(global.set $iff (i32.const 1))", null];
-  if (mnem === "im") return ["(nop)", null];
+  // Interrupt mode: only IM 2 differs on this bus (IM 0 reads $FF = RST $38).
+  if (mnem === "im") return [mode.exact ? `(global.set $im (i32.const ${imm(o[0] ?? "0") & 3}))` : "(nop)", null];
   // HALT: park until an interrupt, PC at the next instruction so the
   // handler returns past the halt.
   if (mnem === "halt") return ["(global.set $halted (i32.const 1))", { kind: "jp", target: nxt }];
