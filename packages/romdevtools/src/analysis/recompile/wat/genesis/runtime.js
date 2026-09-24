@@ -1232,7 +1232,10 @@ export function vdpWat(opts = {}) {
       (then (local.set $dcyc (i32.sub (i32.mul (i32.sub (i32.sub (i32.const ${LINES}) (global.get $vp_h)) (i32.const 1))
                                                (i32.const 3420)) (local.get $cycles))))
       (else (local.set $dcyc (i32.sub (i32.add (global.get $mcvdp) (i32.const 3420)) (local.get $cycles)))))
-    (local.set $dbytes (i32.div_s (i32.mul (local.get $dcyc) (local.get $rate)) (i32.const 3420)))
+    ;; dma_cycles (int) * rate (unsigned) is unsigned arithmetic in C: a
+    ;; trigger past the end of the line (the DMA fill start adjustment) gives
+    ;; a huge byte budget, and the whole DMA completes there
+    (local.set $dbytes (i32.div_u (i32.mul (local.get $dcyc) (local.get $rate)) (i32.const 3420)))
     (if (i32.lt_u (global.get $v_dma_length) (local.get $dbytes))
       (then (local.set $dbytes (global.get $v_dma_length))
             (local.set $dcyc (i32.div_s (i32.mul (local.get $dbytes) (i32.const 3420)) (local.get $rate)))))

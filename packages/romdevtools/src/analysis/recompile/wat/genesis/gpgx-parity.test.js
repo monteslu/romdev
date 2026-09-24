@@ -443,3 +443,17 @@ test("VRAM DMA fill and copy write the byte gpgx's WRITE_BYTE(vram, addr ^ 1) la
   const r = await gpgxParity({ platform: "genesis", rom: mdImage(code), maxFrames: 3 });
   assert.equal(r.diverged, false, divergenceText(r));
 });
+
+test("a DMA fill started past the end of its line completes at once (gpgx's unsigned DMA byte budget)", T, async () => {
+  const cmd = (c) => [...W(0x33fc, c), ...L(0xc00004)];
+  const cmd2 = (a, cd) => { const c = (((cd & 3) << 30) | ((a & 0x3fff) << 16) | ((cd & 0x3c) << 2) | (a >> 14)) >>> 0; return [...W(0x23fc), ...L(c), ...L(0xc00004)]; };
+  // display on: fills of 31 bytes back to back, each polled to completion, the
+  // status and the poll count logged; the start drifts across the line
+  const fill = [...cmd(0x9300 | 31), ...cmd(0x9400), ...cmd(0x9780), ...cmd2(0x1000, 0x21), ...W(0x13fc, 0x005a), ...L(0xc00000)];
+  const poll = [...W(0x5286, 0x3039), ...L(0xc00004), ...W(0x0800, 0x0001, 0x66f4)];   // w: addq #1,d6; move.w status,d0; btst #1; bne w
+  const body = [...fill, ...poll, ...W(0x30c0, 0x30c6, 0x4e71)];                       // log d0 and d6
+  const loop = [...W(0x41f9), ...L(0xff0000), ...W(0x7e3f), ...body, ...W(0x51cf, (-(body.length + 2)) & 0xffff), ...W(0x60fe)];
+  const code = [...cmd(0x8154), ...cmd(0x8f01), ...loop];
+  const r = await gpgxParity({ platform: "genesis", rom: mdImage(code), maxFrames: 3 });
+  assert.equal(r.diverged, false, divergenceText(r));
+});
