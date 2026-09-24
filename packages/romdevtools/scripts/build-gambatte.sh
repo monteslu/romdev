@@ -20,6 +20,7 @@ fetch_pinned cores.gambatte "$GAMBATTE_DIR"
 
 cd "$GAMBATTE_DIR"
 # Reset the files the patch touches so re-runs are idempotent.
+require_git_toplevel
 git checkout -- \
   libgambatte/src/cpu.h \
   libgambatte/src/cpu.cpp \
@@ -37,8 +38,8 @@ git checkout -- \
 # --recount lets the patch survive small additions to hunks (e.g. adding
 # a new ROMDEV_MEMORY_* region) without manually re-computing the @@ counts.
 if ! git apply --recount --check "$PATCH_FILE" 2>/dev/null; then
-  if grep -q "ROMDEV_MEMORY_GB_VRAM" libgambatte/libretro/libretro.cpp; then
-    echo "Patch already present (sentinel ROMDEV_MEMORY_GB_VRAM found); skipping apply."
+  if patch_already_applied "$PATCH_FILE"; then
+    echo "Patch already present (reverse-applies cleanly); skipping apply."
   else
     echo "FATAL: patch failed to apply and sentinel not present." >&2
     exit 1

@@ -71,3 +71,19 @@ EM_WRAP_FLAGS=(
   # need DWARF; the source is available for anyone who wants to debug a build.
   -g0
 )
+
+# A core build resets and re-applies its romdev patch with git. That only works
+# when the source dir is the TOP of its own checkout: otherwise `git checkout --`
+# quietly does nothing, the tree keeps an OLDER patch revision, and a sentinel
+# grep calls it "already present", building a core that silently lacks newer hunks.
+require_git_toplevel() {
+  if [ "$(git rev-parse --show-toplevel 2>/dev/null)" != "$(pwd -P)" ]; then
+    echo "FATAL: $(pwd) is not the top of its own git checkout, so the romdev patch cannot be reset and re-applied. Delete it and re-run to re-fetch the pinned source." >&2
+    exit 1
+  fi
+}
+
+# Succeeds only when the exact patch is already fully applied (reverse-applies).
+patch_already_applied() {
+  git apply --recount --reverse --check "$1" 2>/dev/null
+}

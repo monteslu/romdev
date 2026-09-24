@@ -25,11 +25,13 @@ fetch_pinned cores.snes9x "$SNES9X_DIR"
 cd "$SNES9X_DIR"
 # Reset to clean state and reapply the patch idempotently. `git stash`
 # discards any prior partial apply attempts.
+require_git_toplevel
 git checkout -- libretro/libretro.cpp getset.h cpuexec.cpp ppu.h gfx.cpp 2>/dev/null || true
 if ! git apply --recount --check "$PATCH_FILE" 2>/dev/null; then
-  # Patch may already be applied; check by looking for the sentinel symbol.
-  if grep -q "ROMDEV_MEMORY_SNES_OAM" libretro/libretro.cpp; then
-    echo "Patch already present (sentinel ROMDEV_MEMORY_SNES_OAM found); skipping."
+  # Accept "already applied" only when THIS patch reverse-applies cleanly; an older
+  # revision of the patch carries the same sentinel symbols.
+  if patch_already_applied "$PATCH_FILE"; then
+    echo "Patch already present (reverse-applies cleanly); skipping."
   else
     echo "FATAL: patch failed to apply and sentinel not present." >&2
     exit 1

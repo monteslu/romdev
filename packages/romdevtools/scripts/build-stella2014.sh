@@ -18,6 +18,7 @@ OUT="$PROJECT_DIR/src/cores/wasm"
 fetch_pinned cores.stella2014 "$DIR"
 
 cd "$DIR"
+require_git_toplevel
 git checkout -- \
   stella/src/emucore/M6502.hxx \
   stella/src/emucore/M6502.cxx \

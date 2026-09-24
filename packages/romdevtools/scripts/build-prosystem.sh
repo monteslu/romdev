@@ -20,6 +20,7 @@ OUT="$PROJECT_DIR/src/cores/wasm"
 fetch_pinned cores.prosystem "$DIR"
 
 cd "$DIR"
+require_git_toplevel
 git checkout -- core/libretro.c core/Memory.c core/Sally.c core/ProSystem.c 2>/dev/null || true
 # prosystem ships Memory.c/Sally.c/ProSystem.c as CRLF; normalize to LF so the
 # (LF-generated) romdev patch applies cleanly - same as the vice build.

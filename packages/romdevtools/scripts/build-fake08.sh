@@ -49,6 +49,7 @@ for k,v in subs.items(): print(k, v)
 # ── apply romdev's memory-region patch (exposes PICO-8's 64KB RAM as SYSTEM_RAM) ──
 PATCH_FILE="$PROJECT_DIR/scripts/patches/fake08-romdev-memory-regions.patch"
 cd "$FAKE08_DIR"
+require_git_toplevel
 git checkout -- platform/libretro/libretro.cpp 2>/dev/null || true
 if git apply --check "$PATCH_FILE" 2>/dev/null; then
   git apply "$PATCH_FILE"

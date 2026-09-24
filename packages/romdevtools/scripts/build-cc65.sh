@@ -27,6 +27,7 @@ cd "$CC65_DIR"
 # build of the same input produce byte-identical .o - see the patch header and
 # scripts/patches/README.md). Reset the touched files so a re-run re-applies
 # cleanly; skip if the sentinel (GetSourceDateEpoch) is already present.
+require_git_toplevel
 git checkout -- src/ca65/filetab.c src/ca65/main.c src/cc65/input.c \
                 src/cc65/lineinfo.c src/common/filetime.c src/common/filetime.h 2>/dev/null || true
 if ! git apply --recount --check "$PATCH_FILE" 2>/dev/null; then

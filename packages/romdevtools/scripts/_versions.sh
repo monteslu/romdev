@@ -58,6 +58,20 @@ fetch_pinned() {
     exit 1
   fi
   if [ -d "$dst" ]; then
+    # Reuse only a real checkout of the pinned commit. A directory that is not the
+    # top of its own git repo (git then falls through to an enclosing repo) or that
+    # sits at another commit would build silently stale or unpatched source.
+    if [ "$(git -C "$dst" rev-parse --show-toplevel 2>/dev/null)" != "$(cd "$dst" && pwd -P)" ]; then
+      echo "Error: $dst exists but is not its own git checkout; delete it and re-run to fetch $keypath @ $commit." >&2
+      exit 1
+    fi
+    local head want
+    head="$(git -C "$dst" rev-parse HEAD 2>/dev/null)"
+    want="$(git -C "$dst" rev-parse --verify -q "$commit^{commit}" 2>/dev/null)"
+    if [ -z "$want" ] || [ "$head" != "$want" ]; then
+      echo "Error: $dst is at ${head:-no commit}, not the pinned $keypath @ $commit; delete it and re-run to re-fetch." >&2
+      exit 1
+    fi
     echo "Using existing checkout at $dst (pinned $keypath @ $commit)"
     return 0
   fi

@@ -22,6 +22,7 @@ RDBG="$PROJECT_DIR/scripts/romdev-debug"
 [ -d "$SRC" ] || { echo "FATAL: gametank-libretro not found at $SRC" >&2; exit 1; }
 
 cd "$SRC"
+require_git_toplevel
 git checkout -- src/libretro.cpp vendor/mos6502/mos6502.cpp 2>/dev/null || true
 
 # ── stage the shared debug lib next to the core (quote-include reach) ──

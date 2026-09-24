@@ -23,14 +23,17 @@ fetch_pinned cores.genesis_plus_gx "$GPGX_DIR"
 cd "$GPGX_DIR"
 # Every file the patch touches (vdp_render.c included: the patch rewrites its CRLF
 # endings, so a second run on the same tree fails --check unless it is reverted too).
-git checkout -- libretro/libretro.c core/m68k/m68kcpu.c core/m68k/m68kcpu.h core/z80/z80.c core/vdp_ctrl.c core/vdp_render.c core/sound/blip_buf.c 2>/dev/null || true
+require_git_toplevel
+git checkout -- libretro/libretro.c core/m68k/m68kcpu.c core/m68k/m68kcpu.h core/z80/z80.c core/vdp_ctrl.c core/vdp_render.c core/sound/blip_buf.c
 # --recount lets the patch survive small additions (new ROMDEV_MEMORY_*
 # region IDs etc) without re-numbering hunk headers by hand.
 if ! git apply --recount --check "$PATCH_FILE" 2>/dev/null; then
-  if grep -q "ROMDEV_MEMORY_GENESIS_CRAM" libretro/libretro.c; then
-    echo "Patch already present (sentinel ROMDEV_MEMORY_GENESIS_CRAM found); skipping apply."
+  # Accept "already applied" only when THIS patch reverse-applies cleanly; a
+  # sentinel string is also present in older revisions of the patch.
+  if patch_already_applied "$PATCH_FILE"; then
+    echo "Patch already present (reverse-applies cleanly); skipping apply."
   else
-    echo "FATAL: patch failed to apply and sentinel not present." >&2
+    echo "FATAL: patch neither applies nor is already fully present (the tree holds a different revision of it). Delete $GPGX_DIR and re-run." >&2
     exit 1
   fi
 else

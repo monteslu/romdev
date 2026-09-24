@@ -31,6 +31,7 @@ fetch_pinned cores.bluemsx "$DIR"
 
 cd "$DIR"
 # 1) build-config patch (required).
+require_git_toplevel
 git checkout -- Makefile.libretro 2>/dev/null || true
 if git apply --recount --check "$BUILD_PATCH" 2>/dev/null; then
   git apply --recount "$BUILD_PATCH"; echo "Applied $BUILD_PATCH"

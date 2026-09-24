@@ -20,10 +20,11 @@ OUT="$PROJECT_DIR/src/cores/wasm"
 fetch_pinned cores.handy "$DIR"
 
 cd "$DIR"
+require_git_toplevel
 git checkout -- lynx/c65c02.h libretro/libretro.cpp 2>/dev/null || true
 if ! git apply --recount --check "$PATCH_FILE" 2>/dev/null; then
-  if grep -q "romdev_watchpoint_set" libretro/libretro.cpp; then
-    echo "Patch already present (sentinel romdev_watchpoint_set found); skipping apply."
+  if patch_already_applied "$PATCH_FILE"; then
+    echo "Patch already present (reverse-applies cleanly); skipping apply."
   else
     echo "FATAL: patch failed to apply and sentinel not present." >&2
     exit 1

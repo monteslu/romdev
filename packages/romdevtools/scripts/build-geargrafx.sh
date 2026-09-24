@@ -37,16 +37,18 @@ if [ -n "${PATCH_REL:-}" ] && [ -f "$PATCH_FILE" ]; then
   # - so a clean re-apply always works. EVERY file the patch
   # touches must be listed: one missing entry makes the second build in a row
   # fail to apply, and the script then silently builds a STOCK core.
+  require_git_toplevel
   git checkout -- platforms/libretro/libretro.cpp \
     src/memory.h src/memory_inline.h src/huc6280_inline.h \
     src/geargrafx_core_inline.h src/huc6270_inline.h src/huc6270.cpp src/huc6270.h \
     src/huc6260_inline.h src/huc6260.cpp 2>/dev/null || true
   if git apply --recount --check "$PATCH_FILE" 2>/dev/null; then
     git apply --recount "$PATCH_FILE"; echo "Applied $PATCH_FILE"
-  elif grep -rq "romdev_pcbreak_set" platforms/libretro/ 2>/dev/null; then
-    echo "Patch already present (sentinel found); skipping apply."
+  elif patch_already_applied "$PATCH_FILE"; then
+    echo "Patch already present (reverse-applies cleanly); skipping apply."
   else
-    echo "WARNING: region patch failed to apply; building STOCK core." >&2
+    echo "FATAL: region patch neither applies nor is already fully present. Delete the source dir and re-run." >&2
+    exit 1
   fi
 else
   echo "No region patch yet - building stock geargrafx."
