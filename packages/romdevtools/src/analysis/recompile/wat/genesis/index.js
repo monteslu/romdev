@@ -305,6 +305,65 @@ export function discoverRamCode(img) {
   }
 }
 
+/**
+ * Code in work RAM found by RUNNING the reference: genesis_plus_gx from power-on
+ * (no settle frames) for `frames` frames on the `input` schedule (reference
+ * frames, loadMedia's usual 5 settle frames added), its free-running
+ * instruction trace read every frame. Every 68000 pc in $E00000-$FFFFFF it
+ * executed is recorded with each distinct 10-byte window of work RAM at that
+ * pc seen at the end of a frame it ran in (a 68000 instruction is at most 10
+ * bytes). This finds what the copy-loop scan cannot: routines built or
+ * patched in RAM, trampolines written at run time (a `jmp` the game stores
+ * into its interrupt stub), code copied by other loops or decompressed.
+ * @param {string} romPath
+ * @param {{frames?: number, input?: string|object[]}} [o]
+ * @returns {Promise<{windows: Map<number, Set<string>>, frames: number, instructions: number}>}
+ */
+export async function discoverRamCodeTrace(romPath, o = {}) {
+  const frames = Number.isInteger(o.frames) && o.frames > 0 ? o.frames : 3000;
+  const { LibretroHost } = await import("romdev-core-host/index.js");
+  const { resolveCore } = await import("../../../../cores/registry.js");
+  const { ScheduleDriver, parseInputSchedule } = await import("../../../../host/verify-recompile.js");
+  const resolved = resolveCore("genesis");
+  if (!resolved) throw new Error("genesis recompile: no reference core for genesis");
+  const host = new LibretroHost();
+  try {
+    await host.loadCore(resolved.jsPath, resolved.wasmPath, { hwRender: resolved.hwRender, noderawfs: resolved.noderawfs });
+    host.status.paused = true;
+    await host.loadMedia({ platform: "genesis", path: romPath });
+    host.status.paused = false;
+    if (!host.traceSupported()) throw new Error("genesis recompile: the reference core records no instruction trace");
+    host.setTrace({ capacity: 1 << 20 });
+    const settle = 5;
+    const driver = new ScheduleDriver(host, parseInputSchedule(o.input ?? ""));
+    const windows = new Map();
+    let from = 0, instructions = 0;
+    for (let f = 1; f <= frames + settle; f++) {
+      const rf = f - settle;
+      if (rf >= 0) driver._apply(driver._want(rf));
+      await host.stepFrames(1);
+      const tr = host.readTrace(from);
+      if (tr.lost) throw new Error(`genesis recompile: the reference trace overflowed (${tr.lost} instructions lost in one frame)`);
+      from = tr.to;
+      instructions += tr.pc.length;
+      let ram = null;
+      for (const pc of tr.pc) {
+        if ((pc & 0xffffff) < 0xe00000) continue;
+        if (!ram) ram = host.readMemory("system_ram", 0, 0x10000);
+        const a = pc & 0xffff;
+        let key = "";
+        for (let k = 0; k < 10; k++) key += ram[(a + k) & 0xffff].toString(16).padStart(2, "0");
+        let set = windows.get(pc >>> 0);
+        if (!set) windows.set(pc >>> 0, (set = new Set()));
+        set.add(key);
+      }
+    }
+    return { windows, frames, instructions };
+  } finally {
+    try { host.dispose?.(); } catch { /* best effort */ }
+  }
+}
+
 /** Normalise options.ramCode (plus discovery unless options.discoverRamCode === false). */
 function ramCodeList(img, opts) {
   const list = [];
@@ -540,19 +599,50 @@ export async function* emitWat(rom, opts = {}) {
     return (ROMDATA[p] << 8) | ROMDATA[(p + 1) & (ROMSIZE - 1)];
   };
 
-  // arm list: [index, pc, fetch16]; ROM arms first, then RAM-resident copies
+  // arm list: [index, pc, fetch16, variants?]; ROM arms first, then the
+  // RAM-resident code: copies the scan found (ROM bytes at their RAM
+  // address) and, from the reference's own trace, every RAM pc it ran with
+  // each encoding seen there. An index with more than one candidate becomes
+  // a guarded arm: each variant runs only while the work RAM words it was
+  // compiled from are still there (and at the pc form it was compiled for);
+  // anything else traps, with trappc = the RAM pc.
   const arms = [];
   for (let off = 0; off < img.length; off += 2) arms.push([off >> 1, off, fetchRom]);
+  const ramArms = new Map(); // index -> [{pc, f16, source}]
+  const addRam = (pc, f16, source) => {
+    const idx = ROMWORDS + ((pc & 0xffff) >> 1);
+    let v = ramArms.get(idx);
+    if (!v) ramArms.set(idx, (v = []));
+    v.push({ pc: pc >>> 0, f16, source });
+  };
   for (const { romOffset, ramAddress, length } of ramCodeList(img, opts)) {
     const f16 = (p) => {
       const d = (p - ramAddress) >>> 0;
       if (d < 0x10000) return fetchRom(romOffset + d);
       return fetchRom(p);
     };
-    for (let k = 0; k < length; k += 2) {
-      const pc = (ramAddress + k) >>> 0;
-      arms.push([ROMWORDS + ((pc & 0xffff) >> 1), pc, f16]);
+    for (let k = 0; k < length; k += 2) addRam((ramAddress + k) >>> 0, f16, "copy");
+  }
+  let traced = null;
+  if (opts.ramTrace !== false && typeof opts.romPath === "string") {
+    const o = opts.ramTrace && typeof opts.ramTrace === "object" ? opts.ramTrace : {};
+    traced = await discoverRamCodeTrace(opts.romPath, o);
+    for (const [pc, keys] of traced.windows) {
+      for (const key of keys) {
+        const bytes = Uint8Array.from(key.match(/../g), (h) => parseInt(h, 16));
+        const f16 = (p) => {
+          const d = (p - pc) >>> 0;
+          if (d + 1 < bytes.length) return (bytes[d] << 8) | bytes[d + 1];
+          return 0x10000; // never a word: a guard on it always fails
+        };
+        addRam(pc, f16, "trace");
+      }
     }
+  }
+  for (const [idx, vs] of ramArms) {
+    // one copy-scan variant alone keeps the unguarded arm it always had
+    if (vs.length === 1 && vs[0].source === "copy") arms.push([idx, vs[0].pc, vs[0].f16]);
+    else arms.push([idx, vs[0].pc, vs[0].f16, vs]);
   }
   const narms = arms.length;
   const nsh = Math.ceil(narms / SH);
@@ -589,21 +679,26 @@ export async function* emitWat(rom, opts = {}) {
     yield buf.join("");
   }
   // the 68000 arms, one br_table shard per SH arms
-  let bad = 0, broken = 0;
+  let bad = 0, broken = 0, ramVariantCount = 0;
   const breakAt = parseBreakArm(opts.breakArm);
   for (let si = 0; si < nsh; si++) {
     const sh = arms.slice(si * SH, (si + 1) * SH);
     const bodies = [];
     let nl = 1;
-    for (const [, pc, f16] of sh) {
+    for (const [, pc, f16, variants] of sh) {
       let body, nloc;
-      try {
-        ({ body, nlocals: nloc } = translateM68k(D.m68k, f16(pc), pc, f16));
-      } catch (e) {
-        if (!(e instanceof TrError)) throw e;
-        body = "(call $trap)";
-        nloc = 0;
-        bad++;
+      if (variants) {
+        ({ body, nlocals: nloc } = guardedRamArm(D, variants));
+        ramVariantCount += variants.length;
+      } else {
+        try {
+          ({ body, nlocals: nloc } = translateM68k(D.m68k, f16(pc), pc, f16));
+        } catch (e) {
+          if (!(e instanceof TrError)) throw e;
+          body = "(call $trap)";
+          nloc = 0;
+          bad++;
+        }
       }
       if (nloc > nl) nl = nloc;
       if (breakAt !== null && (pc & 0xffffff) === breakAt) {
@@ -682,7 +777,9 @@ export async function* emitWat(rom, opts = {}) {
   yield frameWat(narms, PACKED, PCTAB, img, ROMSIZE, SRAM.bank).replace("(call $initmap)", `(call $initmap) (i32.store (i32.const ${STATE + 0xf4}) (i32.const ${tracebuf}))`);
   yield ")\n";
   if (breakAt !== null && !broken) throw new Error(`genesis recompile: options.breakArm $${breakAt.toString(16)} is not an instruction address of this cart`);
-  if (opts.stats) Object.assign(opts.stats, { arms: narms, lowered: narms - bad, trapped: bad, shards: nsh, ramCodeArms: narms - Math.ceil(img.length / 2), ...(broken ? { brokenArms: broken } : {}) });
+  if (opts.stats) Object.assign(opts.stats, { arms: narms, lowered: narms - bad, trapped: bad, shards: nsh, ramCodeArms: narms - Math.ceil(img.length / 2),
+    ...(traced ? { ramTrace: { frames: traced.frames, instructions: traced.instructions, executedRamPcs: traced.windows.size, guardedVariants: ramVariantCount } } : {}),
+    ...(broken ? { brokenArms: broken } : {}) });
   if (opts.onProgress) opts.onProgress(`genesis: ${narms} arms (${bad} untranslated)`);
 }
 
@@ -698,6 +795,45 @@ function parseBreakArm(v) {
   const n = typeof v === "number" ? v : parseInt(String(v).replace(/^\$|^0x/i, ""), 16);
   if (!Number.isInteger(n) || n < 0 || n > 0xffffff || (n & 1)) throw new Error(`genesis recompile: options.breakArm must be an even 68000 address, got ${JSON.stringify(v)}`);
   return n;
+}
+
+/**
+ * One arm for a work RAM word with several candidate encodings (see emitWat):
+ * each variant is guarded by the RAM words its translation fetched and, when
+ * the candidates disagree on it, the full 32-bit pc; the first match runs.
+ * Duplicate encodings collapse; no match traps.
+ * @param {object} D gpgx data
+ * @param {{pc:number, f16:(p:number)=>number, source:string}[]} variants
+ */
+function guardedRamArm(D, variants) {
+  const pcs = new Set(variants.map((v) => v.pc));
+  const seen = new Set();
+  const parts = [];
+  let nlocals = 0;
+  for (const v of variants) {
+    const fetched = new Map();
+    const fx = (p) => { const w = v.f16(p); fetched.set(p >>> 0, w); return w; };
+    let body;
+    try {
+      const r = translateM68k(D.m68k, fx(v.pc), v.pc, fx);
+      body = r.body;
+      if (r.nlocals > nlocals) nlocals = r.nlocals;
+    } catch (e) {
+      if (!(e instanceof TrError)) throw e;
+      continue;
+    }
+    if ([...fetched.values()].some((w) => w > 0xffff)) continue;
+    const key = `${pcs.size > 1 ? v.pc : ""}|${[...fetched].sort((a, b) => a[0] - b[0]).map(([p, w]) => `${p & 0xffff}:${w}`).join(",")}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const word = (p) => `(i32.or (i32.shl (i32.load8_u (i32.const ${p & 0xffff})) (i32.const 8)) (i32.load8_u (i32.const ${(p + 1) & 0xffff})))`;
+    const conds = [...fetched].map(([p, w]) => `(i32.eq ${word(p)} (i32.const ${w}))`);
+    if (pcs.size > 1) conds.unshift(`(i32.eq (global.get $curpc) (i32.const ${v.pc | 0}))`);
+    const guard = conds.reduce((acc, c) => (acc ? `(i32.and ${acc} ${c})` : c), "");
+    parts.push(`(if ${guard} (then ${body} (return)))`);
+  }
+  parts.push("(call $trap)");
+  return { body: parts.join("\n    "), nlocals };
 }
 
 /**

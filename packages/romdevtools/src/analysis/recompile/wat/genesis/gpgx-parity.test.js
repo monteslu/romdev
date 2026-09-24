@@ -148,3 +148,19 @@ test("a European cart runs PAL: 313 lines, the PAL V counter, the status PAL bit
     assert.equal(r.diverged, false, `${region}: ${divergenceText(r)}`);
   }
 });
+
+test("code the game builds in work RAM at run time is found by running the reference (guarded per encoding)", T, async () => {
+  // each frame: write `moveq #(n & 3),d1; move.w d1,$FF0020; rts` to $FFE000 and call it
+  const loop = [
+    ...W(0x5279), ...L(0xff0010),                       // addq.w #1,$FF0010
+    ...W(0x3039), ...L(0xff0010), ...W(0x0240, 3),      // move.w $FF0010,d0; andi.w #3,d0
+    ...W(0x0040, 0x7200),                               // ori.w #$7200,d0  (moveq #n,d1)
+    ...W(0x33c0), ...L(0xffe000),                       // move.w d0,$FFE000
+    ...writeW(0xffe002, 0x33c1), ...writeW(0xffe004, 0x00ff), ...writeW(0xffe006, 0x0020), ...writeW(0xffe008, 0x4e75),
+    ...W(0x4eb9), ...L(0xffe000),                       // jsr $FFE000
+    ...W(0x3039), ...L(0xc00004), ...W(0x0800, 3, 0x66f4),
+    ...W(0x3039), ...L(0xc00004), ...W(0x0800, 3, 0x67f4)];
+  const prog = [...loop, ...W(0x6000, (-(loop.length + 2)) & 0xffff)];
+  const r = await gpgxParity({ platform: "genesis", rom: mdImage(prog), maxFrames: 40 });
+  assert.equal(r.diverged, false, divergenceText(r));
+});
