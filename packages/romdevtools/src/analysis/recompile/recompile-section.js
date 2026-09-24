@@ -67,6 +67,27 @@
 //                                   compared instruction by instruction
 //       "filter": { "romOnly": "snesLoRom", "skip": [[lo, hi]] }  what the ring leaves out, so the
 //                                   reference stream is filtered the same way
+//     },
+//     "audio": {                    the cart's sound output, compared by verifyRecompile audio:true
+//                                   and findDiverge audio:true (contract: cart-abi.js AUDIO_CONTRACT)
+//       "sampleRate": 48000,        rate of the wasmcart ring, = wc_info.audio_sample_rate; for an
+//                                   exact compare it equals the reference stream's rate
+//       "channels": 2,              the ring is always interleaved stereo (2)
+//       "format": "s16",            ring format: "s16" (exact compare possible) | "f32"
+//       "reference": "output",      the reference stream the ring must equal: "output" = what the
+//                                   core hands libretro's audio_batch_cb, or the name of a per-frame
+//                                   stream region the core exposes (AUDIO_STREAM_REGION layout)
+//       "streams": {                optional debug buffers (pre-mix, per-channel, pre-resample),
+//                                   rewritten every wc_render: u32 count of sample frames at
+//                                   countOffset, samples at offset
+//         "sq1": { "offset": 1234, "countOffset": 1230, "capacity": 1024, "channels": 1,
+//                  "format": "s16",  s16 | s32 | f32
+//                  "ref": "nes_apu_sq1",   optional: a reference stream region with the same content
+//                  "compare": true }       false = reported only
+//       },
+//       "muteMask": { "offset": 1300, "size": 1, "channels": ["sq1", "sq2", "tri", "noise", "dmc"] }
+//                                   optional: a cart byte/word whose bit i silences channel i in the
+//                                   cart's mixer; the drop-channel must-fail control sets one bit
 //     }
 //   }
 
@@ -289,6 +310,46 @@ export function validateRecompileLayout(layout) {
   if (out.vramZero != null) {
     if (!Array.isArray(out.vramZero)) throw new Error("vramZero must be an array of region names");
     for (const n of out.vramZero) if (!regions[n]) throw new Error(`vramZero names region '${n}', which is not in regions`);
+  }
+  if (out.audio != null) out.audio = validateAudioBlock(out.audio);
+  return out;
+}
+
+export const AUDIO_FORMATS = ["s16", "f32"];
+export const AUDIO_STREAM_FORMATS = ["s16", "s32", "f32"];
+
+/**
+ * Validate the section's `audio` block (see the schema comment at the top)
+ * and return it with defaults filled in.
+ * @param {object} a
+ */
+export function validateAudioBlock(a) {
+  if (!a || typeof a !== "object" || Array.isArray(a)) throw new Error("audio must be an object");
+  const out = { channels: 2, format: "s16", reference: "output", ...a };
+  if (!(Number.isFinite(out.sampleRate) && out.sampleRate > 0)) throw new Error("audio.sampleRate must be a positive number (the ring's rate, = wc_info.audio_sample_rate)");
+  if (out.channels !== 2) throw new Error("audio.channels must be 2: the wasmcart ring is interleaved stereo (write mono as L = R)");
+  if (!AUDIO_FORMATS.includes(out.format)) throw new Error(`audio.format must be one of ${AUDIO_FORMATS.join(" | ")}`);
+  if (typeof out.reference !== "string" || !out.reference) throw new Error("audio.reference must be 'output' or the name of a reference stream region");
+  const streams = out.streams ?? {};
+  if (typeof streams !== "object" || Array.isArray(streams)) throw new Error("audio.streams must be an object of name -> {offset, countOffset, capacity, channels, format}");
+  for (const [n, s] of Object.entries(streams)) {
+    if (!s || typeof s !== "object") throw new Error(`audio.streams.${n} must be an object`);
+    for (const k of ["offset", "countOffset"]) if (!isInt(s[k])) throw new Error(`audio.streams.${n}.${k} must be a non-negative integer`);
+    if (!(isInt(s.capacity) && s.capacity > 0)) throw new Error(`audio.streams.${n}.capacity must be a positive integer (sample frames the buffer holds)`);
+    const ch = s.channels ?? 1;
+    if (ch !== 1 && ch !== 2) throw new Error(`audio.streams.${n}.channels must be 1 or 2`);
+    if (s.format != null && !AUDIO_STREAM_FORMATS.includes(s.format)) throw new Error(`audio.streams.${n}.format must be one of ${AUDIO_STREAM_FORMATS.join(" | ")}`);
+    if (s.ref != null && (typeof s.ref !== "string" || !s.ref)) throw new Error(`audio.streams.${n}.ref must name a reference stream region`);
+    if (s.compare != null && typeof s.compare !== "boolean") throw new Error(`audio.streams.${n}.compare must be a boolean`);
+  }
+  out.streams = streams;
+  if (out.muteMask != null) {
+    const m = out.muteMask;
+    if (!m || typeof m !== "object" || !isInt(m.offset)) throw new Error("audio.muteMask must be {offset, size, channels:[...]}");
+    if (![1, 2, 4].includes(m.size ?? 1)) throw new Error("audio.muteMask.size must be 1, 2 or 4");
+    if (!Array.isArray(m.channels) || !m.channels.length || m.channels.length > 8 * (m.size ?? 1) || !m.channels.every((c) => typeof c === "string" && c)) {
+      throw new Error("audio.muteMask.channels must list the channel names, bit 0 first, no more than the mask has bits");
+    }
   }
   return out;
 }

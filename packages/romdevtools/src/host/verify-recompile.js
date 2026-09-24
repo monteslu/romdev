@@ -34,6 +34,7 @@ import path from "node:path";
 import { PNG } from "pngjs";
 import { getCPUState } from "romdev-core-host/cpu-state.js";
 import { normalizeFieldRef } from "../analysis/recompile/recompile-section.js";
+import { AudioCapture, scoreAudio, syntheticAudioControls, writeAudioWavs, audioChunkHash } from "./audio-verify.js";
 
 // ─── input schedule ──────────────────────────────────────────────────────────
 
@@ -103,6 +104,14 @@ export class ScheduleDriver {
     this.nameMap = nameMap;
     this.at = 0;
     this._held = null;
+    /** @type {Array<(frame:number) => void>|null} called after each frame with the frames stepped since load */
+    this.onFrame = null;
+  }
+
+  /** Observe every frame from now on (the driver then steps one frame at a time). */
+  observe(fn) {
+    (this.onFrame ??= []).push(fn);
+    return this;
   }
 
   _want(f) {
@@ -127,7 +136,16 @@ export class ScheduleDriver {
       let next = target;
       for (const p of this.schedule) for (const e of [p.frame, p.frame + p.hold]) if (this.at < e && e < next) next = e;
       const before = this.host.status?.frameCount;
-      await this.host.stepFrames(next - this.at);
+      if (this.onFrame) {
+        // Per-frame observers (audio capture) need every frame's output on
+        // its own, so the burst is stepped one frame at a time.
+        for (let f = this.at; f < next; f++) {
+          await this.host.stepFrames(1);
+          for (const fn of this.onFrame) fn(f + 1);
+        }
+      } else {
+        await this.host.stepFrames(next - this.at);
+      }
       const after = this.host.status?.frameCount;
       if (Number.isFinite(before) && Number.isFinite(after) && after <= before) {
         throw new Error("a comparison host did not advance (paused or stalled); the lockstep result would be invalid");
@@ -509,6 +527,139 @@ export async function searchFrameOffset({ openCart, openRef, schedule = [], name
   }
 }
 
+// ─── audio ───────────────────────────────────────────────────────────────────
+
+const AUDIO_CONTROLS = ["silence", "shift", "stereoDrop", "channelDrop"];
+
+/** The reference stream a run compares against: "output" or a stream region. */
+function audioStreamOf(a, layout) {
+  return a.audioStream ?? layout?.audio?.reference ?? "output";
+}
+
+function captureSource(stream) {
+  return stream === "output" ? "output" : { region: stream };
+}
+
+/**
+ * Arm per-frame audio capture on both drivers (before they step): the main
+ * stream plus every cart debug stream the section declares.
+ */
+function startAudioCapture({ a, layout, refHost, cartHost, ref, cart, off, last }) {
+  const stream = audioStreamOf(a, layout);
+  const from = Math.max(1, a.audioFrames?.[0] ?? 1), to = a.audioFrames?.[1] ?? last;
+  if (!(to >= from)) throw new Error(`audioFrames [${from}, ${to}] is empty`);
+  const win = [from, to];
+  const refCap = new AudioCapture(refHost, { source: captureSource(stream), from, to });
+  const cartCap = new AudioCapture(cartHost, { source: "output", from: from + off, to: to + off });
+  ref.observe((f) => refCap.onFrame(f));
+  cart.observe((f) => cartCap.onFrame(f));
+  const streams = {};
+  for (const [name, spec] of Object.entries(layout?.audio?.streams ?? {})) {
+    const c = new AudioCapture(cartHost, { source: { cartStream: spec }, from: from + off, to: to + off });
+    cart.observe((f) => c.onFrame(f));
+    let r = null;
+    if (spec.ref) { r = new AudioCapture(refHost, { source: { region: spec.ref }, from, to }); ref.observe((f) => r.onFrame(f)); }
+    streams[name] = { spec, cart: c, ref: r };
+  }
+  return { stream, win, refCap, cartCap, streams };
+}
+
+function cartAudioInfo(cartHost) {
+  const info = cartHost.cart?.info ?? {};
+  return { ring: !!(info.audioPtr && info.audioCap), rate: info.audioSampleRate || cartHost.status?.audioSampleRate || 0, f32: !!info.audioIsF32, cap: info.audioCap || 0 };
+}
+
+/** Score the captured audio, run the audio controls, write WAVs. */
+async function finishAudio({ a, run, layout, refHost, cartHost, schedule, nameMap, off, tag }) {
+  const ci = cartAudioInfo(cartHost);
+  const refRate = run.stream === "output" ? (refHost.status?.audioSampleRate || 0) : run.refCap.rate;
+  const cartRate = ci.rate || layout?.audio?.sampleRate || 0;
+  const base = { ref: run.refCap.frames, cart: run.cartCap.frames, offset: off, from: run.win[0], to: run.win[1],
+    refRate, cartRate, refChannels: run.refCap.channels, cartChannels: 2, maxLag: a.audioMaxLag, bar: a.audioBar };
+  const score = scoreAudio(base);
+  const notes = [];
+  const verdictReasons = [];
+  if (!ci.ring) verdictReasons.push("the cart declares no audio ring (wc_info audio_ptr/audio_cap are 0)");
+  if (ci.f32) notes.push("the cart's ring is f32: the wasmcart host converts it to s16 (x32768 / x32767), so a sample-exact match needs an s16 ring (cart-abi AUDIO_CONTRACT)");
+  if (layout?.audio?.sampleRate && ci.rate && Math.abs(layout.audio.sampleRate - ci.rate) >= 1) notes.push(`the section says audio.sampleRate ${layout.audio.sampleRate} but wc_info says ${ci.rate}`);
+  if (run.refCap.errors.length) verdictReasons.push(`reference stream '${run.stream}' could not be read: ${run.refCap.errors[0]}`);
+  if (run.refCap.dropped) notes.push(`the reference stream dropped ${run.refCap.dropped} sample frames (its buffer is too small for a frame)`);
+  if (ci.ring && ci.cap && score.cartSampleFrames / Math.max(1, score.framesCompared) * 2 > ci.cap) notes.push(`the cart ring holds ${ci.cap} sample frames, less than twice a frame's worth: a long frame can overrun it`);
+  for (const r of score.reasons ?? []) verdictReasons.push(r);
+  if (score.status === "NO-DATA") verdictReasons.push(score.note);
+
+  // controls
+  const want = a.audioControls ?? AUDIO_CONTROLS;
+  const controls = score.status === "NO-DATA" ? {} : syntheticAudioControls(base, want.filter((w) => w !== "channelDrop"));
+  if (want.includes("channelDrop")) controls.channelDrop = await channelDropControl({ a, layout, run, base, schedule, nameMap, off });
+  for (const [n, c] of Object.entries(controls)) {
+    if (c.skipped) continue;
+    if (!c.failed) verdictReasons.push(`audio control ${n} did NOT fail${c.couldNotFail ? `: ${c.couldNotFail}` : ""}`);
+  }
+
+  // debug streams
+  const streams = {};
+  for (const [name, st] of Object.entries(run.streams)) {
+    const frames = [...st.cart.frames.values()];
+    const all = frames.reduce((n, c) => n + c.length, 0);
+    const entry = { sampleFrames: all / (st.spec.channels ?? 1), frames: frames.length, ...(st.cart.errors.length ? { error: st.cart.errors[0] } : {}), ...(st.cart.dropped ? { dropped: st.cart.dropped } : {}) };
+    if (st.ref) {
+      const s = scoreAudio({ ref: st.ref.frames, cart: st.cart.frames, offset: off, from: run.win[0], to: run.win[1],
+        refRate: st.ref.rate || 1, cartRate: st.ref.rate || 1, refChannels: st.ref.channels, cartChannels: st.spec.channels ?? 1 });
+      Object.assign(entry, { ref: st.spec.ref, exactPct: s.exactPct, framesExactPct: s.framesExactPct, maxAbsError: s.maxAbsError, countMismatchFrames: s.countMismatchFrames,
+        ...(s.firstMismatch ? { firstMismatch: s.firstMismatch } : {}), pass: s.pass, ...(st.ref.errors.length ? { refError: st.ref.errors[0] } : {}) });
+      if (a.audio === "required" && st.spec.compare !== false && !s.pass) verdictReasons.push(`stream ${name}: ${s.reasons.join("; ")}`);
+    }
+    streams[name] = entry;
+  }
+
+  let wavs = null;
+  if (a.audioWav && a.outputDir && score.status !== "NO-DATA") wavs = writeAudioWavs(a.outputDir, tag, base);
+  const report = {
+    stream: run.stream, ...score, controls,
+    ...(Object.keys(streams).length ? { streams } : {}),
+    ...(wavs ? { wavs } : {}),
+    ...(notes.length ? { notes } : {}),
+    verdict: verdictReasons.length ? "AUDIO DIFFERS" : "AUDIO VERIFIED",
+    required: a.audio === "required",
+  };
+  delete report.reasons;
+  report.reasons = verdictReasons;
+  return { report, verdictReasons };
+}
+
+/**
+ * The real must-fail control: a fresh cart with one mixer channel silenced
+ * through the section's audio.muteMask, re-run on the same schedule. The
+ * scorer must see the difference, or the audio compare is not measuring the
+ * cart's mix.
+ */
+async function channelDropControl({ a, layout, run, base, schedule, nameMap, off }) {
+  const m = layout?.audio?.muteMask;
+  if (!m) return { skipped: "the cart's section declares no audio.muteMask, so no mixer channel can be silenced (the synthetic silence/shift/stereoDrop controls still ran)" };
+  if (!a.openCart) return { skipped: "no fresh-cart opener" };
+  const names = a.audioDropChannel ? [a.audioDropChannel] : m.channels;
+  const tried = [];
+  for (const name of names) {
+    const bit = m.channels.indexOf(name);
+    if (bit < 0) return { skipped: `audioDropChannel '${name}' is not in muteMask.channels (${m.channels.join(", ")})` };
+    const h = await a.openCart();
+    try {
+      const size = m.size ?? 1, v = 1 << bit, bytes = new Uint8Array(size);
+      for (let i = 0; i < size; i++) bytes[i] = (v >>> (8 * i)) & 0xff;
+      h.writeMemory(m.offset, bytes);
+      const cap = new AudioCapture(h, { source: "output", from: run.win[0] + off, to: run.win[1] + off });
+      const d = new ScheduleDriver(h, shiftSchedule(schedule, off), nameMap).observe((f) => cap.onFrame(f));
+      await d.to(run.win[1] + off);
+      const s = scoreAudio({ ...base, cart: cap.frames });
+      const failed = !s.pass;
+      tried.push({ channel: name, failed, exactPct: s.exactPct ?? null, spectral: s.spectral?.similarity ?? null });
+      if (failed) return { channel: name, failed: true, exactPct: s.exactPct ?? null, ...(tried.length > 1 ? { tried } : {}) };
+    } finally { disposeHost(h); }
+  }
+  return { failed: false, tried, couldNotFail: `silencing ${tried.map((t) => t.channel).join(", ")} through muteMask did not change the scored audio: those channels are silent in the window, or the cart ignores muteMask` };
+}
+
 // ─── the verification ────────────────────────────────────────────────────────
 
 const DEFAULT_CONTROLS = ["vramZero", "wrongFrame", "wrongInput"];
@@ -559,6 +710,18 @@ function disposeHost(h) {
  * @param {boolean} [a.requireStateMatch]      a region/field difference fails the verdict
  * @param {string} [a.outputDir]               where [cart|ref|diff] PNGs go (omit: none written)
  * @param {string} [a.tag]                     PNG filename prefix
+ * @param {boolean|"required"} [a.audio]       capture and score both sides' audio (true: reported;
+ *                                             "required": part of the verdict)
+ * @param {number[]} [a.audioFrames]           [from, to] reference frames whose audio is compared
+ *                                             (default [1, last scored frame])
+ * @param {string} [a.audioStream]             reference stream: "output" or a stream region
+ *                                             (default the section's audio.reference, else "output")
+ * @param {object} [a.audioBar]                {minSpectral, minEnvelope} for rate-mismatched streams
+ * @param {string[]} [a.audioControls]         subset of silence | shift | stereoDrop | channelDrop
+ * @param {string} [a.audioDropChannel]        the muteMask channel the channelDrop control silences
+ *                                             (default: each in turn until one fails)
+ * @param {boolean} [a.audioWav]               write [cart|ref|diff] WAVs to outputDir
+ * @param {number} [a.audioMaxLag]             cross-correlation lag search, in samples
  * @returns {Promise<{result: object, cartHost: object, refHost: object}>}
  */
 export async function verifyRecompile(a) {
@@ -604,6 +767,7 @@ export async function verifyRecompile(a) {
   const cart = new ScheduleDriver(cartHost, shiftSchedule(schedule, off), nameMap);
 
   const last = frames[frames.length - 1];
+  const audioRun = a.audio ? startAudioCapture({ a, layout, refHost, cartHost, ref, cart, off, last }) : null;
   const refShots = new Map();
   const want = new Set();
   const wfFrames = new Set();
@@ -797,6 +961,14 @@ export async function verifyRecompile(a) {
     }
   }
 
+  // ── audio ──
+  let audioResult = null;
+  if (audioRun) {
+    await ref.to(Math.max(ref.at, audioRun.win[1]));
+    await cart.to(Math.max(cart.at, audioRun.win[1] + off));
+    audioResult = await finishAudio({ a, run: audioRun, layout, refHost, cartHost, schedule, nameMap, off, tag });
+  }
+
   // ── verdict ──
   const reasons = [];
   // Most specific failure first: a trapped cart explains everything after it.
@@ -823,6 +995,7 @@ export async function verifyRecompile(a) {
     for (const [n, v] of Object.entries(r.regions ?? {})) if (!v.diagnostic && (v.error || v.differ)) stateDiffs.push(`ref frame ${r.refFrame}: region ${n} ${v.error ? `unreadable (${v.error})` : `${v.differ}/${v.bytes} bytes differ`}`);
     for (const [n, v] of Object.entries(r.fields ?? {})) if (v.error || v.same === false) stateDiffs.push(`ref frame ${r.refFrame}: field ${n} ${v.error ? `unreadable (${v.error})` : `cart ${v.cart} ref ${v.ref}`}`);
   }
+  if (a.audio === "required" && audioResult) for (const r of audioResult.verdictReasons) reasons.push(`audio: ${r}`);
   if (a.requireStateMatch && stateDiffs.length) reasons.push(`state differs: ${stateDiffs.slice(0, 6).join("; ")}${stateDiffs.length > 6 ? ` (+${stateDiffs.length - 6} more)` : ""}`);
   const verified = reasons.length === 0;
   const regionNames = Object.keys(layout.regions ?? {});
@@ -843,6 +1016,7 @@ export async function verifyRecompile(a) {
     bar,
     frames: rows,
     controls: ctl,
+    ...(audioResult ? { audio: audioResult.report } : {}),
     table: table.join("\n"),
   };
   return { result, cartHost, refHost };
@@ -872,13 +1046,15 @@ export async function verifyRecompile(a) {
  * @param {number} [a.maxFrames]   frames compared at most
  * @param {number} [a.stride]      compare every Nth frame
  * @param {Record<string,string>} [a.cartButtonMap]
+ * @param {boolean} [a.audio]      also compare each frame's audio (per-frame hash of the samples)
+ * @param {string} [a.audioStream] reference stream: "output" or a stream region (default the section's audio.reference)
  */
 export async function findRecompileDivergence(a) {
   const layout = a.layout ?? {};
   // compare:false regions are diagnostic (e.g. a register page whose
   // read-side values are computed on access): never a divergence.
   const regions = Object.fromEntries(Object.entries(layout.regions ?? {}).filter(([, r]) => r.compare !== false)), fields = layout.fields ?? {};
-  if (!Object.keys(regions).length && !Object.keys(fields).length) {
+  if (!Object.keys(regions).length && !Object.keys(fields).length && !a.audio) {
     throw new Error("findDiverge (recompile): nothing to compare - the cart has no romdev.recompile section and no `regions`/`fields` were passed");
   }
   const schedule = parseInputSchedule(a.input);
@@ -895,10 +1071,39 @@ export async function findRecompileDivergence(a) {
   const cart = new ScheduleDriver(a.cartHost, shiftSchedule(schedule, off), nameMap);
   const start = Math.max(a.startFrame ?? 0, off < 0 ? -off : 0);
   const stride = a.stride ?? 1, maxFrames = a.maxFrames ?? 600;
+  // Audio: every frame's chunk on both sides, compared at each compare point
+  // over the frames since the previous one (a stride compares the span).
+  let aud = null;
+  if (a.audio) {
+    const stream = audioStreamOf(a, layout);
+    aud = { stream, ref: new AudioCapture(a.refHost, { source: captureSource(stream), keep: false }), cart: new AudioCapture(a.cartHost, { source: "output", keep: false }),
+      refPend: new Map(), cartPend: new Map(), silent: true };
+    ref.observe((f) => { const c = aud.ref.onFrame(f); if (f > start - stride) aud.refPend.set(f, c); });
+    cart.observe((f) => { const c = aud.cart.onFrame(f); if (f > start - stride + off) aud.cartPend.set(f, c); });
+  }
   let lastSame = null, compared = 0, changed = 0, prevSig = null;
   for (let F = start, n = 0; n < maxFrames; F += stride, n++) {
     await ref.to(F);
     await cart.to(F + off);
+    let audioDiff = null;
+    if (aud) {
+      for (let f = F - stride + 1; f <= F; f++) {
+        if (f < 1 || f + off < 1) continue;
+        const r = aud.refPend.get(f), c = aud.cartPend.get(f + off);
+        if (!r || !c) continue;
+        if (aud.silent) for (let i = 0; i < r.length; i++) if (r[i]) { aud.silent = false; break; }
+        const hr = audioChunkHash(r), hc = audioChunkHash(c);
+        if (hr !== hc && !audioDiff) {
+          let k = 0;
+          while (k < Math.min(r.length, c.length) && r[k] === c[k]) k++;
+          const ch = aud.ref.channels;
+          audioDiff = { refFrame: f, cartFrame: f + off, refSamples: r.length / ch, cartSamples: c.length / 2, refHash: hr, cartHash: hc,
+            firstSample: { index: Math.floor(k / ch), channel: ch === 2 ? (k % 2 ? "R" : "L") : "mono", ref: r[k] ?? null, cart: c[k] ?? null } };
+        }
+      }
+      aud.refPend.clear(); aud.cartPend.clear();
+      if (aud.ref.errors.length) throw new Error(`findDiverge audio: reference stream '${aud.stream}' could not be read: ${aud.ref.errors[0]}`);
+    }
     const reg = compareRegions(a.cartHost, a.refHost, regions);
     const fld = compareFields(a.cartHost, a.refHost, a.refPlatform, fields);
     compared++;
@@ -914,11 +1119,12 @@ export async function findRecompileDivergence(a) {
     }).join(",");
     if (prevSig != null && sig !== prevSig) changed++;
     prevSig = sig;
-    if (badRegions.length || badFields.length) {
+    if (badRegions.length || badFields.length || audioDiff) {
       return {
         op: "findDiverge", mode: "recompile", diverged: true,
         atRefFrame: F, atCartFrame: F + off, lastIdenticalRefFrame: lastSame,
         regions: badRegions, fields: badFields,
+        ...(audioDiff ? { audio: { ...audioDiff, stream: aud.stream, note: `the samples produced during reference frame ${audioDiff.refFrame} differ from the cart's frame ${audioDiff.cartFrame}${audioDiff.refSamples !== audioDiff.cartSamples ? ` (and the sample COUNTS differ: ${audioDiff.refSamples} vs ${audioDiff.cartSamples})` : ""}; frame({op:'verifyRecompile', audio:true, audioFrames:[${audioDiff.refFrame}, ${audioDiff.refFrame}], audioWav:true}) dumps that frame` } } : {}),
         framesCompared: compared, stride, alignment,
         note: lastSame == null
           ? `The two sides already differ at the FIRST compared frame (${F}). Either the alignment is wrong (check alignment.meaning, or pass cartFrameOffset) or the cart diverges during boot: rerun with startFrame:0 and stride:1.`
@@ -931,7 +1137,9 @@ export async function findRecompileDivergence(a) {
     op: "findDiverge", mode: "recompile", diverged: false,
     framesCompared: compared, stride, firstRefFrame: start, lastRefFrame: lastSame, alignment,
     stateChangedOnFrames: changed,
-    conclusion: changed > 0 ? "no-observed-divergence" : "inconclusive-no-observed-state-change",
+    ...(aud ? { audio: { stream: aud.stream, compared: true, referenceSilent: aud.silent, ...(aud.ref.errors.length ? { error: aud.ref.errors[0] } : {}),
+      note: aud.silent ? "every compared audio frame was identical, but the reference was SILENT throughout: this says nothing about sound" : "every compared frame's audio was sample-identical (same count, same samples)" } } : {}),
+    conclusion: changed > 0 || (aud && !aud.silent) ? "no-observed-divergence" : "inconclusive-no-observed-state-change",
     note: changed > 0
       ? "Every compared region and field matched at every compared frame, and the state changed along the way. This is evidence for these regions at these frames, not proof of whole-program equivalence."
       : "The compared state never changed, so matching says nothing about execution (an idle or spin loop matches trivially). Compare later frames, or add regions that the game writes every frame.",

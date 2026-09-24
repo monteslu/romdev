@@ -98,6 +98,8 @@ export async function runVerifyRecompile(sessionKey, args) {
       ...(args.minMovingPct != null ? { minMovingPct: args.minMovingPct } : {}), ...(args.minMovingPx != null ? { minMovingPx: args.minMovingPx } : {}),
       ...(args.minChangePx != null ? { minChangePx: args.minChangePx } : {}) },
     requireStateMatch: args.requireStateMatch, outputDir, tag,
+    audio: args.audio, audioFrames: args.audioFrames, audioStream: args.audioStream, audioBar: args.audioBar,
+    audioControls: args.audioControls, audioDropChannel: args.audioDropChannel, audioWav: args.audioWav, audioMaxLag: args.audioMaxLag,
   });
   installHost(sessionKey, cartHost);
   installHostB(sessionKey, refHost);
@@ -121,7 +123,7 @@ export async function runRecompileDiverge(sessionKey, args) {
       cartHost, refHost, refPlatform: ctx.platform, layout: ctx.layout, input: args.input,
       cartFrameOffset: args.cartFrameOffset, startFrame: args.startFrame, maxFrames: args.maxFrames,
       openCart: ctx.openCart, openRef: ctx.openRef, searchFrame: args.searchFrame, searchWindow: args.searchWindow, minSharpness: args.minSharpness,
-      stride: args.stride, cartButtonMap: args.cartButtonMap,
+      stride: args.stride, cartButtonMap: args.cartButtonMap, audio: !!args.audio, audioStream: args.audioStream,
     });
   } catch (e) {
     refHost.dispose?.(); cartHost.destroy?.();

@@ -890,7 +890,8 @@ export function registerFrameTools(server, z, sessionKey) {
     "cart's romdev.recompile layout (CPU registers vs cpu({op:'read'}) paths or reference struct offsets, cycle counters, " +
     "VRAM/RAM/palette/OAM) compared EVERY frame (or every `stride`) from `startFrame`; returns the first differing frame with " +
     "the region's first differing byte and the differing fields. Replaces native emulator trace differs: thousands of frames " +
-    "in seconds, all in romdev. " +
+    "in seconds, all in romdev. With `audio:true` each frame's audio chunk (sample count + samples, reference `audioStream`) is " +
+    "compared too, and the first frame whose sound differs is a divergence (result.audio: frame, first differing sample, both counts). " +
     "INSTRUCTION LEVEL (`level:'instruction'`, with cart + reference): traces ONE frame on both sides - the cart's own trace ring " +
     "(declared in its romdev.recompile section) and the reference core's FREE-RUNNING instruction trace - and walks the two pc streams " +
     "to the first divergent instruction, with `context` instructions from both sides. Normalises what differs only in spelling (SNES " +
@@ -947,7 +948,19 @@ export function registerFrameTools(server, z, sessionKey) {
     "sample where the reference changed most - scored on the pixels where the two reference frames DIFFER; else the compared state " +
     "(equal at the aligned frame, different at the wrong one); `signal` says which decided, couldNotFail when neither can), wrongInput (a second cart run with ALL input withheld, then a perturbed schedule if that did not fail; couldNotFail explains a control no variant could fail). Verdict VERIFIED needs every scored frame >= 95% content " +
     "on >= 2000 content px (and >= 95% moving where >= 200 px moved), every control failing, no trap; reasons[] names each " +
-    "miss. Returns a per-frame markdown `table`. Afterwards slot A = the cart and slot B = the reference at the last frame.\n" +
+    "miss. Returns a per-frame markdown `table`. Afterwards slot A = the cart and slot B = the reference at the last frame. " +
+    "AUDIO (`audio:true` reports, `audio:'required'` makes it part of the verdict): both sides' samples are captured PER FRAME " +
+    "on the same frame axis over `audioFrames` [from,to] (reference frames, default [1, last of atFrames]): the reference's " +
+    "`audioStream` ('output' = what the core hands audio_batch_cb, or a per-frame stream region a core patch exposes, e.g. a " +
+    "pre-resample stream; default the section's audio.reference) against the cart's wasmcart ring. Reports framesExactPct, " +
+    "per-frame sample-count mismatches (firstCountMismatch), exactPct of stereo sample frames, maxAbsError, rmsError, firstMismatch " +
+    "(frame, sample, channel, values), the cross-correlation lag of the mono mix (xcorr.lag, must be 0 for exact), an envelope " +
+    "correlation and a spectral similarity (the only scores when the rates differ: mode 'similar', bar audioBar " +
+    "{minSpectral, minEnvelope}, default 0.9). Audio must-fail controls (`audioControls`): silence, shift (one frame late), " +
+    "stereoDrop (right channel zeroed) re-score the cart's own stream altered; channelDrop re-runs a fresh cart with one mixer " +
+    "channel silenced through the section's audio.muteMask. A silent reference is never evidence. `audioWav:true` writes " +
+    "[cart|ref|diff] WAVs to outputDir. The section's audio.streams (per-channel / pre-mix debug buffers) are captured per frame " +
+    "and compared with their `ref` stream regions. The cart-side contract is AUDIO_CONTRACT in src/analysis/recompile/wat/cart-abi.js.\n" +
     "'fuzzRecompile': run a recompiled `cart` ALONE under seeded random play (`seeds`, default [1,2,3]; `frames` per seed, default 3600 (the tool-wide frames default of 1 counts as unset), " +
     "`input` presses kept in every script, e.g. the Start that leaves the title) and report the first frame each seed TRAPS " +
     "at (its romdev.recompile probe.trapped) with the probe block there (trappc). A trap is invisible from outside - the host keeps " +
@@ -1009,6 +1022,14 @@ export function registerFrameTools(server, z, sessionKey) {
       head: z.number().int().min(0).max(4096).optional().describe("op=traceInstructions: entries returned inline (default 64); the rest go to outputPath."),
       startFrame: z.number().int().min(0).optional().describe("op=findDiverge: recompile mode - first reference frame compared; earlier frames run but are not compared (use it to bisect a late divergence cheaply)."),
       stride: z.number().int().min(1).max(10000).optional().describe("op=findDiverge: recompile mode - compare every Nth frame (default 1). A hit at stride N is between the reported frame and the last identical one; rerun there with stride 1."),
+      audio: z.union([z.boolean(), z.literal("required")]).optional().describe("op=verifyRecompile: capture and score both sides' audio per frame (true = reported under `audio`; 'required' = an audio mismatch, a silent reference or an audio control that does not fail makes the run NOT VERIFIED). op=findDiverge (recompile): also compare each frame's audio chunk (sample count + samples); the first frame whose audio differs is a divergence (result.audio names the frame, the first differing sample and both counts)."),
+      audioFrames: z.array(z.number().int().min(1)).length(2).optional().describe("op=verifyRecompile audio: [from, to] REFERENCE frames whose audio is compared (default [1, the last of atFrames]); the cart side is the same frames + the alignment offset."),
+      audioStream: z.string().optional().describe("op=verifyRecompile/findDiverge audio: the reference stream: 'output' (what the core gives audio_batch_cb) or the name of a per-frame audio stream region the core exposes ('RDAS' header, e.g. a pre-resample stream). Default: the cart section's audio.reference, else 'output'."),
+      audioBar: z.object({ minSpectral: z.number().min(0).max(1).optional(), minEnvelope: z.number().min(-1).max(1).optional() }).optional().describe("op=verifyRecompile audio: bar for streams whose rates differ (mode 'similar'): spectral similarity and envelope correlation (default 0.9 each). Exact mode (same rate and layout) needs 100% sample-exact, equal per-frame counts and xcorr lag 0."),
+      audioControls: z.array(z.enum(["silence", "shift", "stereoDrop", "channelDrop"])).optional().describe("op=verifyRecompile audio: which audio must-fail controls run (default all four; channelDrop needs the section's audio.muteMask)."),
+      audioDropChannel: z.string().optional().describe("op=verifyRecompile audio: the muteMask channel the channelDrop control silences (default: each declared channel in turn until one fails)."),
+      audioWav: z.boolean().optional().describe("op=verifyRecompile audio: write <tag>_audio_cart.wav / _ref.wav / _diff.wav (diff = cart - ref, same rate only) to outputDir."),
+      audioMaxLag: z.number().int().min(1).max(1000000).optional().describe("op=verifyRecompile audio: cross-correlation lag search either side of 0, in reference samples (default two frames of audio)."),
       format: z.enum(["png", "ascii", "full", "compact"]).default("png").describe("op=screenshot: 'png' (default, real image) or 'ascii' (lossy text render). op=stepInstructions: 'full' or 'compact' is accepted here as the trace format (same as stepFormat)."),
       source: z.enum(["composite", "core", "both"]).optional().describe("op=screenshot/stepAndShot, with an Active Bezel loaded: which picture to capture. 'composite' (default when a bezel is active) = the final scene the package rendered, which is what the human sees. 'core' = the RAW emulator framebuffer, ignoring the bezel. 'both' returns the two together - the comparison that shows whether the package's interpretation actually matches the game. Without a bezel, every value returns the core frame."),
       path: z.string().optional().describe("op=screenshot/stepAndShot/traceInstructions: absolute path to write to (required unless inline:true). `outputPath` is accepted as an alias - memory({op:'read'}) spells it that way, and one name failing on the other tool cost round trips."),

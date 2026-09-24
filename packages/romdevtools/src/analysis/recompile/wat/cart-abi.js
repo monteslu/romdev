@@ -17,6 +17,8 @@
 //
 // Plain JS ESM + JSDoc.
 
+import { validateAudioBlock } from "../recompile-section.js";
+
 /** Byte offsets of the wc_info_t fields (wasmcart.h). */
 export const WC_INFO = Object.freeze({
   version: 0, width: 4, height: 8, fbPtr: 12, audioPtr: 16, audioCap: 20,
@@ -89,8 +91,15 @@ export function wcGetInfoWat(o) {
   need("info"); need("fb"); need("input"); need("time");
   if (o.info % 4) throw new Error("cart-abi: the info struct must be 4-byte aligned");
   if (o.time % 8) throw new Error(`cart-abi: timePtr 0x${o.time.toString(16)} must be 8-byte aligned (the host writes f64s through it)`);
+  if (o.audio) {
+    if (!(Number.isInteger(o.audioCap) && o.audioCap > 0)) throw new Error("cart-abi: an audio ring needs audioCap (capacity in stereo sample frames)");
+    if (!(Number.isInteger(o.audioWrite) && o.audioWrite > 0)) throw new Error("cart-abi: an audio ring needs a nonzero audioWrite (address of the u32 write cursor)");
+    if (!(o.sampleRate > 0)) throw new Error("cart-abi: an audio ring needs sampleRate (the reference stream's rate; 0 lets the host pick, which no recompiled cart may do)");
+    if (o.audio % 4) throw new Error("cart-abi: the audio ring must be 4-byte aligned");
+  }
   if (!o.allowOverlap) {
     const spans = [["info", o.info, WC_SIZES.info], ["input", o.input, WC_SIZES.input], ["time", o.time, WC_SIZES.time]];
+    if (o.audio) spans.push(["audio ring", o.audio, o.audioCap * ((o.flags ?? 0) & WC_FLAG.AUDIO_F32 ? 8 : 4)]);
     if (o.hostInfo) spans.push(["hostInfo", o.hostInfo, WC_SIZES.hostInfo]);
     if (o.audioWrite) spans.push(["audioWrite", o.audioWrite, 4]);
     for (let i = 0; i < spans.length; i++) {
@@ -227,3 +236,99 @@ export function watBytes(b) {
   return parts.join("");
 }
 const HEX2 = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"));
+
+// ---------------------------------------------------------------------------
+// Audio
+
+/**
+ * The audio contract a recompiled cart follows so frame({op:'verifyRecompile',
+ * audio}) and findDiverge audio:true can prove it sample-exact against the
+ * reference core. Kept as data so tools and docs quote one text.
+ */
+export const AUDIO_CONTRACT = Object.freeze({
+  ring: "wc_info audio_ptr/audio_cap/audio_write_ptr: a ring of audio_cap STEREO sample frames (L,R interleaved). The u32 at audio_write_ptr is the next frame index (0..audio_cap-1, wrapping); the host drains from its read cursor to it after every wc_render, so the cart must never write audio_cap or more frames in one wc_render (capacity >= 2x the largest per-frame count; a power of two keeps the wrap an AND).",
+  format: "s16 (flags without WC_FLAG_AUDIO_F32): the sample format every libretro core hands audio_batch_cb. An f32 ring is converted by the host (x32768 negative / x32767 positive) and can only match approximately.",
+  rate: "wc_info audio_sample_rate = the reference stream's rate exactly (fceumm 48000 by default, the core's retro_get_system_av_info sample_rate). 0 (host decides) is not allowed for a recompiled cart.",
+  perFrame: "Each wc_render writes EXACTLY the samples the reference core hands audio_batch_cb during the corresponding retro_run: the same count (cores count with fractional accumulators or blip buffers, so port the counting, not an average) and the same values, L and R both (a mono core duplicates: write L = R).",
+  timing: "Samples belong to the frame that produced them: reference frame F pairs with cart frame F + offset (the same axis as the picture). Produce the audio inside wc_render, never ahead or behind by a frame.",
+  mono: "The ring is always stereo; channels:2 in the section.",
+  debugStreams: "Optional per-channel / pre-mix / pre-resample buffers (section audio.streams): the cart rewrites each every wc_render, a u32 count of sample frames at countOffset (reset to 0 at the top of wc_render) and the samples at offset; `ref` pairs one with a reference stream region ('RDAS' header, src/host/audio-verify.js AUDIO_STREAM) for an exact per-stage compare.",
+  muteMask: "Optional (section audio.muteMask): a byte/word the cart's mixer reads every wc_render, bit i silencing channel i (0 at power-on, never written by the cart). The verifier's channelDrop control sets one bit on a fresh cart and requires the audio compare to FAIL.",
+});
+
+/**
+ * Where an s16 (or f32) stereo ring of `capacity` sample frames lives.
+ * @param {number} base 4-byte aligned address
+ * @param {number} capacity stereo sample frames
+ * @param {"s16"|"f32"} [format]
+ */
+export function audioRingLayout(base, capacity, format = "s16") {
+  if (base % 4) throw new Error("cart-abi: the audio ring must be 4-byte aligned");
+  if (!(Number.isInteger(capacity) && capacity > 0)) throw new Error("cart-abi: audio ring capacity must be a positive integer");
+  const frameBytes = format === "f32" ? 8 : 4;
+  return { ring: base, capacity, format, frameBytes, bytes: capacity * frameBytes, end: base + capacity * frameBytes };
+}
+
+/**
+ * WAT for `(func $audio_push (param $l i32) (param $r i32))`: store one s16
+ * stereo sample frame at the ring's write cursor and advance it. Values are
+ * clamped to s16 (a core's own clamp belongs in the backend; this one only
+ * guards the store). The cursor lives at `cursor` (the address wc_info's
+ * audio_write_ptr points at).
+ * @param {{ring:number, capacity:number, cursor:number, name?:string, clamp?:boolean}} o
+ */
+export function audioPushWat(o) {
+  const name = o.name ?? "$audio_push";
+  const cap = o.capacity;
+  const wrap = (cap & (cap - 1)) === 0
+    ? `(i32.and (i32.add (local.get $c) (i32.const 1)) (i32.const ${cap - 1}))`
+    : `(select (i32.const 0) (i32.add (local.get $c) (i32.const 1)) (i32.ge_u (i32.add (local.get $c) (i32.const 1)) (i32.const ${cap})))`;
+  const clamp = (v) => o.clamp === false ? `(local.get ${v})`
+    : `(select (i32.const -32768) (select (i32.const 32767) (local.get ${v}) (i32.gt_s (local.get ${v}) (i32.const 32767))) (i32.lt_s (local.get ${v}) (i32.const -32768)))`;
+  return `  (func ${name} (param $l i32) (param $r i32)
+    (local $c i32) (local $a i32)
+    (local.set $c (i32.load (i32.const ${o.cursor})))
+    (local.set $a (i32.add (i32.const ${o.ring}) (i32.shl (local.get $c) (i32.const 2))))
+    (i32.store16 (local.get $a) ${clamp("$l")})
+    (i32.store16 offset=2 (local.get $a) ${clamp("$r")})
+    (i32.store (i32.const ${o.cursor}) ${wrap}))
+`;
+}
+
+/**
+ * WAT for a debug stream (section audio.streams.<name>): `$<name>_reset`
+ * (call at the top of wc_render) and `$<name>_push` (one sample frame; one
+ * param per channel). Pushes beyond capacity still count, so the verifier
+ * reports the overflow instead of comparing a truncated frame silently.
+ * @param {string} name  identifier (letters, digits, _)
+ * @param {{offset:number, countOffset:number, capacity:number, channels?:number, format?:"s16"|"s32"|"f32"}} s
+ */
+export function audioStreamWat(name, s) {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw new Error(`cart-abi: stream name '${name}' must be an identifier`);
+  const ch = s.channels ?? 1, fmt = s.format ?? "s16", size = fmt === "s16" ? 2 : 4;
+  const ty = fmt === "f32" ? "f32" : "i32";
+  const store = fmt === "s16" ? "i32.store16" : fmt === "f32" ? "f32.store" : "i32.store";
+  const params = ch === 2 ? `(param $l ${ty}) (param $r ${ty})` : `(param $v ${ty})`;
+  const stores = ch === 2
+    ? `      (${store} (local.get $a) (local.get $l))
+      (${store} offset=${size} (local.get $a) (local.get $r))`
+    : `      (${store} (local.get $a) (local.get $v))`;
+  return `  (func $${name}_reset (i32.store (i32.const ${s.countOffset}) (i32.const 0)))
+  (func $${name}_push ${params}
+    (local $n i32) (local $a i32)
+    (local.set $n (i32.load (i32.const ${s.countOffset})))
+    (if (i32.lt_u (local.get $n) (i32.const ${s.capacity}))
+      (then
+      (local.set $a (i32.add (i32.const ${s.offset}) (i32.mul (local.get $n) (i32.const ${size * ch}))))
+${stores}))
+    (i32.store (i32.const ${s.countOffset}) (i32.add (local.get $n) (i32.const 1))))
+`;
+}
+
+/**
+ * The section's `audio` block, validated (throws naming the bad key).
+ * @param {{sampleRate:number, format?:"s16"|"f32", reference?:string, streams?:object, muteMask?:object}} o
+ */
+export function audioSection(o) {
+  return validateAudioBlock({ channels: 2, format: "s16", reference: "output", ...o });
+}
