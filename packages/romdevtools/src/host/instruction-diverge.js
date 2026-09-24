@@ -44,7 +44,7 @@ const hex = (v, w = 4) => "$" + (v >>> 0).toString(16).toUpperCase().padStart(w,
 
 // ─── per-reference conventions ───────────────────────────────────────────────
 
-/** SNES LoROM ring filter defaults (sms-wat's SMW boot loops), used for carts whose section predates `trace`. */
+/** The SNES backend's default pc-ring skip ranges (boot loops that would fill the ring), for carts whose section predates `trace`. */
 const SNES_SKIP_DEFAULT = [[0x8034, 0x8048], [0x8079, 0x80e7], [0x8a4e, 0x8a64]];
 
 const u16 = (b, o) => b[o] | (b[o + 1] << 8);

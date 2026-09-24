@@ -705,7 +705,7 @@ export async function verifyRecompile(a) {
     // `d` frames EARLIER. Three signals, strongest first:
     //  1. PIXELS WHERE THE TWO REFERENCE FRAMES DIFFER: the only pixels that
     //     can tell right from wrong. (sample, d) is chosen to maximise that
-    //     change, so a near-static game (NES Golf: 40 moving px) is still
+    //     change, so a near-static game (40 moving pixels in 10 frames) is still
     //     tested on everything that did change. Needs >= bar.minChangePx.
     //  2. STATE: the compared regions equal the reference at the aligned frame
     //     but differ from it at the wrong frame (a frame counter in RAM moves

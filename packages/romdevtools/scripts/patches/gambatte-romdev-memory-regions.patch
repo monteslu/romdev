@@ -164,7 +164,7 @@ index 15b042c..477404d 100644
     if (libretro_frames_count < expected_frames) // Detect frame dupes.
     {
 diff --git a/libgambatte/src/cpu.cpp b/libgambatte/src/cpu.cpp
-index 0fb6199..deb9284 100644
+index 0fb6199..5ba140a 100644
 --- a/libgambatte/src/cpu.cpp
 +++ b/libgambatte/src/cpu.cpp
 @@ -20,6 +20,30 @@
@@ -362,8 +362,8 @@ index 0fb6199..deb9284 100644
 +					 * left the local stale, so mem_.event() ran events at a time
 +					 * before their own; the interrupt/video events then
 +					 * rescheduled themselves behind the stale counter forever
-+					 * (single-step hung once a game waited in HALT, e.g. Link's
-+					 * Awakening after ~60 frames). */
++					 * (single-step hung as soon as a game waited in HALT for
++					 * its VBlank interrupt). */
 +					cycleCounter = mem_.nextEventTime();
 +					break;                /* outer `while` sees the freeze + exits cleanly */
 +				}

@@ -2,7 +2,7 @@
 // computed from its OWN address, not the batch slot objdump decoded it at.
 //
 // Regression (feedback 2026-09-22, m68k-ir-secondary-pcrel-targets-wrong): on
-// Sonic 1 and Golden Axe every primary short branch was right and every
+// two commercial Genesis carts every primary short branch was right and every
 // secondary one was wrong (0 of 3,074), each off by exactly the distance to
 // its 0x20-byte batch slot. A recompiler trusting `targets` jumped into
 // compressed art ~440 frames later. The same batch path decodes Z80 jr/djnz

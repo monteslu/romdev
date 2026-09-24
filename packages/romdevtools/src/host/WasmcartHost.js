@@ -212,8 +212,8 @@ const WASMCART_FB_FORMAT = RETRO_PIXEL_FORMAT_XRGB8888;
 // This used to translate BY NAME (libretro 'a' -> WC_BTN_A), which pressed a
 // DIFFERENT physical button on a wasmcart than the same input call pressed on
 // every core: input({ports:[{a:true}]}) was EAST (SMS button 2) on
-// genesis_plus_gx and SOUTH (button 1) on a recompiled SMS cart, so Alex Kidd
-// punched on one and jumped on the other and a whole verification run
+// genesis_plus_gx and SOUTH (button 1) on a recompiled SMS cart, so a game's
+// character attacked on one and jumped on the other and a whole verification run
 // diverged from that frame. Translate by POSITION, so one input schedule
 // presses the same physical button on both sides. The spatial names
 // (south/east/west/north) are accepted too, exactly as the cores accept them.
