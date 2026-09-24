@@ -26,8 +26,6 @@
 //
 // Plain JS ESM + JSDoc.
 
-import fs from "node:fs";
-import path from "node:path";
 
 export const LEDGER_SCHEMA = "romdev-decomp-ledger-v1";
 

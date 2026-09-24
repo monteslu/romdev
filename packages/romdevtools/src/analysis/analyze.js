@@ -1248,7 +1248,7 @@ export async function analyzeDecompile(romPath, address, platformOverride, bank 
       provenance = { method: dcIsElf ? "elf-load-segment" : "flat-at-0x8C010000", requestedVa: hx(address), resolvedVa: hx(address), imageOffset: hx(fileOff), loadedAt: hx(loadVa), analysisAddressSpace: "absolute: the image is loaded at its load address, so calls/globals/jump tables resolve to real addresses", analyzedBytes: romBytes.length,
         bytesSha1: fileOff < romBytes.length ? sha1Hex(romBytes.subarray(fileOff, fileOff + 64)) : null, preview: fileOff < romBytes.length ? hexPreview(romBytes.subarray(fileOff, fileOff + 16)) : null };
     } else {
-      let loadAddr = 0, mapped = null;
+      let loadAddr = 0;
       const mappingPs1 = await ps1SegmentMapping(address, opts);
       if (mappingPs1) {
         // A splat psx project: segment-exact, like N64.
@@ -1259,7 +1259,6 @@ export async function analyzeDecompile(romPath, address, platformOverride, bank 
         symbolize = mappingPs1.symbolize;
         provenance = { method: "splat-segment", requestedVa: hx(address), resolvedVa: hx(address), segment: seg.name, overlay: seg.overlay, romOffset: hx(mappingPs1.romOffset), segmentVram: hx(seg.vram), loadedAt: hx(seg.vram), analysisAddressSpace: "absolute: the segment is loaded at its VA", analyzedBytes: romBytes.length,
           bytesSha1: sha1Hex(romBytes.subarray(fileOff, fileOff + 64)), preview: hexPreview(romBytes.subarray(fileOff, fileOff + 16)), project: mappingPs1.project ?? null, candidates: mappingPs1.candidates ?? undefined };
-        mapped = true;
       } else {
         if (romBytes.length >= 0x800 && romBytes[0] === 0x50 && romBytes[1] === 0x53 && romBytes[2] === 0x2d && romBytes[3] === 0x58) {
           loadAddr = (romBytes[0x18] | (romBytes[0x19] << 8) | (romBytes[0x1a] << 16) | (romBytes[0x1b] << 24)) >>> 0;
@@ -1462,10 +1461,10 @@ async function splatSegmentMapping(address, { project, splatYaml, segment } = {}
     for (const [n, v] of sa) if (!byVa.has(v.va)) byVa.set(v.va, n);
     nameFor = (va) => byVa.get(va >>> 0) ?? null;
   }
-  const symbolize = (code, fileOff, va) => {
+  const symbolize = (code, _fileOff, _va) => {
     const stats = { rebased: 0, named: 0, unresolved: [] };
     const seen = new Set();
-    const rewrite = (prefix, hexStr, absolute) => {
+    const rewrite = (prefix, hexStr, _absolute) => {
       // The image is loaded at its VA: every Ghidra name (FUN_801de690, DAT_801542b4,
       // func_0x801de690) already carries the real address. Only names are swapped.
       const vaOut = parseInt(hexStr, 16) >>> 0;

@@ -11,7 +11,7 @@
 //   targets/<func>/      target.s / target.o assembled from the extracted asm
 //   candidates/<func>/   every candidate ever compared: source + result JSON
 //   jobs/<jobId>/        bounded search runs (permuter dir, log, best)
-import { readFile, writeFile, mkdir, stat, readdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -387,7 +387,7 @@ export class Project {
 
   /** Header dependencies of a TU via the host preprocessor (-MM). */
   async tuDependencies(tuRel, compileArgv) {
-    const inc = compileArgv.filter((a, i, arr) => a === "-I" ? true : arr[i - 1] === "-I").reduce((acc, a, i, arr) => { if (a !== "-I") acc.push("-I", a); return acc; }, []);
+    const inc = compileArgv.filter((a, i, arr) => a === "-I" ? true : arr[i - 1] === "-I").reduce((acc, a) => { if (a !== "-I") acc.push("-I", a); return acc; }, []);
     const defs = compileArgv.filter((a) => /^-D/.test(a));
     const r = await run("gcc", ["-MM", "-MG", "-nostdinc", ...inc, ...defs, "-D_LANGUAGE_C", "-x", "c", "-std=gnu89", "-fno-builtin", tuRel], { cwd: this.root, env: this.env });
     if (r.code !== 0) return { ok: false, error: r.stderr.slice(0, 400), deps: [] };

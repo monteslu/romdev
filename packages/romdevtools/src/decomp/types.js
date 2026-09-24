@@ -72,7 +72,6 @@ export async function typeReport(project, { symbol } = {}) {
 export async function proposeTypes(project, { symbol }) {
   const rep = await typeReport(project, { symbol });
   const argReg = { arg0: "a0", arg1: "a1", arg2: "a2", arg3: "a3" };
-  const out = [];
   const fn = symbol ? await project.resolveFunction({ symbol }).catch(() => null) : null;
   const structs = [];
   for (const h of rep.hypotheses) {

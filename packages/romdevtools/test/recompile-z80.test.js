@@ -363,12 +363,11 @@ test("a branch whose target is out of short range still assembles", async () => 
   // so it is not an off-by-one on one edge.
   const { writeFile, mkdtemp } = await import("node:fs/promises");
   const os = await import("node:os"), path = await import("node:path");
-  const { rom, org } = branchRangeFixture();
+  const { rom } = branchRangeFixture();
   const dir = await mkdtemp(path.join(os.tmpdir(), "z80-branch-"));
   const romPath = path.join(dir, "branchtest.sms");
   await writeFile(romPath, rom);
 
-  const { runObjdumpDisasm } = await import("../src/toolchains/binutils/objdump.js").catch(() => ({}));
   // Drive the same path the tool uses: lift the fixture's own instructions.
   const asm = [
     "        ld b,$10",

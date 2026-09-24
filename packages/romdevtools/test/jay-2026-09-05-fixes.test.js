@@ -166,7 +166,7 @@ test("encodeIndexed: an image with few colours keeps them exact (no lossy median
 });
 
 test("dedupeTiles: repeated cells collapse; flip matching folds mirrors and widens the map", () => {
-  const bytes = testPng(32, 8, (x, y) => ((x >> 3) % 2 === 0 ? [200, 30, 30, 255] : [x % 8 < 4 ? 30 : 60, 200, 30, 255]));
+  const bytes = testPng(32, 8, (x) => ((x >> 3) % 2 === 0 ? [200, 30, 30, 255] : [x % 8 < 4 ? 30 : 60, 200, 30, 255]));
   const r = encodeIndexed(bytes, { maxColors: 8 });
   const t = dedupeTiles(r.pixels, 32, 8);
   assert.equal(t.totalTiles, 4);

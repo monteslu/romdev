@@ -299,7 +299,6 @@ export function classifyGroup(group, target, candidate) {
   const idx = group.indices;
   const ta = idx.map((i) => target[i]).filter(Boolean);
   const ca = idx.map((i) => candidate[i]).filter(Boolean);
-  const ev = {};
 
   // A relocation spelling difference: identical words AND identical decoded
   // text, differing only in how the relocation is named. Testing the word

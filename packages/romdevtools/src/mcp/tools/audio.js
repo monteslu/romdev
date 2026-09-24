@@ -533,7 +533,7 @@ export function registerAudioTools(server, z, sessionKey) {
       op: z.enum(["inspect"]).default("inspect").describe("inspect the video chip's live decoded state."),
       chip: z.enum(["vdp"]).default("vdp").describe("'vdp' = SMS/GG/Genesis VDP. (Other platforms' video state is reachable via memory regions; see memory({op:'regions'}).)"),
     },
-    safeTool(async (args) => {
+    safeTool(async (_args) => {
       // Match this file's existing idiom (see the audioDebug record path):
       // state.js is imported where it is used, not at module top level.
       const { getHost } = await import("../state.js");

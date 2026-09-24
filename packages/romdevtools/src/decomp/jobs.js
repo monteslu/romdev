@@ -6,7 +6,7 @@
 // A job never touches the project's sources: import.py copies the TU + the
 // target asm into its own directory under the workspace, and the compile
 // script it writes runs the project's compiler with the candidate as input.
-import { readFile, writeFile, mkdir, readdir, stat } from "node:fs/promises";
+import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";

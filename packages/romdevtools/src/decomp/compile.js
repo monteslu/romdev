@@ -84,7 +84,7 @@ export function extractFunction(tuText, name) {
  * the linked ROM holds. HI16/LO16 pair by the standard rule (carry from the
  * low half). Unknown symbols leave the word as-is and are reported.
  */
-export function applyRelocations(stream, symbolVa, baseVa) {
+export function applyRelocations(stream, symbolVa, _baseVa) {
   const out = [];
   const unresolved = new Set();
   for (let i = 0; i < stream.length; i++) {
@@ -473,7 +473,7 @@ export async function compileAndCompare(project, fn, opts) {
  * the extracted asm and catches a changed call target or global reference
  * that word-equal relocatable objects could hide.
  */
-export async function compareAgainstRom(project, fn, cstream, csyms) {
+export async function compareAgainstRom(project, fn, cstream, _csyms) {
   if (fn.romOffset == null) return { status: "no-rom-offset" };
   const ld = await project.linkerMap();
   const sa = await project.symbolAddrs();
@@ -533,7 +533,6 @@ export async function compareAgainstRom(project, fn, cstream, csyms) {
     mismatches++;
     if (first.length < 8) first.push({ index: i, rom: a == null ? null : "0x" + a.toString(16).padStart(8, "0"), candidate: b == null ? null : "0x" + b.toString(16).padStart(8, "0"), mnemonic: linked.stream[i]?.mnemonic ?? null, reloc: linked.stream[i]?.reloc ?? null });
   }
-  const exact = mismatches === 0 && uncheckable === 0 && linked.unresolved.length === 0;
   const romStream = romWords.map((w, i) => ({ offset: i * 4, word: w, mnemonic: linked.stream[i]?.mnemonic ?? "?", operands: linked.stream[i]?.operands ?? "", reloc: null }));
   const linkedStream = linked.stream.map((s) => ({ offset: s.offset, word: s.linkedWord, mnemonic: s.mnemonic, operands: s.operands, reloc: null }));
   // A real mismatch always wins; otherwise unresolved relocations make the
@@ -618,7 +617,6 @@ const M2C_MACROS = {
 };
 export function m2cMacroDefinitions(candidateText) {
   const names = [...new Set((candidateText.match(/\bM2C_[A-Z0-9_]+\b/g) ?? []))].filter((n) => M2C_MACROS[n]);
-  const needMemcpy = names.some((n) => /MEMCPY|STRUCT_COPY/.test(n)) && !/\bmemcpy\s*\(/.test(candidateText) ? false : false;
   const lines = names.map((n) => M2C_MACROS[n]);
   if (names.some((n) => /MEMCPY|STRUCT_COPY/.test(n))) lines.push("void* memcpy(void*, const void*, unsigned int);");
   return { names, text: lines.length ? lines.join("\n") + "\n" : "" };

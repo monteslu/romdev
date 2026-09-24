@@ -30,9 +30,8 @@ export const REPLAY_SCHEMA = "romdev-decomp-replay-suite-v1";
  * Each case states the EXPECT up front, so a run that merely completes cannot
  * be read as a run that passed.
  */
-export function defaultCases({ researchRoot, workspace }) {
+export function defaultCases({ researchRoot }) {
   const R = (p) => `${researchRoot}/parallel-candidates/${p}`;
-  const W = (p) => `${workspace}/${p}`;
   return [
     {
       id: "i2-exact-with-contradictory-rodata",

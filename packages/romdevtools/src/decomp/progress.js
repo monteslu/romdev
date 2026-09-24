@@ -9,7 +9,6 @@
 // Denominators are code bytes from the map's .text symbols per object.
 import fs from "node:fs";
 import path from "node:path";
-import { readFile } from "node:fs/promises";
 
 export async function computeProgress(project) {
   const ld = await project.linkerMap();

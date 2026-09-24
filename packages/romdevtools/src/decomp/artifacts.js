@@ -16,7 +16,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { readFile, writeFile, mkdir, readdir, stat, unlink, rename } from "node:fs/promises";
+import { readFile, writeFile, mkdir, readdir, stat, rename } from "node:fs/promises";
 import { createHash } from "node:crypto";
 
 export const ARTIFACT_SCHEMA = "romdev-decomp-artifacts-v1";
