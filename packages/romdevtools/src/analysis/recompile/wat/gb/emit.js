@@ -9,6 +9,7 @@
 import { lower } from "./lower.js";
 import * as H from "./hw-gb.js";
 import * as P from "./hw-gbc.js";
+import { ppuShadowWat } from "./ppu-shadow.js";
 import * as A from "./apu.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -39,6 +40,12 @@ const SH = 1024;
  */
 export /** mode-3 prediction scratch: the line's sprite X list (10 bytes) */
 const M3SPR = 0x11480;
+// the gambatte PPU timing shadow (ppu-shadow.js): its sprite list and the
+// line sprite maps
+const GPSPX = 0x11600, GPMAP = 0x11610, GPMAP2 = 0x11620;
+// its SpriteMapper: the OamReader's position buffer (80) and sizes (40), the
+// per-line counts (144) and maps (144 x 10)
+const GPBUF = 0x11700, GPSZ = 0x11750, GPNUM = 0x11780, GPSMAP = 0x11810;
 
 export const PROBE_FIELDS = {
   frames: 0, steps: 4, trapped: 8, trappc: 12, pc: 16,
@@ -122,7 +129,7 @@ export function gbOriginAndPages(L, nArms) {
 
 /** options.traceEntries: the whole-frame ring's entry size and maximum length. */
 export const BIGRING_STRIDE = 32;
-export const BIGRING_MAX = 65536;
+export const BIGRING_MAX = 1 << 20;
 
 /**
  * options.traceEntries: where the whole-frame instruction ring goes (above
@@ -379,7 +386,7 @@ function stepWat(cgb) {
 
   ;; per visible line: the mode-0 time and the HBlank STAT / HDMA event times
   (func $m3setup
-    (local $x166 i32)
+    (local $x166 i32) (local $ls i32) (local $t i32)
     (if (i32.or (i32.ge_u (global.get $ln) (i32.const 144))
                 (i32.eqz (i32.and (i32.load8_u (i32.const ${IO + 0x40})) (i32.const 0x80))))
       (then (global.set $m0done (i32.const 1)) (global.set $hdmadone (i32.const 1))
@@ -393,6 +400,9 @@ function stepWat(cgb) {
                          (i32.or (i32.eq (i32.load8_u (i32.const ${IO + 0x4A})) (global.get $ln))
                                  (i32.eq (i32.load8_u (i32.const ${IO + 0x4A})) (i32.sub (global.get $ln) (i32.const 1)))))
               (then (global.set $wemaster (i32.const 1))))))
+    ;; the gambatte PPU shadow: run it to the line start
+    (call $gp_update (i32.sub (i32.add (global.get $abscc) (global.get $cyc)) (global.get $linelen)))
+    (global.set $m0inval (i32.const 0))
     (global.set $m3acc (i32.const 0))
     (global.set $m0dot (call $m3predict (i32.const 167)))
     (global.set $m3acc (i32.const 0))
@@ -403,11 +413,63 @@ function stepWat(cgb) {
     (local.set $x166 (i32.add (local.get $x166) (i32.mul (global.get $speed) (i32.const 3))))
     (global.set $m0irqat (i32.add (i32.shl (local.get $x166) (global.get $speed))
                                   (i32.sub (i32.const ${cgb ? 1 : 0}) (global.get $speed))))
+;; gambatte predicts from its PPU's state, not from the line start: the
+    ;; shadow's word wins (the two differ where the PPU is not where a fresh
+    ;; line would put it, e.g. the line after a speed switch)
+    (if (i32.ge_u (global.get $gpst) (i32.const 3))
+      (then
+        (local.set $ls (i32.sub (i32.add (global.get $abscc) (global.get $cyc)) (global.get $linelen)))
+        (local.set $t (i32.shr_s (i32.sub (call $gp_predict (i32.const 167)) (local.get $ls)) (global.get $speed)))
+        (global.set $m0dot (local.get $t))
+        (global.set $m0irqat (i32.sub (i32.add (call $gp_predict (i32.const 166)) (i32.sub (i32.const ${cgb ? 1 : 0}) (global.get $speed)))
+                                      (local.get $ls)))))
     (global.set $hdmaat (i32.add (i32.shl (global.get $m0dot) (global.get $speed))
                                  (i32.sub (i32.const 1) (global.get $speed))))
     (global.set $m0done (i32.const 0))
-    (global.set $m0arm (global.get $m0next))
+    ;; a flag (0/1): the candidate tests AND it with (eqz $m0done), and the
+    ;; STAT bit value 8 AND 1 is 0 - the line's mode-0 event never fired
+    (global.set $m0arm (i32.ne (global.get $m0next) (i32.const 0)))
     (global.set $hdmadone (i32.const 0)))
+  ;; LCD::mode3CyclesChange: a register the mode-3 length depends on
+  ;; changed; the rest of the CURRENT line is re-predicted from the PPU
+  ;; shadow's state (a shadow already on the next line's mode 2 leaves it:
+  ;; that line's start predicts it). The mode-0 STAT event moves only while
+  ;; it is still ahead, as does the HDMA block.
+  (func $gp_m3change
+    (local $ls i32) (local $t i32)
+    (if (i32.eqz (i32.and (i32.load8_u (i32.const ${IO + 0x40})) (i32.const 0x80))) (then (return)))
+    (if (i32.lt_u (global.get $gpst) (i32.const 3)) (then (return)))
+    (if (i32.ge_u (global.get $ln) (i32.const 144)) (then (return)))
+    (local.set $ls (i32.sub (global.get $gptime) (i32.shl (i32.const 456) (global.get $gpds))))
+    ;; nextM0Time_ is only invalidated: the next access that needs the
+    ;; line's mode-0 time predicts it from the PPU state THEN ($m0sync), not
+    ;; now, except with an HBlank DMA pending, which predicts at once
+    (global.set $m0inval (i32.const 1))
+    (if (i32.and (i32.eqz (global.get $hdmadone)) (i32.ne (global.get $hdma_on) (i32.const 0)))
+      (then (global.set $m0inval (i32.const 0))
+            (global.set $m0dot (i32.shr_s (i32.sub (call $gp_predict (i32.const 167)) (local.get $ls)) (global.get $speed)))))
+    (if (i32.eqz (global.get $m0done))
+      (then (global.set $m0irqat (i32.sub (i32.add (call $gp_predict (i32.const 166)) (i32.sub (i32.const ${cgb ? 1 : 0}) (global.get $speed)))
+                                          (local.get $ls)))))
+    (if (i32.and (i32.eqz (global.get $hdmadone)) (i32.ne (global.get $hdma_on) (i32.const 0)))
+      (then (global.set $hdmaat (i32.add (i32.shl (global.get $m0dot) (global.get $speed))
+                                         (i32.sub (i32.const 1) (global.get $speed)))))))
+  ;; LCD::m0TimeOfCurrentLine after an invalidation: predict from the PPU
+  ;; state at the access cycle; a prediction past this line means its mode 0
+  ;; has happened (lastM0Time)
+  (global $m0inval (mut i32) (i32.const 0))
+  (func $m0sync (param $cc i32)
+    (local $t i32) (local $ls i32)
+    ;; the PPU's own events (a sprite-map rebuild) due by cc run first
+    (call $gp_update (local.get $cc))
+    (if (i32.eqz (global.get $m0inval)) (then (return)))
+    (global.set $m0inval (i32.const 0))
+    (local.set $ls (i32.sub (global.get $gptime) (i32.shl (i32.const 456) (global.get $gpds))))
+    (local.set $t (call $gp_predict (i32.const 167)))
+    (if (i32.lt_s (i32.sub (local.get $t) (global.get $gptime)) (i32.const 0))
+      (then (global.set $m0dot (i32.shr_s (i32.sub (local.get $t) (local.get $ls)) (global.get $speed))))
+      (else (if (i32.ge_s (i32.sub (global.get $gplastm0) (local.get $ls)) (i32.const 0))
+        (then (global.set $m0dot (i32.shr_s (i32.sub (global.get $gplastm0) (local.get $ls)) (global.get $speed))))))))
   (global $lyc0done (mut i32) (i32.const 0))
 
   ;; STAT events that fall INSIDE a line (gambatte video.cpp):
@@ -516,6 +578,7 @@ function stepWat(cgb) {
   ;; the start of LY's line, and the mode-0 time, at cycle $cc (for the
   ;; write handlers below): this line's predicted mode 0
   (func $m0timeat (param $cc i32) (result i32)
+    (call $m0sync (local.get $cc))
     (drop (call $lyat (local.get $cc)))
     (i32.add (i32.sub (global.get $tly) (global.get $linelen)) (i32.shl (global.get $m0dot) (global.get $speed))))
 
@@ -650,6 +713,11 @@ function stepWat(cgb) {
     (local $e i32) (local $ly i32) (local $L i32) (local $cmp i32) (local $next i32)
     (if (i32.ne (global.get $dmalast) (i32.const -1)) (then (call $dmaupd (global.get $abscc))))
     (if (i32.eqz (i32.and (i32.load8_u (i32.const ${IO + 0x40})) (i32.const 0x80))) (then (return)))
+    ;; the PPU shadow's own events (SpriteMapper::doEvent, the CGB wy2
+    ;; one-shot) at their cycles: they re-predict mode 0 (mode3CyclesChange)
+    (if (i32.or (i32.and (global.get $gpsmon) (i32.le_s (i32.sub (global.get $gpsmt) (i32.add (global.get $abscc) (global.get $ahead))) (i32.const 0)))
+                (i32.and (global.get $gpwy2on) (i32.le_s (i32.sub (global.get $gpwy2t) (i32.add (global.get $abscc) (global.get $ahead))) (i32.const 0))))
+      (then (call $gp_update (i32.add (global.get $abscc) (global.get $ahead)))))
     (block $out (loop $again
       ;; $ahead: an IF access asks for the events due by ITS cycle
       ;; (gambatte Memory::updateIrqs -> LCD::update(cc) before IF is read
@@ -660,8 +728,11 @@ function stepWat(cgb) {
       (local.set $t (i32.const -1))
       ;; candidate: due (t <= now) and in this line (t < lytime), earliest first
       (local.set $e (global.get $lyct))
+      ;; an IF access past the line end also sees the next line's LYC event
+      ;; (LCD::update runs the LY and LYC events due by the access cycle)
       (if (i32.and (i32.and (i32.le_s (i32.sub (local.get $e) (local.get $now)) (i32.const 0))
-                            (i32.lt_s (i32.sub (local.get $e) (local.get $lyt)) (i32.const 0)))
+                            (i32.or (i32.lt_s (i32.sub (local.get $e) (local.get $lyt)) (i32.const 0))
+                                    (i32.ne (global.get $ahead) (i32.const 0))))
                    (i32.ne (local.get $e) (i32.const -1)))
         (then (local.set $t (local.get $e)) (local.set $k (i32.const 1))))
       (local.set $e (global.get $m2t))
@@ -698,8 +769,14 @@ function stepWat(cgb) {
         (then
           (if (i32.and (i32.or (global.get $lycs) (global.get $lycss)) (i32.const 0x40))
             (then
-              (local.set $cmp (if (result i32) (i32.lt_u (i32.sub (local.get $lyt) (local.get $t)) (global.get $linelen))
-                                (then (i32.const 0)) (else (global.get $ln))))
+              ;; an event past the line end (an IF access, see above) is on the next line
+              (local.set $L (global.get $ln))
+              (local.set $e (local.get $lyt))
+              (if (i32.ge_s (i32.sub (local.get $t) (local.get $lyt)) (i32.const 0))
+                (then (local.set $e (i32.add (local.get $lyt) (global.get $linelen)))
+                      (local.set $L (if (result i32) (i32.eq (local.get $L) (i32.const 153)) (then (i32.const 0)) (else (i32.add (local.get $L) (i32.const 1)))))))
+              (local.set $cmp (if (result i32) (i32.lt_u (i32.sub (local.get $e) (local.get $t)) (global.get $linelen))
+                                (then (i32.const 0)) (else (local.get $L))))
               (if (i32.and (i32.eq (global.get $lycr) (local.get $cmp))
                            (i32.eqz (i32.and (global.get $lycs)
                              (if (result i32) (i32.lt_u (i32.sub (global.get $lycr) (i32.const 1)) (i32.const 143))
@@ -1128,9 +1205,10 @@ function frameWat(cgb) {
       (if (i32.lt_u (global.get $ln) (i32.const 144))
         (then (global.set $rxnext (i32.const 0))))
       ;; ---- mode 3 ----
-      (local.set $i (i32.sub (global.get $linelen) (i32.shl (global.get $m0dot) (global.get $speed))))
+      (call $statev)
       (block $d (loop $l
-        (br_if $d (i32.le_s (global.get $cyc) (local.get $i)))
+        ;; the end moves when a mid-line write re-predicts it ($gp_m3change)
+        (br_if $d (i32.le_s (global.get $cyc) (i32.sub (global.get $linelen) (i32.shl (global.get $m0dot) (global.get $speed)))))
         (br_if $d (global.get $trapped))
         (br_if $d (global.get $lcdrestart))
         (call $step)
@@ -1147,7 +1225,11 @@ function frameWat(cgb) {
           (if (global.get $winflag)
             (then (global.set $wline (i32.add (global.get $wline) (i32.const 1)))
                   (global.set $winflag (i32.const 0))))))
-      ;; HBlank's STAT request and HDMA block are events at their own cycles ($statev)
+      ;; HBlank's STAT request and HDMA block are events at their own cycles ($statev).
+      ;; The instruction that ended mode 3 may already have passed one (the
+      ;; mode-3 loop exits before its $statev runs on the next pass): check
+      ;; before the next instruction, as gambatte's event loop does.
+      (call $statev)
       (block $d2 (loop $l2
         (br_if $d2 (i32.le_s (global.get $cyc) (i32.const 0)))
         (br_if $d2 (global.get $trapped))
@@ -1196,6 +1278,12 @@ function frameWat(cgb) {
         (call $apu_rebase (local.get $i))
         (if (global.get $timairq) (then (global.set $timairq (i32.sub (global.get $timairq) (local.get $i)))))
         (global.set $tlast (i32.sub (global.get $tlast) (local.get $i)))
+        (global.set $gpnow (i32.sub (global.get $gpnow) (local.get $i)))
+        (global.set $gptime (i32.sub (global.get $gptime) (local.get $i)))
+        (if (global.get $gplastm0) (then (global.set $gplastm0 (i32.sub (global.get $gplastm0) (local.get $i)))))
+        (global.set $gpwy2t (i32.sub (global.get $gpwy2t) (local.get $i)))
+        (global.set $gplu (i32.sub (global.get $gplu) (local.get $i)))
+        (global.set $gpsmt (i32.sub (global.get $gpsmt) (local.get $i)))
         (global.set $tmat (i32.sub (global.get $tmat) (local.get $i)))
         (if (global.get $serev) (then (global.set $serev (i32.sub (global.get $serev) (local.get $i)))))
         (if (i32.ne (global.get $lyct) (i32.const -1)) (then (global.set $lyct (i32.sub (global.get $lyct) (local.get $i)))))
@@ -1447,9 +1535,10 @@ export function* emitGbWat(img, blocks, o) {
   yield part(P.globalsWat());
   yield part(P.memWat({ imgLen: IMGLEN, mbc: o.mbc, romimg: ROMIMG, probe: PROBE,
     watchLo: WATCH_LO, watchHi: WATCH_HI, padptr: ABI + 0x100, origin: ORIGIN, cgb,
-    rb: P.ramBanks(img), rtc: [0x0F, 0x10].includes(img[0x147]), rumble: [0x1C, 0x1D, 0x1E].includes(img[0x147]), cramhi: CRAMHI }));
+    rb: P.ramBanks(img), rtc: [0x0F, 0x10].includes(img[0x147]), rumble: [0x1C, 0x1D, 0x1E].includes(img[0x147]), cramhi: CRAMHI, time: L.TIME }));
   yield part(A.apuWat({ cgb, muteChannels: o.muteChannels }));
   yield part(commonWat());
+  yield part(ppuShadowWat({ cgb, IO: IOREG, OAM: H.OAM, GPSPX, GPMAP, GPMAP2, GPBUF, GPSZ, GPNUM, GPSMAP }));
   yield part(`  (data (i32.const ${IOREG + 0x100}) "${watBytes(shadeBytes)}")`);
   yield part(H.paletteWat());
   yield part(H.renderWat());
@@ -1647,6 +1736,33 @@ export function* emitGbWat(img, blocks, o) {
     (i32.store8 (i32.const ${IOREG + 0x40}) (i32.const 0x91))
     (i32.store8 (i32.const ${IOREG + 0x47}) (i32.const 0xFC))
     ${initWat(cgb, CRAMHI)}
+    ;; the PPU shadow at power-on (gambatte PPU::loadState: past line 143's
+    ;; mode-3 window, so M2_Ly0::f0 with the cycles left to the frame end)
+    (global.set $gpnow (global.get $abscc))
+    (global.set $gply (global.get $ln))
+    (global.set $gptime (i32.add (global.get $abscc) (global.get $cyc)))
+    (global.set $gpst (i32.const 0))
+    (global.set $gpcyc (i32.sub (i32.add (i32.mul (global.get $ln) (i32.const 456)) (i32.sub (i32.const 456) (global.get $cyc))) (i32.const 70224)))
+    (global.set $gplcdc (i32.load8_u (i32.const ${IOREG + 0x40})))
+    (global.set $gpscx (i32.load8_u (i32.const ${IOREG + 0x43})))
+    (global.set $gpwy (i32.load8_u (i32.const ${IOREG + 0x4A})))
+    (global.set $gpwy2 (i32.load8_u (i32.const ${IOREG + 0x4A})))
+    (global.set $gpwx (i32.load8_u (i32.const ${IOREG + 0x4B})))
+    ;; its SpriteMapper (OamReader::reset, then loadState: change at the
+    ;; power-on cycle, map, the SPRITE_MAP event scheduled)
+    (local.set $i (i32.const 0))
+    (block $od (loop $ol
+      (br_if $od (i32.ge_u (local.get $i) (i32.const 80)))
+      (i32.store8 (i32.add (i32.const ${GPBUF}) (local.get $i))
+        (i32.load8_u (i32.add (i32.const ${H.OAM}) (i32.or (i32.and (i32.shl (local.get $i) (i32.const 1)) (i32.const -4)) (i32.and (local.get $i) (i32.const 1))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $ol)))
+    (memory.fill (i32.const ${GPSZ}) (i32.const 0) (i32.const 40))
+    (global.set $gplu (global.get $abscc))
+    (global.set $gplast (i32.const 0xFF))
+    (call $gp_oamchange (global.get $abscc))
+    (call $gp_mapsprites)
+    (call $gp_smsched (global.get $gpnow))
     (call $apu_init))
 
   (func (export "wc_render")

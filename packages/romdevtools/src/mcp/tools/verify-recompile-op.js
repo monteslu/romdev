@@ -68,6 +68,11 @@ function resolveInputs(sessionKey, args, opName) {
   const openRef = async (hooks = {}) => {
     const h = new LibretroHost();
     await h.loadCore(resolved.jsPath, resolved.wasmPath, { hwRender: resolved.hwRender, noderawfs: resolved.noderawfs });
+    // A cart with a real-time clock reads the wasmcart host's frame clock
+    // (frame N of the cart at (N - 1) * stepMs); the reference's wall clock
+    // is pinned to the same frames: its settle runs see baseMs, and run
+    // settle + k sees baseMs + k * stepMs.
+    if (layout.clock) h.setPinnedClock({ baseMs: layout.clock.baseMs, stepMs: layout.clock.stepMs, startRun: () => h.status.settleFramesUsed ?? Infinity });
     await h.loadMedia({ platform, path: refPath, beforeSettle: hooks.beforeSettle });
     return h;
   };

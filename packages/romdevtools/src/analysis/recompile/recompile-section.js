@@ -12,6 +12,12 @@
 //     "platform": "sms",            source platform of the ROM the cart was built from
 //     "reference": "sms",           loadMedia platform id of the reference core (default = platform)
 //     "romSha1": "<hex>",           sha1 of the source ROM; checked against the reference ROM
+//     "clock": { "baseMs": 1700000000000, "stepMs": 16.667 }
+//                                   the cart reads the wasmcart host's frame clock (a
+//                                   game-visible real-time clock); the verifier pins the
+//                                   reference core's wall clock to the same one:
+//                                   baseMs + (frames past settle) * stepMs, in UTC
+//                                   (RTC_CLOCK below)
 //     "frameAlignment": "settle",   "settle" (default): cart frame = reference frame + refSettle
 //                                   - 1 - warmupFrames. "search": the cart's boot takes a
 //                                   game-dependent number of frames, so the verifier FINDS the
@@ -95,6 +101,18 @@ import { readFileSync } from "node:fs";
 import { unzipSync, zipSync } from "fflate";
 
 export const RECOMPILE_SECTION = "romdev.recompile";
+
+/**
+ * The real-time clock a recompiled cart with a clock chip (GB MBC3, GBA
+ * GPIO RTC) runs on, and the `clock` a verifier pins the reference to. Both
+ * reference cores read it through emscripten's time(): the whole seconds of
+ * Date.now() / 1000. The cart reads the same f64 expression from the
+ * wasmcart host's frame clock (timeMs = frame * stepMs):
+ *   trunc((baseMs + timeMs) / 1000)
+ * so boundary rounding is identical, not merely close. In play the date
+ * starts at baseMs when the cart powers on.
+ */
+export const RTC_CLOCK = Object.freeze({ baseMs: 1700000000000, stepMs: 1000 / 60 });
 export const RECOMPILE_SECTION_VERSION = 1;
 export const REGION_TRANSFORMS = ["swap16", "lowbyte16", "highbyte16"];
 
@@ -272,6 +290,12 @@ export function validateRecompileLayout(layout) {
   if (out.warmupFrames != null && !isInt(out.warmupFrames)) throw new Error("warmupFrames must be a non-negative integer");
   if (out.buttons != null && !["positional", "byName"].includes(out.buttons)) throw new Error("buttons must be 'positional' or 'byName'");
   if (out.frameAlignment != null && !["settle", "search"].includes(out.frameAlignment)) throw new Error("frameAlignment must be 'settle' or 'search'");
+  if (out.clock != null) {
+    const c = out.clock;
+    if (typeof c !== "object" || !(Number.isInteger(c.baseMs) && c.baseMs % 1000 === 0) || !(c.stepMs > 0)) {
+      throw new Error("clock must be {baseMs: whole seconds in ms, stepMs > 0}");
+    }
+  }
   if (out.screen?.origin != null) {
     const o = out.screen.origin;
     if (!Array.isArray(o) || o.length !== 2 || !o.every((n) => Number.isInteger(n) && n >= 0)) throw new Error("screen.origin must be [x, y]");

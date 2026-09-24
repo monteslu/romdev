@@ -32,6 +32,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { VRAM, WRAM, OAM, IOREG, FB_W, FB_H } from "./hw-gb.js";
+import { RTC_CLOCK } from "../../recompile-section.js";
 
 export const VRAM0 = VRAM;
 export const VRAM1 = 0x12000;
@@ -183,7 +184,7 @@ export function globalsWat() {
   (global $imm16 (mut i32) (i32.const 0))
   (global $wline (mut i32) (i32.const 0))
   (global $linelen (mut i32) (i32.const 456))
-  (global $rtc_sel (mut i32) (i32.const 0))
+  (global $rtc_sel (mut i32) (i32.const 0xF8))
   (global $serev (mut i32) (i32.const 0))
   (global $hdmanow (mut i32) (i32.const 0))
   (global $dmapos (mut i32) (i32.const 0xFE))
@@ -264,10 +265,10 @@ function romWrite(mbc, imgLen, rb, rtc) {
                 (if (i32.eqz (global.get $rombank)) (then (global.set $rombank (i32.const 1))))
                 (return)))
         (if (i32.lt_u (local.get $x) (i32.const 0x6000))
-          (then ${rtc ? `(if (i32.lt_u (i32.sub (local.get $v) (i32.const 8)) (i32.const 5))
-                  (then (global.set $rambank (local.get $v)) (return)))` : ""}
-                (global.set $rambank (i32.and (local.get $v) (i32.const ${rm})))
+          (then (global.set $rambank (i32.and (local.get $v) (i32.const ${rm})))
+                ${rtc ? "(global.set $rtc_sel (i32.and (i32.sub (i32.and (local.get $v) (i32.const 0xF)) (i32.const 8)) (i32.const 0xFF)))" : ""}
                 (return)))
+        ${rtc ? "(call $rtc_latch (local.get $v))" : ""}
         (return)`;
   }
   if (mbc === "mbc2") {
@@ -345,13 +346,15 @@ export function memWat(o) {
   return o.cgb === false ? dropBranches(t, CGB_ONLY_REGS) : t;
 }
 
-function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, origin, cgb = true, rb = 4, rtc = false, rumble = false, cramhi }) {
+function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, origin, cgb = true, rb = 4, rtc = false, rumble = false, cramhi, time }) {
   const mask = Math.max(1, imgLen) - 1;
   const setbankWat = setbankFn(mbc, imgLen, rb);
   // cart RAM: none (reads $FF, writes dropped), else enabled by $ramen
   // (HuC1 always reads: its disable is write-protect only)
-  const ramOff = rb === 0 ? "(i32.const 1)" : mbc === "huc1" ? "(i32.const 0)" : "(i32.eqz (global.get $ramen))";
-  const ramWOff = rb === 0 ? "(i32.const 1)" : "(i32.eqz (global.get $ramen))";
+  // an MBC3 clock is reachable (with RAM enabled) even with no RAM chip
+  const ramOff = rb === 0 && !rtc ? "(i32.const 1)" : mbc === "huc1" ? "(i32.const 0)" : "(i32.eqz (global.get $ramen))";
+  const ramWOff = rb === 0 && !rtc ? "(i32.const 1)" : "(i32.eqz (global.get $ramen))";
+  const noRam = rb === 0 ? "(i32.const 1)" : "(i32.const 0)";
   return `
   ;; linear address of a WRAM CPU address in $C000-$FDFF (echo folded)
   (func $wram_lin (param $x i32) (result i32)
@@ -412,6 +415,7 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
     (local $used i32) (local $ly i32) (local $ttn i32) (local $st i32)
     (if (i32.eqz (i32.and (i32.load8_u (i32.const ${IOREG + 0x40})) (i32.const 0x80)))
       (then (return (i32.const 0))))
+    (call $m0sync (i32.add (global.get $abscc) (call $ioff)))
     (local.set $used (i32.add (i32.sub (global.get $linelen) (global.get $cyc)) (i32.mul (call $ioff) (i32.const ${STATIOFF}))))
     (local.set $ly (global.get $ln))
     (if (i32.ge_s (local.get $used) (global.get $linelen))
@@ -522,9 +526,9 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
     (if (i32.lt_u (local.get $x) (i32.const 0xC000))
       (then
         (if ${ramOff} (then (return (i32.const 0xFF))))
-        (if ${rtc ? "(i32.ge_u (global.get $rambank) (i32.const 8))" : "(i32.const 0)"}
-          (then (return (i32.load8_u (i32.add (i32.const ${probe + 3840})
-                          (i32.and (global.get $rambank) (i32.const 7)))))))
+        (if ${rtc ? "(i32.lt_u (global.get $rtc_sel) (i32.const 5))" : "(i32.const 0)"}
+          (then (return (i32.load8_u (i32.add (i32.const ${probe + 3840}) (global.get $rtc_sel))))))
+        (if ${noRam} (then (return (i32.const 0xFF))))
         (return (i32.load8_u (call $cram_lin (local.get $x))))))
     (if (i32.lt_u (local.get $x) (i32.const 0xFE00))
       (then (return (i32.load8_u (call $wram_lin (local.get $x))))))
@@ -669,10 +673,9 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
     (if (i32.lt_u (local.get $x) (i32.const 0xC000))
       (then
         (if ${ramWOff} (then (return)))
-        (if ${rtc ? "(i32.ge_u (global.get $rambank) (i32.const 8))" : "(i32.const 0)"}
-          (then (i32.store8 (i32.add (i32.const ${probe + 3840})
-                  (i32.and (global.get $rambank) (i32.const 7))) (local.get $v))
-                (return)))
+        (if ${rtc ? "(i32.lt_u (global.get $rtc_sel) (i32.const 5))" : "(i32.const 0)"}
+          (then (call $rtc_write (local.get $v)) (return)))
+        (if ${noRam} (then (return)))
         (i32.store8 (call $cram_lin (local.get $x)) (local.get $v)) (return)))
     (if (i32.lt_u (local.get $x) (i32.const 0xFE00))
       (then (call $set_origin (call $origin_slot (local.get $x)) (local.get $v))
@@ -684,7 +687,8 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
         (if (i32.and (i32.and (i32.ge_u (global.get $dmapos) (i32.const 0xA0))
                               (call $oamok (i32.add (global.get $abscc) (call $ioff)) (i32.const ${cgb ? 4 : 3}) (i32.const 2)))
                      ${cgb ? '(i32.const 1)' : '(i32.lt_u (local.get $x) (i32.const 0xFEA0))'})
-          (then (i32.store8 (i32.add (i32.const ${OAM})
+          (then (call $gp_oamw (i32.add (global.get $abscc) (call $ioff)))
+                (i32.store8 (i32.add (i32.const ${OAM})
                   (i32.and (i32.sub (local.get $x) (i32.const 0xFE00)) (i32.const 0xFF)))
                   (local.get $v))))
         (return)))
@@ -745,8 +749,13 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
         (call $serupd (i32.add (global.get $abscc) (call $ioff)))
         (call $tirqupd (i32.add (global.get $abscc) (call $ioff)))
         (call $ifsync)))
+    ;; the gambatte PPU shadow sees SCX/WX/WY/LCDC at the write's cycle
+    (if (i32.eq (local.get $x) (i32.const 0xFF43)) (then (call $gp_scx (local.get $v) (i32.add (global.get $abscc) (call $ioff)))))
+    (if (i32.eq (local.get $x) (i32.const 0xFF4B)) (then (call $gp_wx (local.get $v) (i32.add (global.get $abscc) (call $ioff)))))
+    (if (i32.eq (local.get $x) (i32.const 0xFF4A)) (then (call $gp_wy (local.get $v) (i32.add (global.get $abscc) (call $ioff)))))
     (if (i32.eq (local.get $x) (i32.const 0xFF40))
       (then
+        (call $gp_lcdc (local.get $v) (i32.add (global.get $abscc) (call $ioff)))
         (local.set $old (i32.load8_u (i32.const ${IOREG + 0x40})))
         ;; LCD on/off log for the frame-boundary differ: 32 x {frame, ln, cyc, v}
         ;; at PROBE+0xE00, count at PROBE+0xDFC.
@@ -789,7 +798,7 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
             (i32.store8 (i32.const ${IOREG + 0x40}) (local.get $v))
             (call $lcdevreset (i32.add (global.get $abscc) (call $ioff)) (i32.const 1))
             (global.set $m0next (i32.and (global.get $statreg) (i32.const 0x08)))
-            (global.set $m0done (i32.const 1))
+            (call $m3setup)
             (global.set $hdmadone (i32.const 1))))
         ;; LCD switched OFF: LY reads 0 and gambatte schedules its next frame
         ;; event 4 lines (1824 cycles) out; that event only arms the blank
@@ -1014,6 +1023,14 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
                  (i32.or (i32.lt_u (global.get $pc) (i32.const 0xFDFE)) (i32.ge_u (global.get $pc) (i32.const 0xFF80))))
       (then
         (local.set $o (call $get_origin (global.get $pc)))
+        ;; a banked original must end inside its window: the arm of an
+        ;; instruction ending at $7FFF falls through to the window's start,
+        ;; not to the next RAM byte (a lone $00 written after a read of the
+        ;; bank's last byte carries that byte as provenance)
+        (if (i32.and (i32.ge_u (local.get $o) (i32.const 0x4001))
+              (i32.gt_u (i32.add (i32.and (i32.sub (local.get $o) (i32.const 1)) (i32.const 0x3FFF))
+                          (i32.load8_u (i32.add (i32.const ${OPLEN}) (local.get $op)))) (i32.const 0x3FFF)))
+          (then (local.set $o (i32.const 0))))
         (if (local.get $o)
           (then (if (call $ram_bytes_intact (global.get $pc) (local.get $o))
                   (then (return (i32.const 0))))))))
@@ -1142,8 +1159,9 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
     (if (i32.eq (global.get $dmasrc) (i32.const 1))
       (then
         (if ${ramOff} (then (return (i32.const 0xFF))))
-        (if ${rtc ? "(i32.ge_u (global.get $rambank) (i32.const 8))" : "(i32.const 0)"}
-          (then (return (i32.load8_u (i32.add (i32.const ${probe + 3840}) (i32.and (global.get $rambank) (i32.const 7)))))))
+        (if ${rtc ? "(i32.lt_u (global.get $rtc_sel) (i32.const 5))" : "(i32.const 0)"}
+          (then (return (i32.load8_u (i32.add (i32.const ${probe + 3840}) (global.get $rtc_sel))))))
+        (if ${noRam} (then (return (i32.const 0xFF))))
         (return (i32.load8_u (call $cram_lin (local.get $a))))))
     (if (i32.eq (global.get $dmasrc) (i32.const 3))
       (then (return (i32.load8_u (call $wram_lin (local.get $a))))))
@@ -1158,10 +1176,14 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
       (local.set $n (i32.sub (local.get $n) (i32.const 1)))
       (global.set $dmapos (i32.and (i32.add (global.get $dmapos) (i32.const 1)) (i32.const 0xFF)))
       (global.set $dmalast (i32.add (global.get $dmalast) (i32.const 4)))
+      ;; the PPU loses the OAM at the first byte and gets it back after the
+      ;; last (startOamDma / endOamDma at lastOamDmaUpdate - 1)
+      (if (i32.eqz (global.get $dmapos)) (then (call $gp_oamptr (i32.const 1) (i32.sub (global.get $dmalast) (i32.const 1)))))
       (if (i32.lt_u (global.get $dmapos) (i32.const 0xA0))
         (then (i32.store8 (i32.add (i32.const ${OAM}) (global.get $dmapos)) (call $dmabyte (global.get $dmapos))))
         (else (if (i32.eq (global.get $dmapos) (i32.const 0xA0))
-          (then (global.set $dmapos (i32.const 0xFE)) (global.set $dmasrc (i32.const 5))
+          (then (call $gp_oamptr (i32.const 0) (i32.sub (global.get $dmalast) (i32.const 1)))
+                (global.set $dmapos (i32.const 0xFE)) (global.set $dmasrc (i32.const 5))
                 (global.set $dmalast (i32.const -1)) (br $d)))))
       (br $l))))
 
@@ -1184,7 +1206,8 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
     (i32.store (i32.const ${probe + 24}) (local.get $page))
     (call $dmaupd (local.get $cc))
     (if (i32.ne (global.get $dmalast) (i32.const -1))
-      (then (global.set $dmapos (i32.const 0xFE)) (global.set $dmasrc (i32.const 5))))
+      (then (call $gp_oamptr (i32.const 0) (local.get $cc))
+            (global.set $dmapos (i32.const 0xFE)) (global.set $dmasrc (i32.const 5))))
     (global.set $dmalast (local.get $cc))
     (global.set $dmapage (local.get $page))
     (global.set $dmasrc (call $dmasrctype (local.get $page)))
@@ -1194,6 +1217,7 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
   ;; (4 or 3 + cgb, minus ds*3 or ds*2 via $dsm)
   (func $oamok (param $cc i32) (param $near i32) (param $dsm i32) (result i32)
     (local $ly i32) (local $ttn i32) (local $lc i32)
+    (call $m0sync (local.get $cc))
     (if (i32.eqz (i32.and (i32.load8_u (i32.const ${IOREG + 0x40})) (i32.const 0x80))) (then (return (i32.const 1))))
     (local.set $ly (call $lyat (local.get $cc)))
     (if (i32.and (global.get $lcdinactive) (i32.eqz (local.get $ly)))
@@ -1212,6 +1236,7 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
   ;; LCD::cgbpAccessible at $cc
   (func $palok (param $cc i32) (result i32)
     (local $ly i32) (local $lc i32)
+    (call $m0sync (local.get $cc))
     (if (i32.eqz (i32.and (i32.load8_u (i32.const ${IOREG + 0x40})) (i32.const 0x80))) (then (return (i32.const 1))))
     (local.set $ly (call $lyat (local.get $cc)))
     (if (i32.ge_u (local.get $ly) (i32.const 144)) (then (return (i32.const 1))))
@@ -1264,6 +1289,7 @@ ${setbankWat}
         ;; the sound up to the switch at the old speed (Memory::stop:
         ;; psg_.generateSamples(cc + 4 + 4 * ds) after the opcode fetch)
         (call $apu_gen (i32.add (global.get $abscc) (i32.add (i32.const 8) (i32.shl (local.get $old) (i32.const 2)))))
+        (call $gp_speed (i32.add (global.get $abscc) (i32.add (i32.const 8) (i32.shl (local.get $old) (i32.const 2)))))
         (global.set $speed (i32.xor (global.get $speed) (i32.const 1)))
         (global.set $key1prep (i32.const 0))
         ;; gambatte PPU::speedChange keeps the VIDEO position: the rest of
@@ -1365,6 +1391,82 @@ ${setbankWat}
     (global.set $cyc (i32.sub (global.get $cyc) (i32.const 4)))
     (global.set $hdma_on (i32.const 0))
     (i32.store8 (i32.const ${IOREG + 0x55}) (i32.const 0xFF)))
+  ;; ---- MBC3 real-time clock, gambatte's Rtc (mem/rtc.cpp) ----
+  ;; The clock is the host's frame clock (WCInfo time, ms since the cart
+  ;; started) as time() reads Date.now(): trunc((baseMs + ms) / 1000), with
+  ;; RTC_CLOCK.baseMs. gambatte's baseTime starts at time(0) when the ROM
+  ;; loads, so what a game sees is elapsed seconds either way; verification
+  ;; pins the reference's Date.now() to the same frames (setPinnedClock).
+  (global $rtc_base (mut i64) (i64.const ${RTC_CLOCK.baseMs / 1000}))
+  (global $rtc_halt (mut i64) (i64.const 0))
+  (global $rtc_last (mut i32) (i32.const 0))
+  (func $rtc_now (result i64)
+    (i64.trunc_f64_u (f64.div (f64.add (f64.const ${RTC_CLOCK.baseMs}) (f64.load (i32.const ${time}))) (f64.const 1000))))
+  (func $rtc_reg (param $i i32) (result i32) (i32.load8_u (i32.add (i32.const ${probe + 3840}) (local.get $i))))
+  (func $rtc_set (param $i i32) (param $v i32) (i32.store8 (i32.add (i32.const ${probe + 3840}) (local.get $i)) (local.get $v)))
+  ;; the clock's current time: frozen at haltTime while DH bit 6 is set
+  (func $rtc_unix (result i64)
+    (if (result i64) (i32.and (call $rtc_reg (i32.const 4)) (i32.const 0x40)) (then (global.get $rtc_halt)) (else (call $rtc_now))))
+  ;; Rtc::doLatch
+  (func $rtc_dolatch
+    (local $t i64)
+    (local.set $t (i64.sub (call $rtc_unix) (global.get $rtc_base)))
+    (block $d (loop $l
+      (br_if $d (i64.le_u (local.get $t) (i64.const ${0x1FF * 86400})))
+      (global.set $rtc_base (i64.add (global.get $rtc_base) (i64.const ${0x1FF * 86400})))
+      (local.set $t (i64.sub (local.get $t) (i64.const ${0x1FF * 86400})))
+      (call $rtc_set (i32.const 4) (i32.or (call $rtc_reg (i32.const 4)) (i32.const 0x80)))
+      (br $l)))
+    (call $rtc_set (i32.const 3) (i32.wrap_i64 (i64.and (i64.div_u (local.get $t) (i64.const 86400)) (i64.const 0xFF))))
+    (call $rtc_set (i32.const 4) (i32.or (i32.and (call $rtc_reg (i32.const 4)) (i32.const 0xFE))
+      (i32.wrap_i64 (i64.shr_u (i64.and (i64.div_u (local.get $t) (i64.const 86400)) (i64.const 0x100)) (i64.const 8)))))
+    (local.set $t (i64.rem_u (local.get $t) (i64.const 86400)))
+    (call $rtc_set (i32.const 2) (i32.wrap_i64 (i64.div_u (local.get $t) (i64.const 3600))))
+    (local.set $t (i64.rem_u (local.get $t) (i64.const 3600)))
+    (call $rtc_set (i32.const 1) (i32.wrap_i64 (i64.div_u (local.get $t) (i64.const 60))))
+    (call $rtc_set (i32.const 0) (i32.wrap_i64 (i64.rem_u (local.get $t) (i64.const 60)))))
+  ;; Rtc::latch ($6000-$7FFF)
+  (func $rtc_latch (param $v i32)
+    (if (i32.and (i32.eqz (global.get $rtc_last)) (i32.eq (local.get $v) (i32.const 1))) (then (call $rtc_dolatch)))
+    (global.set $rtc_last (i32.ne (local.get $v) (i32.const 0))))
+  ;; Rtc::write: setS/setM/setH/setDl/setDh move baseTime, then the register
+  (func $rtc_write (param $v i32)
+    (local $u i64) (local $o i64)
+    (local.set $u (call $rtc_unix))
+    (block $done
+      (if (i32.eqz (global.get $rtc_sel))
+        (then
+          (global.set $rtc_base (i64.add (global.get $rtc_base) (i64.rem_u (i64.sub (local.get $u) (global.get $rtc_base)) (i64.const 60))))
+          (global.set $rtc_base (i64.sub (global.get $rtc_base) (i64.extend_i32_u (local.get $v))))
+          (br $done)))
+      (if (i32.eq (global.get $rtc_sel) (i32.const 1))
+        (then
+          (local.set $o (i64.rem_u (i64.div_u (i64.sub (local.get $u) (global.get $rtc_base)) (i64.const 60)) (i64.const 60)))
+          (global.set $rtc_base (i64.sub (i64.add (global.get $rtc_base) (i64.mul (local.get $o) (i64.const 60)))
+                                         (i64.mul (i64.extend_i32_u (local.get $v)) (i64.const 60))))
+          (br $done)))
+      (if (i32.eq (global.get $rtc_sel) (i32.const 2))
+        (then
+          (local.set $o (i64.rem_u (i64.div_u (i64.sub (local.get $u) (global.get $rtc_base)) (i64.const 3600)) (i64.const 24)))
+          (global.set $rtc_base (i64.sub (i64.add (global.get $rtc_base) (i64.mul (local.get $o) (i64.const 3600)))
+                                         (i64.mul (i64.extend_i32_u (local.get $v)) (i64.const 3600))))
+          (br $done)))
+      (if (i32.eq (global.get $rtc_sel) (i32.const 3))
+        (then
+          (local.set $o (i64.and (i64.div_u (i64.sub (local.get $u) (global.get $rtc_base)) (i64.const 86400)) (i64.const 0xFF)))
+          (global.set $rtc_base (i64.sub (i64.add (global.get $rtc_base) (i64.mul (local.get $o) (i64.const 86400)))
+                                         (i64.mul (i64.extend_i32_u (local.get $v)) (i64.const 86400))))
+          (br $done)))
+      ;; DH: the day high bit, and the halt bit starting/stopping the clock
+      (local.set $o (i64.and (i64.div_u (i64.sub (local.get $u) (global.get $rtc_base)) (i64.const 86400)) (i64.const 0x100)))
+      (global.set $rtc_base (i64.add (global.get $rtc_base) (i64.mul (local.get $o) (i64.const 86400))))
+      (global.set $rtc_base (i64.sub (global.get $rtc_base) (i64.mul (i64.extend_i32_u (i32.shl (i32.and (local.get $v) (i32.const 1)) (i32.const 8))) (i64.const 86400))))
+      (if (i32.and (i32.xor (call $rtc_reg (i32.const 4)) (local.get $v)) (i32.const 0x40))
+        (then
+          (if (i32.and (local.get $v) (i32.const 0x40))
+            (then (global.set $rtc_halt (call $rtc_now)))
+            (else (global.set $rtc_base (i64.add (global.get $rtc_base) (i64.sub (call $rtc_now) (global.get $rtc_halt)))))))))
+    (call $rtc_set (global.get $rtc_sel) (local.get $v)))
 `;
 }
 

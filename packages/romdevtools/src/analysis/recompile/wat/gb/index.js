@@ -19,7 +19,7 @@
 //   stopAt     {pc, fromFrame?}: trap the first time that pc is dispatched on
 //              or after host frame `fromFrame` (debug), default off
 //   traceEntries  ALSO record a whole-frame instruction ring (a power of two,
-//              1024 to 65536; a frame runs ~5,000-15,000 instructions, so
+//              1024 to 1048576; a frame runs ~5,000-15,000 instructions, so
 //              16384 or more holds one) of {pc, rombank, sp, hl, bc, de, af}
 //              for findDiverge level:'instruction', which otherwise sees the
 //              default ring's last 2,048. Off by default: the default module
@@ -37,6 +37,7 @@ import { emitGbWat, gbLayout, gbOriginAndPages, gbBigRing, PROBE, PROBE_FIELDS }
 import { mbcKind, VRAM0, VRAM1, WRAMX, BGPAL, OBJPAL } from "./hw-gbc.js";
 import { OAM, IOREG, WRAM, FB_W, FB_H } from "./hw-gb.js";
 import { discoverBlocks, blocksFromJson, opcodeCatalogue } from "./blocks.js";
+import { RTC_CLOCK } from "../../recompile-section.js";
 import { APU_LAYOUT, APU_SAMPLE_RATE, APU_MUTE_CHANNELS } from "./apu.js";
 
 export const platforms = ["gb", "gbc"];
@@ -82,7 +83,7 @@ export function describe(rom, opts = {}) {
   if (headerRamBytes === null) warnings.push(`unknown RAM size code $${ramSizeCode.toString(16)}.`);
   else if (ramSizeCode >= 4) warnings.push(`header RAM size code $${ramSizeCode.toString(16)}: 16 banks of 8KB (128KB), as gambatte allocates them.`);
   if (headerRomBytes !== null && (rom.length & (rom.length - 1))) warnings.push(`the ROM is ${rom.length} bytes, not a power of two: gambatte pads it with $FF to the next power of two and masks the bank number; the cart does not (bank numbers past the file read other memory).`);
-  if (cartType === 0x0F || cartType === 0x10) warnings.push("MBC3 real-time clock: the RTC registers are a stub that holds what was written (a stopped clock).");
+  if (cartType === 0x0F || cartType === 0x10) warnings.push("MBC3 real-time clock: it counts the host's frame clock (the wasmcart time value) from power-on, as gambatte counts time(0) from load; verification pins gambatte's clock to the same frames.");
   if ([0x1C, 0x1D, 0x1E].includes(cartType)) warnings.push("MBC5 rumble motor is not modelled.");
   if (cartType === 0x08 || cartType === 0x09) warnings.push("cart type ROM+RAM: gambatte runs it as MBC2 ($2100 writes select a ROM bank), and so does the recompile.");
   if (hsum !== rom[0x14D]) warnings.push(`header checksum $${rom[0x14D].toString(16)} does not match the computed $${hsum.toString(16)}.`);
@@ -142,6 +143,8 @@ export function describe(rom, opts = {}) {
       line: { offset: PROBE + F.line, size: 4 },
     },
     framebuffer: { offset: L.FB, width: FB_W, height: FB_H, format: "xrgb8888" },
+    // an MBC3 clock reads the host frame clock; the verifier pins gambatte's time(0) to it
+    ...([0x0F, 0x10].includes(rom[0x147]) ? { clock: { ...RTC_CLOCK } } : {}),
     // gambatte-libretro's audio_batch_cb stream: blipper at 32768 Hz, s16 stereo (apu.js)
     audio: { sampleRate: APU_SAMPLE_RATE, channels: 2, format: "s16", reference: "output",
       muteMask: { offset: APU_LAYOUT.mute, size: 1, channels: APU_MUTE_CHANNELS } },

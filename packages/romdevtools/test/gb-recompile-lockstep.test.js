@@ -32,8 +32,9 @@ const skip = !core ? "gambatte not staged" : !objdumpAvailable("gbz80") ? "gbz80
  * @param {Record<number, number[]>} [extra]
  * @param {number} [cartType]
  */
-function makeRom(main, extra = {}, cartType = 0, { size = 0x8000, ramCode = 0 } = {}) {
+function makeRom(main, extra = {}, cartType = 0, { size = 0x8000, ramCode = 0, cgb = false } = {}) {
   const r = new Uint8Array(size);
+  if (cgb) r[0x143] = 0x80;
   // every 16KB bank starts with its own number (what a bank read returns)
   for (let b = 1; b < size / 0x4000; b++) r[b * 0x4000] = b;
   r.set([0x00, 0xC3, 0x50, 0x01], 0x100);
@@ -69,7 +70,7 @@ async function lockstep(rom, frames) {
     writeFileSync(romPath, rom);
     await ref.loadCore(core.jsPath, core.wasmPath, { hwRender: core.hwRender, noderawfs: core.noderawfs });
     ref.setTrace({ capacity: 1 << 20, registers: true });
-    await ref.loadMedia({ platform: "gb", path: romPath });
+    await ref.loadMedia({ platform: rom[0x143] & 0x80 ? "gbc" : "gb", path: romPath });
     const cq = [], rq = [];
     let cgot = 0, rgot = 0, n = 0, off0 = null;
     const pull = () => {
@@ -141,6 +142,18 @@ test("RAM copies of call/rst/jr/ret run from RAM: return addresses are RAM addre
   ];
   const rom = makeRom(main, { 0x38: [0xC9], 0x200: routine, 0x210: [0x3C], 0x220: [0x3C], 0x230: [0xC9] });
   await assertLockstep(rom, 20);
+});
+
+test("a RAM byte whose provenance is the last byte of the ROM window runs as RAM code, not as that byte's arm", { skip, timeout: 120000 }, async () => {
+  // ld a,($7FFF) reads the $00 at the end of bank 1, so the $00 written to
+  // $C100 carries it as provenance; its arm would fall through to the start
+  // of the window ($4000), not to $C101
+  const main = [0xF3, 0x31, 0xF0, 0xDF,
+    0xFA, 0xFF, 0x7F, 0xEA, 0x00, 0xC1,  // ld a,($7FFF) ; ld ($C100),a
+    0x3E, 0xC9, 0xEA, 0x01, 0xC1,        // ld a,$C9 ; ld ($C101),a
+    // loop: call $C100 ; inc b ; jr loop
+    0xCD, 0x00, 0xC1, 0x04, 0x18, 0xFA];
+  await assertLockstep(makeRom(main, {}, 0x01, { size: 0x10000 }), 10);
 });
 
 test("RAM code the game writes: add sp,e / ld hl,sp+e and opcodes its ROM never uses run from RAM", { skip, timeout: 120000 }, async () => {
@@ -243,4 +256,76 @@ test("MBC5 with a 64KB-coded RAM: 16 RAM banks, 9-bit ROM bank masked to the ROM
 test("HuC1: RAM mode banking and reads while RAM writes are disabled", { skip, timeout: 120000 }, async () => {
   const w = [[0x2000, 2], [0x4000, 1], [0x6000, 1], [0x0000, 0x0A], [0x4000, 3], [0x0000, 0], [0x6000, 0], [0x2000, 0]];
   await assertLockstep(makeRom(mapperProgram(w), {}, 0xFF, { size: 0x40000, ramCode: 3 }), 10);
+});
+
+// ---- the PPU: STAT mode-0 events and the mode-3 length as gambatte's PPU
+// state machine predicts it (wat/gb/ppu-shadow.js) ----
+
+const HALT_FREE_LOOP = (body) => [...body];
+
+test("the HBlank STAT interrupt fires on line 0 right after the LCD is switched on", { skip, timeout: 120000 }, async () => {
+  // di ; LCDC=0 ; STAT=$08 (mode 0) ; IE=$02 ; IF=0 ; ei ; LCDC=$91 ; inc a forever
+  // handler at $48: inc b ; reti
+  const main = [0xF3, 0xAF, 0xE0, 0x40, 0x3E, 0x08, 0xE0, 0x41, 0x3E, 0x02, 0xE0, 0xFF, 0xAF, 0xE0, 0x0F,
+    0xFB, 0x3E, 0x91, 0xE0, 0x40, 0x3C, 0x18, 0xFD];
+  await assertLockstep(makeRom(main, { 0x48: [0x04, 0xD9] }), 6);
+  await assertLockstep(makeRom(main, { 0x48: [0x04, 0xD9] }, 0, { cgb: true }), 6);
+});
+
+/** STAT sampled into E while `write` (a register store of D) moves the mode-3 end, D counting up. */
+function midLineRom(reg, cgb, extra = []) {
+  const main = [0xF3, 0x31, 0xF0, 0xDF, ...extra,
+    // loop: ldh a,(STAT) ; ld e,a ; ld a,d ; ldh (reg),a ; ldh a,(STAT) ; ld e,a ; inc d ; nop x n ; jr loop
+    0xF0, 0x41, 0x5F, 0x7A, 0xE0, reg, 0xF0, 0x41, 0x5F, 0x14, 0x00, 0x18, 0xF3];
+  return makeRom(main, {}, 0, { cgb });
+}
+
+for (const cgb of [false, true]) {
+  const m = cgb ? "CGB" : "DMG";
+  test(`${m}: SCX written mid-line moves the rest of mode 3 (LCD::scxChange -> mode3CyclesChange)`, { skip, timeout: 180000 }, async () => {
+    await assertLockstep(midLineRom(0x43, cgb), 30);
+  });
+  test(`${m}: WX written mid-line with the window on moves the rest of mode 3`, { skip, timeout: 180000 }, async () => {
+    // LCDC=$F3 (window on, map $9C00), WY=0, OBJ on with sprites on every line
+    const sprites = [];
+    for (let i = 0; i < 10; i++) sprites.push(0x3E, 16 + i * 14, 0xEA, (i * 4) & 0xFF, 0xFE, 0x3E, 8 + i * 13, 0xEA, (i * 4 + 1) & 0xFF, 0xFE);
+    await assertLockstep(midLineRom(0x4B, cgb, [0xAF, 0xE0, 0x40, ...sprites, 0xAF, 0xE0, 0x4A, 0x3E, 0xF3, 0xE0, 0x40]), 30);
+  });
+  test(`${m}: LCDC window/OBJ bits toggled mid-line move the rest of mode 3`, { skip, timeout: 180000 }, async () => {
+    // D cycles through LCDC values with bit 7 set: $80|d (window, OBJ, OBJ size, BG all toggling)
+    const main = [0xF3, 0x31, 0xF0, 0xDF, 0x3E, 0x07, 0xE0, 0x4B, 0xAF, 0xE0, 0x4A,
+      0xF0, 0x41, 0x5F, 0x7A, 0xF6, 0x80, 0xE0, 0x40, 0xF0, 0x41, 0x5F, 0x14, 0x18, 0xF3];
+    await assertLockstep(makeRom(main, {}, 0, { cgb }), 30);
+  });
+  test(`${m}: OAM written and copied by DMA during the frame: the sprite map as gambatte's SpriteMapper reads it`, { skip, timeout: 180000 }, async () => {
+    // loop: OAM[e & $9F] = d (y and x bytes change while the PPU scans),
+    // STAT into E, an OAM DMA from $8000 every 256 passes, LCDC OBJ size toggling
+    const main = [0xF3, 0x31, 0xF0, 0xDF, 0x3E, 0x83, 0xE0, 0x40,
+      0x7B, 0xE6, 0x9F, 0x6F, 0x26, 0xFE, 0x72,   // loop: ld a,e ; and $9F ; ld l,a ; ld h,$FE ; ld (hl),d
+      0xF0, 0x41, 0x5F, 0x14,                     // ldh a,(STAT) ; ld e,a ; inc d
+      0x20, 0x0A,                                 // jr nz,+10 (skip the DMA/LCDC part)
+      0x3E, 0x80, 0xE0, 0x46,                     // ldh (DMA),$80 (VRAM: the CPU keeps the ROM bus)
+      0xF0, 0x40, 0xEE, 0x04, 0xE0, 0x40,         // LCDC ^= 4
+      0x18, 0xE8];                                // jr loop
+    await assertLockstep(makeRom(main, {}, 0, { cgb }), 30);
+  });
+}
+
+test("an IF write on the cycle of a line's LYC event sees it (LCD::update before IF is written)", { skip, timeout: 180000 }, async () => {
+  // STAT=$40 (LYC), IE=0. loop: LYC = LY+1 ; wait C*4 cycles ; IF=0 ; E=IF ; C++
+  const main = [0xF3, 0x3E, 0x40, 0xE0, 0x41, 0xAF, 0xE0, 0xFF,
+    0xF0, 0x44, 0x3C, 0xE0, 0x45,            // loop: ldh a,(LY) ; inc a ; ldh (LYC),a
+    0x41, 0x05, 0x20, 0xFD,                  // ld b,c ; w: dec b ; jr nz,w
+    0xAF, 0xE0, 0x0F, 0xF0, 0x0F, 0x5F,      // xor a ; ldh (IF),a ; ldh a,(IF) ; ld e,a
+    0x0C, 0x18, 0xEE];                       // inc c ; jr loop
+  await assertLockstep(makeRom(main), 30);
+});
+
+test("CGB: the line after a speed switch predicts mode 0 from where the PPU is", { skip, timeout: 180000 }, async () => {
+  // KEY1=1 ; stop ; then STAT into E, switch again every 64 samples
+  const main = [0xF3, 0xAF, 0xE0, 0xFF,
+    0x3E, 0x01, 0xE0, 0x4D, 0x10, 0x00,      // loop: KEY1=1 ; stop
+    0x06, 0x40, 0xF0, 0x41, 0x5F, 0x05, 0x20, 0xFA, // 64 x (ldh a,(STAT) ; ld e,a)
+    0x14, 0x18, 0xF0];                        // inc d ; jr loop
+  await assertLockstep(makeRom(main, {}, 0, { cgb: true }), 30);
 });

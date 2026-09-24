@@ -751,7 +751,7 @@ export class LibretroHost {
         mod._romdev_proxied_fire_context_reset(this.state.proxiedContextResetPtr);
       }
     } else {
-      ok = mod._retro_load_game(infoPtr);
+      ok = this._withClock(() => mod._retro_load_game(infoPtr));
     }
 
     // Free the struct itself. Don't free pathPtr or dataPtr - the core may
@@ -1035,7 +1035,44 @@ export class LibretroHost {
    *     observes (frameCount is incremented after the frame runs).
    *  A hook failure never breaks emulation: it is caught and remembered on
    *  `beforeFrameError`; the callback owner surfaces it. */
+  /**
+   * Pin the wall clock the core reads (Date.now, which emscripten's time()
+   * and clock_gettime call: gambatte's MBC3 RTC, mGBA's GPIO RTC) to a
+   * frame clock, so a verifier can give a recompiled cart the same one:
+   *   baseMs + max(0, runs - startRun) * stepMs
+   * where runs counts retro_run calls since the pin was set (0 while the
+   * game loads), in UTC (localtime = gmtime while the core runs). baseMs
+   * should be a whole second. null restores the host
+   * clock. Set it before loadMedia so the load (gambatte's RTC base time)
+   * sees it too.
+   * @param {{baseMs: number, stepMs: number, startRun?: number|(() => number)}|null} pin
+   */
+  setPinnedClock(pin) {
+    this._clockPin = pin ? { baseMs: pin.baseMs, stepMs: pin.stepMs, startRun: pin.startRun ?? 0, runs: 0 } : null;
+  }
+
+  /** @param {() => any} fn run with Date.now pinned (see setPinnedClock) */
+  _withClock(fn) {
+    const pin = this._clockPin;
+    if (!pin) return fn();
+    const start = typeof pin.startRun === "function" ? pin.startRun() : pin.startRun;
+    const t = pin.baseMs + Math.max(0, pin.runs - start) * pin.stepMs;
+    const real = Date.now;
+    Date.now = () => t;
+    // localtime() is emscripten's JS Date getters in the host's zone; a
+    // pinned clock is UTC so the calendar a core computes (mGBA's RTC date
+    // and hour) does not depend on the machine running the verification
+    const env = globalThis.process?.env;
+    const tz = env?.TZ;
+    if (env) env.TZ = "UTC";
+    try { return fn(); } finally {
+      Date.now = real;
+      if (env) { if (tz === undefined) delete env.TZ; else env.TZ = tz; }
+    }
+  }
+
   _runCore() {
+    if (this._clockPin) this._clockPin.runs++;
     if (this.state.inputOverrides) this.state.inputOverrides.fill(null);
     if (this.beforeFrame) {
       try {
@@ -1044,8 +1081,10 @@ export class LibretroHost {
         this.beforeFrameError = e;
       }
     }
-    if (this._proxied) this.mod._romdev_proxied_run();
-    else this.mod._retro_run();
+    this._withClock(() => {
+      if (this._proxied) this.mod._romdev_proxied_run();
+      else this.mod._retro_run();
+    });
   }
 
   /**
