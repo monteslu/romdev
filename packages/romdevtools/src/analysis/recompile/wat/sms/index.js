@@ -494,11 +494,11 @@ export function noMapperImage(img) {
  * @param {number} nbank
  * @param {boolean} pagesSlot1
  */
-export function computeLayout(narms, romLen, nbank, pagesSlot1, pagesSlot0 = false) {
+export function computeLayout(narms, romLen, nbank, pagesSlot1, pagesSlot0 = false, fbRows = 192) {
   const g = {};
   g.ABI = 0xA0000;
   g.FB = 0xA1000;
-  g.TRACE = g.FB + 0x30000;
+  g.TRACE = g.FB + fbRows * 256 * 4;
   g.AUDIO = g.TRACE + 0x8000;
   g.ROMIMG = align(g.AUDIO + 0xB000);
   // Cart SRAM: two 16KB banks, mapped over $8000-$BFFF or $C000-$FFFF by the
@@ -895,12 +895,14 @@ function abiWat(G, cfg, n, platform) {
   // Legacy model: interrupts sampled only here, at the start of each line.
   // Otherwise $run samples them before every instruction.
   // gpgx: a status read in the overshoot past line 192 already took the flag.
+  // the active height: 192, or on the exact model the 224/240-line modes
+  const VPH = cfg.legacy ? "(i32.const 192)" : "(global.get $vph)";
   const VINT_SET = cfg.legacy ? `      (if (i32.eq (local.get $ln) (i32.const 192))
         (then (global.set $vdp_status
-                (i32.or (global.get $vdp_status) (i32.const 0x80)))))` : `      (if (i32.and (i32.eq (local.get $ln) (i32.const 192)) (i32.eqz (global.get $vintdone)))
+                (i32.or (global.get $vdp_status) (i32.const 0x80)))))` : `      (if (i32.and (i32.eq (local.get $ln) ${VPH}) (i32.eqz (global.get $vintdone)))
         (then (global.set $vdp_status
                 (i32.or (global.get $vdp_status) (i32.const 0x80)))))`;
-  const FRAME_START = cfg.legacy ? "" : "    (global.set $vintdone (i32.const 0))\n";
+  const FRAME_START = cfg.legacy ? "" : "    (call $vdp_frame_start)\n    (global.set $vintdone (i32.const 0))\n";
   // Power-on VDP state gpgx sets without a BIOS: R10 = $FF (line interrupt
   // off), the line counter $FF, and R0-R6 as its boot-ROM stand-in writes.
   const POWER_ON = cfg.legacy ? "" : [
@@ -931,7 +933,7 @@ function abiWat(G, cfg, n, platform) {
     `(then (global.set $linectr (call $vreg (i32.const 10)))\n${pauseNmiWat(platform)}          (call $parse_satb (i32.const -1))))`);
   const RELOAD_AFTER = cfg.legacy ? RELOAD : "";
   const RENDER_LINE = cfg.legacy ? `      (if (i32.lt_u (local.get $ln) (i32.const 192))
-        (then (call $render_line (local.get $ln))))` : `      (if (i32.and (i32.lt_u (local.get $ln) (i32.const 192)) (i32.ne (local.get $ln) (global.get $earlyline)))
+        (then (call $render_line (local.get $ln))))` : `      (if (i32.and (i32.lt_u (local.get $ln) ${VPH}) (i32.ne (local.get $ln) (global.get $earlyline)))
         (then (call $render_line (local.get $ln))))
       (global.set $earlyline (i32.const -1))`;
   const LINE_IRQ = cfg.legacy ? "      (call $irq_check)\n" : "";
@@ -967,13 +969,28 @@ ${CRAMBODY}
         (i32.or (i32.shl (local.get $g) (i32.const 8)) (local.get $b)))))
 
   (func $present
-    (local $i i32)
-    (block $d (loop $l
+    (local $i i32)${!cfg.legacy && platform === "gg" ? " (local $s i32)" : ""}
+${cfg.legacy ? `    (block $d (loop $l
       (br_if $d (i32.ge_u (local.get $i) (i32.const 49152)))
       (i32.store (i32.add (i32.const ${FB}) (i32.mul (local.get $i) (i32.const 4)))
         (call $cram_rgba (i32.load8_u (i32.add (i32.const ${SMSFB}) (local.get $i)))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
-      (br $l))))
+      (br $l))))` : platform === "gg" ? `    ;; the Game Gear shows 144 lines centred in the active height, so the
+    ;; 192 presented rows start (height - 192) / 2 lines down
+    (local.set $s (i32.shl (i32.shr_u (i32.sub (global.get $vph) (i32.const 192)) (i32.const 1)) (i32.const 8)))
+    (block $d (loop $l
+      (br_if $d (i32.ge_u (local.get $i) (i32.const 49152)))
+      (i32.store (i32.add (i32.const ${FB}) (i32.mul (local.get $i) (i32.const 4)))
+        (call $cram_rgba (i32.load8_u (i32.add (i32.const ${SMSFB}) (i32.add (local.get $i) (local.get $s))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l))))` : `    ;; as tall as the active display (192, 224 or 240 lines)
+    (block $d (loop $l
+      (br_if $d (i32.ge_u (local.get $i) (i32.shl (global.get $vph) (i32.const 8))))
+      (i32.store (i32.add (i32.const ${FB}) (i32.mul (local.get $i) (i32.const 4)))
+        (call $cram_rgba (i32.load8_u (i32.add (i32.const ${SMSFB}) (local.get $i)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+    (i32.store (i32.add (i32.const ${ABI}) (i32.const 8)) (global.get $vph)))`}
 
   (func (export "wc_get_info") (result i32)
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 0))  (i32.const 3))
@@ -1054,18 +1071,18 @@ ${cfg.legacy ? "" : `    ;; the second pad (wasmcart pad 1): up/down on $DC bits
 `}${FRAME_START}    (local.set $k (i32.const 0))
     (block $fd (loop $fl
       (br_if $fd (i32.ge_u (local.get $k) (i32.const ${LINES})))
-      (local.set $ln (i32.rem_u (i32.add (local.get $k) (i32.const 192)) (i32.const ${LINES})))
+      (local.set $ln (i32.rem_u (i32.add (local.get $k) ${VPH}) (i32.const ${LINES})))
       (global.set $line (local.get $ln))
 ${RENDER_LINE}
-      (if (i32.le_u (local.get $ln) (i32.const 192))
+      (if (i32.le_u (local.get $ln) ${VPH})
         (then
           (if (i32.eqz (global.get $linectr))
             (then
-              (if (i32.lt_u (local.get $ln) (i32.const 192))
+              (if (i32.lt_u (local.get $ln) ${VPH})
                 (then (global.set $linectr (call $vreg (i32.const 10)))))
 ${HINT_EDGE}              (global.set $hintpend (i32.const 1)))
             (else
-              (if (i32.lt_u (local.get $ln) (i32.const 192))
+              (if (i32.lt_u (local.get $ln) ${VPH})
                 (then (global.set $linectr
                         (i32.sub (global.get $linectr) (i32.const 1)))))))))
 ${LINE_IRQ}${RELOAD_BEFORE}      (global.set $carry (call $run (i32.add (i32.const 228) (global.get $carry))))
@@ -1074,7 +1091,11 @@ ${RELOAD_AFTER}${cfg.legacy ? "" : `      (if (i32.eq (local.get $ln) (i32.const
 `}${VINT_SET}
       (local.set $k (i32.add (local.get $k) (i32.const 1)))
       (br $fl)))
-    (call $present)
+${!cfg.legacy && platform === "sms" ? `    ;; gpgx's libretro retro_run: an R0 change since the previous frame forces
+    ;; a viewport update that drops a pending height change (reg0_prev)
+    (if (i32.ne (call $vreg (i32.const 0)) (global.get $reg0prev)) (then (global.set $vpchanged (i32.const 0))))
+    (global.set $reg0prev (call $vreg (i32.const 0)))
+` : ""}    (call $present)
     (call $psg_render)
     (i32.store (i32.add (i32.const ${PROBE}) (i32.const 0))  (global.get $frames))
     (i32.store (i32.add (i32.const ${PROBE}) (i32.const 4))  (global.get $trapped))
@@ -1609,7 +1630,7 @@ export async function* emitWat(rom, opts = {}) {
     items = items.map((t, i) => [t, i]).sort((a, b) => (a[0][0] - b[0][0]) || (a[1] - b[1])).map((x) => x[0]);
   }
   const n = items.length;
-  const G = computeLayout(n, CODE.length, NBANK, cfg.pagesSlot1, cfg.pagesSlot0);
+  const G = computeLayout(n, CODE.length, NBANK, cfg.pagesSlot1, cfg.pagesSlot0, cfg.legacy ? 192 : 240);
   const { ABI, TRACE, AUDIO, ROMIMG, BTAB } = G;
   // options.traceEntries: the register ring goes above everything else.
   if (cfg.traceEntries) G.BIGRING = G.TOP;
@@ -1626,6 +1647,7 @@ export async function* emitWat(rom, opts = {}) {
     "  (global $im (mut i32) (i32.const 0))",
     "  (global $vscroll (mut i32) (i32.const 0))",
     "  (global $wz (mut i32) (i32.const 0))",
+    "  (global $reg0prev (mut i32) (i32.const 0))",
     "  (global $halted (mut i32) (i32.const 0))",
     "  (global $joy1 (mut i32) (i32.const 0xFF))",
     "  (global $joy2 (mut i32) (i32.const 0xFF))",
@@ -1638,8 +1660,8 @@ export async function* emitWat(rom, opts = {}) {
     "  (global $linectr (mut i32) (i32.const 0))");
   head.push(cfg.legacy ? bankHelpersWat(G, cfg, NBANK) : bankHelpersExactWat(G, cfg, NBANK));
   head.push(flagHelpersWat({ exact: !cfg.legacy }));
-  head.push(hwWat(PLATFORM, { exact: !cfg.legacy, region: cfg.region, pal: cfg.pal, fm: cfg.fm }));
-  head.push(renderWat({ exact: !cfg.legacy }));
+  head.push(hwWat(PLATFORM, { exact: !cfg.legacy, region: cfg.region, pal: cfg.pal, fm: cfg.fm, sms1: cfg.vdp === "315-5124" }));
+  head.push(renderWat({ exact: !cfg.legacy, sms1: cfg.vdp === "315-5124" }));
   head.push(psgWat(AUDIO, ABI, { pal: cfg.pal && !cfg.legacy }));
   head.push(miscWat({ exact: !cfg.legacy }));
   head.push("  (func $trap (global.set $trapped (i32.const 1)) (global.set $trappc (global.get $pc)))");

@@ -242,6 +242,12 @@ function hwExactWat(platform, opts) {
   vdpPart = vdpPart.replace(first, `        (global.set $vdp_latch (i32.and (local.get $v) (i32.const 0xFF)))
         (global.set $vdp_addr (i32.or (i32.and (global.get $vdp_addr) (i32.const 0x3F00)) (global.get $vdp_latch)))
         (global.set $vdp_first (i32.const 0)))`);
+  // register writes go through gpgx's vdp_reg_w / mode checks ($vdp_reg_w)
+  const regStore = `            (i32.store8 (i32.add (i32.const ${VREG})
+                          (i32.and (local.get $v) (i32.const 0x0F)))
+                        (global.get $vdp_latch))))`;
+  if (!vdpPart.includes(regStore)) throw new Error("sms recompile: register store not found in the VDP text");
+  vdpPart = vdpPart.replace(regStore, "            (call $vdp_reg_w (i32.and (local.get $v) (i32.const 0x0F)) (global.get $vdp_latch))))");
   if (gg) {
     // gpgx vdp_z80_data_w_gg: CRAM is written a colour (two bytes) at a time;
     // an even address only latches the byte, the odd one stores the pair.
@@ -252,7 +258,7 @@ function hwExactWat(platform, opts) {
     vdpPart = vdpPart.replace(cramStore, `        (if (i32.and (global.get $vdp_addr) (i32.const 1))
           (then (i32.store16 (i32.add (i32.const ${CRAM}) (i32.and (global.get $vdp_addr) (i32.const 0x3E)))
                   (i32.or (i32.shl (i32.and (local.get $v) (i32.const 0xFF)) (i32.const 8)) (global.get $cram_latch))))
-          (else (global.set $cram_latch (i32.and (local.get $v) (i32.const 0xFF))))))`) + "  (global $cram_latch (mut i32) (i32.const 0))\n";
+          (else (global.set $cram_latch (i32.and (local.get $v) (i32.const 0xFF))))))`) + "  ;; vdp_reset: cached_write = -1, so an odd write before any even one stores $FFFF\n  (global $cram_latch (mut i32) (i32.const -1))\n";
   }
   const japan = opts.region === "japan";
   const LINES = opts.pal ? 313 : 262;
@@ -270,6 +276,45 @@ function hwExactWat(platform, opts) {
   (global $hvlatch (mut i32) (i32.const 0x10000))
   (global $vcmax (mut i32) (i32.const ${opts.pal ? 0xF2 : 0xDA}))
   (global $io6 (mut i32) (i32.const 0))
+  (global $vph (mut i32) (i32.const 192))
+  (global $vpchanged (mut i32) (i32.const 0))
+
+  ;; gpgx vdp_reg_w (Mode 4 part) + vdp_sms_ctrl_w's mode check: R11-R15 are
+  ;; not writable in Mode 4; toggling the display early in an active line
+  ;; (within 860 master cycles) redraws that line; on the 315-5246 / Game
+  ;; Gear VDPs M1/M3 select the 224 / 240 line modes, whose V counter fold
+  ;; applies at once and whose height from the next frame.
+  (func $vdp_reg_w (param $r i32) (param $d i32)
+    (local $prev i32) (local $mode i32) (local $h i32) (local $redraw i32)
+    (if (i32.and (i32.eqz (i32.and (call $vreg (i32.const 1)) (i32.const 4))) (i32.gt_u (local.get $r) (i32.const 10))) (then (return)))
+    (local.set $prev (i32.or (i32.and (call $vreg (i32.const 0)) (i32.const 6)) (i32.and (call $vreg (i32.const 1)) (i32.const 0x18))))
+    (if (i32.eq (local.get $r) (i32.const 1))
+      (then (if (i32.and (i32.and (i32.ne (i32.and (i32.xor (local.get $d) (call $vreg (i32.const 1))) (i32.const 0x40)) (i32.const 0))
+                                  (i32.lt_u (global.get $line) (global.get $vph)))
+                         (i32.and (i32.gt_s (global.get $curbudget) (i32.const 0))
+                                  (i32.le_s (i32.mul (i32.sub (i32.const 228) (global.get $curbudget)) (i32.const 15)) (i32.const 860))))
+              (then (local.set $redraw (i32.const 1))))))
+    (i32.store8 (i32.add (i32.const ${VREG}) (local.get $r)) (local.get $d))
+    (if (local.get $redraw) (then (call $render_line (global.get $line))))
+${opts.sms1 ? "" : `    (local.set $mode (i32.or (i32.and (call $vreg (i32.const 0)) (i32.const 6)) (i32.and (call $vreg (i32.const 1)) (i32.const 0x18))))
+    (if (i32.ne (local.get $mode) (local.get $prev))
+      (then
+        (local.set $h (i32.const 192))
+        (global.set $vcmax (i32.const ${opts.pal ? 0xF2 : 0xDA}))
+        (if (i32.eq (local.get $mode) (i32.const 0x0E))
+          (then (local.set $h (i32.const 240)) (global.set $vcmax (i32.const ${opts.pal ? 0x10A : 0x106}))))
+        (if (i32.eq (local.get $mode) (i32.const 0x16))
+          (then (local.set $h (i32.const 224)) (global.set $vcmax (i32.const ${opts.pal ? 0x102 : 0xEA}))))
+        (if (i32.ne (local.get $h) (global.get $vph)) (then (global.set $vpchanged (i32.const 1))))))`})
+
+  ;; system_frame_sms: a pending height change takes effect as a frame starts
+  (func $vdp_frame_start
+    (local $mode i32)
+    (if (global.get $vpchanged)
+      (then (global.set $vpchanged (i32.const 0))
+            (local.set $mode (i32.or (i32.and (call $vreg (i32.const 0)) (i32.const 6)) (i32.and (call $vreg (i32.const 1)) (i32.const 0x18))))
+            (global.set $vph (select (i32.const 240) (select (i32.const 224) (i32.const 192) (i32.eq (local.get $mode) (i32.const 0x16)))
+                                     (i32.eq (local.get $mode) (i32.const 0x0E)))))))
   (global $fmstatus (mut i32) (i32.const 0))
 
   (func $ioctl_write (param $v i32)
@@ -285,7 +330,7 @@ function hwExactWat(platform, opts) {
     (local.set $vl (global.get $line))
     (if (i32.le_s (global.get $curbudget) (i32.const 0))
       (then
-        (if (i32.eq (global.get $line) (i32.const 192))
+        (if (i32.eq (global.get $line) (global.get $vph))
           (then
             (if (i32.eqz (global.get $vintdone))
               (then (global.set $vintdone (i32.const 1))
@@ -293,7 +338,7 @@ function hwExactWat(platform, opts) {
           (else
             ;; gpgx renders the next line NOW (cycle-accurate collision flags)
             (local.set $nl (i32.rem_u (i32.add (global.get $line) (i32.const 1)) (i32.const ${LINES})))
-            (if (i32.lt_u (local.get $nl) (i32.const 192))
+            (if (i32.lt_u (local.get $nl) (global.get $vph))
               (then
                 (if (i32.ne (global.get $earlyline) (local.get $nl))
                   (then (call $render_line (local.get $nl))
@@ -516,13 +561,33 @@ export function renderWat(opts = {}) {
         (br $spx)))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $sp)))
-    (if (i32.lt_u (local.get $y) (i32.const 191)) (then (call $parse_satb (local.get $y))))
+    (if (i32.lt_u (local.get $y) (i32.sub (global.get $vph) (i32.const 1))) (then (call $parse_satb (local.get $y))))
 `;
   // gpgx latches R9 (vertical scroll) once a frame, after the last line
   // runs; the cart kept reading the live register on every line.
   const vsOld = "(local.set $sy (i32.add (local.get $y) (call $vreg (i32.const 9))))";
   if (!text.includes(vsOld)) throw new Error("sms recompile: vertical scroll read not found in the renderer text");
   text = text.replace(vsOld, "(local.set $sy (i32.add (local.get $y) (global.get $vscroll)))");
+  // gpgx render_bg_m4: the name table row address through its mask (R2
+  // bits 1-3, bit 0 too on the 315-5124 VDP), and the extended heights'
+  // 32-row table at $3700 with a 256-line vertical wrap.
+  const must = (a, b) => { if (!text.includes(a)) throw new Error(`sms recompile: renderer text not found: ${a.slice(0, 60)}`); text = text.replace(a, b); };
+  must(`    (if (i32.ge_u (local.get $sy) (i32.const 224))
+      (then (local.set $sy (i32.sub (local.get $sy) (i32.const 224)))))`, `    (local.set $sy (select (i32.and (local.get $sy) (i32.const 255)) (i32.rem_u (local.get $sy) (i32.const 224))
+                           (i32.gt_u (global.get $vph) (i32.const 192))))
+    (local.set $ntbase (i32.or (i32.xor (i32.const 0xFFFFC3FF) (i32.shl (call $vreg (i32.const 2)) (i32.const 10)))
+                               (i32.const ${opts.sms1 ? 0 : 0x400})))`);
+  must(`      (local.set $ent (i32.add (i32.add (i32.const ${VRAM}) (local.get $ntbase))
+        (i32.mul (i32.add (i32.mul (local.get $row) (i32.const 32)) (local.get $tx)) (i32.const 2))))`,
+  `      (local.set $ent (i32.add (i32.const ${VRAM})
+        (i32.add (select (i32.add (i32.and (i32.const 0x3700) (local.get $ntbase)) (i32.shl (local.get $row) (i32.const 6)))
+                         (i32.and (i32.add (i32.const 0x3800) (i32.shl (local.get $row) (i32.const 6))) (local.get $ntbase))
+                         (i32.gt_u (global.get $vph) (i32.const 192)))
+                 (i32.shl (local.get $tx) (i32.const 1)))))`);
+  // the line probe has 192 slots: taller modes share the last one
+  must(`    (local.set $lp (i32.add (i32.const ${LINEPROBE}) (i32.mul (local.get $y) (i32.const 8))))`,
+    `    (local.set $lp (i32.add (i32.const ${LINEPROBE}) (i32.mul (select (local.get $y) (i32.const 191) (i32.lt_u (local.get $y) (i32.const 192))) (i32.const 8))))`);
+
   const withLocals = text.replace("(local $r0 i32) (local $hs i32) (local $bd i32) (local $o i32)",
     "(local $r0 i32) (local $hs i32) (local $bd i32) (local $o i32) (local $zoom i32)");
   if (withLocals === text) throw new Error("sms recompile: renderer locals not found");
@@ -540,28 +605,30 @@ export function renderWat(opts = {}) {
   (global $sprcol (mut i32) (i32.const 0))
   (global $sprovr (mut i32) (i32.const 0))
   (func $parse_satb (param $line i32)
-    (local $i i32) (local $cnt i32) (local $satb i32) (local $sy i32) (local $py i32) (local $h16 i32) (local $zoom i32)
+    (local $i i32) (local $cnt i32) (local $satb i32) (local $sy i32) (local $py i32) (local $h16 i32) (local $zoom i32) (local $stm i32)
+    ;; st_mask: on the 315-5124 VDP R5 bit 0 masks bit 7 of the x/pattern offset
+    (local.set $stm ${opts.sms1 ? "(i32.or (i32.const 0x7F) (i32.shl (i32.and (call $vreg (i32.const 5)) (i32.const 1)) (i32.const 7)))" : "(i32.const 0xFF)"})
     (local.set $satb (i32.shl (i32.and (call $vreg (i32.const 5)) (i32.const 0x7E)) (i32.const 7)))
     (local.set $h16 (i32.and (call $vreg (i32.const 1)) (i32.const 2)))
     (local.set $zoom (i32.and (call $vreg (i32.const 1)) (i32.const 1)))
     (block $done (loop $l
       (br_if $done (i32.ge_u (local.get $i) (i32.const 64)))
       (local.set $sy (i32.load8_u (i32.add (i32.const ${VRAM}) (i32.add (local.get $satb) (local.get $i)))))
-      (br_if $done (i32.eq (local.get $sy) (i32.const 208)))
-      (if (i32.gt_u (local.get $sy) (i32.const 208)) (then (local.set $sy (i32.sub (local.get $sy) (i32.const 256)))))
+      (br_if $done (i32.and (i32.eq (local.get $sy) (i32.const 208)) (i32.eq (global.get $vph) (i32.const 192))))
+      (if (i32.gt_u (local.get $sy) (i32.add (global.get $vph) (i32.const 16))) (then (local.set $sy (i32.sub (local.get $sy) (i32.const 256)))))
       (local.set $py (i32.shr_s (i32.sub (local.get $line) (local.get $sy)) (local.get $zoom)))
       (if (i32.and (i32.ge_s (local.get $py) (i32.const 0))
                    (i32.lt_s (local.get $py) (select (i32.const 16) (i32.const 8) (local.get $h16))))
         (then
           (if (i32.eq (local.get $cnt) (i32.const 8))
             (then
-              (if (i32.and (i32.ge_s (local.get $line) (i32.const 0)) (i32.lt_s (local.get $line) (i32.const 192)))
+              (if (i32.and (i32.ge_s (local.get $line) (i32.const 0)) (i32.lt_s (local.get $line) (global.get $vph)))
                 (then (global.set $sprovr (i32.const 0x40))))
               (br $done)))
           (i32.store8 (i32.add (i32.const ${OBJLIST + 4}) (i32.shl (local.get $cnt) (i32.const 2)))
-            (i32.load8_u (i32.add (i32.const ${VRAM}) (i32.add (local.get $satb) (i32.add (i32.const 128) (i32.shl (local.get $i) (i32.const 1)))))))
+            (i32.load8_u (i32.add (i32.const ${VRAM}) (i32.add (local.get $satb) (i32.and (i32.add (i32.const 128) (i32.shl (local.get $i) (i32.const 1))) (local.get $stm))))))
           (i32.store8 (i32.add (i32.const ${OBJLIST + 5}) (i32.shl (local.get $cnt) (i32.const 2)))
-            (i32.and (i32.load8_u (i32.add (i32.const ${VRAM}) (i32.add (local.get $satb) (i32.add (i32.const 129) (i32.shl (local.get $i) (i32.const 1))))))
+            (i32.and (i32.load8_u (i32.add (i32.const ${VRAM}) (i32.add (local.get $satb) (i32.and (i32.add (i32.const 129) (i32.shl (local.get $i) (i32.const 1))) (local.get $stm)))))
                      (select (i32.const 0xFE) (i32.const 0xFF) (local.get $h16))))
           (i32.store8 (i32.add (i32.const ${OBJLIST + 6}) (i32.shl (local.get $cnt) (i32.const 2))) (local.get $py))
           (local.set $cnt (i32.add (local.get $cnt) (i32.const 1)))))
