@@ -192,7 +192,9 @@ export function sysWat(L, rom_size, idle_loop, savetype) {
       (call $trigger_irq (local.get $late)) (return))
       (if (global.get $vcb) (then (call $start_hdraw (local.get $late))) (else (call $start_hblank (local.get $late))))
       (return))
+      (call $au_frame_event (local.get $late))
       (call $schedule (i32.const ${EV_FRAME}) (i32.sub (i32.const ${AUDIO_FRAME_CYCLES}) (local.get $late))) (return))
+      (call $au_sample_event (local.get $late))
       (call $schedule (i32.const ${EV_SAMPLE}) (i32.sub (i32.const ${AUDIO_SAMPLE_CYCLES}) (local.get $late))) (return))
       (call $timer_update (i32.const 0) (local.get $late)) (return))
       (call $timer_update (i32.const 1) (local.get $late)) (return))
@@ -1224,9 +1226,11 @@ export function sysWat(L, rom_size, idle_loop, savetype) {
     (if (result i32) (i32.eqz (global.get $aEnable)) (then (i32.const 1))
       (else (i32.eqz (global.get $ch3bank)))))
   (func $wave_read (param $a i32) (result i32)
+    (call $au_wave_run)   ;; audio.js: ch3 plays (rotates the wave RAM) up to now
     (i32.load16_u (i32.add (i32.const ${WAVE}) (i32.add (i32.shl (call $wave_bank) (i32.const 4))
                                                       (i32.sub (local.get $a) (i32.const 0x90))))))
   (func $wave_write32 (param $a i32) (param $v i32)
+    (call $au_wave_run)   ;; audio.js
     (i32.store (i32.add (i32.const ${WAVE}) (i32.add (i32.shl (call $wave_bank) (i32.const 4))
                                                    (i32.sub (local.get $a) (i32.const 0x90)))) (local.get $v)))
 
@@ -1267,6 +1271,7 @@ export function sysWat(L, rom_size, idle_loop, savetype) {
     ;; sound (only the stored masks and the FIFO/DMA plumbing matter here)
     (if (i32.and (i32.ge_u (local.get $a) (i32.const 0x60)) (i32.le_u (local.get $a) (i32.const 0x88)))
       (then
+        (call $au_io_write (local.get $a) (local.get $v))   ;; audio.js: the GBAAudioWrite* calls
         (if (i32.eq (local.get $a) (i32.const 0x60)) (then (local.set $v (i32.and (local.get $v) (i32.const 0x7F)))))
         (if (i32.eq (local.get $a) (i32.const 0x62)) (then (local.set $v (i32.and (local.get $v) (i32.const 0xFFC0)))))
         (if (i32.eq (local.get $a) (i32.const 0x64)) (then (local.set $v (i32.and (local.get $v) (i32.const 0x4000)))))
@@ -1394,6 +1399,7 @@ export function sysWat(L, rom_size, idle_loop, savetype) {
 
   ;; the byte-wide PSG register writes (GBAIOWrite8's sound cases) -> 1 if handled
   (func $io8_psg (param $a i32) (param $v i32) (result i32)
+    (call $au_io_write8 (local.get $a) (local.get $v))   ;; audio.js
     (if (i32.eq (local.get $a) (i32.const 0x62))
       (then (call $io16w (i32.const 0x62) (i32.or (i32.and (call $io16 (i32.const 0x62)) (i32.const 0xFF00)) (i32.and (local.get $v) (i32.const 0xC0)))) (return (i32.const 1))))
     (if (i32.eq (local.get $a) (i32.const 0x63))
@@ -1432,7 +1438,8 @@ export function sysWat(L, rom_size, idle_loop, savetype) {
             (call $io16w (i32.add (local.get $a) (i32.const 2)) (i32.shr_u (local.get $v) (i32.const 16)))
             (return)))
     (if (i32.or (i32.eq (local.get $a) (i32.const 0xA0)) (i32.eq (local.get $a) (i32.const 0xA4)))
-      (then (call $fifo_write (i32.eq (local.get $a) (i32.const 0xA4)))
+      (then (call $au_fifo_write (i32.eq (local.get $a) (i32.const 0xA4)) (local.get $v))   ;; audio.js
+            (call $fifo_write (i32.eq (local.get $a) (i32.const 0xA4)))
             (call $io16w (local.get $a) (local.get $v))
             (call $io16w (i32.add (local.get $a) (i32.const 2)) (i32.shr_u (local.get $v) (i32.const 16)))
             (return)))
@@ -1938,8 +1945,10 @@ export function sysWat(L, rom_size, idle_loop, savetype) {
             (call $dma_recalc_cycles)
             (call $dma_schedule (local.get $src))))))
     (if (i32.and (i32.eqz (local.get $rem)) (i32.ne (local.get $size) (i32.const 0)))
-      (then (local.set $rem (i32.const 4))
+      (then (call $au_fifo_load (local.get $id) (local.get $rd))   ;; audio.js: internalSample
+            (local.set $rem (i32.const 4))
             (local.set $rd (i32.and (i32.add (local.get $rd) (i32.const 1)) (i32.const 7)))))
+    (call $au_fifo_fill (local.get $id) (local.get $rem))   ;; audio.js: the sample slots
     (if (local.get $rem) (then (local.set $rem (i32.sub (local.get $rem) (i32.const 1)))))
     (if (local.get $id)
       (then (global.set $chBRead (local.get $rd)) (global.set $chBRem (local.get $rem)))

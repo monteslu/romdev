@@ -44,6 +44,7 @@ import {
   SAVE_EEPROM512, SAVE_SRAM512,
 } from "./sys.js";
 import * as video from "./video.js";
+import { audioLayout, audioWat, audioData, audioInfoWat, audioSection } from "./audio.js";
 
 export const platforms = ["gba"];
 /** loadMedia platform id of the reference core */
@@ -195,6 +196,10 @@ export function computeLayout(romLen, staticRom, nArm = 0) {
   }
   alloc("ROM", Math.max(romLen, 4), 0x1000);
   L.END = a + romLen;
+  // audio.js's block goes after everything else, so no machine address moves
+  const A = audioLayout(L);
+  L.AUD = A.SINC;
+  L.END = A.END_TRACE;
   L.FB = fb;
   return L;
 }
@@ -239,6 +244,7 @@ function sectionFor(L, romSha1, buttons) {
     },
     vramZero: ["vram"],
     fields,
+    audio: audioSection(audioLayout({ END: L.AUD })),
     // the per-step TRACE ring below, in recompile-section.js's `trace` schema
     // (findDiverge level:'instruction'); r0-r15/cpsr are compared per
     // instruction against mGBA's register columns of the same names
@@ -594,6 +600,13 @@ export async function* emitWat(rom, opts = {}) {
   yield "\n" + interpThumb();
   yield "\n" + interpArm();
   yield "\n" + mainWat();
+  const A = audioLayout({ END: L.AUD });
+  yield "\n" + audioWat(L, A, EV_SAMPLE, { trace: !!opts.audioTrace });
+  for (const [addr, data] of audioData(A)) {
+    yield `\n  (data (i32.const ${addr}) "`;
+    yield* watBytesChunks(data);
+    yield "\")";
+  }
   for (const [addr, data] of dataSegments(L, IMG)) {
     yield `\n  (data (i32.const ${addr}) "`;
     yield* watBytesChunks(data);
@@ -761,6 +774,7 @@ export async function* emitWat(rom, opts = {}) {
     ;; both every frame with no zero check.
     (i32.store (i32.const ${ABI + 28}) (i32.const ${ABI + 0x100}))
     (i32.store (i32.const ${ABI + 40}) (i32.const ${ABI + 0x180}))
+    ${audioInfoWat(audioLayout({ END: L.AUD }), ABI)}
     (i32.const ${ABI}))
 
   (func (export "wc_set_input") (param $m i32))
@@ -797,6 +811,7 @@ export async function* emitWat(rom, opts = {}) {
     ;; GBAAudioReset: PSG frame sequencer and sample events at 0
     (call $schedule (i32.const ${EV_FRAME}) (i32.const 0))
     (call $schedule (i32.const ${EV_SAMPLE}) (i32.const 0))
+    (call $au_reset)
     ;; GBAIOInit
     (i32.store16 (i32.const ${IO}) (i32.const 0x80))
     (i32.store16 (i32.const ${IO + 0x134}) (i32.const 0x8000))
@@ -836,11 +851,13 @@ export async function* emitWat(rom, opts = {}) {
           (br_if $wd (i32.ge_u (local.get $f) (i32.const ${WARMUP_FRAMES})))
           (call $test_keypad_irq)
           (call $run_frame)
+          (call $au_frame_end)
           (local.set $f (i32.add (local.get $f) (i32.const 1)))
           (br $wl)))))
     (global.set $keysActive (local.get $k))
     (call $test_keypad_irq)
     (call $run_frame)
+    (call $au_frame_end)
     (call $checkpoint))
 
   ;; per-frame checkpoint, laid out like the native reference's
