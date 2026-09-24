@@ -262,6 +262,28 @@ index 0b92d7f..04cb996 100644
  			ARMStep(cpu);
  		}
  	}
+diff --git a/src/gba/audio.c b/src/gba/audio.c
+index ac394e9..979f2cc 100644
+--- a/src/gba/audio.c
++++ b/src/gba/audio.c
+@@ -24,6 +24,8 @@ static const int SAMPLE_INTERVAL = GBA_ARM7TDMI_FREQUENCY / 0x4000;
+ 
+ static int _applyBias(struct GBAAudio* audio, int sample);
+ static void _sample(struct mTiming* timing, void* user, uint32_t cyclesLate);
++/* romdev: defined in platform/libretro/libretro.c (the gba_audio_raw region) */
++void romdev_gba_audio_tap(const int16_t* samples, int frames, unsigned rate);
+ 
+ void GBAAudioInit(struct GBAAudio* audio, size_t samples) {
+ 	audio->sampleEvent.context = audio;
+@@ -406,6 +408,8 @@ static void _sample(struct mTiming* timing, void* user, uint32_t cyclesLate) {
+ 
+ 	mCoreSyncLockAudio(audio->p->sync);
+ 	mAudioBufferWrite(&audio->psg.buffer, (int16_t*) audio->currentSamples, samples);
++	/* romdev: copy the native (pre-resample) samples to the gba_audio_raw stream */
++	romdev_gba_audio_tap((const int16_t*) audio->currentSamples, samples, GBA_ARM7TDMI_FREQUENCY / audio->sampleInterval);
+ 	if (audio->p->stream) {
+ 		if (audio->p->stream->postAudioFrame) {
+ 			int i;
 diff --git a/src/gba/memory.c b/src/gba/memory.c
 index 27e289c..029aaee 100644
 --- a/src/gba/memory.c
@@ -351,10 +373,20 @@ index 27e289c..029aaee 100644
  	int wait = 0;
  	uint16_t oldValue;
 diff --git a/src/platform/libretro/libretro.c b/src/platform/libretro/libretro.c
-index 4b05a42..3f53118 100644
+index 4b05a42..85af9c7 100644
 --- a/src/platform/libretro/libretro.c
 +++ b/src/platform/libretro/libretro.c
-@@ -2269,6 +2269,81 @@ unsigned retro_get_region(void) {
+@@ -1547,7 +1547,9 @@ int16_t cycleturbo(bool a, bool b, bool l, bool r) {
+ 	return buttons;
+ }
+ 
++void romdev_gba_audio_begin_frame(void);
+ void retro_run(void) {
++	romdev_gba_audio_begin_frame();
+ 	if (deferredSetup) {
+ 		_doDeferredSetup();
+ 	}
+@@ -2269,6 +2271,101 @@ unsigned retro_get_region(void) {
  	return RETRO_REGION_NTSC; // TODO: This isn't strictly true
  }
  
@@ -400,6 +432,26 @@ index 4b05a42..3f53118 100644
 +#define ROMDEV_REGION_GBA_OAM      0x183u /* 0x400 bytes: oam.raw[512] - 128 sprites x 8 bytes */
 +#define ROMDEV_REGION_GBA_IWRAM    0x184u /* 0x8000 bytes: IWRAM @ 0x03000000 - the C stack + libtonc/maxmod .bss live here */
 +#define ROMDEV_REGION_GBA_TIMING   0x185u /* 4 u32: master clock, cpu->cycles, cpu->nextEvent, timing.masterCycles */
++#define ROMDEV_REGION_GBA_AUDIO_RAW 0x186u /* RDAS stream: GBAAudioSample's stereo s16 at 16777216/sampleInterval Hz, before the libretro resampler */
++
++#include "romdev_audio_stream.h"
++#define ROMDEV_GBA_AUDIO_CAP 8192u
++static uint8_t romdev_gba_audio_raw[ROMDEV_AS_BYTES(ROMDEV_GBA_AUDIO_CAP, 2, 2)];
++void romdev_gba_audio_begin_frame(void) {
++	if (romdev_as_hdr(romdev_gba_audio_raw)->magic != ROMDEV_AS_MAGIC)
++		romdev_as_init(romdev_gba_audio_raw, 2, ROMDEV_AS_S16, 32768, ROMDEV_GBA_AUDIO_CAP);
++	romdev_as_begin_frame(romdev_gba_audio_raw);
++}
++static void romdev_gba_audio_begin_frame_if_unset(void) {
++	if (romdev_as_hdr(romdev_gba_audio_raw)->magic != ROMDEV_AS_MAGIC)
++		romdev_as_init(romdev_gba_audio_raw, 2, ROMDEV_AS_S16, 32768, ROMDEV_GBA_AUDIO_CAP);
++}
++void romdev_gba_audio_tap(const int16_t* samples, int frames, unsigned rate) {
++	if (romdev_as_hdr(romdev_gba_audio_raw)->magic != ROMDEV_AS_MAGIC)
++		romdev_as_init(romdev_gba_audio_raw, 2, ROMDEV_AS_S16, rate, ROMDEV_GBA_AUDIO_CAP);
++	romdev_as_set_rate(romdev_gba_audio_raw, rate);
++	romdev_as_push(romdev_gba_audio_raw, samples, (uint32_t) frames, 2);
++}
 +
 +#ifdef M_CORE_GBA
 +/* Assemble the ARM7 register snapshot. Layout (all little-endian u32):
@@ -436,7 +488,7 @@ index 4b05a42..3f53118 100644
  void retro_set_controller_port_device(unsigned port, unsigned device) {
  	UNUSED(port);
  	UNUSED(device);
-@@ -2327,6 +2402,26 @@ void* retro_get_memory_data(unsigned id) {
+@@ -2327,6 +2424,32 @@ void* retro_get_memory_data(unsigned id) {
  			break;
  		}
  		break;
@@ -459,11 +511,17 @@ index 4b05a42..3f53118 100644
 +	case ROMDEV_REGION_GBA_TIMING:
 +		if (core->platform(core) == mPLATFORM_GBA) return romdev_gba_fill_timing();
 +		break;
++	case ROMDEV_REGION_GBA_AUDIO_RAW:
++		if (core->platform(core) == mPLATFORM_GBA) {
++			romdev_gba_audio_begin_frame_if_unset();
++			return romdev_gba_audio_raw;
++		}
++		break;
 +#endif
  	default:
  		break;
  	}
-@@ -2370,9 +2465,41 @@ size_t retro_get_memory_size(unsigned id) {
+@@ -2370,9 +2493,43 @@ size_t retro_get_memory_size(unsigned id) {
  		}
  		break;
  	case RETRO_MEMORY_SYSTEM_RAM:
@@ -501,6 +559,8 @@ index 4b05a42..3f53118 100644
 +		return GBA_SIZE_IWRAM;     /* 0x8000 - IWRAM @ 0x03000000 */
 +	case ROMDEV_REGION_GBA_TIMING:
 +		return sizeof(romdev_gba_timing); /* 16 bytes */
++	case ROMDEV_REGION_GBA_AUDIO_RAW:
++		return sizeof(romdev_gba_audio_raw);
 +#endif
  	default:
  		break;

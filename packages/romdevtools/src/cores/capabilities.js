@@ -136,7 +136,7 @@ export const CAPABILITIES = {
     cpuFamily: "arm", decompileQuality: "excellent",
     cpus: { main: "arm", secondary: [] },
     audioChips: ["gba"],
-    memoryRegions: [...GENERIC_REGIONS, "gba_cpu_regs", "gba_io_regs", "gba_palette", "gba_oam", "gba_iwram", "gba_timing"],
+    memoryRegions: [...GENERIC_REGIONS, "gba_cpu_regs", "gba_io_regs", "gba_palette", "gba_oam", "gba_iwram", "gba_timing", "gba_audio_raw"],
     // GBA: the patched mgba regions give MORE than BUILDING.md's old "shallow"
     // prose implied - inspectSprites/Palette + renderingContext + cpuState +
     // audioDebug are all wired (per the tool Supported lists). cart extract/wrap

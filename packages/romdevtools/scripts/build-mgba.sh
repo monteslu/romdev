@@ -27,7 +27,7 @@ OUT="$PROJECT_DIR/src/cores/wasm"
 fetch_pinned cores.mgba "$DIR"
 
 cd "$DIR"
-git checkout -- src/gba/memory.c src/platform/libretro/libretro.c src/arm/arm.c 2>/dev/null || true
+git checkout -- src/gba/memory.c src/gba/audio.c src/platform/libretro/libretro.c src/arm/arm.c 2>/dev/null || true
 if ! git apply --recount --check "$PATCH_FILE" 2>/dev/null; then
   if grep -q "romdev_watchpoint_set" src/platform/libretro/libretro.c; then
     echo "Patch already present (sentinel romdev_watchpoint_set found); skipping apply."
@@ -48,6 +48,8 @@ cp "$RDBG_SRC/romdev_debug.h" "$DIR/src/arm/romdev_debug.h"
 cp "$RDBG_SRC/romdev_debug.h" "$DIR/src/gba/romdev_debug.h"
 cp "$RDBG_SRC/romdev_debug.h" "$DIR/src/platform/libretro/romdev_debug.h"
 cp "$RDBG_SRC/romdev_debug.c" "$DIR/romdev_debug.c"
+# The gba_audio_raw stream region (libretro.c) uses the shared RDAS helper.
+cp "$RDBG_SRC/romdev_audio_stream.h" "$DIR/src/platform/libretro/romdev_audio_stream.h"
 
 emmake make -f Makefile.libretro platform=emscripten clean >/dev/null 2>&1 || true
 find . -maxdepth 2 -name "*_libretro_emscripten.a" -delete 2>/dev/null || true

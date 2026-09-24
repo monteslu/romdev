@@ -24,7 +24,7 @@
  *   | "a78_cpu_regs"
  *   | "c64_color_ram" | "c64_vic_regs" | "c64_sid_regs"
  *   | "c64_cia1_regs" | "c64_cia2_regs" | "c64_cpu_regs"
- *   | "gba_cpu_regs" | "gba_io_regs" | "gba_palette" | "gba_oam" | "gba_iwram"
+ *   | "gba_cpu_regs" | "gba_io_regs" | "gba_palette" | "gba_oam" | "gba_iwram" | "gba_audio_raw"
  *   | "sync32_cpu_regs" | "sync32_palette" | "sync32_canvas"
  *   | "lynx_cpu_regs" | "lynx_hw_regs"
  *   | "pce_vdc_vram" | "pce_vdc_satb" | "pce_vdc_regs"
@@ -159,6 +159,10 @@ export const RetroMemory = {
   /** 16 bytes, 4 u32 LE: [0] master clock (mTimingCurrentTime), [1] cpu->cycles,
    *  [2] cpu->nextEvent, [3] timing.masterCycles. Assembled on read. */
   GBA_TIMING:         0x185,
+  /** RDAS per-frame audio stream (src/host/audio-verify.js AUDIO_STREAM): the
+   *  stereo s16 samples GBAAudioSample produced this retro_run, at the native
+   *  16777216/sampleInterval Hz, BEFORE libretro's resampler to 65536 Hz. */
+  GBA_AUDIO_RAW:      0x186,
   // Lynx (handy): CPU snapshot + the $FC00-$FDFF Suzy/Mikey HW register window
   // (sprite regs, LCD control, audio $FD20-$FD3F, palette $FDA0-$FDBF).
   LYNX_CPU_REGS:      0x190,
@@ -331,6 +335,7 @@ export const MemoryRegionToRetro = {
   gba_oam:       RetroMemory.GBA_OAM,
   gba_iwram:     RetroMemory.GBA_IWRAM,
   gba_timing:    RetroMemory.GBA_TIMING,
+  gba_audio_raw: RetroMemory.GBA_AUDIO_RAW,
   sync32_cpu_regs: RetroMemory.SYNC32_CPU_REGS,
   sync32_palette:  RetroMemory.SYNC32_PALETTE,
   sync32_canvas:   RetroMemory.SYNC32_CANVAS,

@@ -75,7 +75,7 @@ export function readRefStream(host, region) {
   if (!format) throw new Error(`audio stream '${region}' has an unknown format code ${u32(h, 12)}`);
   const n = Math.min(count, cap) * channels;
   const bytes = n ? Uint8Array.from(host.readMemory(region, AUDIO_STREAM.header, n * BYTES[format])) : new Uint8Array(0);
-  return { samples: decodeSamples(bytes, format), channels, format, rate, dropped: dropped + Math.max(0, count - cap) };
+  return { samples: decodeSamples(bytes, format), channels, format, rate, dropped: Math.max(dropped, count - cap, 0) };
 }
 
 /**
