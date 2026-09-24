@@ -195,20 +195,6 @@ function globalsWat() {
 /** OAM DMA and the trap recorder. */
 function commonWat() {
   return `
-  (func $oamdma (param $page i32)
-    (local $i i32)
-    (i32.store (i32.const ${PROBE + 20})
-      (i32.add (i32.load (i32.const ${PROBE + 20})) (i32.const 1)))
-    (i32.store (i32.const ${PROBE + 24}) (local.get $page))
-    (local.set $i (i32.const 0))
-    (block $d (loop $l
-      (br_if $d (i32.ge_u (local.get $i) (i32.const 160)))
-      (i32.store8 (i32.add (i32.const ${OAM}) (local.get $i))
-        (call $rd8 (i32.add (i32.shl (local.get $page) (i32.const 8))
-                            (local.get $i))))
-      (local.set $i (i32.add (local.get $i) (i32.const 1)))
-      (br $l))))
-
   (func $trap
     ;; Record the FIRST trap only, with its banking context - a later trap
     ;; overwrites the evidence of what actually went wrong.
@@ -318,6 +304,8 @@ function stepWat(cgb) {
                           ${cgb ? '(i32.const 1)' : '(i32.ne (local.get $wx) (i32.const 166))'}))
       (then (local.set $nwx (local.get $wx)) (local.set $c (i32.add (local.get $c) (i32.const 6)))))
     ${cgb ? '' : '(if (i32.eqz (i32.and (local.get $lcdc) (i32.const 2))) (then (return (local.get $c))))'}
+    ;; an OAM DMA hides every sprite from the PPU (startOamDma)
+    (if (i32.lt_u (global.get $dmapos) (i32.const 0xA0)) (then (return (local.get $c))))
     ;; the line's sprites: up to 10 in OAM order, stable-sorted by X
     (local.set $h (if (result i32) (i32.and (local.get $lcdc) (i32.const 4)) (then (i32.const 16)) (else (i32.const 8))))
     (local.set $i (i32.const 0))
@@ -649,6 +637,7 @@ function stepWat(cgb) {
   (func $statev
     (local $now i32) (local $lyt i32) (local $t i32) (local $k i32) (local $hit i32)
     (local $e i32) (local $ly i32) (local $L i32) (local $cmp i32) (local $next i32)
+    (if (i32.ne (global.get $dmalast) (i32.const -1)) (then (call $dmaupd (global.get $abscc))))
     (if (i32.eqz (i32.and (i32.load8_u (i32.const ${IO + 0x40})) (i32.const 0x80))) (then (return)))
     (block $out (loop $again
       (local.set $now (global.get $abscc))
