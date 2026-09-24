@@ -24,7 +24,7 @@
 import { readFileSync } from "node:fs";
 import { cost, costExact } from "./cycles.js";
 import { lower, flagHelpersWat, m1Count, rIncWat } from "./z80.js";
-import { hwWat, renderWat, psgWat, miscWat, cramBody, startBody, ggLutBytes, hcounterBytes, VRAM, CRAM, VREG, GGLUT, PROBE, PCWATCH, SMSFB, LINEPROBE, HCTAB } from "./hw.js";
+import { hwWat, renderWat, psgWat, miscWat, cramBody, startBody, ggLutBytes, hcounterBytes, hcolBytes, VRAM, CRAM, VREG, GGLUT, PROBE, PCWATCH, SMSFB, LINEPROBE, HCTAB, HCOLTAB } from "./hw.js";
 import { watBytes } from "../cart-abi.js";
 import { emitFlatWat } from "./flat.js";
 
@@ -567,8 +567,13 @@ function abiWat(G, cfg, n, platform) {
   const RELOAD = `      (if (i32.eq (local.get $ln) (i32.const 261))
         (then (global.set $linectr (call $vreg (i32.const 10)))))
 `;
-  const RELOAD_BEFORE = cfg.legacy ? "" : RELOAD;
+  // ...and parses the sprites for line 0 then too (parse_satb(-1)).
+  const RELOAD_BEFORE = cfg.legacy ? "" : RELOAD.replace("(then (global.set $linectr (call $vreg (i32.const 10)))))", "(then (global.set $linectr (call $vreg (i32.const 10))) (call $parse_satb (i32.const -1))))");
   const RELOAD_AFTER = cfg.legacy ? RELOAD : "";
+  const RENDER_LINE = cfg.legacy ? `      (if (i32.lt_u (local.get $ln) (i32.const 192))
+        (then (call $render_line (local.get $ln))))` : `      (if (i32.and (i32.lt_u (local.get $ln) (i32.const 192)) (i32.ne (local.get $ln) (global.get $earlyline)))
+        (then (call $render_line (local.get $ln))))
+      (global.set $earlyline (i32.const -1))`;
   const LINE_IRQ = cfg.legacy ? "      (call $irq_check)\n" : "";
   const REGPROBE = cfg.probeRegs === false ? "" : REG_PROBE.map((g, i) =>
     `    (i32.store8 (i32.const ${PROBE + REG_PROBE_BASE + i}) (global.get $${g}))\n`).join("") +
@@ -678,8 +683,7 @@ ${FRAME_START}    (local.set $k (i32.const 0))
       (br_if $fd (i32.ge_u (local.get $k) (i32.const 262)))
       (local.set $ln (i32.rem_u (i32.add (local.get $k) (i32.const 192)) (i32.const 262)))
       (global.set $line (local.get $ln))
-      (if (i32.lt_u (local.get $ln) (i32.const 192))
-        (then (call $render_line (local.get $ln))))
+${RENDER_LINE}
       (if (i32.le_u (local.get $ln) (i32.const 192))
         (then
           (if (i32.eqz (global.get $linectr))
@@ -1199,7 +1203,7 @@ export async function* emitWat(rom, opts = {}) {
   head.push(bankHelpersWat(G, cfg, NBANK));
   head.push(flagHelpersWat({ exact: !cfg.legacy }));
   head.push(hwWat(PLATFORM, { exact: !cfg.legacy, region: cfg.region }));
-  head.push(renderWat());
+  head.push(renderWat({ exact: !cfg.legacy }));
   head.push(psgWat(AUDIO, ABI));
   head.push(miscWat({ exact: !cfg.legacy }));
   head.push("  (func $trap (global.set $trapped (i32.const 1)) (global.set $trappc (global.get $pc)))");
@@ -1318,7 +1322,7 @@ export async function* emitWat(rom, opts = {}) {
   items.forEach(([, a, bk], i) => { btab[i * 4] = a & 0xFF; btab[i * 4 + 1] = (a >> 8) & 0xFF; btab[i * 4 + 2] = bk & 0xFF; });
   yield `  (data (i32.const ${BTAB}) "${watBytes(btab)}")\n`;
   yield `  (data (i32.const ${GGLUT}) "${watBytes(ggLutBytes())}")\n`;
-  if (!cfg.legacy) yield `  (data (i32.const ${HCTAB}) "${watBytes(hcounterBytes())}")\n`;
+  if (!cfg.legacy) yield `  (data (i32.const ${HCTAB}) "${watBytes(hcounterBytes())}")\n  (data (i32.const ${HCOLTAB}) "${watBytes(hcolBytes())}")\n`;
   yield `  (data (i32.const ${ROMIMG}) "${watBytes(IMG)}")\n`;
   yield ")";
 

@@ -12,7 +12,9 @@
 
 import { readFileSync } from "node:fs";
 
-const HC_TABLE = JSON.parse(readFileSync(new URL("./gpgx-hcounter.json", import.meta.url), "utf8")).hc;
+const HC_DATA = JSON.parse(readFileSync(new URL("./gpgx-hcounter.json", import.meta.url), "utf8"));
+const HC_TABLE = HC_DATA.hc;
+const HCOL_TABLE = HC_DATA.hcol;
 
 // Linear memory map (beyond the 64KB Z80 address space at 0):
 //   0x10000  VRAM 16KB           0x14000  CRAM (32 SMS / 64 GG bytes)
@@ -200,6 +202,10 @@ ${GGPORT}
 export const IOREGS = 0x14AC0;
 /** H counter by T-state within the line (gpgx cycle2hc32 sampled every 15 master cycles). */
 export const HCTAB = 0x14B00;
+/** The same table as gpgx's collision check samples it (+545 master cycles). */
+export const HCOLTAB = 0x14C00;
+/** Sprites parsed for the NEXT line (gpgx parse_satb): u8 count, then 8 x {x, attr, row, 0}. */
+export const OBJLIST = 0x14D00;
 
 /**
  * VDP + I/O modelled the way genesis_plus_gx models them (the banked
@@ -226,16 +232,42 @@ function hwExactWat(platform, opts) {
   (global $memctl (mut i32) (i32.const 0xA8))
   (global $ioctl (mut i32) (i32.const 0xFF))
 
+  (global $earlyline (mut i32) (i32.const -1))
   (func $vdp_status_read (result i32)
-    (local $s i32)
-    (if (i32.and (i32.eq (global.get $line) (i32.const 192))
-                 (i32.and (i32.le_s (global.get $curbudget) (i32.const 0)) (i32.eqz (global.get $vintdone))))
-      (then (global.set $vintdone (i32.const 1))
-            (global.set $vdp_status (i32.or (global.get $vdp_status) (i32.const 0x80)))))
+    (local $s i32) (local $vl i32) (local $nl i32) (local $t i32) (local $hc i32)
+    (local.set $vl (global.get $line))
+    (if (i32.le_s (global.get $curbudget) (i32.const 0))
+      (then
+        (if (i32.eq (global.get $line) (i32.const 192))
+          (then
+            (if (i32.eqz (global.get $vintdone))
+              (then (global.set $vintdone (i32.const 1))
+                    (global.set $vdp_status (i32.or (global.get $vdp_status) (i32.const 0x80))))))
+          (else
+            ;; gpgx renders the next line NOW (cycle-accurate collision flags)
+            (local.set $nl (i32.rem_u (i32.add (global.get $line) (i32.const 1)) (i32.const 262)))
+            (if (i32.lt_u (local.get $nl) (i32.const 192))
+              (then
+                (if (i32.ne (global.get $earlyline) (local.get $nl))
+                  (then (call $render_line (local.get $nl))
+                        (global.set $earlyline (local.get $nl))))
+                (local.set $vl (local.get $nl))))))))
     (local.set $s (global.get $vdp_status))
     (if (i32.and (call $vreg (i32.const 0)) (i32.const 0x04))
       (then (local.set $s (i32.or (local.get $s) (i32.const 0x1F)))))
     (global.set $vdp_status (i32.and (global.get $vdp_status) (i32.const 0x1F)))
+    ;; A collision on the current line is visible only once the beam is past it.
+    (if (i32.and (i32.ne (i32.and (local.get $s) (i32.const 0x20)) (i32.const 0))
+                 (i32.eq (local.get $vl) (i32.shr_u (global.get $sprcol) (i32.const 8))))
+      (then
+        (local.set $t (select (i32.sub (i32.const 228) (global.get $curbudget))
+                              (i32.sub (i32.const 0) (global.get $curbudget))
+                              (i32.gt_s (global.get $curbudget) (i32.const 0))))
+        (local.set $hc (i32.load8_u (i32.add (i32.const ${HCOLTAB}) (i32.rem_u (local.get $t) (i32.const 228)))))
+        (if (i32.or (i32.lt_u (local.get $hc) (i32.and (global.get $sprcol) (i32.const 0xFF)))
+                    (i32.gt_u (local.get $hc) (i32.const 0xF3)))
+          (then (global.set $vdp_status (i32.or (global.get $vdp_status) (i32.const 0x20)))
+                (local.set $s (i32.and (local.get $s) (i32.const 0xDF)))))))
     (global.set $hintpend (i32.const 0))
     (global.set $vdp_first (i32.const 1))
     (local.get $s))
@@ -339,6 +371,11 @@ export function hcounterBytes() {
   return Uint8Array.from(HC_TABLE);
 }
 
+/** @returns {Uint8Array} the collision-check H counter table (228 bytes) */
+export function hcolBytes() {
+  return Uint8Array.from(HCOL_TABLE);
+}
+
 /**
  * Mode 4 scanline renderer into the index buffer at SMSFB: background with
  * H/V scroll (vertical wraps at 224, R0 bit 6/7 scroll locks), priority
@@ -347,7 +384,111 @@ export function hcounterBytes() {
  * (R0 bit 5) in the backdrop colour. Bit 7 of an index marks a priority BG
  * pixel and bit 6 a sprite-claimed one while the line is built.
  */
-export function renderWat() {
+export function renderWat(opts = {}) {
+  const text = renderLegacyWat();
+  if (!opts.exact) return text;
+  // Sprites as genesis_plus_gx's parse_satb_m4 / render_obj_m4 draw them:
+  // Y past 208 wraps to the top, zoom (R1 bit 0) doubles pixels and rows,
+  // a 9th sprite on an active line sets the overflow flag (status bit 6),
+  // and two sprites' opaque pixels meeting set the collision flag (bit 5),
+  // with the x of the first collision kept for the cycle-accurate status
+  // read (spr_col).
+  const start = text.indexOf("    (local.set $i (i32.const 0))\n    (local.set $drawn (i32.const 0))");
+  const endMark = "      (br $sp)))\n";
+  const end = text.indexOf(endMark, start) + endMark.length;
+  if (start < 0 || end < endMark.length) throw new Error("sms recompile: sprite section not found in the renderer text");
+  const sprites = `    (global.set $vdp_status (i32.or (global.get $vdp_status) (global.get $sprovr)))
+    (global.set $sprovr (i32.const 0))
+    (local.set $zoom (i32.and (call $vreg (i32.const 1)) (i32.const 1)))
+    (local.set $i (i32.const 0))
+    (block $spdone (loop $sp
+      (br_if $spdone (i32.ge_u (local.get $i) (i32.load8_u (i32.const ${OBJLIST}))))
+      (local.set $sxx (i32.sub (i32.load8_u (i32.add (i32.const ${OBJLIST + 4}) (i32.shl (local.get $i) (i32.const 2))))
+                               (i32.and (call $vreg (i32.const 0)) (i32.const 8))))
+      (local.set $stile (i32.load8_u (i32.add (i32.const ${OBJLIST + 5}) (i32.shl (local.get $i) (i32.const 2)))))
+      (local.set $py (i32.load8_u (i32.add (i32.const ${OBJLIST + 6}) (i32.shl (local.get $i) (i32.const 2)))))
+      (if (i32.and (call $vreg (i32.const 6)) (i32.const 4))
+        (then (local.set $stile (i32.add (local.get $stile) (i32.const 256)))))
+      (if (i32.ge_u (local.get $py) (i32.const 8))
+        (then (local.set $stile (i32.add (local.get $stile) (i32.const 1)))
+              (local.set $py (i32.sub (local.get $py) (i32.const 8)))))
+      (local.set $px (i32.const 0))
+      (block $sdone (loop $spx
+        (br_if $sdone (i32.ge_u (local.get $px) (i32.shl (i32.const 8) (local.get $zoom))))
+        (local.set $x (i32.add (local.get $sxx) (local.get $px)))
+        (if (i32.and (i32.ge_s (local.get $x) (i32.const 0)) (i32.lt_s (local.get $x) (i32.const 256)))
+          (then
+            (local.set $c (call $tile_pixel (local.get $stile) (i32.shr_u (local.get $px) (local.get $zoom)) (local.get $py)))
+            (local.set $o (i32.load8_u (i32.add (local.get $fbrow) (local.get $x))))
+            (if (i32.ne (local.get $c) (i32.const 0))
+              (then
+                (if (i32.and (local.get $o) (i32.const 0x40))
+                  (then
+                    (if (i32.eqz (i32.and (global.get $vdp_status) (i32.const 0x20)))
+                      (then (global.set $vdp_status (i32.or (global.get $vdp_status) (i32.const 0x20)))
+                            (global.set $sprcol (i32.or (i32.shl (local.get $y) (i32.const 8))
+                              (i32.shr_u (i32.add (local.get $x) (i32.const 13)) (i32.const 1)))))))
+                  (else
+                    (if (i32.and (local.get $o) (i32.const 0x80))
+                      (then (i32.store8 (i32.add (local.get $fbrow) (local.get $x))
+                                        (i32.or (local.get $o) (i32.const 0x40))))
+                      (else (i32.store8 (i32.add (local.get $fbrow) (local.get $x))
+                                        (i32.or (local.get $c) (i32.const 0x50)))))))))))
+        (local.set $px (i32.add (local.get $px) (i32.const 1)))
+        (br $spx)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $sp)))
+    (if (i32.lt_u (local.get $y) (i32.const 191)) (then (call $parse_satb (local.get $y))))
+`;
+  const withLocals = text.replace("(local $r0 i32) (local $hs i32) (local $bd i32) (local $o i32)",
+    "(local $r0 i32) (local $hs i32) (local $bd i32) (local $o i32) (local $zoom i32)");
+  if (withLocals === text) throw new Error("sms recompile: renderer locals not found");
+  const s2 = withLocals.indexOf("    (local.set $i (i32.const 0))\n    (local.set $drawn (i32.const 0))");
+  const e2 = withLocals.indexOf(endMark, s2) + endMark.length;
+  const blankOld = "          (br $bkl)))\n        (return)))";
+  const body = withLocals.slice(0, s2) + sprites + withLocals.slice(e2);
+  if (!body.includes(blankOld)) throw new Error("sms recompile: blank-display path not found in the renderer text");
+  const withBlank = body.replace(blankOld, `          (br $bkl)))
+        (global.set $vdp_status (i32.or (global.get $vdp_status) (global.get $sprovr)))
+        (global.set $sprovr (i32.const 0))
+        (call $parse_satb (local.get $y))
+        (return)))`);
+  return `
+  (global $sprcol (mut i32) (i32.const 0))
+  (global $sprovr (mut i32) (i32.const 0))
+  (func $parse_satb (param $line i32)
+    (local $i i32) (local $cnt i32) (local $satb i32) (local $sy i32) (local $py i32) (local $h16 i32) (local $zoom i32)
+    (local.set $satb (i32.shl (i32.and (call $vreg (i32.const 5)) (i32.const 0x7E)) (i32.const 7)))
+    (local.set $h16 (i32.and (call $vreg (i32.const 1)) (i32.const 2)))
+    (local.set $zoom (i32.and (call $vreg (i32.const 1)) (i32.const 1)))
+    (block $done (loop $l
+      (br_if $done (i32.ge_u (local.get $i) (i32.const 64)))
+      (local.set $sy (i32.load8_u (i32.add (i32.const ${VRAM}) (i32.add (local.get $satb) (local.get $i)))))
+      (br_if $done (i32.eq (local.get $sy) (i32.const 208)))
+      (if (i32.gt_u (local.get $sy) (i32.const 208)) (then (local.set $sy (i32.sub (local.get $sy) (i32.const 256)))))
+      (local.set $py (i32.shr_s (i32.sub (local.get $line) (local.get $sy)) (local.get $zoom)))
+      (if (i32.and (i32.ge_s (local.get $py) (i32.const 0))
+                   (i32.lt_s (local.get $py) (select (i32.const 16) (i32.const 8) (local.get $h16))))
+        (then
+          (if (i32.eq (local.get $cnt) (i32.const 8))
+            (then
+              (if (i32.and (i32.ge_s (local.get $line) (i32.const 0)) (i32.lt_s (local.get $line) (i32.const 192)))
+                (then (global.set $sprovr (i32.const 0x40))))
+              (br $done)))
+          (i32.store8 (i32.add (i32.const ${OBJLIST + 4}) (i32.shl (local.get $cnt) (i32.const 2)))
+            (i32.load8_u (i32.add (i32.const ${VRAM}) (i32.add (local.get $satb) (i32.add (i32.const 128) (i32.shl (local.get $i) (i32.const 1)))))))
+          (i32.store8 (i32.add (i32.const ${OBJLIST + 5}) (i32.shl (local.get $cnt) (i32.const 2)))
+            (i32.and (i32.load8_u (i32.add (i32.const ${VRAM}) (i32.add (local.get $satb) (i32.add (i32.const 129) (i32.shl (local.get $i) (i32.const 1))))))
+                     (select (i32.const 0xFE) (i32.const 0xFF) (local.get $h16))))
+          (i32.store8 (i32.add (i32.const ${OBJLIST + 6}) (i32.shl (local.get $cnt) (i32.const 2))) (local.get $py))
+          (local.set $cnt (i32.add (local.get $cnt) (i32.const 1)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+    (i32.store8 (i32.const ${OBJLIST}) (local.get $cnt)))
+` + withBlank;
+}
+
+function renderLegacyWat() {
   return `
   (func $tile_pixel (param $tile i32) (param $px i32) (param $py i32) (result i32)
     (local $base i32) (local $b i32) (local $sh i32) (local $c i32)

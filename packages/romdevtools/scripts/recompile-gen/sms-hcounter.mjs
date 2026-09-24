@@ -24,6 +24,9 @@ const body = src.slice(src.indexOf("{", start) + 1, src.indexOf("};", start));
 const vals = body.replace(/\/\*[\s\S]*?\*\//g, "").split(",").map((t) => t.trim()).filter(Boolean).map((t) => parseInt(t, 16));
 if (vals.length !== 3420 || vals.some((v) => !(v >= 0 && v <= 255))) throw new Error(`expected 3420 byte entries, got ${vals.length}`);
 const hc = Array.from({ length: 228 }, (_, t) => vals[t * 15]);
+// The sprite-collision check in gpgx's status read samples the table at
+// (cycles + SMS_CYCLE_OFFSET + 15) % 3420, SMS_CYCLE_OFFSET = 530.
+const hcol = Array.from({ length: 228 }, (_, t) => vals[(t * 15 + 530 + 15) % 3420]);
 const out = outArg || path.join(path.dirname(fileURLToPath(import.meta.url)), "../../src/analysis/recompile/wat/sms/gpgx-hcounter.json");
-writeFileSync(out, JSON.stringify({ source: "genesis_plus_gx core/hvc.h cycle2hc32, every 15 master cycles", entries: 228, hc }) + "\n");
+writeFileSync(out, JSON.stringify({ source: "genesis_plus_gx core/hvc.h cycle2hc32, every 15 master cycles", entries: 228, hc, hcol }) + "\n");
 console.log(`wrote ${out}`);
