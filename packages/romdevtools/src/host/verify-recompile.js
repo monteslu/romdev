@@ -293,9 +293,9 @@ export function compareRegions(cartHost, refHost, regions) {
       const { cart, ref } = readRegionPair(cartHost, refHost, spec);
       let differ = 0, first = -1;
       for (let i = 0; i < cart.length; i++) if (cart[i] !== ref[i]) { differ++; if (first < 0) first = i; }
-      out[name] = { bytes: cart.length, differ, ...(first >= 0 ? { firstDiff: { offset: first, cart: cart[first], ref: ref[first] } } : {}) };
+      out[name] = { bytes: cart.length, differ, ...(first >= 0 ? { firstDiff: { offset: first, cart: cart[first], ref: ref[first] } } : {}), ...(spec.compare === false ? { diagnostic: true } : {}) };
     } catch (e) {
-      out[name] = { error: e.message };
+      out[name] = { error: e.message, ...(spec.compare === false ? { diagnostic: true } : {}) };
     }
   }
   return out;
@@ -661,40 +661,59 @@ export async function verifyRecompile(a) {
     }
   }
   if (controls.includes("wrongInput")) {
-    const alt = a.wrongInput != null ? parseInputSchedule(a.wrongInput) : wrongInputSchedule(schedule, last);
-    if (!alt.length) ctl.wrongInput = { skipped: "no input schedule: this run does not exercise input, so there is nothing to perturb (pass `input`, or `wrongInput` explicitly)" };
-    else {
+    // Variants tried in order until one fails: the caller's schedule if given;
+    // otherwise WITHHOLD ALL INPUT (the strongest perturbation: a game that
+    // waits on its title for Start cannot reach the same picture), then a
+    // perturbed schedule (Start/Select kept, play presses replaced). If none
+    // fails, that is reported, never passed silently.
+    const variants = a.wrongInput != null
+      ? [{ kind: "caller", schedule: parseInputSchedule(a.wrongInput) }]
+      : schedule.length ? [{ kind: "no-input", schedule: [] }, { kind: "perturbed", schedule: wrongInputSchedule(schedule, last) }] : [];
+    if (!variants.length) ctl.wrongInput = { skipped: "no input schedule: this run does not exercise input, so there is nothing to perturb (pass `input`, or `wrongInput` explicitly)" };
+    const tried = [];
+    for (const v of variants) {
       const h = await a.openCart();
       try {
-        const d = new ScheduleDriver(h, shiftSchedule(alt, off), nameMap);
+        const d = new ScheduleDriver(h, shiftSchedule(v.schedule, off), nameMap);
         await d.to(last + off);
         const pic = snap(h.screenshotRgba());
-        ctl.wrongInput = { refFrame: last, cartFrame: last + off, presses: alt.length, ...scorePictures(pic, lastRef, origin, lastPrev) };
-        ctl.wrongInput.failed = controlFailed(ctl.wrongInput, bar);
-        if (a.outputDir) ctl.wrongInput.png = writeDiffPng(path.join(a.outputDir, `${tag}_control_wronginput_ref${last}.png`), pic, lastRef, origin);
+        const c = { variant: v.kind, refFrame: last, cartFrame: last + off, presses: v.schedule.length, ...scorePictures(pic, lastRef, origin, lastPrev) };
+        c.failed = controlFailed(c, bar);
+        tried.push({ variant: v.kind, failed: c.failed, contentPct: c.contentPct, movingPct: c.movingPct });
+        if (c.failed || v === variants[variants.length - 1]) {
+          if (a.outputDir) c.png = writeDiffPng(path.join(a.outputDir, `${tag}_control_wronginput_ref${last}.png`), pic, lastRef, origin);
+          ctl.wrongInput = { ...c, ...(tried.length > 1 ? { tried } : {}) };
+          if (!c.failed) ctl.wrongInput.couldNotFail = `no input variant changed the picture at reference frame ${last} (tried: ${tried.map((t) => t.variant).join(", ")}). Input may not matter at this frame (an attract loop, a cutscene): score a frame where the pressed input shows, pass wrongInput explicitly, or drop the control with controls:[...] if you can defend it.`;
+          break;
+        }
       } finally { disposeHost(h); }
     }
   }
 
   // ── verdict ──
   const reasons = [];
-  const scoredRows = rows.filter((r) => r.status === "OK" && r.contentTotal >= bar.minContentPx);
-  if (!scoredRows.length) reasons.push(`no scored frame has >= ${bar.minContentPx} content pixels in the reference: nothing here is evidence (pick later frames with real pictures)`);
+  // Most specific failure first: a trapped cart explains everything after it.
+  if (trapped) reasons.push(`the cart TRAPPED (probe.trapped=${trapped.probe.trapped}${trapped.probe.trappc != null ? `, trappc=0x${Number(trapped.probe.trappc).toString(16)}` : ""}) by ref frame ${trapped.refFrame}`);
   for (const r of rows) {
-    // Too little in the reference picture to be evidence either way: reported
-    // (evidence:false), never counted as a pass OR a failure.
-    r.evidence = r.status !== "INCONCLUSIVE" && (r.status === "BLANK" || r.contentTotal >= bar.minContentPx);
+    // A frame is evidence when the REFERENCE shows enough content; what the
+    // cart drew there (even a blank screen) is then a pass or a failure. A
+    // reference with too little content is reported (evidence:false) and
+    // never counted either way.
+    r.evidence = r.status !== "INCONCLUSIVE" && r.contentTotal >= bar.minContentPx;
     if (!r.evidence) continue;
-    if (!r.pass) reasons.push(`ref frame ${r.refFrame}: ${r.status !== "OK" ? r.status : `content ${r.contentPct}% (${r.contentPx}/${r.contentTotal})${r.movingTotal != null ? `, moving ${r.movingPct}% (${r.movingPx}/${r.movingTotal})` : ""}`} is below the bar`);
+    if (!r.pass) {
+      const regionMiss = Object.entries(r.regions ?? {}).filter(([, v]) => !v.diagnostic && v.differ).map(([n, v]) => `${n} ${v.differ}/${v.bytes}`);
+      reasons.push(`ref frame ${r.refFrame}: pixels do not match - ${r.status === "BLANK" ? "the cart drew a BLANK (one-colour) picture" : `content ${r.contentPct}% (${r.contentPx}/${r.contentTotal})${r.movingTotal != null ? `, moving ${r.movingPct}% (${r.movingPx}/${r.movingTotal})` : ""}`}, below the bar${regionMiss.length ? `; state also differs: ${regionMiss.join(", ")} bytes` : ""}`);
+    }
   }
+  if (!rows.some((r) => r.evidence)) reasons.push(`no scored frame is evidence: every requested reference frame has fewer than ${bar.minContentPx} content pixels (or is one colour). Pick later frames with real pictures.`);
   for (const [n, c] of Object.entries(ctl)) {
     if (c.skipped) continue;
-    if (!c.failed) reasons.push(`control ${n} did NOT fail (content ${c.contentPct}%${c.movingTotal != null ? `, moving ${c.movingPct}%` : ""}): the score cannot tell this wrong picture from the right one`);
+    if (!c.failed) reasons.push(`control ${n} did NOT fail (content ${c.contentPct}%${c.movingTotal != null ? `, moving ${c.movingPct}%` : ""}): ${c.couldNotFail ?? "the score cannot tell this wrong picture from the right one"}`);
   }
-  if (trapped) reasons.push(`the cart trapped (probe.trapped=${trapped.probe.trapped}) by ref frame ${trapped.refFrame}`);
   const stateDiffs = [];
   for (const r of rows) {
-    for (const [n, v] of Object.entries(r.regions ?? {})) if (v.error || v.differ) stateDiffs.push(`ref frame ${r.refFrame}: region ${n} ${v.error ? `unreadable (${v.error})` : `${v.differ}/${v.bytes} bytes differ`}`);
+    for (const [n, v] of Object.entries(r.regions ?? {})) if (!v.diagnostic && (v.error || v.differ)) stateDiffs.push(`ref frame ${r.refFrame}: region ${n} ${v.error ? `unreadable (${v.error})` : `${v.differ}/${v.bytes} bytes differ`}`);
     for (const [n, v] of Object.entries(r.fields ?? {})) if (v.error || v.same === false) stateDiffs.push(`ref frame ${r.refFrame}: field ${n} ${v.error ? `unreadable (${v.error})` : `cart ${v.cart} ref ${v.ref}`}`);
   }
   if (a.requireStateMatch && stateDiffs.length) reasons.push(`state differs: ${stateDiffs.slice(0, 6).join("; ")}${stateDiffs.length > 6 ? ` (+${stateDiffs.length - 6} more)` : ""}`);
@@ -703,7 +722,7 @@ export async function verifyRecompile(a) {
   const table = [
     `| ref frame | cart frame | exact | content (px) | moving (px) |${regionNames.map((n) => ` ${n} |`).join("")} pass |`,
     `|---|---|---|---|---|${regionNames.map(() => "---|").join("")}---|`,
-    ...rows.map((r) => `| ${r.refFrame} | ${r.cartFrame} | ${r.exactPct}% | ${r.contentPct ?? "-"}% (${r.contentPx}/${r.contentTotal}) | ${r.movingTotal == null ? "-" : `${r.movingPct ?? "-"}% (${r.movingPx}/${r.movingTotal})`} |${regionNames.map((n) => ` ${r.regions?.[n]?.error ? "ERR" : `${r.regions?.[n]?.differ}/${r.regions?.[n]?.bytes}`} |`).join("")} ${!r.evidence ? "n/a" : r.pass ? "yes" : "NO"} |`),
+    ...rows.map((r) => `| ${r.refFrame} | ${r.cartFrame} | ${r.exactPct}% | ${r.contentPct ?? "-"}% (${r.contentPx}/${r.contentTotal}) | ${r.movingTotal == null ? "-" : `${r.movingPct ?? "-"}% (${r.movingPx}/${r.movingTotal})`} |${regionNames.map((n) => ` ${r.regions?.[n]?.error ? "ERR" : `${r.regions?.[n]?.differ}/${r.regions?.[n]?.bytes}`}${r.regions?.[n]?.diagnostic ? " (diag)" : ""} |`).join("")} ${!r.evidence ? "n/a" : r.pass ? "yes" : "NO"} |`),
   ];
   const result = {
     op: "verifyRecompile",
@@ -749,7 +768,9 @@ export async function verifyRecompile(a) {
  */
 export async function findRecompileDivergence(a) {
   const layout = a.layout ?? {};
-  const regions = layout.regions ?? {}, fields = layout.fields ?? {};
+  // compare:false regions are diagnostic (e.g. a register page whose
+  // read-side values are computed on access): never a divergence.
+  const regions = Object.fromEntries(Object.entries(layout.regions ?? {}).filter(([, r]) => r.compare !== false)), fields = layout.fields ?? {};
   if (!Object.keys(regions).length && !Object.keys(fields).length) {
     throw new Error("findDiverge (recompile): nothing to compare - the cart has no romdev.recompile section and no `regions`/`fields` were passed");
   }

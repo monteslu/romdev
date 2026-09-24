@@ -32,7 +32,10 @@
 //                 "refOffset": 0,             byte offset into the reference region
 //                 "transform": "lowbyte16",   applied to the REFERENCE bytes before comparing:
 //                                             swap16 | lowbyte16 | highbyte16
-//                 "mask": 63 }                AND-ed into both sides before comparing
+//                 "mask": 63,                 AND-ed into both sides before comparing
+//                 "compare": false }          optional: a DIAGNOSTIC region, read and reported
+//                                             but never a verdict or divergence input (a
+//                                             register page with computed-on-read values)
 //     },
 //     "fields": {                   scalar CPU/machine state, compared per frame by findDiverge
 //       "pc":     { "offset": 32772, "size": 2, "ref": "cpu:pc" },
@@ -239,6 +242,7 @@ export function validateRecompileLayout(layout) {
     if (r.refOffset != null && !isInt(r.refOffset)) throw new Error(`region '${name}'.refOffset must be a non-negative integer`);
     if (r.transform != null && !REGION_TRANSFORMS.includes(r.transform)) throw new Error(`region '${name}'.transform must be one of ${REGION_TRANSFORMS.join(" | ")}`);
     if (r.mask != null && !(Number.isInteger(r.mask) && r.mask >= 0 && r.mask <= 255)) throw new Error(`region '${name}'.mask must be a byte (0-255)`);
+    if (r.compare != null && typeof r.compare !== "boolean") throw new Error(`region '${name}'.compare must be a boolean`);
   }
   out.regions = regions;
   for (const key of ["fields", "probe"]) {

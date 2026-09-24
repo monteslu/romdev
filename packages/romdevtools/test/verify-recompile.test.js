@@ -416,3 +416,40 @@ test("the offset search REFUSES a picture that does not pin a frame, naming the 
     run({ cartFrameOffset: "auto", frames: [40], input: "", controls: [], searchWindow: 6, minSharpness: 101 }),
     /not sharp/);
 });
+
+test("compare:false regions are diagnostic: reported, never in stateIdentical or findDiverge", async () => {
+  const layout = validateRecompileLayout({ ...LAYOUT, regions: { ...LAYOUT.regions, io: { offset: 12, length: 4, ref: "system_ram", refOffset: 8, compare: false } } });
+  const r = await run({ layout, controls: [] });
+  try {
+    assert.equal(r.result.stateIdentical, true);
+    assert.equal(r.result.frames[1].regions.io.diagnostic, true);
+    assert.ok(r.result.frames[1].regions.io.differ > 0, "it does differ; it just is not a gate");
+    assert.match(r.result.table, /\(diag\)/);
+  } finally { dispose(r); }
+  const d = await findRecompileDivergence({ cartHost: await openCartFrom(cartBytes()), refHost: new FakeCore(), refPlatform: "fake", layout, input: INPUTS, maxFrames: 80 });
+  assert.equal(d.diverged, false);
+});
+
+test("a broken cart's reasons name the actual failure, not a missing-evidence message", async () => {
+  const r = await run({ controls: [] }, { cart: cartBytes({ still: true }) });
+  try {
+    assert.equal(r.result.verdict, "NOT VERIFIED");
+    assert.match(r.result.reasons[0], /pixels do not match/);
+    assert.ok(!r.result.reasons.some((x) => /no scored frame/.test(x)));
+  } finally { dispose(r); }
+});
+
+test("wrong-input control: withholding all input is tried first; a control no variant can fail says so", async () => {
+  const r = await run({ controls: ["wrongInput"] });
+  try {
+    assert.equal(r.result.controls.wrongInput.variant, "no-input");
+    assert.equal(r.result.controls.wrongInput.failed, true);
+  } finally { dispose(r); }
+  // A "wrong" schedule that differs only by a button this machine ignores.
+  const r2 = await run({ controls: ["wrongInput"], wrongInput: `${INPUTS},5:up:3` });
+  try {
+    assert.equal(r2.result.controls.wrongInput.failed, false);
+    assert.match(r2.result.controls.wrongInput.couldNotFail, /no input variant changed the picture/);
+    assert.equal(r2.result.verdict, "NOT VERIFIED");
+  } finally { dispose(r2); }
+});
