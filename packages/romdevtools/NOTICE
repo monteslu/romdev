@@ -100,3 +100,19 @@ Bundled data  (cheat database - used by gameCheats / applyCheat / makeCheat)
   built game and does not affect the license of games you make. Source:
   https://github.com/libretro/libretro-database (cht/). Rebuild the index from a
   local .cht tree with packages/romdev/scripts/build-cheat-index.mjs.
+
+
+Bundled data  (reference-core-derived recompiler data)
+------------------------------------------------------
+  src/analysis/recompile/wat/genesis/gpgx-derived.json.gz holds the parsed
+  ASTs of genesis_plus_gx's Musashi 68000 opcode handlers and MAME z80.c
+  handlers plus gpgx's cycle/HV tables, generated from the pinned, patched
+  gpgx tree by scripts/recompile-gen/genesis_gpgx.py (the file records the
+  upstream commit, the patch and a sha256 of every source file it read), and
+  src/analysis/recompile/wat/genesis/runtime.js is a port of gpgx's VDP,
+  memory map and frame loop. Both are under the Genesis Plus GX license
+  (NON-COMMERCIAL, see above; z80.c additionally carries Juergen
+  Buchmueller's non-commercial notice). Unlike an emulator core, this code
+  IS copied into the output: a wasmcart built by
+  disasm({target:'recompile', emit:'wasmcart', platform:'genesis'}) contains
+  code transpiled from gpgx and may not be sold or used commercially.
