@@ -855,7 +855,13 @@ export function sysWat(L, rom_size, idle_loop, savetype) {
         (br $done))
         (i32.store16 (i32.add (i32.const ${OAM}) (i32.and (local.get $a) (i32.const 0x3FE))) (local.get $v))
         (br $done))
-        (br $done))   ;; ROM0..ROM2: no GPIO/matrix/AGBPrint on these carts
+        ;; ROM0: the GPIO port (gpio.js; a no-op without a GPIO device)
+        (if (i32.eq (local.get $r) (i32.const 8))
+          (then
+            (local.set $o (i32.and (local.get $a) (i32.const 0xFFFFFE)))
+            (if (i32.or (i32.eq (local.get $o) (i32.const 0xC4)) (i32.or (i32.eq (local.get $o) (i32.const 0xC6)) (i32.eq (local.get $o) (i32.const 0xC8))))
+              (then (call $gpio_write (local.get $o) (local.get $v))))))
+        (br $done))   ;; no matrix/AGBPrint on these carts
         ;; ROM2_EX: EEPROM
         (if (i32.eq (global.get $saveType) (i32.const ${SAVE_AUTODETECT}))
           (then (call $save_init (i32.const ${SAVE_EEPROM512}))))

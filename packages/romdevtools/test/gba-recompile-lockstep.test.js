@@ -56,6 +56,12 @@ async function lockstep(rom, frames) {
     const romPath = path.join(dir, "t.gba");
     writeFileSync(romPath, rom);
     await ref.loadCore(core.jsPath, core.wasmPath, { hwRender: core.hwRender, noderawfs: core.noderawfs });
+    // a clock cart: pin mGBA's clock as the verifier does, and give the cart
+    // the wasmcart host's fixed-step clock (render m sees (m - 1) * stepMs)
+    if (lay.clock) ref.setPinnedClock({ baseMs: lay.clock.baseMs, stepMs: lay.clock.stepMs, startRun: () => ref.status.settleFramesUsed ?? Infinity });
+    const timePtr = dv().getUint32(x.wc_get_info() + 40, true);
+    let renders = 0;
+    const render = () => { if (lay.clock) dv().setFloat64(timePtr, renders * lay.clock.stepMs, true); renders++; x.wc_render(); };
     // mGBA registers its register filler with the game: arm the trace
     // after the load, before the settle frames
     await ref.loadMedia({ platform: "gba", path: romPath, beforeSettle: () => ref.setTrace({ capacity: 1 << 21, registers: true }) });
@@ -92,9 +98,9 @@ async function lockstep(rom, frames) {
       }
       return null;
     };
-    x.wc_render();
+    render();
     let bad = pull();
-    for (let f = 0; f < frames && !bad; f++) { ref.stepFrames(1); x.wc_render(); bad = pull(); }
+    for (let f = 0; f < frames && !bad; f++) { ref.stepFrames(1); render(); bad = pull(); }
     // the picture: the cart's framebuffer against mGBA's, exact RGB
     const fb = lay.framebuffer, rs = ref.screenshotRgba(), d = dv();
     let px = 0;
@@ -102,7 +108,8 @@ async function lockstep(rom, frames) {
       const i = (y * rs.width + xx) * 4;
       if ((d.getUint32(fb.offset + (y * fb.width + xx) * 4, true) & 0xffffff) !== ((rs.rgba[i] << 16) | (rs.rgba[i + 1] << 8) | rs.rgba[i + 2])) px++;
     }
-    return { bad, n, px };
+    const iw = lay.regions.iwram.offset;
+    return { bad, n, px, iwram: [d.getUint32(iw, true), d.getUint32(iw + 4, true)] };
   } finally {
     ref.dispose?.();
     rmSync(dir, { recursive: true, force: true });
@@ -142,11 +149,110 @@ test("ARM code in IWRAM runs what the pipeline fetched: stores to the next two i
 });
 
 async function assertLockstep(rom, frames) {
-  const { bad, n, px } = await lockstep(rom, frames);
+  const r = await lockstep(rom, frames);
+  const { bad, n, px } = r;
   assert.equal(bad, null, bad ? `diverged at instruction ${bad.at} (${bad.why}): cart ${bad.cart.join(" ")} vs mGBA ${bad.ref.join(" ")}` : "");
   assert.ok(n > 1000, `compared ${n} instructions`);
   assert.equal(px, 0, `${px} pixels differ from mGBA's picture`);
+  return r;
 }
+
+// ---- the cartridge GPIO port and its RTC (mGBA gpio.c)
+
+const A = {
+  mov: (rd, imm) => 0xE3A00000 | (rd << 12) | imm,
+  orr: (rd, rn, imm) => 0xE3800000 | (rn << 16) | (rd << 12) | imm,
+  and: (rd, rn, imm) => 0xE2000000 | (rn << 16) | (rd << 12) | imm,
+  add: (rd, rn, imm) => 0xE2800000 | (rn << 16) | (rd << 12) | imm,
+  subs: (rd, rn, imm) => 0xE2500000 | (rn << 16) | (rd << 12) | imm,
+  strh: (rd, rn, off = 0) => 0xE1C000B0 | (rn << 16) | (rd << 12) | ((off >> 4) << 8) | (off & 15),
+  ldrh: (rd, rn, off = 0) => 0xE1D000B0 | (rn << 16) | (rd << 12) | ((off >> 4) << 8) | (off & 15),
+  str: (rd, rn, off = 0) => 0xE5800000 | (rn << 16) | (rd << 12) | off,
+  lsl: (rd, rm, sh) => 0xE1A00000 | (rd << 12) | (sh << 7) | rm,
+  lsr: (rd, rm, sh) => 0xE1A00020 | (rd << 12) | (sh << 7) | rm,
+  orrLsr: (rd, rn, rm, sh) => 0xE1800020 | (rn << 16) | (rd << 12) | (sh << 7) | rm,
+};
+
+/**
+ * Bit-bang the S-3511A through the GPIO port at $080000C4 in a loop. Each
+ * of `cmds` is a transfer: CS low then high, the command byte LSB first
+ * (and `data`, a written byte) with SIO driven, then 8 * `bytes` bits clocked in with SIO as an input,
+ * the first bit ending up highest in r6:r5. The last reading transfer's
+ * r5/r6 are stored to $03000000. Code at $100 (the GPIO registers overlay
+ * ROM $C4-$C9).
+ * @param {{cmd: number, data?: number, bytes: number}[]} cmds
+ */
+function rtcReader(cmds) {
+  const w = [];
+  const at = () => 0x100 + 4 * w.length;
+  // (at() is read when b() runs: push a branch on its own)
+  const b = (cond, to) => ((cond << 28) | 0x0A000000 | (((to - at() - 8) >> 2) & 0xFFFFFF)) >>> 0;
+  w.push(0xE3A04302, A.add(4, 4, 0xC4));               // r4 = $080000C4
+  w.push(0xE3A09403);                                  // r9 = $03000000
+  w.push(A.mov(0, 1), A.strh(0, 4, 4));                // control: readable
+  const loop = at();
+  for (const { cmd, data, bytes } of cmds) {
+    w.push(A.mov(0, 7), A.strh(0, 4, 2));              // direction: SCK, SIO, CS out
+    w.push(A.mov(0, 1), A.strh(0, 4));                 // CS low
+    w.push(A.mov(0, 5), A.strh(0, 4));                 // CS high
+    for (const byte of [cmd, ...(data != null ? [data] : [])]) {
+      w.push(A.mov(1, byte), A.mov(2, 8));
+      const send = at();
+      w.push(A.and(3, 1, 1), A.lsl(3, 3, 1), A.orr(0, 3, 4), A.strh(0, 4));  // SCK low, SIO = bit
+      w.push(A.orr(0, 0, 1), A.strh(0, 4));            // SCK high: the RTC shifts it in
+      w.push(A.lsr(1, 1, 1), A.subs(2, 2, 1));
+      w.push(b(1, send));
+    }
+    if (!bytes) continue;
+    w.push(A.mov(0, 5), A.strh(0, 4, 2));              // SIO in
+    w.push(A.mov(5, 0), A.mov(6, 0), A.mov(2, 8 * bytes));
+    const recv = at();
+    w.push(A.mov(0, 4), A.strh(0, 4), A.mov(0, 5), A.strh(0, 4));  // SCK low (the RTC drives SIO), high
+    w.push(A.ldrh(3, 4), A.and(3, 3, 2));
+    w.push(A.lsl(6, 6, 1), A.orrLsr(6, 6, 5, 31), A.lsl(5, 5, 1), A.orrLsr(5, 5, 3, 1));
+    w.push(A.subs(2, 2, 1));
+    w.push(b(1, recv));
+    w.push(A.str(5, 9), A.str(6, 9, 4));
+  }
+  w.push(A.add(8, 8, 1));
+  w.push(b(14, loop));
+  return w;
+}
+
+/** An RTC cart: a game code whose mGBA override names HW_RTC (FLASH512 + RTC). */
+function rtcRom(cmds) {
+  // $C0 is not a branch (mGBA's GBAIsMB would take the image for multiboot);
+  // $C4 branches to the code once, before the port overwrites it
+  const rom = makeRom([0xE1A00000, 0xEA00000D], rtcReader(cmds), 0x400);
+  rom.set([...Buffer.from("BR4J")], 0xAC);
+  return rom;
+}
+
+/** r6:r5 as rtcReader leaves them for these bytes (each LSB first). */
+function rtcBits(bytes) {
+  let v = 0n;
+  for (const x of bytes) for (let i = 0; i < 8; i++) v = (v << 1n) | BigInt((x >> i) & 1);
+  return [Number(v & 0xFFFFFFFFn), Number(v >> 32n)];
+}
+
+test("GPIO RTC: the date and time mGBA's S-3511A reads from its pinned clock, bit-banged through ROM $C4", { skip, timeout: 300000 }, async () => {
+  const rom = rtcRom([{ cmd: 0xA6, bytes: 7 }]);
+  assert.ok(recompileSection(rom).json.clock, "an RTC cart declares the clock the verifier pins");
+  // 1700000000 is 2023-11-14 22:13:20 UTC, a Tuesday; 90 frames later the
+  // cart is 1.5 s in
+  const { iwram } = await assertLockstep(rom, 90);
+  assert.deepEqual(iwram, rtcBits([0x23, 0x11, 0x14, 0x02, 0x22, 0x13, 0x21]));
+});
+
+test("GPIO RTC: the control register, reset, 12-hour mode and the time command", { skip, timeout: 300000 }, async () => {
+  // control reads 0x40 after InitRTC (24-hour)
+  assert.deepEqual((await assertLockstep(rtcRom([{ cmd: 0xC6, bytes: 1 }]), 3)).iwram, rtcBits([0x40]));
+  // reset clears control, so the time command reads a 12-hour clock
+  assert.deepEqual((await assertLockstep(rtcRom([{ cmd: 0x06, bytes: 0 }, { cmd: 0xE6, bytes: 3 }]), 3)).iwram, rtcBits([0x10, 0x13, 0x20]));
+  // a control write (0x46 with data 0x40) sets 24-hour again
+  assert.deepEqual((await assertLockstep(rtcRom([{ cmd: 0x06, bytes: 0 }, { cmd: 0x46, data: 0x40, bytes: 0 }, { cmd: 0xE6, bytes: 3 }]), 3)).iwram,
+    rtcBits([0x22, 0x13, 0x20]));
+});
 
 /**
  * ldrb/ldrh/ldr from ROM addresses past the image (and into its mirrors)

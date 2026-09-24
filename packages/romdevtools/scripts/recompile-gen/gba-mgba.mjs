@@ -18,7 +18,8 @@
 //   conditionLut            arm.c conditionLut
 //   vstallLut               memory.c GBAMemoryStallVRAM stallLUT
 //   deadbeef                memory.c _deadbeef (open-bus fetch of a bad region)
-//   overrides               overrides.c _overrides: id -> savetype, idle loop
+//   overrides               overrides.c _overrides: id -> savetype, hardware
+//                           (interface.h HW_* bits, when not HW_NONE), idle loop
 //   exp2fTab                musl __exp2f_data.tab (mGBA's MidiKey2Freq calls exp2f)
 //   sintab                  f32 sinf/cosf of theta = f32(f32(k / 128) * pi), the
 //                           HLE BIOS BgAffineSet/ObjAffineSet trig (correctly
@@ -145,12 +146,17 @@ const saveEnum = {};
 for (const m of iface.matchAll(/(GBA_SAVEDATA_\w+)\s*=\s*(-?\d+)/g)) saveEnum[m[1]] = Number(m[2]);
 const ovBody = /_overrides\[\]\s*=\s*\{([\s\S]*?)\n\};/.exec(ov);
 assert.ok(ovBody, "_overrides");
+const hwEnum = {};
+for (const m of iface.matchAll(/\b(HW_\w+)\s*=\s*(0x[0-9A-Fa-f]+|\d+)\s*,/g)) hwEnum[m[1]] = Number(m[2]);
+assert.ok(hwEnum.HW_RTC === 1 && hwEnum.HW_NO_OVERRIDE === 0x8000, "HW_ enum moved; review the override hardware bits");
+const hwBits = (e) => e === "HW_NONE" ? 0 : e.split("|").map((t) => t.trim()).reduce((a, t) => { assert.ok(t in hwEnum, `hardware ${t}`); return a | hwEnum[t]; }, 0);
 const overrides = {};
 for (const m of ovBody[1].matchAll(/\{\s*"(\w{4})"\s*,\s*(GBA_SAVEDATA_\w+)\s*,\s*([^,]+?)\s*,\s*([^,}]+?)\s*(?:,\s*([^}]+?)\s*)?\}/g)) {
   assert.ok(m[2] in saveEnum, `savetype ${m[2]}`);
   const idle = m[4] === "GBA_IDLE_LOOP_NONE" ? null : Number(m[4]);
   assert.ok(idle === null || Number.isFinite(idle), `idle ${m[4]}`);
-  overrides[m[1]] = { savetype: saveEnum[m[2]], idleLoop: idle };
+  const hardware = hwBits(m[3]);
+  overrides[m[1]] = hardware && hardware !== hwEnum.HW_NO_OVERRIDE ? { savetype: saveEnum[m[2]], hardware, idleLoop: idle } : { savetype: saveEnum[m[2]], idleLoop: idle };
 }
 assert.ok(Object.keys(overrides).length > 50 && overrides.AWRE, "override table");
 assert.ok(/override->id\[0\] == 'F'/.test(ov), "'F' game-code EEPROM rule moved; review GBAOverrideFind");

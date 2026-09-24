@@ -44,6 +44,8 @@ import {
   SAVE_EEPROM512, SAVE_SRAM512,
 } from "./sys.js";
 import * as video from "./video.js";
+import { gpioWat, HW_RTC } from "./gpio.js";
+import { RTC_CLOCK } from "../../recompile-section.js";
 import { audioLayout, audioWat, audioData, audioInfoWat, audioSection } from "./audio.js";
 
 export const platforms = ["gba"];
@@ -113,13 +115,13 @@ function saveLibrary(img) {
  * mGBA's GBAOverrideFind: the override table, then the 'F' game-code
  * rule (id starting with 'F' saves to EEPROM).
  * @param {string} code
- * @returns {{savetype: number, idleLoop: number|null, source: string}}
+ * @returns {{savetype: number, hardware: number, idleLoop: number|null, source: string}}
  */
 function findOverride(code) {
   const o = MGBA_DATA.overrides[code];
-  if (o) return { savetype: o.savetype, idleLoop: o.idleLoop, source: "mGBA override table" };
-  if (code[0] === "F") return { savetype: SAVE_EEPROM, idleLoop: null, source: "mGBA 'F' game-code rule" };
-  return { savetype: SAVE_AUTODETECT, idleLoop: null, source: "none (runtime autodetect)" };
+  if (o) return { savetype: o.savetype, hardware: o.hardware ?? 0, idleLoop: o.idleLoop, source: "mGBA override table" };
+  if (code[0] === "F") return { savetype: SAVE_EEPROM, hardware: 0, idleLoop: null, source: "mGBA 'F' game-code rule" };
+  return { savetype: SAVE_AUTODETECT, hardware: 0, idleLoop: null, source: "none (runtime autodetect)" };
 }
 
 const ahashBits = (n) => { let k = 10; while ((1 << k) < 2 * n) k++; return k; };
@@ -212,7 +214,7 @@ export function computeLayout(romLen, staticRom, nArm = 0) {
  * @param {Record<string, number>} L
  * @param {string} romSha1
  */
-function sectionFor(L, romSha1, buttons) {
+function sectionFor(L, romSha1, buttons, hardware = 0) {
   const fields = {};
   for (let i = 0; i < 16; i++) {
     fields[`r${i}`] = { offset: L.REGS + 4 * i, size: 4, ref: { region: "gba_cpu_regs", offset: 4 * i, size: 4 } };
@@ -228,6 +230,9 @@ function sectionFor(L, romSha1, buttons) {
     referenceCore: REFERENCE_CORE,
     romSha1,
     warmupFrames: WARMUP_FRAMES,
+    // a GPIO RTC reads the host frame clock; the verifier pins mGBA's time(0)
+    // (and localtime's zone, UTC) to the same frames
+    ...(hardware & HW_RTC ? { clock: { ...RTC_CLOCK } } : {}),
     // positional: east (WC_BTN_B) is the GBA's A; "byName" only for a cart
     // built with buttons:'byName' (sms-wat's original reading)
     buttons,
@@ -344,13 +349,16 @@ function describeUncached(img, opts, buttons) {
     saveTypeSource: ov.source,
     saveLibrary: lib ? `${lib.tag} (${lib.type})` : null,
     idleLoop: ov.idleLoop,
+    // mGBA's override HW_* bits; the cart models the GPIO port and the RTC
+    hardware: ov.hardware,
+    rtc: (ov.hardware & HW_RTC) !== 0,
     staticArms: staticRom,
     uniqueArmWords: nArm,
     warmupFrames: WARMUP_FRAMES,
     memoryPages: Math.floor((L.END + 0xFFFF) / 0x10000) + 1,
     memory: L,
     buttons,
-    layout: sectionFor(L, sha1, buttons),
+    layout: sectionFor(L, sha1, buttons, ov.hardware),
   };
 }
 
@@ -593,6 +601,7 @@ export async function* emitWat(rom, opts = {}) {
 
   yield `(module\n  (memory (export "memory") ${pages})`;
   yield "\n" + sysWat(L, ROMLEN, idle, savetype);
+  yield "\n" + gpioWat(L, findOverride(d.gameCode).hardware);
   yield "\n" + swiWat(L);
   yield "\n" + video.colorWat();
   yield "\n" + video.renderWat();
