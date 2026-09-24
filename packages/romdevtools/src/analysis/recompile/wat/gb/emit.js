@@ -9,6 +9,7 @@
 import { lower } from "./lower.js";
 import * as H from "./hw-gb.js";
 import * as P from "./hw-gbc.js";
+import * as A from "./apu.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -1182,6 +1183,8 @@ function frameWat(cgb) {
                 (then (call $ppu_blank) (br $fd))
                 (else (global.set $blanklcd (i32.const 1))))))))
       (br $fl)))
+    ;; the frame's audio up to gambatte's runFor end (apu.js)
+    (call $apu_frame (global.get $abscc))
     (global.set $rres (i32.sub (global.get $rres) (i32.const 70224)))
     ;; gambatte CPU::runFor: past 2^31 the cycle counter is rebased
     ;; (Memory::resetCounters: dec = (cc & ~0x7FFF) - 0x8000), and every
@@ -1190,6 +1193,7 @@ function frameWat(cgb) {
       (then
         (local.set $i (i32.sub (i32.and (global.get $abscc) (i32.const -32768)) (i32.const 0x8000)))
         (global.set $abscc (i32.sub (global.get $abscc) (local.get $i)))
+        (call $apu_rebase (local.get $i))
         (if (global.get $timairq) (then (global.set $timairq (i32.sub (global.get $timairq) (local.get $i)))))
         (global.set $tlast (i32.sub (global.get $tlast) (local.get $i)))
         (global.set $tmat (i32.sub (global.get $tmat) (local.get $i)))
@@ -1444,6 +1448,7 @@ export function* emitGbWat(img, blocks, o) {
   yield part(P.memWat({ imgLen: IMGLEN, mbc: o.mbc, romimg: ROMIMG, probe: PROBE,
     watchLo: WATCH_LO, watchHi: WATCH_HI, padptr: ABI + 0x100, origin: ORIGIN, cgb,
     rb: P.ramBanks(img), rtc: [0x0F, 0x10].includes(img[0x147]), rumble: [0x1C, 0x1D, 0x1E].includes(img[0x147]), cramhi: CRAMHI }));
+  yield part(A.apuWat({ cgb, muteChannels: o.muteChannels }));
   yield part(commonWat());
   yield part(`  (data (i32.const ${IOREG + 0x100}) "${watBytes(shadeBytes)}")`);
   yield part(H.paletteWat());
@@ -1623,6 +1628,7 @@ export function* emitGbWat(img, blocks, o) {
     ;; all four nametables. Fixing it took that cart from 58.68% to 100.00%.
     ;; MUST be 8-byte aligned: the host writes f64 via a Float64Array index.
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 40)) (i32.add (i32.const ${ABI}) (i32.const 0x180)))
+    ;; audio: gambatte-libretro's 32768 Hz int16 stereo stream (apu.js)${A.apuInfoWat(ABI)}
     (i32.const ${ABI}))
 
   (func (export "wc_init")
@@ -1640,7 +1646,8 @@ export function* emitGbWat(img, blocks, o) {
     ;; LCDC/BGP as the boot ROM leaves them: display on, BG on, tiles at $8000.
     (i32.store8 (i32.const ${IOREG + 0x40}) (i32.const 0x91))
     (i32.store8 (i32.const ${IOREG + 0x47}) (i32.const 0xFC))
-    ${initWat(cgb, CRAMHI)})
+    ${initWat(cgb, CRAMHI)}
+    (call $apu_init))
 
   (func (export "wc_render")
     (local $i i32) (local $ln i32)

@@ -29,11 +29,15 @@
 //              must name exactly this instruction (the section carries a
 //              warning). Pick a straight-line instruction.
 //   stats      an object filled with arm/lowering counts after emit
+//   muteChannels  MUST-FAIL CONTROL: channels (ch1..ch4 or 1-4) the cart's
+//              mixer silences from power-on (presets the section's
+//              audio.muteMask byte). Not a faithful cart.
 import { createHash } from "node:crypto";
 import { emitGbWat, gbLayout, gbOriginAndPages, gbBigRing, PROBE, PROBE_FIELDS } from "./emit.js";
 import { mbcKind, VRAM0, VRAM1, WRAMX, BGPAL, OBJPAL } from "./hw-gbc.js";
 import { OAM, IOREG, WRAM, FB_W, FB_H } from "./hw-gb.js";
 import { discoverBlocks, blocksFromJson, opcodeCatalogue } from "./blocks.js";
+import { APU_LAYOUT, APU_SAMPLE_RATE, APU_MUTE_CHANNELS } from "./apu.js";
 
 export const platforms = ["gb", "gbc"];
 
@@ -138,6 +142,9 @@ export function describe(rom, opts = {}) {
       line: { offset: PROBE + F.line, size: 4 },
     },
     framebuffer: { offset: L.FB, width: FB_W, height: FB_H, format: "xrgb8888" },
+    // gambatte-libretro's audio_batch_cb stream: blipper at 32768 Hz, s16 stereo (apu.js)
+    audio: { sampleRate: APU_SAMPLE_RATE, channels: 2, format: "s16", reference: "output",
+      muteMask: { offset: APU_LAYOUT.mute, size: 1, channels: APU_MUTE_CHANNELS } },
     probeBase: PROBE,
     probeFields: PROBE_FIELDS,
   };
@@ -201,7 +208,7 @@ export async function* emitWat(rom, opts = {}) {
   else if (!(blocks instanceof Map)) blocks = blocksFromJson(blocks);
   if (blocks.size !== rom.length) throw new Error(`gb: block index covers ${blocks.size} offsets; the ROM has ${rom.length}. A hole becomes a silent trap.`);
   const opcat = await opcodeCatalogue();
-  yield* emitGbWat(rom, blocks, { opcat, cgb: d.cgb, mbc: d.mbc, watch: opts.watch, hits: opts.hits, stopAt: opts.stopAt, stats: opts.stats, traceEntries: opts.traceEntries, breakArm: parseBreakArm(opts.breakArm) });
+  yield* emitGbWat(rom, blocks, { opcat, cgb: d.cgb, mbc: d.mbc, watch: opts.watch, hits: opts.hits, stopAt: opts.stopAt, stats: opts.stats, traceEntries: opts.traceEntries, breakArm: parseBreakArm(opts.breakArm), muteChannels: opts.muteChannels });
 }
 
 export { gbLayout, gbOriginAndPages };

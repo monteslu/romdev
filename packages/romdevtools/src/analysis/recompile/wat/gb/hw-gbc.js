@@ -621,6 +621,9 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
         (i32.and (i32.load8_u (i32.const ${IOREG + 0x6A})) (i32.const 0x3F)))))))
     (if (i32.eq (local.get $x) (i32.const 0xFF70))
       (then (return (i32.or (global.get $svbk) (i32.const 0xF8)))))
+    ;; NR52 status and wave RAM come from the APU (apu.js)
+    (if (i32.or (i32.eq (local.get $x) (i32.const 0xFF26)) (i32.eq (i32.and (local.get $x) (i32.const 0xFFF0)) (i32.const 0xFF30)))
+      (then (return (call $apu_ffr (local.get $x)))))
     (i32.load8_u (i32.add (i32.const ${IOREG})
       (i32.sub (local.get $x) (i32.const 0xFF00)))))
 
@@ -863,6 +866,8 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
     (local.set $m (i32.load8_u (i32.add (i32.const ${IOTAB}) (i32.shl (local.get $p) (i32.const 1)))))
     (local.set $or (i32.load8_u (i32.add (i32.const ${IOTAB + 1}) (i32.shl (local.get $p) (i32.const 1)))))
     (local.set $on (i32.and (i32.load8_u (i32.const ${IOREG + 0x26})) (i32.const 0x80)))
+    ;; the sound side of $FF10-$FF3F (apu.js), before the register byte is stored
+    (call $apu_ffw (local.get $p) (local.get $v))
     (block $done
       (br_if $done (i32.eqz (local.get $m)))
       (if (i32.eq (local.get $m) (i32.const 2)) (then (br_if $done (i32.eqz (local.get $on)))))
@@ -882,7 +887,8 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
                 (br_if $d (i32.ge_u (local.get $i) (i32.const 0x26)))
                 (call $iostore (local.get $i) (i32.const 0))
                 (local.set $i (i32.add (local.get $i) (i32.const 1)))
-                (br $l)))))
+                (br $l)))
+              (call $apu_poweroff)))
           (local.set $v (i32.or (i32.and (local.get $v) (i32.const 0x80))
                                 (i32.and (i32.load8_u (i32.const ${IOREG + 0x26})) (i32.const 0x7F))))))
       (i32.store8 (i32.add (i32.const ${IOREG}) (local.get $p)) (i32.or (local.get $v) (local.get $or)))))
@@ -1254,6 +1260,9 @@ ${setbankWat}
     (global.set $cyc (i32.sub (global.get $cyc) (i32.add (i32.const 4) (i32.shl (local.get $old) (i32.const 2)))))
     (if (global.get $key1prep)
       (then
+        ;; the sound up to the switch at the old speed (Memory::stop:
+        ;; psg_.generateSamples(cc + 4 + 4 * ds) after the opcode fetch)
+        (call $apu_gen (i32.add (global.get $abscc) (i32.add (i32.const 8) (i32.shl (local.get $old) (i32.const 2)))))
         (global.set $speed (i32.xor (global.get $speed) (i32.const 1)))
         (global.set $key1prep (i32.const 0))
         ;; gambatte PPU::speedChange keeps the VIDEO position: the rest of
