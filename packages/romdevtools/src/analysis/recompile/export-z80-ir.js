@@ -181,7 +181,7 @@ export function decodedIR(row, window, rom, { allowStraddle = false, isa = ISAS.
   // The decoder prints a relative branch's target from the address IT was
   // handed, and that is not always the instruction's CPU address: the
   // all-alignments batch decodes every slice at a fake stride address, so a
-  // secondary `jr` came back aimed at the batch buffer (Tetris $01DA `18 FA`,
+  // secondary `jr` came back aimed at the batch buffer (a 32KB cart's $01DA `18 FA`,
   // jr -6, exported as $048C). An ISA that knows its relative encodings
   // rewrites the operand from `bytes` and `row.addr` here, for every record.
   //
@@ -436,7 +436,7 @@ export async function* irRecords(rom, isa, windows, { wantAllAlignments = false,
           // primary pass emits as `truncated-at-rom-end`. Thumb makes it
           // routine: `bl` is an aligned PAIR of halfwords, so the final two
           // bytes of any ROM ending in a bl-first-half decode to nothing.
-          // Advance Wars ends in `ff ff` and the whole 4MB export was being
+          // A 4MB cart whose image ends in `ff ff` had its whole export
           // refused over it.
           const rowBytes = row.bytes.split(/\s+/).filter(Boolean);
           if (!rowBytes.length || off + rowBytes.length > rom.length) {

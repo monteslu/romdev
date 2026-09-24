@@ -142,7 +142,7 @@ export function discoverRamCode(img) {
     if (seen.has(key)) continue;
     seen.add(key);
     // A copy is CODE only if something calls or jumps into it: tables copied
-    // to RAM the same way (Sonic 1 copies one to $FE30) must not become arms.
+    // to RAM the same way (one cart copies one to $FE30) must not become arms.
     const callers = jumpsInto(dst & 0xffff, length);
     if (!callers.length) continue;
     out.push({ romOffset: src, ramAddress: dst, length, foundAt: p, callers });

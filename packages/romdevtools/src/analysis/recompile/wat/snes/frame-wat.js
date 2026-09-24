@@ -78,7 +78,7 @@ export function stepHeadWat(regwatch, pcringExcl, lay) {
                               (i32.const 0x7F)))
     (local.set $off (i32.and (global.get $pc) (i32.const 0xFFFF)))
     ;; CODE IN RAM. A static recompiler has no arm for it, because the bytes
-    ;; do not exist until the game writes them: Super Mario World BUILDS a
+    ;; do not exist until the game writes them: one LoROM cart BUILDS a
     ;; 380-byte OAM-clear routine at $7F8000 during its reset handler (the
     ;; \`lda #$F0A9 / sta $7F8000\` at $802A and the loop that follows) and
     ;; then \`jml\`s into it. With nothing here the cart trapped at $7F8000
@@ -91,10 +91,10 @@ export function stepHeadWat(regwatch, pcringExcl, lay) {
     ;; ROM lands on a compiled arm and its \`rtl\` comes back here.
     ;; WORK RAM IS BANKS $7E AND $7F ONLY - a CLOSED range, not \`>= $7E\`.
     ;; Banks $80-$FF are the FAST MIRROR of $00-$7F, which is where most SNES
-    ;; code actually runs (\`jml $808423\` is the first thing Super Metroid
+    ;; code actually runs (\`jml $808423\` is the first thing a 3MB cart
     ;; does), so an open-ended test sent every one of those to the
     ;; interpreter. The interpreter does not charge $cyc, so the scanline
-    ;; budget never drained and \`wc_render\` never returned: Super Metroid
+    ;; budget never drained and \`wc_render\` never returned: that cart
     ;; "hung" for nine minutes on a single frame while \`dbg_step\` ran at
     ;; 30,675 steps/ms, which is what made this look like an infinite loop in
     ;; the game rather than a dispatch bug.
@@ -234,7 +234,7 @@ export function frameWat(lay) {
     ;;   bytes  0-7  timeMs (f64)   bytes 8-15 deltaMs (f64)
     ;;   bytes 16-19 frame  (u32)
     ;; On the NES cart that was NES $0000-$0013 - the zero page - and it held
-    ;; Excitebike's PPUCTRL shadow at $10, so PPUCTRL tracked the host frame
+    ;; one cart's PPUCTRL shadow at $10, so PPUCTRL tracked the host frame
     ;; counter instead of holding $90 and the background base cycled through
     ;; all four nametables. Fixing it took that cart from 58.68% to 100.00%.
     ;; MUST be 8-byte aligned: the host writes f64 via a Float64Array index.

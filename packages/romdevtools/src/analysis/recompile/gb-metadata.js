@@ -94,8 +94,8 @@ export function gbControl(b, addr) {
  * walk used before handed the decoder the FILE OFFSET as the start address,
  * which only coincides with the CPU address below $8000: above 64KB a record
  * at file offset $10006 carried addr 65542, and the decoder's PC-relative
- * `jr` target was that bogus address truncated to 16 bits (Super Mario Land
- * 2's `jr nz,$4003` exported as `nz,0x0003`, the RST area - 12,827 of its
+ * `jr` target was that bogus address truncated to 16 bits (a 512KB MBC1
+ * cart's `jr nz,$4003` exported as `nz,0x0003`, the RST area - 12,827 of its
  * 14,746 `jr` targets were wrong).
  *
  * @param {number} size ROM bytes
@@ -139,7 +139,7 @@ export function gbWindows(size, { allOffsets = false, fileOffset, startAddress, 
  * `jr` is the LR35902's only PC-relative encoding: `18 dd` / `20|28|30|38 dd`,
  * target = addr + 2 + signed(dd), 16-bit. The decoder computes it from the
  * address it was handed, which for a secondary-alignment record is a batch
- * slot, not the instruction's address (Tetris $01DA `18 FA` came back as
+ * slot, not the instruction's address (a 32KB cart's $01DA `18 FA` came back as
  * $048C, unreachable by a two-byte jr). Everything else is absolute and
  * passes through untouched. Spelling matches the decoder's (`nz,0x0086`).
  *

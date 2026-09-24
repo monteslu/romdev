@@ -127,11 +127,11 @@ test("describe reads the header, the save library string and mGBA's overrides", 
   assert.match(d.saveLibrary, /FLASH1M_V/);
   assert.equal(d.romSha1, createHash("sha1").update(rom).digest("hex"));
   assert.equal(d.warmupFrames, WARMUP_FRAMES);
-  // Advance Wars' entry in mGBA's table: flash 64K and a known idle loop
-  const aw = describeRom(synthRom({ code: "AWRE" }));
-  assert.equal(aw.saveType, "flash512");
-  assert.equal(aw.idleLoop, 0x08038810);
-  // Classic NES Series rule
+  // an entry in mGBA's override table: flash 64K and a known idle loop
+  const ov = describeRom(synthRom({ code: "AWRE" }));
+  assert.equal(ov.saveType, "flash512");
+  assert.equal(ov.idleLoop, 0x08038810);
+  // game codes starting with 'F' save to EEPROM
   assert.equal(describeRom(synthRom({ code: "FSME" })).saveType, "eeprom");
   // too small to be a cart
   assert.equal(describeRom(new Uint8Array(64)).supported, false);

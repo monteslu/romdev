@@ -153,7 +153,7 @@ for (const m of ovBody[1].matchAll(/\{\s*"(\w{4})"\s*,\s*(GBA_SAVEDATA_\w+)\s*,\
   overrides[m[1]] = { savetype: saveEnum[m[2]], idleLoop: idle };
 }
 assert.ok(Object.keys(overrides).length > 50 && overrides.AWRE, "override table");
-assert.ok(/override->id\[0\] == 'F'/.test(ov), "Classic NES rule moved; review GBAOverrideFind");
+assert.ok(/override->id\[0\] == 'F'/.test(ov), "'F' game-code EEPROM rule moved; review GBAOverrideFind");
 
 // --- musl exp2f
 const musl = await readFile(MUSL, "utf8");

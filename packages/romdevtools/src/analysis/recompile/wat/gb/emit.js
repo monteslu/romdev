@@ -56,7 +56,7 @@ export function cpuAddr(off) {
 /**
  * Linear-memory layout for a ROM of `romLen` bytes. EVERYTHING ABOVE THE ROM
  * IMAGE IS PLACED AFTER IT, BY ITS ACTUAL SIZE: fixed constants sized for a
- * 64KB cart put Super Mario Land 2's framebuffer inside its 512KB ROM image
+ * 64KB cart put a 512KB cart's framebuffer inside its own ROM image
  * and the title-screen copy loop read back pixels.
  * @param {number} romLen
  */
@@ -395,7 +395,7 @@ function frameWat() {
     ;; AHEAD of the host frame count, returns WITHOUT RUNNING (a dupe frame).
     ;; A frame is handed out only at a blit, so a long gap between blits (the
     ;; LCD off, or the skipped first mode-1 after switching it on) is paid
-    ;; back with dupes. Klustar's counter went one frame ahead of the
+    ;; back with dupes. One GBC cart's counter went one frame ahead of the
     ;; reference at every LCD toggle until this was modelled.
     (if (i32.ge_s (global.get $rres) (i32.const 70224))
       (then
@@ -477,7 +477,7 @@ function frameWat() {
         (br $l0)))
       (br_if $fl (global.get $lcdrestart))
       ;; DRAW AT MODE 3, not at the start of the line: a raster effect that
-      ;; writes palette RAM from an interrupt landing in mode 2 (1942's sky
+      ;; writes palette RAM from an interrupt landing in mode 2 (a sky
       ;; gradient, one colour per line from STAT) changes the line on
       ;; hardware; drawn at line start the whole gradient sat one line late.
       ;; The line is drawn in segments as mode 3 runs (hw_gbc $ppu_catch):
@@ -579,8 +579,8 @@ function ramCodeWat(PCSPAN) {
           (local.set $rs (call $get_origin (global.get $pc)))
           (if (i32.eqz (local.get $rs)) (then (br $rc (i32.const ${PCSPAN}))))
           ;; EVERY byte of the instruction must still carry its ROM origin: a
-          ;; game that copies a routine and then PATCHES an operand (Project
-          ;; S-11 rewrites \`ld de,$0448\` in its WRAM copy) keeps provenance on
+          ;; game that copies a routine and then PATCHES an operand (one GBC
+          ;; cart rewrites \`ld de,$0448\` in its WRAM copy) keeps provenance on
           ;; the opcode byte only, and running the ROM arm would use the
           ;; ROM's operand. That is a trap, never a silent wrong answer.
           (if (i32.eqz (call $ram_bytes_intact (global.get $pc) (local.get $rs)))
@@ -589,7 +589,7 @@ function ramCodeWat(PCSPAN) {
           ;; Run the ROM arm whatever bank is mapped now, and let $step carry
           ;; the fall-through BACK INTO RAM ($ramexec) so the next instruction
           ;; is checked against the RAM bytes again. Running a bank-0 copy "in
-          ;; place" was wrong: Project S-11 copies a routine to WRAM, patches
+          ;; place" was wrong: a cart can copy a routine to WRAM and patch
           ;; an operand further down, and the in-place run never saw it.
           (global.set $ramexec (i32.const 1))
           (global.set $ramobase (i32.and (local.get $rs) (i32.const -16384)))
@@ -627,8 +627,8 @@ function opLenTable(img, blocks) {
 
 // ---- RAM interpreter templates -----------------------------------------
 // A byte-for-byte copy of ROM code runs as its ROM arm (provenance). An
-// instruction whose OPERAND the game patched in RAM (Trouballs rewrites the
-// DMA page in its HRAM routine, Project S-11 a `ld de,nn` in WRAM) cannot:
+// instruction whose OPERAND the game patched in RAM (one cart rewrites the
+// DMA page in its HRAM routine, another a `ld de,nn` in WRAM) cannot:
 // its immediates must come from RAM. One template arm per opcode is lowered
 // by lower() itself with SENTINEL immediates, and the sentinel constants are
 // then swapped for globals the interpreter fills from memory. Every template
@@ -786,7 +786,7 @@ export function* emitGbWat(img, blocks, o) {
     // THE FALLTHROUGH ADDRESS IS A CPU ADDRESS, NOT A ROM OFFSET: `$pc` holds
     // what the CPU sees and `$exec` maps pc -> offset through `$rombank`.
     // Handing it `a + n` is only right in bank 0 (a banked `call` pushed a
-    // non-16-bit return address and SML2 returned into the header logo).
+    // non-16-bit return address and a banked cart returned into the header logo).
     const nxt = cpuAddr(a + rec.n);
     let body, flow;
     try { [body, flow] = lower(rec.m, rec.o ?? "", cpuAddr(a), nxt); ok++; }
@@ -938,7 +938,7 @@ export function* emitGbWat(img, blocks, o) {
     ;;   bytes  0-7  timeMs (f64)   bytes 8-15 deltaMs (f64)
     ;;   bytes 16-19 frame  (u32)
     ;; On the NES cart that was NES $0000-$0013 - the zero page - and it held
-    ;; Excitebike's PPUCTRL shadow at $10, so PPUCTRL tracked the host frame
+    ;; one cart's PPUCTRL shadow at $10, so PPUCTRL tracked the host frame
     ;; counter instead of holding $90 and the background base cycled through
     ;; all four nametables. Fixing it took that cart from 58.68% to 100.00%.
     ;; MUST be 8-byte aligned: the host writes f64 via a Float64Array index.

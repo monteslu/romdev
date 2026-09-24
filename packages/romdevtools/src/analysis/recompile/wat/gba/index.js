@@ -109,7 +109,7 @@ function saveLibrary(img) {
 }
 
 /**
- * mGBA's GBAOverrideFind: the override table, then the Classic NES Series
+ * mGBA's GBAOverrideFind: the override table, then the 'F' game-code
  * rule (id starting with 'F' saves to EEPROM).
  * @param {string} code
  * @returns {{savetype: number, idleLoop: number|null, source: string}}
@@ -117,7 +117,7 @@ function saveLibrary(img) {
 function findOverride(code) {
   const o = MGBA_DATA.overrides[code];
   if (o) return { savetype: o.savetype, idleLoop: o.idleLoop, source: "mGBA override table" };
-  if (code[0] === "F") return { savetype: SAVE_EEPROM, idleLoop: null, source: "mGBA Classic NES Series rule" };
+  if (code[0] === "F") return { savetype: SAVE_EEPROM, idleLoop: null, source: "mGBA 'F' game-code rule" };
   return { savetype: SAVE_AUTODETECT, idleLoop: null, source: "none (runtime autodetect)" };
 }
 

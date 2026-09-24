@@ -41,8 +41,8 @@ const SH = 1024;
 
 /**
  * Ranges (16-bit ROM addresses, inclusive) the ROM pc ring never records:
- * tight boot loops that would fill it by themselves. These three are Super
- * Mario World's ($8034-$8048 the $7F8000 OAM-clear builder, $8079-$80E7 the
+ * tight boot loops that would fill it by themselves. These three came from a
+ * LoROM cart's boot ($8034-$8048 the $7F8000 OAM-clear builder, $8079-$80E7 the
  * APU upload loop, $8A4E-$8A64 its RAM clear); `options.pcSkip` appends more.
  * Emitted into every cart so the output matches the Python emitter's.
  */
@@ -118,8 +118,8 @@ export function describe(rom, opts = {}) {
   const chipset = byte(0x16);
   const sramByte = byte(0x18);
   // SRAM decodes only log2(size) address lines, so it MIRRORS through the
-  // $70-$7D window; Super Metroid checks exactly that and shows its
-  // anti-copier screen on a flat 32KB window. 0 (or nonsense) = no SRAM:
+  // $70-$7D window; a LoROM cart that checks the mirror to detect copiers
+  // shows its anti-copier screen on a flat 32KB window. 0 (or nonsense) = no SRAM:
   // keep the 32KB scratch window rather than invent open-bus behaviour.
   // (The Python emitter reads the byte at $7FD8 whatever the mapping.)
   const sramLow = img.length > 0x7fd8 ? img[0x7fd8] : 0;
@@ -170,9 +170,8 @@ export const REFERENCE_CORE = "snes9x";
 /**
  * Frame / input conventions the verify op needs. The cart does not model
  * the APU's timing, so it boots ahead of snes9x by a game-dependent number
- * of frames (Super Mario World 56, Zelda LTTP 82, Super Metroid 39-41 at
- * the verified pairs): the reference frame is SEARCHED over a window, never
- * assumed. The controller ports read "nothing pressed" (the cart ignores
+ * of frames (56, 82 and 39-41 on three of the verified carts): the
+ * reference frame is SEARCHED over a window, never assumed. The controller ports read "nothing pressed" (the cart ignores
  * wasmcart pad input), so verification runs are input-free.
  */
 export const conventions = {
@@ -428,7 +427,7 @@ function arm(img, a, n, pb, pc16) {
 
 /**
  * Binary search over shard index (a linear `if` chain cost ~137M compares
- * per frame at Super Metroid's 3,072 shards and looked like a hang).
+ * per frame at a 3MB cart's 3,072 shards and looked like a hang).
  */
 function shardDispatch(nshards, lo = 0, hi = nshards, indent = 4) {
   const pad = " ".repeat(indent);

@@ -166,8 +166,8 @@ export function decodeLinear(rom, from, to, startAddr) {
   while (off < to) {
     // DO NOT WRAP AT 16 BITS. The exporter recovers a record's file offset
     // as `window.off + row.addr - window.addr`, so wrapping breaks that
-    // arithmetic on any ROM whose window base exceeds $FFFF - Super Metroid
-    // (3MB) failed with "decoder byte/offset mismatch at ROM offset 2".
+    // arithmetic on any ROM whose window base exceeds $FFFF - a 3MB
+    // cart failed with "decoder byte/offset mismatch at ROM offset 2".
     // Operand RENDERING still masks to 16 bits where the CPU would.
     const addr = startAddr + (off - from);
     const r = decodeOne(rom, off, addr);

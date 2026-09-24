@@ -3,9 +3,9 @@
 //
 // Both bugs this guards were measured on real carts: above 64KB a record's
 // `addr` was its FILE OFFSET and the jr target that offset truncated to 16
-// bits (Super Mario Land 2's `jr nz,$4003` at ROM $10006 exported as
+// bits (a 512KB MBC1 cart's `jr nz,$4003` at ROM $10006 exported as
 // `nz,0x0003`); on secondary records the target was resolved against the
-// batch-decode slot (Tetris $01DA `18 FA`, jr -6, exported as $048C). The
+// batch-decode slot (a 32KB cart's $01DA `18 FA`, jr -6, exported as $048C). The
 // synthetic ROM below reproduces both shapes.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -19,7 +19,7 @@ import { objdumpAvailable } from "../../toolchains/objdump.js";
 /** 128KB (8 banks), nop-filled, with the two jr shapes placed. */
 function rom() {
   const r = new Uint8Array(0x20000);
-  // bank 4, CPU $4006: jr nz,-3 -> $4005 (the SML2 shape)
+  // bank 4, CPU $4006: jr nz,-3 -> $4005 (the above-64KB shape)
   r.set([0x20, 0xFD], 0x10006);
   // bank 0: `3e 18` (ld a,$18) then `fa 00 c0`; offset $01D1 is only reached
   // as a SECONDARY decode: `18 fa` = jr -6 from $01D1 -> $01CD.

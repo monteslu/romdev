@@ -156,7 +156,7 @@ export const ISAS = {
   },
   m65816: {
     // No binutils target and no usable da65 batch mode, same as the 6502.
-    // Validated against da65 on Super Mario World: 182 of 183 instructions
+    // Validated against da65 on a 512KB LoROM cart: 182 of 183 instructions
     // identical, and the one difference is da65 giving up (`.byte $ad`)
     // where this decoder correctly reads `lda $1DF9`.
     arch: "m65816",

@@ -58,7 +58,7 @@ export function apuWat(lay) {
     ;; read of $2141 returns.
     ;;
     ;; Modelling them as one byte breaks the boot immediately and in a way
-    ;; that looks like a CPU fault: SMW clears the ports with \`stz $2140-43\`
+    ;; that looks like a CPU fault: a LoROM cart clears the ports with \`stz $2140-43\`
     ;; before it starts, which under the shared-byte model wipes the IPL's
     ;; $BB out of port 1, so the \`cmp $2140 / bne\` at $8082 waits forever for
     ;; a $BBAA that the CPU itself erased. Measured on the first build of
@@ -112,7 +112,7 @@ export function apuWat(lay) {
         (return)))
 
     ;; ---- PHASE 1: $ffd6, \`mov y,$f4 / bne $ffd6\`. Wait for a ZERO. ----
-    ;; The uploader's first per-byte write is the counter 0, and SMW reaches
+    ;; The uploader's first per-byte write is the counter 0, and the game reaches
     ;; here having just had its $CC echoed; anything non-zero is re-read.
     (if (i32.eq (global.get $apuph) (i32.const 1))
       (then
@@ -134,7 +134,7 @@ export function apuWat(lay) {
         ;; the N flag that the \`cmp y,$f4\` at $ffda itself set - that is, on
         ;; bit 7 of (Y - port0), NOT on bit 7 of port0. Testing the port
         ;; value directly is wrong and it is what left this stalled at $80D3:
-        ;; SMW computes the next block's kick with \`adc #$7F\` at $80CD, so
+        ;; the game computes the next block's kick with \`adc #$7F\` at $80CD, so
         ;; the value it writes has bit 7 CLEAR about half the time ($41 in
         ;; the measured run), and a bit-7 test then ignores the kick and
         ;; waits for a counter that will never come.
@@ -162,7 +162,7 @@ export function apuWat(lay) {
             (return)))
     ;; The uploaded driver RUNS THE SAME PROTOCOL, so phase 3 is not the end.
     ;;
-    ;; This is not an assumption. SMW uploads three times ($80F8, $8122 and
+    ;; This is not an assumption. One cart uploads three times ($80F8, $8122 and
     ;; the $98B1 block), and each call re-enters $8079 and waits on $BBAA
     ;; again. The answer the second time comes from the driver that the first
     ;; upload installed, and that driver's code is now sitting in this cart's

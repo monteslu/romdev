@@ -3,7 +3,7 @@
 // The fixed regions below the ROM image are the emulated machine state and
 // the debug probes; everything from the ROM image up is sized from the CART,
 // because two bugs came from fixed addresses that were only right for a
-// 512KB ROM (Super Metroid's 3MB image ran under the arm table, and a table
+// 512KB ROM (a 3MB LoROM image ran under the arm table, and a table
 // that followed the ROM ran through the framebuffer and the WCInfo block).
 // checkLayout() fails the BUILD on any overlap: a WAT store to a literal
 // address hits whatever is there, and two probes sharing an address produce

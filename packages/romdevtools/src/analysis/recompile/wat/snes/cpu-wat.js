@@ -1,7 +1,7 @@
 // CPU-side WAT of a recompiled SNES cart: register/flag globals, the memory
 // map ($rd8/$wr8 with the LoROM decode, SRAM mirroring, the $4200-$43FF I/O
 // block, general-purpose DMA and HDMA), and the RAM interpreter that runs
-// code the game builds in WRAM (Super Mario World builds an OAM-clear
+// code the game builds in WRAM (one LoROM cart builds an OAM-clear
 // routine at $7F8000 during reset).
 //
 // The WAT bodies are carried over byte-for-byte from sms-wat's emit_snes.py

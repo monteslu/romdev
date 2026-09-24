@@ -24,7 +24,7 @@
 //     R = r<<3 | r>>2     G = g6<<2 | g6>>4 with g6 = g<<1     B = b<<3 | b>>2
 //
 // Checked against gb_bgpdata/gb_objpdata and the reference's own screenshots:
-// 115,200/115,200 pixels over 5 Klustar frames, including pure (255,0,0) red,
+// 115,200/115,200 pixels over 5 frames of a GBC cart, including pure (255,0,0) red,
 // which any colour-correction mode would have moved.
 //
 // Ported from sms-wat src/hw_gbc.py; the emitted text is byte-identical.
@@ -49,7 +49,7 @@ export const CRAMX = 0x38000;
 // They are fixed now: every verified cart was verified with exactly these.
 //
 // Mid-line write position: pixel x = dots into the line - 80 - PIXDELAY.
-// FITTED, not derived: -4 minimises Link's Awakening f600 line 48 (a SCX
+// FITTED, not derived: -4 minimises one GBC cart's f600 line 48 (a SCX
 // write from an LYC handler) to 3 residual pixels; 0..-16 all leave 3-4.
 export const PIXDELAY = -4;
 // Multipliers on $ioff (cycles from the start of the instruction to its
@@ -339,7 +339,7 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
     ;; DIV/LY/STAT are sampled WHERE IN THE INSTRUCTION the read happens
     ;; (after its opcode and operand fetches, 4 cycles each), not at its
     ;; start: $cyc and $divcnt only advance when the instruction completes.
-    ;; An 8-cycle early DIV read moved Link's Awakening's intro rain.
+    ;; An 8-cycle early DIV read moved one cart's DIV-seeded intro animation.
     (if (i32.eq (local.get $x) (i32.const 0xFF04))
       (then (return (i32.and (i32.shr_u (i32.add (global.get $divcnt) (i32.mul (call $ioff) (i32.const ${DIVIOFF}))) (i32.const 8))
                              (i32.const 0xFF)))))
@@ -353,7 +353,7 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
                 (call $stat_mode))))))
     ;; LY as gambatte's LCD::getLyReg reads it: line 153 reads 0 (after its
     ;; first 8 cycles at double speed), and the last 4 cycles of any other
-    ;; line already read the NEXT line. 1942's sky gradient starts on
+    ;; line already read the NEXT line. A sky-gradient raster effect starts on
     ;; \`wait LY == 0\`, which on this rule exits a line early.
     (if (i32.eq (local.get $x) (i32.const 0xFF44))
       (then
@@ -581,7 +581,7 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
   ;; (self-modified or computed code) TRAPS rather than guessing.
   ;; This replaces the DMG build's signature-scanned HRAM aliases, which
   ;; anchored on \`ldh ($46),a\` and missed a routine that begins \`di; push
-  ;; af\` (1942): the call landed two bytes in, skipped the push, and the
+  ;; af\` (seen in one GBC cart): the call landed two bytes in, skipped the push, and the
   ;; matching pop unbalanced the stack.
   ;; Slots: WRAM bank 0 0..0xFFF, bank n n*0x1000.., HRAM 0x8000..
   (func $origin_slot (param $x i32) (result i32)
@@ -764,8 +764,8 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
   ;; ---- MID-LINE WRITES -------------------------------------------------
   ;; The line is drawn during mode 3 in SEGMENTS: a write to a PPU register
   ;; (LCDC, SCY/SCX, BGP/OBP, WY/WX, CGB palette data) while mode 3 is running
-  ;; first draws the pixels already output, with the old value. Link's
-  ;; Awakening changes a register part-way along a line; drawing the whole
+  ;; first draws the pixels already output, with the old value. A cart can
+  ;; change a register part-way along a line; drawing the whole
   ;; line at once put the change at x=0.
   ;; x output at a write = dots into the line - 80 - PIXDELAY.
   (func $ppu_catch (param $x i32)
@@ -805,7 +805,7 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
   ;; ---- HDMA / GDMA, as gambatte-memory.cpp intevent_dma does it ----------
   ;; The source/destination are INTERNAL counters: $FF51-$FF54 writes set
   ;; them, and a transfer leaves them advanced, so a second $FF55 write
-  ;; continues where the first stopped. (Project S-11 loads 4KB of tiles with
+  ;; continues where the first stopped. (One cart loads 4KB of tiles with
   ;; one address setup and four GDMAs; reloading from the registers each time
   ;; copied the first 1KB four times.) A source in VRAM or above $FDFF reads
   ;; $FF. Each byte costs 2<<speed cycles.
@@ -855,7 +855,7 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
         ;; LCD off: gambatte moves ONE block and ends the HDMA (its dma event
         ;; zeroes the remaining length when the LCD is off). Only the HBlank
         ;; mode - a GDMA with the LCD off must still move every block, and
-        ;; cutting it after one block left Buzz Lightyear's tiles as zeros.
+        ;; cutting it after one block left one cart's tiles as zeros.
         (if (i32.eqz (i32.and (i32.load8_u (i32.const ${IOREG + 0x40})) (i32.const 0x80)))
           (then
             (global.set $hdma_len (i32.const 1))

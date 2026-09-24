@@ -62,7 +62,7 @@ export function colorWat() {
     ;; error on essentially EVERY pixel of every frame.
     ;;
     ;; This was invisible for as long as the carts were failing for larger
-    ;; reasons. It surfaced only once Mario Kart's picture came out right:
+    ;; reasons. It surfaced only once one cart's picture came out right:
     ;; the frame looked identical to the reference and still scored 10.53%,
     ;; because the scorer is an exact RGB compare. Measured across the whole
     ;; frame, red and blue matched on every pixel and green differed on every
@@ -188,7 +188,7 @@ export function colorWat() {
       ;; field. For blue (bits 0-4) that is v - floor(v*y/16). For green and
       ;; red the field sits at bit 6 / bit 11, the product is exact, and the
       ;; MASK truncates the result - which is v - CEIL(v*y/16). Measured on
-      ;; Pac-Man Collection's title (BLDY=1): palette (20,3,7) comes out
+      ;; a title screen using BLDY=1: palette (20,3,7) comes out
       ;; (18,2,7) and (31,31,31) comes out (29,29,30); the textbook formula
       ;; gives (19,3,7) and (30,30,30) and scored 66% of content pixels.
       (else (local.set $v (i32.sub (local.get $v)
