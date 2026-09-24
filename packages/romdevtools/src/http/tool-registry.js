@@ -19,6 +19,7 @@ import { registerTools } from "../mcp/tools/index.js";
 import { withClearToolErrors } from "../mcp/util.js";
 import { observer, summarizeForLog, extractImages, pushObserverFrame } from "../observer/bus.js";
 import { getHostOrNull } from "../mcp/state.js";
+import { floodWarning } from "../observer/request-stats.js";
 
 /**
  * Build a tool registry for a given session key. Each entry's handler closes
@@ -209,6 +210,8 @@ export async function runTool(tool, args, sessionKey) {
         return { ok: false, error: err, result: parsed };
       }
       emit({ ok: true, result: summarizeForLog(parsed), ...(images.length ? { images } : {}) });
+      const flood = floodWarning(sessionKey, tool.name);
+      if (flood && parsed && typeof parsed === "object" && !Array.isArray(parsed)) parsed.floodWarning = flood;
       return { ok: true, result: parsed };
     }
     // image / multi-part content: hand back the raw content array.

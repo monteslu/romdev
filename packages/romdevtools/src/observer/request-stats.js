@@ -33,6 +33,15 @@ export class RequestStats {
       if (s.recentErrors.length > 5) s.recentErrors.shift();
     }
   }
+  /** Calls per second for one session over the last `seconds` whole seconds (0 when unknown). */
+  recentRate(sessionKey, seconds = 10) {
+    const s = this.sessions.get(sessionKey);
+    if (!s) return { calls: 0, rps: 0 };
+    const second = Math.floor(this.now() / 1000);
+    let calls = 0;
+    for (const [t, b] of s.buckets) if (t > second - seconds) calls += b.calls;
+    return { calls, rps: calls / seconds };
+  }
   snapshot() {
     const second = Math.floor(this.now() / 1000);
     return { windowSeconds: this.windowSeconds, retainedSessions: this.sessions.size, maxSessions: this.maxSessions,
@@ -51,3 +60,31 @@ export class RequestStats {
   }
 }
 export const requestStats = new RequestStats();
+
+// ─── per-item call floods ─────────────────────────────────────────────────────
+// A client looping one call per byte / instruction / frame degrades the shared
+// server for every other session (38,763 disasm calls at 49-72 req/s once, 32,768
+// at 32 req/s before that), and the loop usually does not know it is doing it.
+// The cheapest guard that reaches it is a line in the response it is already
+// reading, naming the bulk form of the tool it is flooding.
+export const FLOOD_RPS = 20;
+export const FLOOD_WINDOW_S = 10;
+const BULK_FORM = {
+  disasm: "disasm({target:'recompile', emit:'blockMap'|'ir', alignments:'all', outputPath}) maps the whole ROM in ONE call; disasm({target:'rom', startAddress, length}) disassembles a span",
+  memory: "memory({op:'read', offset, length}) reads a whole span (up to MBs) in one call",
+  frame: "frame({op:'step', frames:N}) steps N frames, frame({op:'traceInstructions', frames}) returns every executed instruction, frame({op:'findDiverge', level:'instruction'}) diffs a whole frame",
+  cpu: "frame({op:'traceInstructions'}) records every pc (and register columns where the core has them) in one call",
+  wasm: "wasm({op:'read', offset, length}) reads a whole span in one call",
+};
+/**
+ * The warning to append to a response when this session is flooding, or null.
+ * @param {string} sessionKey @param {string} tool
+ * @param {RequestStats} [stats]
+ */
+export function floodWarning(sessionKey, tool, stats = requestStats) {
+  if (!sessionKey) return null;
+  const { calls, rps } = stats.recentRate(sessionKey, FLOOD_WINDOW_S);
+  if (rps <= FLOOD_RPS) return null;
+  const hint = BULK_FORM[tool] ?? "batch the work into one call (every romdev tool that reads or steps takes a count/length)";
+  return `note: this session made ${calls} calls in the last ${FLOOD_WINDOW_S}s (${rps.toFixed(1)} req/s) on a server other agents share. A per-item loop over ${tool} should be one bulk call: ${hint}.`;
+}
