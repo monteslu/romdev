@@ -63,7 +63,7 @@ const BIGRING_BASE_PROBE = 112;
  */
 const GPGX_DB = JSON.parse(readFileSync(new URL("./gpgx-sms-db.json", import.meta.url), "utf8"));
 const GPGX_BY_CRC = new Map(GPGX_DB.games.map((g) => [parseInt(g.crc, 16) >>> 0, g]));
-const DB_MAPPER = { MAPPER_SEGA: "sega", MAPPER_SEGA_X: "sega", MAPPER_CODIES: "codemasters", MAPPER_KOREA_16K_V1: "korean-a000", MAPPER_NONE: "none" };
+const DB_MAPPER = { MAPPER_SEGA: "sega", MAPPER_SEGA_X: "sega", MAPPER_CODIES: "codemasters", MAPPER_KOREA_16K_V1: "korean-a000", MAPPER_KOREA_16K_V2: "korean-v2", MAPPER_NONE: "none" };
 const DB_REGION = { REGION_JAPAN_NTSC: ["japan", false], REGION_USA: ["export", false], REGION_EUROPE: ["export", true], REGION_JAPAN_PAL: ["japan", true] };
 /** sms_cart_region_detect: two carts that only enable FM on a Japanese console run as one. */
 const FM_JAPAN_CRCS = new Set([0x22CCA9BB, 0x679E1676]);
@@ -218,7 +218,8 @@ export function describe(rom, opts = {}) {
   if (db) {
     if (Object.hasOwn(DB_MAPPER, db.mapper)) {
       mapper = DB_MAPPER[db.mapper];
-      bankShift = db.mapper !== "MAPPER_SEGA_X";
+      // mapper_16k_w's page increment is the official SEGA mapper's only
+      bankShift = db.mapper === "MAPPER_SEGA";
     } else if (supported) {
       supported = false;
       unsupportedReason = `genesis_plus_gx runs this cart (CRC ${db.crc}) with ${db.mapper}, which this backend does not model`;
@@ -233,9 +234,11 @@ export function describe(rom, opts = {}) {
     if (db.fm) warnings.push("the cart supports the YM2413 FM unit: its register interface is modelled, its audio is not");
   }
   if (opts.mapper) mapper = opts.mapper;
-  if (!["sega", "codemasters", "korean-a000", "none"].includes(mapper)) throw new Error(`sms recompile: unknown mapper '${mapper}' (sega, codemasters, korean-a000, none)`);
+  if (!["sega", "codemasters", "korean-a000", "korean-v2", "none"].includes(mapper)) throw new Error(`sms recompile: unknown mapper '${mapper}' (sega, codemasters, korean-a000, korean-v2, none)`);
 
   const slot1Pats = [[0x32, 0xFE, 0xFF], [0x22, 0xFE, 0xFF], [0x22, 0xFD, 0xFF]];
+  // write_mapper_korea_16k_v2 also pages slot 1 by a write to $4000
+  if (mapper === "korean-v2") slot1Pats.push([0x32, 0x00, 0x40], [0x22, 0x00, 0x40], [0x22, 0xFF, 0x3F]);
   for (const o of [0x43, 0x53, 0x63, 0x73]) slot1Pats.push([0xED, o, 0xFE, 0xFF], [0xED, o, 0xFD, 0xFF]);
   for (const p of [0xDD, 0xFD]) slot1Pats.push([p, 0x22, 0xFE, 0xFF], [p, 0x22, 0xFD, 0xFF]);
   const slot1Stores = slot1Pats.reduce((a, p) => a + countPattern(img, p), 0);
@@ -243,11 +246,11 @@ export function describe(rom, opts = {}) {
   // Slot 0 ($0000-$3FFF) is paged by $FFFD on the Sega mapper (its first 1KB
   // stays on page 0) and by $0000 on the Codemasters one (all of it). Found
   // the same way as slot 1: any direct store to the register.
-  const slot0Reg = mapper === "codemasters" ? [0x00, 0x00] : mapper === "sega" ? [0xFD, 0xFF] : null;
+  const slot0Reg = mapper === "codemasters" ? [0x00, 0x00] : mapper === "sega" || mapper === "korean-v2" ? [0xFD, 0xFF] : null;
   let slot0Stores = 0;
   if (slot0Reg && opts.legacy !== true) {
     const pats = [[0x32, ...slot0Reg]];
-    if (mapper === "sega") pats.push([0x22, 0xFC, 0xFF], [0xED, 0x43, 0xFC, 0xFF], [0xED, 0x53, 0xFC, 0xFF], [0xED, 0x63, 0xFC, 0xFF], [0xED, 0x73, 0xFC, 0xFF], [0xDD, 0x22, 0xFC, 0xFF], [0xFD, 0x22, 0xFC, 0xFF]);
+    if (mapper === "sega" || mapper === "korean-v2") pats.push([0x22, 0xFC, 0xFF], [0xED, 0x43, 0xFC, 0xFF], [0xED, 0x53, 0xFC, 0xFF], [0xED, 0x63, 0xFC, 0xFF], [0xED, 0x73, 0xFC, 0xFF], [0xDD, 0x22, 0xFC, 0xFF], [0xFD, 0x22, 0xFC, 0xFF]);
     for (const pre of [[0x22], [0xED, 0x43], [0xED, 0x53], [0xED, 0x63], [0xED, 0x73], [0xDD, 0x22], [0xFD, 0x22]]) pats.push([...pre, ...slot0Reg]);
     slot0Stores = pats.reduce((a, p) => a + countPattern(img, p), 0);
   }
@@ -318,7 +321,8 @@ export function describe(rom, opts = {}) {
     slot1StoreSites: slot1Stores,
     pagesSlot0,
     slot0StoreSites: slot0Stores,
-    slot0From: mapper === "codemasters" ? 0 : 0x400,
+    // mapper_16k_w: the first 1KB of slot 0 is fixed on the SEGA mapper only
+    slot0From: mapper === "sega" ? 0x400 : 0,
     slot1Bank: Number.isInteger(opts.slot1Bank) ? opts.slot1Bank : 1,
     ramRegions,
     ramSnapshot: typeof opts.ramSnapshot === "string" ? opts.ramSnapshot
@@ -740,7 +744,11 @@ ${RAMMAP_LOOKUP}    (i32.const 0))
 function bankHelpersExactWat(G, cfg, nbank) {
   const { ROMIMG, CARTRAM, BMAP0, BMAPP, BMAP1, BMAPR, BMAPS0 } = G;
   const M = cfg.mapper;
-  const sega = M === "sega", cm = M === "codemasters", kr = M === "korean-a000";
+  // 'korean-v2' (write_mapper_korea_16k_v2): the SEGA registers at $FFFC-$FFFF
+  // without the page increment or the fixed first 1KB, plus $4000 / $8000
+  // paging slots 1 / 2 (gpgx resets slot 2 to page 0)
+  const kv2 = M === "korean-v2";
+  const sega = M === "sega" || kv2, cm = M === "codemasters", kr = M === "korean-a000";
   const page = (v) => `(i32.rem_u ${v} (i32.const ${nbank}))`;
   const romAt = (bank, off) => `(i32.load8_u (i32.add (i32.const ${ROMIMG}) (i32.add (i32.mul ${bank} (i32.const 0x4000)) ${off})))`;
   const cartRam = (off) => `(i32.add (i32.const ${CARTRAM}) ${off})`;
@@ -786,7 +794,7 @@ ${sega ? `        (if (i32.and (global.get $ctl) (i32.const 0x08))
 ` : ""}        (return ${romAt("(global.get $bank2)", "(i32.sub (local.get $a) (i32.const 0x8000))")})))
     (if (i32.ge_u (local.get $a) (i32.const 0x4000))
       (then (return ${romAt("(global.get $bank1)", "(i32.sub (local.get $a) (i32.const 0x4000))")})))
-${sega ? `    (if (i32.lt_u (local.get $a) (i32.const 0x400)) (then (return (i32.load8_u (i32.add (i32.const ${ROMIMG}) (local.get $a))))))
+${sega && !kv2 ? `    (if (i32.lt_u (local.get $a) (i32.const 0x400)) (then (return (i32.load8_u (i32.add (i32.const ${ROMIMG}) (local.get $a))))))
 ` : ""}    ${romAt("(global.get $bank0)", "(local.get $a)")})
 ${sega ? `
   ;; gpgx mapper_16k_w for the Sega mapper's four registers
@@ -815,6 +823,8 @@ ${cfg.bankShift === false ? "" : `                    (if (i32.and (local.get $v
     (if (i32.lt_u (local.get $a) (i32.const 0xC000))
       (then
 ${kr ? `        (if (i32.eq (local.get $a) (i32.const 0xA000)) (then (global.set $bank2 ${page("(local.get $v)")}) (return)))
+` : ""}${kv2 ? `        (if (i32.eq (local.get $a) (i32.const 0x4000)) (then (call $mapper_w (i32.const 2) (local.get $v)) (return)))
+        (if (i32.eq (local.get $a) (i32.const 0x8000)) (then (call $mapper_w (i32.const 3) (local.get $v)) (return)))
 ` : ""}${cm ? `        (if (i32.eqz (local.get $a)) (then (global.set $bank0 ${page("(local.get $v)")}) (return)))
         (if (i32.eq (local.get $a) (i32.const 0x4000))
           (then (global.set $bank1 ${page("(local.get $v)")})

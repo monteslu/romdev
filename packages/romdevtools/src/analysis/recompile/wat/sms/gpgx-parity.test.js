@@ -349,3 +349,32 @@ test("a Game Gear cart gpgx runs in Master System mode (SYSTEM_GGMS): SMS CRAM a
     assert.equal(r.picture.exactPct, 100, `R0=${r0}: ${JSON.stringify(r.picture)}`);
   }
 });
+
+test("the Korean 16K v2 mapper: $4000 / $8000 page slots 1 / 2, SEGA registers without the page increment or the fixed first 1KB", T, async () => {
+  const st = (a) => [0x32, a & 0xFF, a >> 8];          // ld (a),a
+  const ld = (a) => [0x3A, a & 0xFF, a >> 8];          // ld a,(a)
+  const w = (addr, v) => [0x3E, v, ...st(addr)];
+  let n = 0;
+  const probe = (addr) => [...ld(addr), ...st(0xC000 + n++)];
+  const prog = z80([
+    [0xF3, 0x31, 0xF0, 0xDF],
+    probe(0x3F00), probe(0x7F00), probe(0xBF00), probe(0x0010),       // power-on pages
+    w(0x8000, 3), probe(0xBF00),                                       // $8000 pages slot 2
+    w(0x4000, 2), probe(0x7F00),                                       // $4000 pages slot 1
+    w(0xFFFD, 1), probe(0x3F00), probe(0x0010),                        // slot 0, its first 1KB too
+    w(0xFFFE, 2), probe(0x7F00), w(0xFFFF, 1), probe(0xBF00),
+    w(0xFFFC, 0x01), w(0xFFFF, 1), probe(0xBF00),                      // no SEGA page increment
+    w(0xFFFC, 0x08), w(0x8001, 0x5A), probe(0x8001), w(0xFFFC, 0x00), probe(0xBF00),   // cart RAM at $8000
+    "end:", ["jr", null, "end"]], 0x100);
+  const rom = new Uint8Array(0x40000);
+  for (let k = 0; k < 16; k++) {
+    rom.set([0xC3, 0x00, 0x01], k * 0x4000);
+    rom.set(prog, k * 0x4000 + 0x100);
+    rom[k * 0x4000 + 0x10] = 0x20 + k;
+    rom[k * 0x4000 + 0x3F00] = 0x40 + k;
+  }
+  const img = smsImage([], { size: 0x40000, region: 6, at: [[0, rom.subarray(0, 0x7FF0)], [0x8000, rom.subarray(0x8000)]] });
+  // a USA SYSTEM_GGMS / MAPPER_KOREA_16K_V2 entry of gpgx's database
+  const r = await gpgxParity({ platform: "gg", rom: await forgeCrc32(img, 0x3F80, 0x01A2D595), maxFrames: 3 });
+  assert.equal(r.diverged, false, divergenceText(r));
+});
