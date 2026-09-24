@@ -47,17 +47,19 @@ const SHARED_ABI = [
 // The cores migrated to the shared lib (0.80.0 pilots). As more cores migrate, add
 // them here - the test then guards their ABI too. `extra` = per-core exports that
 // must ALSO be present (the genuinely per-core debug surface kept in each patch).
+// The instruction trace (romdev_trace_*) is listed per core: it is in the shared
+// lib, but only the cores rebuilt with romdev_on_dispatch_ex export it so far.
 const MIGRATED_CORES = [
-  { core: "gambatte_libretro",        extra: ["_romdev_setreg", "_romdev_getreg"] },
-  { core: "fceumm_libretro",          extra: ["_romdev_setreg", "_romdev_getreg", "_romdev_vramwatch_set", "_romdev_vramwatch_get"] },
-  { core: "genesis_plus_gx_libretro", extra: ["_romdev_setreg", "_romdev_getreg", "_romdev_vramwatch_set", "_romdev_dmawatch_set", "_romdev_run_pure"] },
-  { core: "snes9x_libretro",          extra: ["_romdev_setreg", "_romdev_getreg", "_romdev_vramwatch_set", "_romdev_vramwatch_get"] },
+  { core: "gambatte_libretro",        extra: ["_romdev_trace_set", "_romdev_trace_info", "_romdev_setreg", "_romdev_getreg"] },
+  { core: "fceumm_libretro",          extra: ["_romdev_trace_set", "_romdev_trace_info", "_romdev_setreg", "_romdev_getreg", "_romdev_vramwatch_set", "_romdev_vramwatch_get"] },
+  { core: "genesis_plus_gx_libretro", extra: ["_romdev_trace_set", "_romdev_trace_info", "_romdev_setreg", "_romdev_getreg", "_romdev_vramwatch_set", "_romdev_dmawatch_set", "_romdev_run_pure"] },
+  { core: "snes9x_libretro",          extra: ["_romdev_trace_set", "_romdev_trace_info", "_romdev_setreg", "_romdev_getreg", "_romdev_vramwatch_set", "_romdev_vramwatch_get"] },
   { core: "vice_x64_libretro",        extra: ["_romdev_setreg", "_romdev_getreg", "_romdev_disk_export", "_romdev_key_matrix", "_romdev_joyport_get"] },
   { core: "prosystem_libretro",       extra: ["_romdev_setreg", "_romdev_getreg"] },
   { core: "stella2014_libretro",      extra: ["_romdev_setreg", "_romdev_getreg"] },
   { core: "geargrafx_libretro",       extra: ["_romdev_setreg", "_romdev_getreg", "_romdev_vramwatch_set", "_romdev_vramwatch_get"] },
   { core: "bluemsx_libretro",         extra: ["_romdev_setreg", "_romdev_getreg", "_romdev_vramwatch_set", "_romdev_vramwatch_get"] },
-  { core: "mgba_libretro",            extra: ["_romdev_setreg", "_romdev_getreg"] },
+  { core: "mgba_libretro",            extra: ["_romdev_trace_set", "_romdev_trace_info", "_romdev_setreg", "_romdev_getreg"] },
   // handy (Lynx 65C02) - the last inline holdout, now on the shared lib. The CPU_PEEK
   // read hook MUST evaluate the (side-effecting) I/O read exactly once; see the patch.
   { core: "handy_libretro",           extra: ["_romdev_setreg", "_romdev_getreg"] },

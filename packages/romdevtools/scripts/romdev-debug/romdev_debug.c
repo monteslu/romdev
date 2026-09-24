@@ -12,6 +12,8 @@
  * the exports from being LTO-stripped; they must ALSO be in EXPORTED_FUNCTIONS.
  */
 #include "romdev_debug.h"
+#include <stdlib.h>
+#include <string.h>
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -67,6 +69,17 @@ static unsigned      wd_limit = 0;         /* watchdog: max instrs (0=off) */
 static unsigned      wd_count = 0;
 static int           wd_tripped = 0;
 static int           pc_hit_kind = 0;      /* why the last dispatch froze: 1=pcbreak 2=watchdog */
+
+/* instruction trace ring (romdev_trace_set / romdev_trace_info) */
+static unsigned     *tr_buf = 0;
+static unsigned      tr_cap = 0;           /* entries (2 words each) */
+static unsigned      tr_count = 0;         /* entries recorded since trace_set (monotone) */
+static int           tr_enabled = 0;
+static unsigned      tr_cpumask = 1u;      /* which dispatching CPUs are recorded */
+static unsigned      tr_words = 2;         /* u32 per entry: pc, clock (+ registers) */
+static unsigned      tr_regs_want = 0;     /* host asked for the register columns */
+static unsigned      tr_regs_n = 0;        /* register columns the core provides */
+static void        (*tr_regs_fn)(unsigned *dst) = 0;
 
 /* at-hit snapshots (filled by the core's shim; declared in the header) */
 unsigned romdev_snap_regs[ROMDEV_SNAP_REGS];
@@ -254,13 +267,41 @@ void romdev_regsnap_get(unsigned *out, int clear) {
 EMSCRIPTEN_KEEPALIVE
 void romdev_irqblock_set(int on) { romdev_irq_block = on ? 1 : 0; }
 
+EMSCRIPTEN_KEEPALIVE
+unsigned romdev_trace_set(unsigned cap, int enabled, unsigned cpumask) {
+    /* (Re)arm the trace: the count restarts at 0 and the ring is kept (or
+     * reallocated when the capacity changes). cap 0 or enabled 0 disarms. */
+    unsigned words = 2u + (tr_regs_want && tr_regs_fn ? tr_regs_n : 0u);
+    tr_enabled = 0; tr_count = 0;
+    if (!enabled || !cap) return tr_cap;
+    if (cap > ROMDEV_TRACE_MAX) cap = ROMDEV_TRACE_MAX;
+    if (cap != tr_cap || words != tr_words || !tr_buf) {
+        free(tr_buf);
+        tr_buf = (unsigned *)malloc((size_t)cap * words * sizeof(unsigned));
+        tr_cap = tr_buf ? cap : 0;
+        tr_words = words;
+    }
+    tr_cpumask = cpumask ? cpumask : 1u;
+    tr_enabled = tr_buf ? 1 : 0;
+    return tr_cap;
+}
+EMSCRIPTEN_KEEPALIVE
+void romdev_trace_info(unsigned *out) {
+    if (!out) return;
+    out[0] = (unsigned)tr_enabled; out[1] = tr_cap; out[2] = tr_count;
+    out[3] = (unsigned)(unsigned long)tr_buf; out[4] = tr_cpumask;
+    out[5] = tr_words; out[6] = tr_regs_n;
+}
+EMSCRIPTEN_KEEPALIVE
+void romdev_trace_regs(int on) { tr_regs_want = on ? 1u : 0u; }
+
 /* ── PART 2: core-facing hooks (the seam) ───────────────────────────────────── */
 
 int romdev_wp_wants_old(void) { return wp_enabled && wp_cond; }
 
 int romdev_any_armed(void) {
     return wp_enabled || rd_enabled || range_enabled || cov_enabled || covb_enabled
-        || pc_enabled || pc_step || wd_limit || pc_hit;
+        || pc_enabled || pc_step || wd_limit || pc_hit || tr_enabled;
 }
 
 static int wp_cond_ok(unsigned char oldv, unsigned char v) {
@@ -306,7 +347,36 @@ int romdev_on_read(unsigned addr, unsigned char val, unsigned pc) {
     return hit;
 }
 
-int romdev_on_dispatch(unsigned pc) {
+static int romdev_dispatch_checks(unsigned pc);
+
+/* One instruction-trace entry: the dispatched pc and the core's clock at dispatch. */
+static void trace_record(unsigned pc, unsigned clock, int cpu) {
+    if (!((tr_cpumask >> (cpu & 31)) & 1u)) return;
+    {
+        unsigned *e = tr_buf + tr_words * (tr_count % tr_cap);
+        e[0] = pc; e[1] = clock;
+        if (tr_words > 2) tr_regs_fn(e + 2);
+    }
+    tr_count++;
+}
+
+int romdev_trace_wants_regs(void) { return tr_enabled && tr_words > 2; }
+
+void romdev_trace_provide_regs(void (*fn)(unsigned *dst), unsigned n) {
+    tr_regs_fn = fn; tr_regs_n = fn ? n : 0;
+}
+
+int romdev_on_dispatch(unsigned pc) { return romdev_on_dispatch_ex(pc, 0, 0); }
+
+int romdev_on_dispatch_ex(unsigned pc, unsigned clock, int cpu) {
+    int r = romdev_dispatch_checks(pc);
+    /* Record only instructions that EXECUTE: a freeze returns 1 before the
+     * instruction runs, and the resumed dispatch of the same pc records it once. */
+    if (tr_enabled && !r) trace_record(pc, clock, cpu);
+    return r;
+}
+
+static int romdev_dispatch_checks(unsigned pc) {
     /* exact coverage bitmap: O(1) per instruction */
     if (covb_enabled && pc >= covb_lo && pc < covb_hi) {
         unsigned bit = (pc - covb_lo) >> covb_shift, w = bit >> 5, m = 1u << (bit & 31);

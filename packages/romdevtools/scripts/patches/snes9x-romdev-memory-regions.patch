@@ -1,5 +1,5 @@
 diff --git a/cpuexec.cpp b/cpuexec.cpp
-index aa43b2f..3c69389 100644
+index aa43b2f..7f0074a 100644
 --- a/cpuexec.cpp
 +++ b/cpuexec.cpp
 @@ -19,8 +19,49 @@
@@ -82,7 +82,7 @@ index aa43b2f..3c69389 100644
 +		 * un-executed instruction (the host polls pcbreak_get after retro_run). */
 +		romdev_snes_instr_pc = Registers.PBPC & 0xffffff;
 +
-+		if (romdev_on_dispatch(Registers.PBPC & 0xffffff))
++		if (romdev_on_dispatch_ex(Registers.PBPC & 0xffffff, (unsigned)CPU.V_Counter * (unsigned)Timings.H_Max + (unsigned)CPU.Cycles, 0))
 +		{
 +			romdev_snes_snap(romdev_pc_hit_kind() == 2 ? 2 : 1);
 +			break;
@@ -92,7 +92,7 @@ index aa43b2f..3c69389 100644
  		struct	SOpcodes	*Opcodes;
  
 diff --git a/getset.h b/getset.h
-index ec55ea9..a73af88 100644
+index ec55ea9..82a87b6 100644
 --- a/getset.h
 +++ b/getset.h
 @@ -54,7 +54,58 @@ static inline int32 memory_speed (uint32 address)
@@ -305,7 +305,7 @@ index 98f9941..f44eb0f 100644
  {
  	int	SmallWidth, SmallHeight, LargeWidth, LargeHeight;
 diff --git a/libretro/libretro.cpp b/libretro/libretro.cpp
-index d381c61..63b284f 100644
+index d381c61..ea7a21c 100644
 --- a/libretro/libretro.cpp
 +++ b/libretro/libretro.cpp
 @@ -6,6 +6,7 @@
@@ -316,7 +316,7 @@ index d381c61..63b284f 100644
  #include "gfx.h"
  #include "snapshot.h"
  #include "controls.h"
-@@ -2029,6 +2030,162 @@ unsigned retro_get_region()
+@@ -2029,6 +2030,178 @@ unsigned retro_get_region()
      return Settings.PAL ? RETRO_REGION_PAL : RETRO_REGION_NTSC;
  }
  
@@ -438,6 +438,22 @@ index d381c61..63b284f 100644
 + * (re-rendering with layer masks would lose every mid-frame trick). */
 +#define ROMDEV_MEMORY_SNES_LP_WORLD  0x1B6  /* 240*512 u16 LE RGB565, no OBJ pixels */
 +#define ROMDEV_MEMORY_SNES_LP_OBJ    0x1B7  /* 240*512 u16 LE RGB565, only OBJ pixels */
++/* The CPU's position in the frame, assembled on read (u32 LE each):
++ * [0] master clock since the frame's line 0 = V_Counter * H_Max + Cycles,
++ * [1] CPU.Cycles (master cycles into the line), [2] CPU.V_Counter,
++ * [3] Timings.H_Max, [4] IPPU.TotalEmulatedFrames. Two runs with equal
++ * registers can still be at different points of the frame; this tells. */
++#define ROMDEV_MEMORY_SNES_TIMING    0x1B8
++static uint32 romdev_snes_timing[5];
++static void *romdev_snes_fill_timing(void)
++{
++    romdev_snes_timing[0] = (uint32)CPU.V_Counter * (uint32)Timings.H_Max + (uint32)CPU.Cycles;
++    romdev_snes_timing[1] = (uint32)CPU.Cycles;
++    romdev_snes_timing[2] = (uint32)CPU.V_Counter;
++    romdev_snes_timing[3] = (uint32)Timings.H_Max;
++    romdev_snes_timing[4] = (uint32)IPPU.TotalEmulatedFrames;
++    return romdev_snes_timing;
++}
 +unsigned char romdev_snes_linepix[480 * 512 * 2];
 +unsigned char romdev_snes_lp_world[240 * 512 * 2];
 +unsigned char romdev_snes_lp_obj[240 * 512 * 2];
@@ -479,7 +495,7 @@ index d381c61..63b284f 100644
  void* retro_get_memory_data(unsigned type)
  {
      void* data;
-@@ -2051,6 +2208,42 @@ void* retro_get_memory_data(unsigned type)
+@@ -2051,6 +2224,45 @@ void* retro_get_memory_data(unsigned type)
          case RETRO_MEMORY_VIDEO_RAM:
          data = Memory.VRAM;
          break;
@@ -504,6 +520,9 @@ index d381c61..63b284f 100644
 +        case ROMDEV_MEMORY_SNES_FRAMEINFO:
 +            data = romdev_snes_frameinfo;
 +            break;
++        case ROMDEV_MEMORY_SNES_TIMING:
++            data = romdev_snes_fill_timing();
++            break;
 +        case ROMDEV_MEMORY_SNES_M7LINES:
 +            data = romdev_snes_m7lines;
 +            break;
@@ -522,7 +541,7 @@ index d381c61..63b284f 100644
          //case RETRO_MEMORY_ROM:
          //	data = Memory.ROM;
          //	break;
-@@ -2085,6 +2278,42 @@ size_t retro_get_memory_size(unsigned type)
+@@ -2085,6 +2297,45 @@ size_t retro_get_memory_size(unsigned type)
          case RETRO_MEMORY_VIDEO_RAM:
              size = 64 * 1024;
              break;
@@ -543,6 +562,9 @@ index d381c61..63b284f 100644
 +            break;
 +        case ROMDEV_MEMORY_SNES_FRAMEINFO:
 +            size = 8;
++            break;
++        case ROMDEV_MEMORY_SNES_TIMING:
++            size = sizeof(romdev_snes_timing);
 +            break;
 +        case ROMDEV_MEMORY_SNES_M7LINES:
 +            size = 240 * 16;
@@ -565,7 +587,7 @@ index d381c61..63b284f 100644
          //case RETRO_MEMORY_ROM:
          //	size = Memory.CalculatedSize;
          //	break;
-@@ -2259,10 +2488,36 @@ bool8 S9xDeinitUpdate(int width, int height)
+@@ -2259,10 +2510,36 @@ bool8 S9xDeinitUpdate(int width, int height)
              width >>= 1;
          }
  
@@ -603,7 +625,7 @@ index d381c61..63b284f 100644
      }
  
 diff --git a/ppu.h b/ppu.h
-index f5b0e0a..e34c413 100644
+index f5b0e0a..cbf01df 100644
 --- a/ppu.h
 +++ b/ppu.h
 @@ -352,6 +352,23 @@ static inline void REGISTER_2104 (uint8 Byte)

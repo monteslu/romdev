@@ -387,6 +387,15 @@ export async function stepInstructionsCore(sessionKey, { count = 16, withRegiste
   }
   const finalPcHex = finalPc != null ? "$" + finalPc.toString(16).toUpperCase() : null;
 
+  // An empty trace is a FAILURE, never `stepped:true` with count 0: a caller
+  // that checks `stepped` would read a core that could not step as a pass.
+  if (!trace.length) {
+    return jsonContent({
+      stepped: false, count: 0, trace: [],
+      error: `the core reported no stepped instruction (asked for ${n}). The single-step hook never fired within a frame: the CPU may be stopped (a STOP/halt the core does not leave inside one frame), or this core build predates the fix for its step hook. frame({op:'stepInstruction'}) and cpu({op:'read'}) show where the CPU is.`,
+    });
+  }
+
   // format:'compact' - one string per step instead of a per-step object. A
   // triage trace's signal is "which loop is the CPU in", and 48 steps of JSON
   // objects (~250 lines) is ~90% padding for that. Each string is
@@ -422,7 +431,8 @@ export async function stepInstructionsCore(sessionKey, { count = 16, withRegiste
     note: (opAt
       ? "CPU is frozen at finalPc. `flow` classifies each step from its opcode (seq/branch/call/jump/ret); `width` = the instruction's true byte size and is present ONLY on `flow:'seq'` steps, so a 65816 immediate width (2-byte lda #imm8 vs 3-byte ldx #imm16) is trustworthy - a taken forward branch no longer masquerades as a width (it carries `flow` + `nextPc` instead). "
       : "CPU is frozen at finalPc. `width` = PC[k+1]-PC[k]; on this core no opcode classifier ran, so `flow:'seq'` means the step was linear (delta = size) and a branch omits `width`. ") +
-      "Step more with frame({op:'stepInstructions', count}). For a compact loop-map trace pass format:'compact'.",
+      "Step more with frame({op:'stepInstructions', count}). For a compact loop-map trace pass format:'compact'. " +
+      "TIMING: each stepped instruction freezes the CPU while the rest of the machine finishes that frame, so consecutive steps are a frame apart in machine time (polls and interrupts land differently than in a free run). For the stream the game really executes, use frame({op:'traceInstructions'}).",
   }), host);
 }
 

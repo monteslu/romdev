@@ -102,6 +102,9 @@ export const RetroMemory = {
   SNES_CLIPLINES:     0x1B5,
   SNES_LP_WORLD:      0x1B6,
   SNES_LP_OBJ:        0x1B7,
+  /** 20 bytes, 5 u32 LE: [0] master clock since line 0 (V_Counter*H_Max + Cycles),
+   *  [1] CPU.Cycles, [2] CPU.V_Counter, [3] Timings.H_Max, [4] TotalEmulatedFrames. */
+  SNES_TIMING:        0x1B8,
   GENESIS_CRAM:       0x120,
   GENESIS_VSRAM:      0x121,
   GENESIS_VDP_REGS:   0x122,
@@ -152,6 +155,9 @@ export const RetroMemory = {
   GBA_PALETTE:        0x182,
   GBA_OAM:            0x183,
   GBA_IWRAM:          0x184,
+  /** 16 bytes, 4 u32 LE: [0] master clock (mTimingCurrentTime), [1] cpu->cycles,
+   *  [2] cpu->nextEvent, [3] timing.masterCycles. Assembled on read. */
+  GBA_TIMING:         0x185,
   // Lynx (handy): CPU snapshot + the $FC00-$FDFF Suzy/Mikey HW register window
   // (sprite regs, LCD control, audio $FD20-$FD3F, palette $FDA0-$FDBF).
   LYNX_CPU_REGS:      0x190,
@@ -261,6 +267,7 @@ export const MemoryRegionToRetro = {
   snes_cliplines: RetroMemory.SNES_CLIPLINES,
   snes_lp_world: RetroMemory.SNES_LP_WORLD,
   snes_lp_obj: RetroMemory.SNES_LP_OBJ,
+  snes_timing: RetroMemory.SNES_TIMING,
   genesis_cram: RetroMemory.GENESIS_CRAM,
   genesis_vsram: RetroMemory.GENESIS_VSRAM,
   genesis_vdp_regs: RetroMemory.GENESIS_VDP_REGS,
@@ -321,6 +328,7 @@ export const MemoryRegionToRetro = {
   gba_palette:   RetroMemory.GBA_PALETTE,
   gba_oam:       RetroMemory.GBA_OAM,
   gba_iwram:     RetroMemory.GBA_IWRAM,
+  gba_timing:    RetroMemory.GBA_TIMING,
   sync32_cpu_regs: RetroMemory.SYNC32_CPU_REGS,
   sync32_palette:  RetroMemory.SYNC32_PALETTE,
   sync32_canvas:   RetroMemory.SYNC32_CANVAS,

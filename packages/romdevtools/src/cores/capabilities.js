@@ -82,7 +82,7 @@ export const CAPABILITIES = {
     audioChips: ["dsp"],
     memoryRegions: [...GENERIC_REGIONS, "snes_oam", "snes_cgram", "snes_aram", "snes_fillram",
       "snes_linepix", "snes_linestate", "snes_frameinfo", "snes_m7lines", "snes_linedepth", "snes_cliplines",
-      "snes_lp_world", "snes_lp_obj"],
+      "snes_lp_world", "snes_lp_obj", "snes_timing"],
     ...tileDeep(),
   },
   genesis: {
@@ -136,7 +136,7 @@ export const CAPABILITIES = {
     cpuFamily: "arm", decompileQuality: "excellent",
     cpus: { main: "arm", secondary: [] },
     audioChips: ["gba"],
-    memoryRegions: [...GENERIC_REGIONS, "gba_cpu_regs", "gba_io_regs", "gba_palette", "gba_oam", "gba_iwram"],
+    memoryRegions: [...GENERIC_REGIONS, "gba_cpu_regs", "gba_io_regs", "gba_palette", "gba_oam", "gba_iwram", "gba_timing"],
     // GBA: the patched mgba regions give MORE than BUILDING.md's old "shallow"
     // prose implied - inspectSprites/Palette + renderingContext + cpuState +
     // audioDebug are all wired (per the tool Supported lists). cart extract/wrap

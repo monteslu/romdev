@@ -35,6 +35,7 @@ extern "C" {
 #define ROMDEV_RANGE_CAP  4096   /* range-watch event ring */
 #define ROMDEV_SNAP_REGS  19     /* registers in a snapshot (romdev_snap_regs[]) */
 #define ROMDEV_SNAP_WORDS 21     /* regsnap_get out: [kind, count(19), regs0..18] */
+#define ROMDEV_TRACE_MAX  (1u << 22) /* instruction-trace ring entries at most (32 MB) */
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * PART 1 - exports the HOST calls (the ABI). Implemented in romdev_debug.c.
@@ -108,6 +109,25 @@ unsigned romdev_covbits_get(unsigned *out, unsigned maxWords, unsigned *out2);
  * [2..20]=the per-CPU register layout. */
 void romdev_regsnap_get(unsigned *out, int clear);
 
+/* Instruction trace: every EXECUTED instruction's dispatch pc and the core's clock at
+ * that dispatch, in execution order, recorded in a ring of `cap` entries (2 u32 each:
+ * [pc, clock]) while the machine free-runs. Unlike single-step (which freezes the CPU
+ * while the rest of the machine finishes the frame, so every stepped instruction is a
+ * frame apart in machine time) the trace does not perturb timing: it is the stream
+ * the core really executed. `cpumask` picks which dispatching CPUs are recorded (bit
+ * n = the `cpu` a core passes to romdev_on_dispatch_ex; the main CPU is 0, a second
+ * CPU such as genesis_plus_gx's Z80 is 1). set() restarts the count; returns the
+ * capacity allocated (0 = none). info out7: [enabled, cap, count, bufPtr, cpumask,
+ * wordsPerEntry, nRegs]; entry k (0-based since set) lives at
+ * bufPtr + 4 * wordsPerEntry * (k % cap) while k >= count - cap. */
+unsigned romdev_trace_set(unsigned cap, int enabled, unsigned cpumask);
+void romdev_trace_info(unsigned *out);
+/* Register columns: romdev_trace_regs(1) BEFORE romdev_trace_set makes every entry
+ * [pc, clock, reg0..regN-1] when the core provides registers (see
+ * romdev_trace_provide_regs); info out7 then reads [.., wordsPerEntry, nRegs]. The
+ * layout of the columns is per core (mgba: r0-r15, cpsr; gambatte: sp, hl, bc, de). */
+void romdev_trace_regs(int on);
+
 /* IRQ block: when set, the core's interrupt dispatch is gated off (deterministic
  * stepping). The core reads romdev_irq_block in its IRQ path. */
 void romdev_irqblock_set(int on);
@@ -144,6 +164,20 @@ int romdev_on_read(unsigned addr, unsigned char val, unsigned pc);
  * When it returns 1, romdev_pc_hit_kind() says WHY (for the snapshot kind). */
 int romdev_on_dispatch(unsigned pc);
 
+/* romdev_on_dispatch with the core's clock at this dispatch (any monotone-within-a-
+ * frame cycle count the core keeps; recorded by the instruction trace) and which CPU
+ * is dispatching (0 = main; see romdev_trace_set's cpumask). romdev_on_dispatch(pc)
+ * is romdev_on_dispatch_ex(pc, 0, 0). */
+int romdev_on_dispatch_ex(unsigned pc, unsigned clock, int cpu);
+
+/* A core that can report its registers per instruction registers a filler (called
+ * once per traced instruction, only while register columns are armed) and the
+ * column count. Call once at init. */
+void romdev_trace_provide_regs(void (*fn)(unsigned *dst), unsigned n);
+/* True while the trace records register columns: a core whose registers live in
+ * locals copies them out only then (the filler reads the copy). */
+int romdev_trace_wants_regs(void);
+
 /* After romdev_on_dispatch returns 1, the reason for the freeze (= the snapshot kind
  * the core should take): 1 = pc-break/single-step, 2 = watchdog. 0 if no freeze. */
 int romdev_pc_hit_kind(void);
@@ -158,7 +192,7 @@ int romdev_is_frozen(void);
 int romdev_wp_wants_old(void);
 
 /* True when ANY debug feature is armed (watchpoint / read-watch / range / coverage /
- * pc-break / single-step / watchdog / freeze). A core with a stock tight run loop uses
+ * pc-break / single-step / watchdog / freeze / trace). A core with a stock tight run loop uses
  * this to bypass all the per-instruction hooks when nothing is armed - zero overhead on
  * the hot path. Equivalent to OR-ing every enabled flag. */
 int romdev_any_armed(void);

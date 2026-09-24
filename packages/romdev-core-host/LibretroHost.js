@@ -885,6 +885,9 @@ export class LibretroHost {
     // Proxied cores (PSP) drive frames through the async run path (run_start + poll); the
     // synchronous settle loop below uses the blocking sync run, so skip it. PSP geometry is the
     // fixed 480×272 av_info already read, so there's no pre-init default to settle past.
+    // A caller that must observe the settle frames themselves (the
+    // instruction differ traces power-on) arms its hooks here.
+    if (typeof args.beforeSettle === "function") args.beforeSettle(this);
     if (!this.status.paused && !this._proxied) {
       // Settle frames are core warm-up, not agent-visible gameplay
       // frames - don't increment frameCount. From the agent's POV the
@@ -3037,6 +3040,97 @@ export class LibretroHost {
     } finally {
       mod._free(outPtr); mod._free(out2Ptr);
     }
+  }
+
+  // ── instruction trace (free-running, exact) ────────────────────────────────
+  // Every EXECUTED instruction's pc (and the core's clock at dispatch) in
+  // order, recorded by the core while it runs normally. stepInstruction is not
+  // a substitute: it freezes the CPU while the rest of the machine finishes the
+  // frame, so consecutive stepped instructions are a frame apart in machine
+  // time and every interrupt/poll lands somewhere else.
+
+  /** True when this core build records the instruction trace (romdev_trace_*). */
+  traceSupported() {
+    const mod = this.mod;
+    return !!(mod && typeof mod._romdev_trace_set === "function" && typeof mod._romdev_trace_info === "function");
+  }
+
+  /**
+   * Which dispatching CPUs the trace records for the loaded platform: bit 0 =
+   * the main CPU. genesis_plus_gx dispatches its Z80 as cpu 1, which is the
+   * MAIN CPU on SMS / Game Gear.
+   */
+  traceCpuMask() {
+    const p = this.status.platform;
+    return p === "sms" || p === "gg" || p === "sg1000" ? 2 : 1;
+  }
+
+  /**
+   * Arm (restart) or disarm the trace. The count restarts at 0.
+   * `registers:true` adds the core's per-instruction register columns
+   * (traceRegisterNames()) where the core provides them.
+   * @param {{capacity?:number, enabled?:boolean, cpuMask?:number, registers?:boolean}} [o]
+   * @returns {number} the ring capacity allocated (entries)
+   */
+  setTrace({ capacity = 1 << 20, enabled = true, cpuMask, registers = false } = {}) {
+    const mod = this._needMod();
+    if (!this.traceSupported()) throw new Error("this core build does not record an instruction trace (rebuild with romdev_trace_* exports).");
+    if (typeof mod._romdev_trace_regs === "function") mod._romdev_trace_regs(registers ? 1 : 0);
+    return mod._romdev_trace_set(capacity >>> 0, enabled ? 1 : 0, (cpuMask ?? this.traceCpuMask()) >>> 0) >>> 0;
+  }
+
+  /** Names of the register columns this core records with setTrace({registers:true}). */
+  traceRegisterNames() {
+    const p = this.status.platform;
+    if (p === "gba") return [...Array.from({ length: 16 }, (_, i) => `r${i}`), "cpsr"];
+    if (p === "gb" || p === "gbc") return ["sp", "hl", "bc", "de"];
+    if (p === "nes") return ["a", "x", "y", "s", "p"];
+    return [];
+  }
+
+  /** @returns {{enabled:boolean, capacity:number, count:number, ptr:number, cpuMask:number, words:number, regs:number}} */
+  traceInfo() {
+    const mod = this._needMod();
+    if (!this.traceSupported()) throw new Error("this core build does not record an instruction trace.");
+    const p = mod._malloc(28);
+    try {
+      new Uint32Array(mod.HEAPU8.buffer, p, 7).fill(0);
+      mod._romdev_trace_info(p);
+      const u = new Uint32Array(mod.HEAPU8.buffer, p, 7);
+      return { enabled: !!u[0], capacity: u[1], count: u[2], ptr: u[3], cpuMask: u[4], words: u[5] || 2, regs: u[6] };
+    } finally { mod._free(p); }
+  }
+
+  /**
+   * Read recorded entries [from, to) (indices since setTrace). Entries older
+   * than count - capacity were overwritten; `from` is raised to the oldest
+   * surviving one and `lost` says how many were asked for but gone.
+   * @param {number} [from=0]
+   * @param {number} [to] default: everything recorded so far
+   * `regs` (when the trace was armed with registers) maps each
+   * traceRegisterNames() column to a Uint32Array parallel to `pc`.
+   * @returns {{from:number, to:number, lost:number, pc:Uint32Array, clock:Uint32Array, regs:Record<string,Uint32Array>|null}}
+   */
+  readTrace(from = 0, to) {
+    const info = this.traceInfo();
+    const end = Math.min(to ?? info.count, info.count);
+    const oldest = Math.max(0, info.count - info.capacity);
+    const start = Math.max(from, oldest);
+    const n = Math.max(0, end - start);
+    const W = info.words;
+    const pc = new Uint32Array(n), clock = new Uint32Array(n);
+    const names = W > 2 ? this.traceRegisterNames().slice(0, W - 2) : [];
+    const cols = names.map(() => new Uint32Array(n));
+    if (n && info.ptr) {
+      const ring = new Uint32Array(this.mod.HEAPU8.buffer, info.ptr, info.capacity * W);
+      for (let k = 0; k < n; k++) {
+        const i = ((start + k) % info.capacity) * W;
+        pc[k] = ring[i]; clock[k] = ring[i + 1];
+        for (let c = 0; c < cols.length; c++) cols[c][k] = ring[i + 2 + c];
+      }
+    }
+    const regs = names.length ? Object.fromEntries(names.map((nm, c) => [nm, cols[c]])) : null;
+    return { from: start, to: start + n, lost: Math.max(0, Math.min(start, end) - from), pc, clock, regs };
   }
 
   logPCRange(lo, hi, frames) {

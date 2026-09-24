@@ -1,5 +1,5 @@
 diff --git a/src/drivers/libretro/libretro.c b/src/drivers/libretro/libretro.c
-index 96dece6..ae7a694 100644
+index 96dece6..369e921 100644
 --- a/src/drivers/libretro/libretro.c
 +++ b/src/drivers/libretro/libretro.c
 @@ -262,6 +262,17 @@ static unsigned libretro_msg_interface_version = 0;
@@ -553,7 +553,7 @@ index 946fae3..88ac0eb 100644
  
  void FCEU_ResetPalette(void);
 diff --git a/src/ppu.c b/src/ppu.c
-index 2a5ba88..9a7b7cc 100644
+index 2a5ba88..4c8503a 100644
 --- a/src/ppu.c
 +++ b/src/ppu.c
 @@ -303,9 +303,152 @@ static DECLFW(B2006) {
@@ -1032,10 +1032,10 @@ index e1c6438..e925205 100644
  static uint32_t DMCAddress = 0;
  static int32_t DMCSize = 0;
 diff --git a/src/x6502.c b/src/x6502.c
-index 61b83e0..6fc0034 100644
+index 61b83e0..654f3f4 100644
 --- a/src/x6502.c
 +++ b/src/x6502.c
-@@ -28,6 +28,74 @@
+@@ -28,6 +28,80 @@
  
  X6502 X;
  uint8_t encryptOpcodes =0;
@@ -1080,6 +1080,12 @@ index 61b83e0..6fc0034 100644
 + * romdev_snap_regs[] in the romdev_getReg regId order ([0]=A [1]=X [2]=Y [3]=P
 + * [4]=S [16]=PC-of-executing-instruction [18]=S) + the kind. The hooks call this
 + * when the shared lib reports a hit. */
++/* Per-instruction register columns for the instruction trace: A, X, Y, S, P
++ * as the instruction about to execute sees them. */
++static void romdev_6502_trace_regs(unsigned *dst) {
++	dst[0] = X.A; dst[1] = X.X; dst[2] = X.Y; dst[3] = X.S; dst[4] = X.P;
++}
++
 +static void romdev_6502_snap(int kind) {
 +	int i;
 +	for (i = 0; i < 19; i++) romdev_snap_regs[i] = 0;
@@ -1110,7 +1116,7 @@ index 61b83e0..6fc0034 100644
  
  uint32_t timestamp;
  uint32_t sound_timestamp;
-@@ -54,19 +122,33 @@ void FP_FASTAPASS(1) (*MapIRQHook)(int a);
+@@ -54,19 +128,33 @@ void FP_FASTAPASS(1) (*MapIRQHook)(int a);
  	if (!overclocked) sound_timestamp +=  __x; \
  }
  
@@ -1145,7 +1151,16 @@ index 61b83e0..6fc0034 100644
  	RAM[A] = V;
  }
  
-@@ -391,6 +473,17 @@ void X6502_Run(int32_t cycles)
+@@ -355,6 +443,8 @@ void X6502_Reset(void) {
+ void X6502_Init(void) {
+ 	int x;
+ 
++	romdev_trace_provide_regs(romdev_6502_trace_regs, 5);
++
+ 	memset((void*)&X, 0, sizeof(X));
+ 	for (x = 0; x < 256; x++)
+ 		if (!x)
+@@ -391,6 +481,17 @@ void X6502_Run(int32_t cycles)
  	#undef _PC
  	#define _PC pbackus
  
@@ -1163,7 +1178,7 @@ index 61b83e0..6fc0034 100644
  	if (PAL)
  		cycles *= 15;	/* 15*4=60 */
  	else
-@@ -402,7 +495,7 @@ void X6502_Run(int32_t cycles)
+@@ -402,7 +503,7 @@ void X6502_Run(int32_t cycles)
  		int32_t temp;
  		uint8_t b1;
  
@@ -1172,7 +1187,7 @@ index 61b83e0..6fc0034 100644
  			if (_IRQlow & FCEU_IQRESET) {
  				_PC = RdMem(0xFFFC);
  				_PC |= RdMem(0xFFFD) << 8;
-@@ -445,6 +538,29 @@ void X6502_Run(int32_t cycles)
+@@ -445,6 +546,29 @@ void X6502_Run(int32_t cycles)
  		}
  
  		_PI = _P;
@@ -1183,7 +1198,7 @@ index 61b83e0..6fc0034 100644
 +		 * pc-break/single-step all live in romdev_debug.c now). */
 +		romdev_6502_instr_pc = (uint32_t)_PC;
 +
-+		if (romdev_on_dispatch((uint32_t)_PC)) {
++		if (romdev_on_dispatch_ex((uint32_t)_PC, timestamp, 0)) {
 +			/* freeze the CPU EXACTLY at this PC (X.PC = pbackus, instruction NOT run),
 +			 * take the 6502 register snapshot with the shared lib's reported kind
 +			 * (2=watchdog else 1=pc-break/step) + fill the compact pcbreak_get reg slots
