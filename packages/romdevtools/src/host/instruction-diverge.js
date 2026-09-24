@@ -73,8 +73,12 @@ export const REFERENCE_PC = {
   },
   gb: { pcWidth: 4, singleCpu: true, cart: (e) => e.pc & 0xffff, ref: (p) => p & 0xffff, vectors: () => [0x40, 0x48, 0x50, 0x58, 0x60] },
   gbc: { pcWidth: 4, singleCpu: true, cart: (e) => e.pc & 0xffff, ref: (p) => p & 0xffff, vectors: () => [0x40, 0x48, 0x50, 0x58, 0x60] },
-  sms: { pcWidth: 4, singleCpu: true, cart: (e) => e.pc & 0xffff, ref: (p) => p & 0xffff, vectors: () => [0x38, 0x66] },
-  gg: { pcWidth: 4, singleCpu: true, cart: (e) => e.pc & 0xffff, ref: (p) => p & 0xffff, vectors: () => [0x38, 0x66] },
+  // haltRepeat: genesis_plus_gx keeps a halted Z80 on its HALT (ENTER_HALT:
+  // PC--) and dispatches it again every 4 T (60 master cycles, the trace's
+  // clock unit), so its trace repeats the HALT pc until an interrupt; a cart
+  // records the HALT once and idles.
+  sms: { pcWidth: 4, singleCpu: true, haltRepeat: 60, cart: (e) => e.pc & 0xffff, ref: (p) => p & 0xffff, vectors: () => [0x38, 0x66] },
+  gg: { pcWidth: 4, singleCpu: true, haltRepeat: 60, cart: (e) => e.pc & 0xffff, ref: (p) => p & 0xffff, vectors: () => [0x38, 0x66] },
   genesis: {
     // genesis_plus_gx dispatches its Z80 through the same hook, so the
     // watchdog counts both CPUs: no watchdog-stopped replay here.
@@ -284,6 +288,36 @@ function refKeep(filter, pc) {
     for (const [lo, hi] of filter.skip) if (lo16 >= lo && lo16 <= hi) return false;
   }
   return true;
+}
+
+/**
+ * Recognise a halted CPU's re-executions in a reference stream fed entry by
+ * entry: an entry repeating the previous pc exactly `step` clock units later
+ * starts a run, and the run continues while the pc stays the same (a frame
+ * boundary resets the clock). `repeat(pc, clock)` is true for an entry to
+ * drop; the first entry of a run is kept. `startedInRun()`: the stream's
+ * first entry was itself a re-execution (its second entry repeated it).
+ * @param {number|null|undefined} step
+ */
+export function collapseHaltRepeats(step) {
+  let prevPc = null, prevClk = null, inRun = false, n = 0, first = false;
+  const st = {
+    collapsed: 0,
+    repeat(pc, clock) {
+      n++;
+      let drop = false;
+      if (step != null && prevPc === pc && (inRun || (prevClk != null && clock != null && ((clock - prevClk) >>> 0) === step))) {
+        drop = true;
+        inRun = true;
+        if (n === 2) first = true;
+      } else inRun = false;
+      prevPc = pc; prevClk = clock;
+      if (drop) st.collapsed++;
+      return drop;
+    },
+    startedInRun: () => first,
+  };
+  return st;
 }
 
 // ─── the walk (pure: unit-tested on synthetic streams) ───────────────────────
@@ -560,15 +594,21 @@ export async function findInstructionDivergence(a) {
     let refAll = [];
     const refIdx = [];
     const refPcs = [], refClk = [];
+    // A halted CPU's re-executions (conv.haltRepeat) collapse to the one
+    // entry the cart records; a run under way when the trace started (the
+    // cart was already idle, so it has no entry for it) is dropped whole.
+    const halt = collapseHaltRepeats(conv.haltRepeat);
     const addRef = () => {
       for (let k = refAll.length; k < rt.pc.length; k++) {
         const p = conv.ref(rt.pc[k]) >>> 0;
         refAll.push(p);
+        if (halt.repeat(p, rt.clock[k])) continue;
         if (!refKeep(d.filter, p)) continue;
         refIdx.push(k); refPcs.push(p); refClk.push(rt.clock[k]);
       }
     };
     addRef();
+    if (halt.startedInRun() && refPcs.length && cartPcs[0] !== refPcs[0]) { refIdx.shift(); refPcs.shift(); refClk.shift(); halt.collapsed++; }
     const cmpRegs = rt.regs ? Object.keys(rt.regs).filter((n) => d.fields[n]) : [];
     const regDiff = cmpRegs.length ? (i, j) => {
       const e = ct.entries[i], k = refIdx[j];
@@ -590,7 +630,8 @@ export async function findInstructionDivergence(a) {
       trace: {
         source: d.source, ...(d.note ? { note: d.note } : {}),
         cart: { recorded: ct.recorded, kept: ct.kept, compared: cartPcs.length, ringEntries: d.entries, truncated: ct.truncated },
-        ref: { recorded: rt.pc.length, lost: rt.lost, compared: refPcs.length, filteredOut: refAll.length - refPcs.length },
+        ref: { recorded: rt.pc.length, lost: rt.lost, compared: refPcs.length, filteredOut: refAll.length - refPcs.length - halt.collapsed,
+          ...(halt.collapsed ? { haltRepeatsCollapsed: halt.collapsed } : {}) },
       },
       interruptVectors: [...vectors].map((v) => hex(v, conv.pcWidth)),
     };
@@ -635,7 +676,8 @@ export async function findInstructionDivergence(a) {
       if (rt.regs && more.regs) for (const n of Object.keys(rt.regs)) rt.regs[n].push(...more.regs[n]);
       addRef();
       w = walkStreams(cartPcs, refPcs, { ia: al.ia, ib: al.ib, vectors, aClock: d.clock ? cartClk : null, bClock: d.clock ? refClk : null, regDiff });
-      result0.trace.ref = { ...result0.trace.ref, recorded: rt.pc.length, compared: refPcs.length, filteredOut: refAll.length - refPcs.length, frames: rt.frames };
+      result0.trace.ref = { ...result0.trace.ref, recorded: rt.pc.length, compared: refPcs.length, filteredOut: refAll.length - refPcs.length - halt.collapsed,
+        ...(halt.collapsed ? { haltRepeatsCollapsed: halt.collapsed } : {}), frames: rt.frames };
     }
 
     const ctx = (arr, clk, at, entries, isCart) => {
