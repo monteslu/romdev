@@ -115,7 +115,7 @@ export function drainAudioRing(host) {
 export class AudioCapture {
   /**
    * @param {object} host
-   * @param {{source?: "output"|{region:string}|{cartStream:object}, from?: number, to?: number, keep?: boolean}} [o]
+   * @param {{source?: "output"|{region:string}|{cartStream:object}, from?: number, to?: number, keep?: boolean, maxBytes?: number}} [o]
    */
   constructor(host, o = {}) {
     this.host = host;
@@ -123,6 +123,10 @@ export class AudioCapture {
     this.from = o.from ?? 0;
     this.to = o.to ?? Infinity;
     this.keep = o.keep !== false;
+    // A raw stream is big (gb_apu_raw is ~140 KB a frame): bound what one
+    // capture may hold rather than exhausting the server's heap.
+    this.maxBytes = o.maxBytes ?? 512 * 1024 * 1024;
+    this.bytes = 0;
     /** @type {Map<number, Int16Array|Int32Array|Float32Array>} */
     this.frames = new Map();
     this.channels = 2;
@@ -148,7 +152,13 @@ export class AudioCapture {
         s = null;
       }
     }
-    if (s && this.keep && f >= this.from && f <= this.to) this.frames.set(f, s);
+    if (s && this.keep && f >= this.from && f <= this.to) {
+      this.bytes += s.byteLength;
+      if (this.bytes > this.maxBytes) {
+        throw new Error(`audio capture of ${this.source === "output" ? "the output stream" : this.source.region ?? "a cart debug stream"} passed ${Math.round(this.maxBytes / 1048576)} MB at frame ${f} (${this.frames.size} frames kept): narrow audioFrames to the span you need`);
+      }
+      this.frames.set(f, s);
+    }
     return s;
   }
 }
