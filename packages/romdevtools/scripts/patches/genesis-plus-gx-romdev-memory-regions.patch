@@ -18517,7 +18517,7 @@ index 798c6cc..18d5ea1 100644
 +
 +/* SMS / Game Gear region IDs. Same gpgx globals (vram/cram/reg) are
 + * shared across all systems gpgx emulates, but with different sizes:
-+ *   SMS:  VRAM 16KB, CRAM 32B (16 entries × 6-bit BGR), VDP regs 11
++ *   SMS:  VRAM 16KB, CRAM 64B (32 entries x u16 word, low byte 6-bit BGR), VDP regs 11
 + *   GG:   VRAM 16KB, CRAM 64B (32 entries × 12-bit BGR), VDP regs 11
 + * Expose with SMS-correct sizes so callers don't need to know the
 + * Genesis-shaped backing buffer is 64KB / 128B / 32B. */
@@ -18665,7 +18665,7 @@ index 798c6cc..18d5ea1 100644
 +      case ROMDEV_MEMORY_MD_PIXLINES:      return 240 * 512;
 +      case ROMDEV_MEMORY_SMS_VRAM:         return 0x4000;   /* SMS VRAM = 16 KB */
 +      case ROMDEV_MEMORY_GG_VRAM:          return 0x4000;   /* GG VRAM  = 16 KB */
-+      case ROMDEV_MEMORY_SMS_CRAM:         return 0x20;     /* SMS CRAM = 32 B  */
++      case ROMDEV_MEMORY_SMS_CRAM:         return 0x40;     /* SMS CRAM = 32 colours x u16 word (low byte = --BBGGRR) */
 +      case ROMDEV_MEMORY_GG_CRAM:          return 0x40;     /* GG CRAM  = 64 B  */
 +      case ROMDEV_MEMORY_SMS_VDP_REGS:     return 0x10;     /* SMS uses lower 16 of the 32-byte reg file */
 +      case ROMDEV_MEMORY_SMS_Z80_REGS:     return sizeof(romdev_z80_snap);

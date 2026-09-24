@@ -60,17 +60,26 @@ export function ggCramWordToRgb(lo, hi) {
 }
 
 /**
- * Decode the full 32-byte SMS CRAM into 32 RGB entries.
+ * Decode the SMS CRAM into 32 RGB entries.
  * Entry 0..15 = BG palette; 16..31 = sprite palette (entry 0 = transparent).
  *
- * @param {Uint8Array} cram  32 bytes
+ * Two layouts are accepted. genesis_plus_gx keeps SMS CRAM as one u16 WORD
+ * per colour (low byte = --BBGGRR, high byte 0), so the live `sms_cram`
+ * region is 64 bytes; a bare 32-byte table (one byte per colour, the form a
+ * ROM or an assembler source holds) is also decoded. The region used to be
+ * cut at 32 bytes, which exposed only the 16 background colours as word
+ * pairs and made every odd index read black.
+ *
+ * @param {Uint8Array} cram  64 bytes (core words) or 32 bytes (one per colour)
  * @returns {{ index: number, r: number, g: number, b: number, rawWord: number }[]}
  */
 export function decodeSmsCram(cram) {
+  const words = cram.length >= 64;
   const out = [];
   for (let i = 0; i < 32; i++) {
-    const [r, g, b] = smsCramByteToRgb(cram[i]);
-    out.push({ index: i, r, g, b, rawWord: cram[i] });
+    const raw = words ? (cram[i * 2] | (cram[i * 2 + 1] << 8)) : cram[i];
+    const [r, g, b] = smsCramByteToRgb(raw & 0xff);
+    out.push({ index: i, r, g, b, rawWord: raw });
   }
   return out;
 }
@@ -400,6 +409,16 @@ export function renderGgMasterPalettePng() {
 }
 
 /**
+ * Bytes to read from the live `sms_cram` region: 64 (32 u16 words) on a core
+ * that exposes the whole table, 32 on an older core build that cut it short.
+ * @param {{regionSize?: (r: string) => number}} host
+ */
+export function smsCramReadLength(host) {
+  const size = typeof host.regionSize === "function" ? host.regionSize("sms_cram") : 64;
+  return size >= 64 ? 64 : 32;
+}
+
+/**
  * Read the live SMS palette + return as a generic {index,r,g,b,rawWord}[]
  * shape (matching inspectPalette's NES/SNES/Genesis output).
  *
@@ -411,7 +430,7 @@ export function snapshotPalette(host, platform) {
     const cram = host.readMemory("gg_cram", 0, 64);
     return { colors: decodeGgCram(cram), png: renderCramSwatchPng(cram, "gg") };
   }
-  const cram = host.readMemory("sms_cram", 0, 32);
+  const cram = host.readMemory("sms_cram", 0, smsCramReadLength(host));
   return { colors: decodeSmsCram(cram), png: renderCramSwatchPng(cram, "sms") };
 }
 

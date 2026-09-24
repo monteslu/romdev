@@ -203,7 +203,7 @@ export async function gbAdapter(host, platform) {
 //  palette line (CRAM entries 16-31). Tile data base from VDP reg 6.
 // =====================================================================
 export async function smsAdapter(host, platform) {
-  const { decodeSmsTile, decodeSmsVdpRegs, snapshotPalette } = await import("../sms/vdp.js");
+  const { decodeSmsTile, decodeSmsVdpRegs, snapshotPalette, smsCramReadLength } = await import("../sms/vdp.js");
   const vramRegion = platform === "gg" ? "gg_vram" : "sms_vram";
   const vram = host.readMemory(vramRegion, 0, 0x4000);
   const regs = host.readMemory("sms_vdp_regs", 0, 16);
@@ -231,7 +231,7 @@ export async function smsAdapter(host, platform) {
     cellTileOrder: rowMajorOrder, cellGridPositions: rowMajorPos,
     getTilePixels: (idx) => { const out = decodeSmsTile(vram, base + (idx & 0x1FF) * 32); const g = []; for (let y = 0; y < 8; y++) g.push(Array.from(out.slice(y * 8, y * 8 + 8))); return g; },
     getPaletteRgb: palRgb,
-    exportPalette: () => { const cram = host.readMemory(platform === "gg" ? "gg_cram" : "sms_cram", 0, platform === "gg" ? 64 : 32); return { bytes: Uint8Array.from(cram), json: { "sprite": sprPal.map(rgbHex) } }; },
+    exportPalette: () => { const cram = host.readMemory(platform === "gg" ? "gg_cram" : "sms_cram", 0, platform === "gg" ? 64 : smsCramReadLength(host)); return { bytes: Uint8Array.from(cram), json: { "sprite": sprPal.map(rgbHex) } }; },
     encodeTiles: encode4bppSms,
   };
 }

@@ -1,6 +1,6 @@
 {
   "note": "sha256 of every shipped prebuilt binary. Regenerate ONLY when a build script legitimately rebuilds one: node scripts/binary-manifest.mjs --write",
-  "generated": "2026-09-17",
+  "generated": "2026-09-24",
   "binaries": {
     "romdev-analysis-decompiler/wasm/decompile.wasm": "2dd4ef4da24713f95052ab80658082356ca8806060890b074dcd218364b6c76f",
     "romdev-analysis/wasm/rizin.wasm": "d3f3b2a1ab5e5a34899a37fb53d58ea3eb41b58920758eea98c225facd1a0610",
@@ -13,7 +13,7 @@
     "romdev-core-gambatte/wasm/gambatte_libretro.wasm": "6a07ec2fee1360af8cffd1f21e2e191289e27d14efa0af12dce6552eabaeb6bd",
     "romdev-core-gametank/wasm/gametank_libretro.wasm": "3693a411f01c8e93fc9dea8a399c370f7845d280a81041d102c83689ae412677",
     "romdev-core-geargrafx/wasm/geargrafx_libretro.wasm": "0e4c4dbf40ea001c24b6077743f279be3107c4b88fe783dfa895db1c856e0e16",
-    "romdev-core-gpgx/wasm/genesis_plus_gx_libretro.wasm": "09154b4c4336eeb83fdd35853662981a23a05c37e49fd32115df4e7ee770bbf5",
+    "romdev-core-gpgx/wasm/genesis_plus_gx_libretro.wasm": "dd00a5d07fcf755a960480636b472029f5a8a0555d232d036890e740bf1ada4e",
     "romdev-core-handy/wasm/handy_libretro.wasm": "ae70f8fa006fd82851055b9c2cc00bef50f7333605dee456e7fd10324fd247d8",
     "romdev-core-parallel-n64/wasm/parallel_n64_libretro.wasm": "b4a6af011cbc58e80eb81985977d38fce4270d3fa826193aeff69ebb5d5939e7",
     "romdev-core-prosystem/wasm/prosystem_libretro.wasm": "74f50628925047cce2443407f94695ae1f4290b81c0a64451a8f35a03a8aef4a",
@@ -87,7 +87,7 @@
     "romdevtools/src/cores/wasm/gambatte_libretro.wasm": "6a07ec2fee1360af8cffd1f21e2e191289e27d14efa0af12dce6552eabaeb6bd",
     "romdevtools/src/cores/wasm/gametank_libretro.wasm": "3693a411f01c8e93fc9dea8a399c370f7845d280a81041d102c83689ae412677",
     "romdevtools/src/cores/wasm/geargrafx_libretro.wasm": "0e4c4dbf40ea001c24b6077743f279be3107c4b88fe783dfa895db1c856e0e16",
-    "romdevtools/src/cores/wasm/genesis_plus_gx_libretro.wasm": "09154b4c4336eeb83fdd35853662981a23a05c37e49fd32115df4e7ee770bbf5",
+    "romdevtools/src/cores/wasm/genesis_plus_gx_libretro.wasm": "dd00a5d07fcf755a960480636b472029f5a8a0555d232d036890e740bf1ada4e",
     "romdevtools/src/cores/wasm/handy_libretro.wasm": "ae70f8fa006fd82851055b9c2cc00bef50f7333605dee456e7fd10324fd247d8",
     "romdevtools/src/cores/wasm/mgba_libretro.wasm": "bbdd2f4341446e256488dac94e695f67c06a29409df3bf69cf28362f187d38db",
     "romdevtools/src/cores/wasm/mupen64plus_next_libretro.wasm": "271b6c1cc4382d5ecc46ece8436c535302eadcb6f25e6127ba0cbe2d6324a78a",
