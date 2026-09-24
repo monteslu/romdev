@@ -274,3 +274,15 @@ test("the VDP powers on with H-INT off (vdp_reset: registers cleared, R10 = $FF)
   const r = await gpgxParity({ platform: "genesis", rom, maxFrames: 4 });
   assert.equal(r.diverged, false, divergenceText(r));
 });
+
+test("md_cart_init's special backup RAM maps: the whole upper 2MB (T-119186), $200000-$2FFFFF with ROM re-based above it (T-172026)", T, async () => {
+  const ra = (s, e) => [0x52, 0x41, 0xf8, 0x20, ...L(s), ...L(e)];
+  // write a byte through $2x0001, read it back through $200001 and $3x0001; read ROM at $300000
+  const code = [...W(0x41f9), ...L(0xff0000), ...W(0x13fc, 0x005a), ...L(0x2f0001), ...readB(0x200001), ...readB(0x3f0001), ...readB(0x300000), ...W(0x60fe)];
+  const barkley = mdImage(code, { header: { 0x182: "T-119186-00", 0x1b0: ra(0x200001, 0x200fff) } });
+  const r1 = await gpgxParity({ platform: "genesis", rom: barkley, maxFrames: 3 });
+  assert.equal(r1.diverged, false, `T-119186: ${divergenceText(r1)}`);
+  const triple = mdImage(code, { size: 0x280000, header: { 0x182: "T-172026-04", 0x1b0: ra(0x200001, 0x20ffff) }, at: [[0x200000, [0x12, 0x34]]] });
+  const r2 = await gpgxParity({ platform: "genesis", rom: triple, maxFrames: 3 });
+  assert.equal(r2.diverged, false, `T-172026: ${divergenceText(r2)}`);
+});

@@ -29,19 +29,11 @@ import { createHash } from "node:crypto";
 import { loadGpgxData } from "./gpgx-data.js";
 import { translateM68k, translateZ80, z80HandlerNames, TrError, ZREGS } from "./ctrans.js";
 import * as RT from "./runtime.js";
-import { ymWat, mdSoundInfo, hookZ80Wat, hookVdpWat, hookFrameWat, hookMemWat, deltasLayout } from "./ym2612.js";
 
 export const platforms = ["genesis", "md", "megadrive"];
 
 const { R, CYCTAB, FIFO, ABI, FB, FB_W, FB_H, PIXEL } = RT;
 const ROMIMG = 0x160000;
-// ym2612.js / ../sms/psg.js sound state, tables and the audio ring (free
-// space between the ABI block and the Z80 tables)
-const SND = 0xed000;
-// sound.c's fm_buffer (after the per-line composed codes)
-const FMBUF = 0x155000;
-// options.audioDeltas (debug): every blip delta, compared with gpgx_blip_deltas
-const DELTAS = deltasLayout(0x3000000);
 const RAMWORDS = 0x8000;
 const STATE = RT.TRACE; // per-frame CPU/VDP state block for the differ
 const TRACEN = 1 << 18; // instruction ring entries (enabled by STATE+0xF8)
@@ -162,7 +154,15 @@ export function sramConfig(img) {
   }
   const mapped = on && start >= img.length && !international.includes("SONIC THE HEDGEHOG 3") && start < 0x400000;
   if (on && start >= 0x400000) note = `backup RAM at $${start.toString(16)} (outside the cartridge area) is not modelled`;
-  return { on, detected, start, end, bank: mapped ? start >>> 16 : null, note };
+  // md_cart_init: one cart wants backup RAM in the whole upper 2MB, two
+  // others at $200000-$2FFFFF with ROM re-based above it
+  const extraBanks = [], remap = [];
+  if (on && start >= img.length && product.includes("T-119186")) for (let i = 0x21; i < 0x40; i++) extraBanks.push(i);
+  else if (on && start < img.length && (product.includes("T-172026") || product.includes("T-172116"))) {
+    for (let i = 0x20; i < 0x30; i++) extraBanks.push(i);
+    if (img.length > 0x200000 && img[0x200000] !== 0xff) for (let i = 0x30; i < 0x40; i++) remap.push([i, (i - 0x10) << 16]);
+  }
+  return { on, detected, start, end, bank: mapped ? start >>> 16 : null, extraBanks, remap, note };
 }
 
 // eeprom_i2c.c i2c_specs: address bits, array size mask, page write mask
@@ -690,8 +690,6 @@ export function recompileSection(rom, sha1, opts = {}) {
       ramCode: d.ramCode.map(({ romOffset, ramAddress, length, source }) => ({ romOffset, ramAddress, length, source })),
       trapHint: "probe trapped=1 with trappc in work RAM ($FFxxxxxx) means the game ran code it copied to RAM that discovery missed: rebuild with options.ramCode:[{romOffset, ramAddress, length}]",
       license: d.licenseNote,
-      // genesis_plus_gx's libretro output (ym2612.js): s16 stereo 44100 Hz
-      ...(opts.audio !== false ? { audio: mdSoundInfo(SND, opts.audioDeltas ? DELTAS : undefined).section } : {}),
       ...(opts.breakArm != null ? { debugBreakArm: parseBreakArm(opts.breakArm), warning: "built with options.breakArm: one instruction also flips bit 0 of d0 (a must-fail control), NOT a faithful cart" } : {}),
     },
   };
@@ -840,34 +838,25 @@ export async function* emitWat(rom, opts = {}) {
   const ring = traceRingFor(opts);
   const ALTTAB = PACKED + narms * 8;
   const tracebuf = (ALTTAB + altPcs.length * 4 + 0xffff) & ~0xffff;
-  let pages = Math.floor((tracebuf + ring.entries * ring.stride) / 0x10000) + 1;
-  if (opts.audioDeltas && opts.audio !== false) {
-    if (pages * 0x10000 > DELTAS.countOffset) throw new Error("genesis recompile: options.audioDeltas: the cart is too large for the debug stream at 0x3000000");
-    pages = Math.floor(DELTAS.end / 0x10000) + 1;
-  }
+  const pages = Math.floor((tracebuf + ring.entries * ring.stride) / 0x10000) + 1;
 
   yield `(module\n  (memory (export "memory") ${pages})\n  `;
   yield RT.globalsWat();
   yield RT.cpuWat();
-  yield opts.audio !== false ? hookMemWat(RT.memWat(ROMIMG, ROMSIZE)) : RT.memWat(ROMIMG, ROMSIZE);
+  yield RT.memWat(ROMIMG, ROMSIZE);
   const SRAM = sramConfig(img), MAPPER = cartMapper(img), EEP = eepromConfig(img);
   // a serial EEPROM is sram.custom: the backup RAM is not memory-mapped
   if (EEP && EEP.eeprom) SRAM.bank = null;
   yield RT.cartWat(ROMIMG, ROMSIZE, { sramOn: (SRAM.on || !!(EEP && EEP.eeprom)) && SRAM.start < 0x400000, ssf2: MAPPER.kind === "ssf2", eeprom: EEP });
   yield RT.ioWat({ sixButton: sixButtonPads(img) });
   const PAL = palTiming(img);
-  // options.audio (default on): genesis_plus_gx's YM2612 + PSG output (ym2612.js)
-  const AUDIO = opts.audio !== false;
-  if (AUDIO && mdSoundInfo(SND).end > RT.ZT) throw new Error("genesis recompile: the sound state overlaps the Z80 tables");
-  yield AUDIO ? hookVdpWat(RT.vdpWat({ pal: PAL })) : RT.vdpWat({ pal: PAL });
-  if (AUDIO) yield ymWat({ base: SND, cursorAddr: ABI + 256, fmBuf: FMBUF, pal: PAL, deltas: opts.audioDeltas ? DELTAS : undefined });
+  yield RT.vdpWat({ pal: PAL });
   yield RT.renderWat();
   // the Z80: one function per opcode handler, dispatched via the table
   zlay.tbase = nsh;
   const znames = z80HandlerNames();
-  const z80text = RT.z80Wat(zlay, D.z80.cc).replaceAll("{romimg}", String(ROMIMG)).replaceAll("{rmask}", String(ROMSIZE - 1))
+  yield RT.z80Wat(zlay, D.z80.cc).replaceAll("{romimg}", String(ROMIMG)).replaceAll("{rmask}", String(ROMSIZE - 1))
     .replaceAll("{ztbase}", String(nsh));
-  yield AUDIO ? hookZ80Wat(z80text, zlay.ZREGS + 64) : z80text;
   {
     let buf = [];
     for (const zn of znames) buf.push(translateZ80(D.z80, zn, zlay));
@@ -991,8 +980,7 @@ export async function* emitWat(rom, opts = {}) {
   }
   for (const [off, b] of tabsegs) yield `  (data (i32.const ${off}) "${watBytes(b)}")\n`;
   yield `  (data (i32.const ${ROMIMG}) "${watBytes(ROMDATA)}")\n`;
-  const frameText = frameWat(narms, PACKED, PCTAB, img, ROMSIZE, SRAM.bank, EEP).replace("(call $initmap)", `(call $initmap) (i32.store (i32.const ${STATE + 0xf4}) (i32.const ${tracebuf}))`);
-  yield AUDIO ? hookFrameWat(frameText, { abi: ABI, base: SND }) : frameText;
+  yield frameWat(narms, PACKED, PCTAB, img, ROMSIZE, SRAM.bank, EEP).replace("(call $initmap)", `(call $initmap) (i32.store (i32.const ${STATE + 0xf4}) (i32.const ${tracebuf}))`);
   yield ")\n";
   if (breakAt !== null && !broken) throw new Error(`genesis recompile: options.breakArm $${breakAt.toString(16)} is not an instruction address of this cart`);
   if (opts.stats) Object.assign(opts.stats, { arms: narms, lowered: narms - bad, trapped: bad, shards: nsh, ramCodeArms: narms - Math.ceil(img.length / 2),
@@ -1326,7 +1314,7 @@ function frameWat(narms, PACKED, PCTAB, img, ROMSIZE, sramBank, eep) {
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $l)))
     (global.set $region (i32.const ${regionCode(img)}))
-${RT.cartInitWat(ROMSIZE, sramBank)}${eep ? RT.eepromInitWat(eep) : ""}    (call $vdp_reset)
+${RT.cartInitWat(ROMSIZE, sramBank, eep && eep.eeprom ? null : sramConfig(img))}${eep ? RT.eepromInitWat(eep) : ""}    (call $vdp_reset)
     (call $io_reset)
     (global.set $zstate (i32.const 0))
     (global.set $zmap (i32.const 0))

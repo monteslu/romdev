@@ -2586,7 +2586,7 @@ export function eepromInitWat(e) {
  * @param {number} romsize
  * @param {number|null} sramBank
  */
-export function cartInitWat(romsize, sramBank) {
+export function cartInitWat(romsize, sramBank, sx = null) {
   const rmask = romsize - 1;
   return `    (local.set $i (i32.const 0))
     (block $cd (loop $cl
@@ -2598,5 +2598,7 @@ export function cartInitWat(romsize, sramBank) {
     (memory.fill (i32.const ${SRAMBUF}) (i32.const 0xFF) (i32.const 0x10000))
 ${sramBank != null ? `    (i32.store (i32.const ${CARTMAP + sramBank * 4}) (i32.const -1))
     (global.set $remapped (i32.const 1))
-${sramBank === 0x20 ? `    (global.set $sramreg0 (i32.const ${(0x200000 & rmask) >> 16}))\n` : ""}` : ""}`;
+${sramBank === 0x20 ? `    (global.set $sramreg0 (i32.const ${(0x200000 & rmask) >> 16}))\n` : ""}` : ""}${sx ? sx.extraBanks.map((b) => `    (i32.store (i32.const ${CARTMAP + b * 4}) (i32.const -1)) (global.set $remapped (i32.const 1))\n`).join("") +
+    sx.remap.map(([b, off]) => `    (i32.store (i32.const ${CARTMAP + b * 4}) (i32.const ${off})) (global.set $remapped (i32.const 1))\n`).join("") +
+    (sx.extraBanks.includes(0x20) ? `    (global.set $sramreg0 (i32.const ${(0x200000 & rmask) >> 16}))\n` : "") : ""}`;
 }
