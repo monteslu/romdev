@@ -4,17 +4,19 @@ import assert from "node:assert/strict";
 import { describe as describeRom, emitWat, emitWatString, layout, recompileSection, platforms, PROBE_FIELDS } from "./index.js";
 import { lower, Unsupported, OPS } from "./cpu.js";
 import { backendFor } from "../index.js";
+import { validateRecompileLayout } from "../../recompile-section.js";
+import { assembleWat } from "../assemble.js";
 
 /**
  * Build an iNES image. `code` is placed at the start of the LAST 16KB bank
- * ($C000) with the reset vector pointing at it; NMI and IRQ point at an RTI.
+ * ($C000) with the reset vector pointing at it; NMI and IRQ point at `inc $20 ; rti`.
  */
 function synthRom({ code = [0x4C, 0x00, 0xC0], prgBanks = 1, chrBanks = 1, flags6 = 0x01, flags7 = 0, trainer = false } = {}) {
   const prg = new Uint8Array(prgBanks * 0x4000).fill(0xEA);
   const base = prg.length - 0x4000;
   prg.set(code, base);
   const rti = base + 0x3F00;
-  prg[rti] = 0x40;
+  prg.set([0xE6, 0x20, 0x40], rti); // inc $20 ; rti
   const vec = (off, addr) => { prg[off] = addr & 0xFF; prg[off + 1] = addr >> 8; };
   vec(prg.length - 6, 0xFF00); // NMI -> RTI at $FF00
   vec(prg.length - 4, 0xC000); // RESET
@@ -177,18 +179,21 @@ test("32KB NROM-256: arm addresses run $8000-$FFFF", async () => {
   assert.equal((wat.match(/\(func \$shard\d+ /g) || []).length, 32);
 });
 
-test("layout and the romdev.recompile section describe the compared regions", () => {
-  assert.deepEqual(Object.keys(layout.regions), ["ram", "nametables", "palette", "oam"]);
+test("the romdev.recompile section validates against the verify op's schema", () => {
+  assert.deepEqual(Object.keys(layout.regions), ["ram", "nametables", "palette", "oam", "chr"]);
   assert.equal(layout.regions.ram.ref, "system_ram");
-  assert.equal(layout.probe.fields.cnt.type, "i32");
-  assert.equal(Object.keys(layout.probe.fields).length, PROBE_FIELDS.length);
+  assert.equal(layout.fields.cycles.signed, true);
+  assert.equal(layout.fields.pc.offset, 0x8000 + 4 * PROBE_FIELDS.indexOf("pc"));
   const sec = recompileSection(synthRom(), "ab".repeat(20));
   assert.equal(sec.name, "romdev.recompile");
-  const j = JSON.parse(JSON.stringify(sec.json));
+  const j = validateRecompileLayout(JSON.parse(JSON.stringify(sec.json)));
   assert.equal(j.platform, "nes");
-  assert.equal(j.referenceCore, "fceumm");
+  assert.equal(j.reference, "nes");
+  assert.equal(j.warmupFrames, 0);
+  assert.equal(j.buttons, "positional");
   assert.equal(j.regions.oam.offset, 0x5100);
-  assert.equal(j.conventions.totalFrameOffset, 0);
+  assert.deepEqual(j.vramZero, ["nametables", "chr"]);
+  assert.equal(j.probe.trapped.offset, 0x8004);
 });
 
 test("describe zeroes a 'DiskDude!' header tail as fceumm does", () => {
@@ -197,4 +202,38 @@ test("describe zeroes a 'DiskDude!' header tail as fceumm does", () => {
   const d = describeRom(rom);
   assert.equal(d.mapper, 0);
   assert.equal(d.supported, true);
+});
+
+test("assembled cart runs: NMI per frame after the two ppudead frames, ADC, no trap", async () => {
+  // $C000: sei cld ldx #$FF txs  lda #$80 sta $2000  lda #5 clc adc #7 sta $30
+  //        loop: inc $10 jmp loop           NMI ($FF00): inc $20 rti
+  const code = [0x78, 0xD8, 0xA2, 0xFF, 0x9A, 0xA9, 0x80, 0x8D, 0x00, 0x20,
+    0xA9, 0x05, 0x18, 0x69, 0x07, 0x85, 0x30, 0xE6, 0x10, 0x4C, 0x11, 0xC0];
+  const rom = synthRom({ code });
+  const { bytes } = await assembleWat(emitWat(rom), {
+    customSections: [{ name: recompileSection(rom).name, data: JSON.stringify(recompileSection(rom).json) }],
+  });
+  const { instance } = await WebAssembly.instantiate(bytes, {});
+  const e = instance.exports;
+  const mem = () => new Uint8Array(e.memory.buffer);
+  const probe = () => {
+    const w = new DataView(e.memory.buffer);
+    return Object.fromEntries(PROBE_FIELDS.map((f, i) => [f, w.getInt32(0x8000 + 4 * i, true)]));
+  };
+  e.wc_get_info();
+  e.wc_init();
+  assert.equal(mem()[0x20], 0xFF, "RAM powers up $FF (fceumm_ramstate default)");
+  for (let i = 0; i < 10; i++) e.wc_render();
+  const p = probe();
+  assert.equal(p.trapped, 0);
+  assert.equal(p.frame, 10);
+  assert.equal(p.nnmi, 8, "no vblank (so no NMI) in the two ppudead frames");
+  assert.equal((mem()[0x20] + 1) & 0xFF, 8);
+  assert.equal(mem()[0x30], 12);
+  assert.ok(p.steps > 50000, "the CPU ran whole frames");
+  // the custom section is in the binary
+  const mod = new WebAssembly.Module(bytes);
+  const sec = WebAssembly.Module.customSections(mod, "romdev.recompile");
+  assert.equal(sec.length, 1);
+  assert.equal(JSON.parse(new TextDecoder().decode(sec[0])).platform, "nes");
 });

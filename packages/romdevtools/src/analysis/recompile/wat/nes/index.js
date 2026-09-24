@@ -63,50 +63,52 @@ export const PROBE_FIELDS = ["steps", "trapped", "trappc", "pc", "frame", "nnmi"
   "ringi", "nbrk", "nemph", "cnt", "apu4017", "dmcsize", "dmcirq"];
 
 /**
- * Linear-memory regions the verify op compares against the reference core's
- * memory regions, plus the probe block. Static for every NES cart.
+ * The cart's `romdev.recompile` layout (schema: recompile/recompile-section.js):
+ * linear-memory regions byte-compared against fceumm's memory regions, CPU
+ * fields compared against cpu({op:'read'}), cart-only probe fields. Static
+ * for every NES cart.
  */
+const p4 = (f) => PROBE + 4 * PROBE_FIELDS.indexOf(f);
 export const layout = {
   regions: {
     ram: { offset: 0x0000, length: 0x800, ref: "system_ram" },
     nametables: { offset: NTRAM, length: 0x800, ref: "nes_nametables" },
     palette: { offset: PAL, length: 32, ref: "nes_palette" },
     oam: { offset: OAM, length: 256, ref: "nes_oam" },
+    chr: { offset: CHR, length: 0x2000, ref: "nes_chr" },
   },
-  probe: {
-    offset: PROBE,
-    fields: Object.fromEntries(PROBE_FIELDS.map((f, i) => [f, {
-      offset: PROBE + 4 * i, type: f === "cnt" ? "i32" : "u32",
-    }])),
+  // P is compared without bits 4-5 (B and the unused bit are not flags).
+  // `cycles` is fceumm's internal X.count: equal only when both sides are on
+  // the same CPU cycle, which registers alone cannot show.
+  fields: {
+    pc: { offset: p4("pc"), size: 2, ref: "cpu:pc" },
+    a: { offset: p4("a"), size: 1, ref: "cpu:registers.A" },
+    x: { offset: p4("x"), size: 1, ref: "cpu:registers.X" },
+    y: { offset: p4("y"), size: 1, ref: "cpu:registers.Y" },
+    s: { offset: p4("s"), size: 1, ref: "cpu:registers.S" },
+    p: { offset: p4("p"), size: 1, ref: "cpu:registers.P", mask: 0xCF },
+    cycles: { offset: p4("cnt"), size: 4, signed: true, ref: "cpu:coreInternal.count" },
   },
-  // CPU state compared against cpu({op:'read'}) on the reference. P is
-  // compared with bits 4-5 forced (B and the unused bit are not flags);
-  // `count` is fceumm's internal X.count, which equal only when both sides
-  // are on the same cycle.
-  cpu: {
-    pc: "pc", A: "a", X: "x", Y: "y", S: "s",
-    P: { field: "p", orMask: 0x30 },
-    count: { field: "cnt", ref: "coreInternal.count" },
-  },
-  trap: { flag: "trapped", pc: "trappc", op: "trapop" },
-  pcRing: { offset: PCRING, entries: 1024, stride: 8, format: "u32 pc|opcode<<16, u32 ts" },
-  framebuffer: { offset: FB, width: FB_W, height: FB_H, format: "rgba8888" },
+  probe: Object.fromEntries(["trapped", "trappc", "trapop", "steps", "frame", "nnmi", "nbrk", "dmcirq"]
+    .map((f) => [f, { offset: p4(f), size: 4 }])),
+  // The Python verifier's VRAM-zero control wiped nametables + CHR.
+  vramZero: ["nametables", "chr"],
 };
 
 /**
- * Frame / input conventions the verify op needs. Both sides are tracked by
- * TOTAL frames executed (romdev's wasmcart host settles 1 frame at load,
- * fceumm 5); with fceumm's frame loop modelled exactly, the same total is the
- * same picture, so the aligned offset in total frames is 0. The cart reads
- * the pad POSITIONALLY (the east face button, WC_BTN_B, is NES A), so to
- * press NES `a` on the cart send wasmcart `b`, and vice versa.
+ * Frame / input conventions. romdev's wasmcart host settles 1 frame at load,
+ * fceumm 5; the cart models fceumm's frame loop exactly (including the two
+ * ppudead frames), so the same TOTAL frame count is the same picture and the
+ * cart needs no warm-up frames. The pad is read POSITIONALLY: the east face
+ * button (WC_BTN_B, RetroPad 'a') is NES A, south (WC_BTN_A) is NES B.
  */
-export const conventions = {
-  frameAxis: "total",
-  settleFrames: { cart: 1, reference: 5 },
-  totalFrameOffset: 0,
-  warmupFrames: 0,
-  cartInputNames: { a: "b", b: "a" },
+export const conventions = { warmupFrames: 0, buttons: "positional" };
+
+/** Diagnostic spans that are not compared (probe block, pc ring, framebuffer). */
+export const diagnostics = {
+  probeBlock: { offset: PROBE, fields: PROBE_FIELDS, stride: 4 },
+  pcRing: { offset: PCRING, entries: 1024, stride: 8, format: "u32 pc|opcode<<16, u32 ts" },
+  framebuffer: { offset: FB, width: FB_W, height: FB_H, format: "u32 0xAABBGGRR" },
 };
 
 /**
@@ -214,17 +216,14 @@ export function recompileSection(rom, sha1) {
     json: {
       version: 1,
       platform: "nes",
+      reference: "nes",
       referenceCore: REFERENCE_CORE,
       romSha1: sha1 || null,
       mapper: d.mapper,
       mirroring: d.mirroring,
-      regions: layout.regions,
-      probe: layout.probe,
-      cpu: layout.cpu,
-      trap: layout.trap,
-      pcRing: layout.pcRing,
-      framebuffer: layout.framebuffer,
-      conventions,
+      ...conventions,
+      ...layout,
+      diagnostics,
     },
   };
 }
