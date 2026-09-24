@@ -26,11 +26,17 @@ const vramPattern = Array.from({ length: 256 }, (_, i) => ((i * 37 + (i >> 3)) &
 // picture scrolls with frame + x + 8*presses, so a wrong frame OR a wrong
 // input moves every pixel; a white bar marks frame % W and the player column
 // is green. With no input the picture repeats every 512 frames.
-function cartWat({ inputPtr = INPUT, timePtr = TIME, southBit = 0 } = {}) {
+function cartWat({ inputPtr = INPUT, timePtr = TIME, southBit = 0, bootDelay = 0, still = false } = {}) {
   const hex = vramPattern.map((b) => "\\" + b.toString(16).padStart(2, "0")).join("");
+  // bootDelay: the cart's machine starts that many frames BEHIND power-on
+  // (the frame counter begins negative), like a recompiled cart whose boot
+  // takes a game-dependent number of frames longer than the reference's.
+  const f0 = (-bootDelay >>> 0).toString(16).padStart(8, "0").match(/../g).reverse().map((b) => "\\" + b).join("");
+  const fr = still ? "(i32.const 0)" : "(local.get $f)";
   return `(module
   (memory (export "memory") 1)
   (data (i32.const ${VRAM}) "${hex}")
+  (data (i32.const 0) "${f0}")
   (func (export "wc_get_info") (result i32)
     (i32.store (i32.const ${INFO}) (i32.const 3))
     (i32.store (i32.const ${INFO + 4}) (i32.const ${W}))
@@ -56,14 +62,14 @@ function cartWat({ inputPtr = INPUT, timePtr = TIME, southBit = 0 } = {}) {
       (local.set $col (i32.rem_u (local.get $i) (i32.const ${W})))
       (local.set $row (i32.div_u (local.get $i) (i32.const ${W})))
       (local.set $c
-        (if (result i32) (i32.eq (local.get $col) (i32.rem_u (local.get $f) (i32.const ${W})))
+        (if (result i32) (i32.eq (local.get $col) (i32.rem_u ${fr} (i32.const ${W})))
           (then (i32.const 0xFFFFFF))
           (else (if (result i32) (i32.eq (local.get $col) (i32.rem_u (local.get $x) (i32.const ${W})))
             (then (i32.or (i32.const 0x00FF00) (i32.and (i32.load (i32.const 8)) (i32.const 0xFF))))
             (else (i32.mul (i32.const 0x010101)
               (i32.load8_u (i32.add (i32.const ${VRAM})
                 (i32.and (i32.add (i32.mul (local.get $row) (i32.const 8))
-                  (i32.shr_u (i32.add (i32.add (i32.add (local.get $col) (local.get $f)) (local.get $x))
+                  (i32.shr_u (i32.add (i32.add (i32.add (local.get $col) ${fr}) (local.get $x))
                     (i32.shl (i32.load (i32.const 8)) (i32.const 3))) (i32.const 1)))
                   (i32.const 255))))))))))
       (i32.store (i32.add (i32.const ${FB}) (i32.shl (local.get $i) (i32.const 2))) (local.get $c))
@@ -86,7 +92,8 @@ async function openCartFrom(wasm) {
 // A JS stand-in for a libretro core running the SAME machine: libretro names,
 // 5 settle frames at load, named memory regions.
 class FakeCore {
-  constructor({ bugAtTotalFrame = null } = {}) {
+  constructor({ bugAtTotalFrame = null, still = false } = {}) {
+    this.still = still;
     this.ram = new Uint8Array(64);
     this.vram = Uint8Array.from(vramPattern);
     this.bugAt = bugAtTotalFrame;
@@ -106,7 +113,7 @@ class FakeCore {
   setInput({ ports }) { this.input = { ...(ports[0] ?? {}) }; }
   stepFrames(n) { for (let i = 0; i < n; i++) { this._frame(); this.status.frameCount++; } return n; }
   screenshotRgba() {
-    const f = this._u32(0), x = this._u32(4), presses = this._u32(8);
+    const f = this.still ? 0 : this._u32(0), x = this._u32(4), presses = this._u32(8);
     const rgba = new Uint8Array(W * H * 4);
     for (let i = 0; i < W * H; i++) {
       const col = i % W, row = Math.floor(i / W);
@@ -373,4 +380,39 @@ test("frame tool: verifyRecompile needs atFrames; step takes count as an alias; 
     const big = await tools.frame({ op: "stepInstructions", count: 5000 });
     assert.match(big.content[0].text, /4096 cap/);
   } finally { clearHost(key); }
+});
+
+test("frameAlignment:'search' FINDS a game-dependent boot offset by a sharp picture peak", async () => {
+  // The cart boots 7 frames later than the settle arithmetic assumes, so the
+  // true offset is 4 + 7 = 11. No input before the search frame.
+  const cart = cartBytes({ bootDelay: 7 });
+  const layout = { ...LAYOUT, frameAlignment: "search" };
+  const r = await run({ layout, frames: [40, 150, 300], input: "60:right:20,100:b:3", searchWindow: 20 }, { cart });
+  try {
+    const v = r.result;
+    assert.equal(v.alignment.source, "search");
+    assert.equal(v.alignment.offset, 11);
+    assert.equal(v.alignment.computedOffset, 4);
+    assert.ok(v.alignment.search.sharpness >= 2, `sharp peak (${v.alignment.search.sharpness})`);
+    assert.equal(v.alignment.search.candidates, 41, "cost bound: 2*window+1 scores");
+    assert.equal(v.verdict, "VERIFIED", JSON.stringify(v.reasons));
+    assert.ok(v.frames.every((f) => f.refinedBy == null && f.cartFrame === f.refFrame + 11));
+  } finally { dispose(r); }
+  // Without the search, the same cart is (correctly) not verified.
+  const r2 = await run({ frames: [40, 150], input: "", controls: [] }, { cart });
+  try { assert.equal(r2.result.verdict, "NOT VERIFIED"); } finally { dispose(r2); }
+  // cartFrameOffset:'auto' asks for the same search on a cart without the flag.
+  const r3 = await run({ cartFrameOffset: "auto", frames: [40], input: "", controls: [], searchWindow: 10 }, { cart });
+  try { assert.equal(r3.result.alignment.offset, 11); } finally { dispose(r3); }
+});
+
+test("the offset search REFUSES a picture that does not pin a frame, naming the candidates", async () => {
+  const cart = cartBytes({ still: true });
+  await assert.rejects(
+    run({ cartFrameOffset: "auto", frames: [40], input: "", controls: [], searchWindow: 6 }, { cart, core: { still: true } }),
+    /offset search refused: \d+ offsets tie.*best candidates/s);
+  // A too-high sharpness demand on a good cart is refused too, not guessed.
+  await assert.rejects(
+    run({ cartFrameOffset: "auto", frames: [40], input: "", controls: [], searchWindow: 6, minSharpness: 101 }),
+    /not sharp/);
 });

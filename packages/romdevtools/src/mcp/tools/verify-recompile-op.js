@@ -90,6 +90,7 @@ export async function runVerifyRecompile(sessionKey, args) {
   const { result, cartHost, refHost } = await verifyRecompile({
     openCart: ctx.openCart, openRef: ctx.openRef, refPlatform: ctx.platform, layout: ctx.layout,
     frames, input: args.input, wrongInput: args.wrongInput, cartFrameOffset: args.cartFrameOffset,
+    searchFrame: args.searchFrame, searchWindow: args.searchWindow, minSharpness: args.minSharpness,
     sweep: args.sweep, cartOrigin: args.cartOrigin, cartButtonMap: args.cartButtonMap,
     controls: args.controls, movingWindow: args.movingWindow, wrongFrameDelta: args.wrongFrameDelta,
     bar: { ...(args.minContentPct != null ? { minContentPct: args.minContentPct } : {}), ...(args.minContentPx != null ? { minContentPx: args.minContentPx } : {}),
@@ -117,6 +118,7 @@ export async function runRecompileDiverge(sessionKey, args) {
     res = await findRecompileDivergence({
       cartHost, refHost, refPlatform: ctx.platform, layout: ctx.layout, input: args.input,
       cartFrameOffset: args.cartFrameOffset, startFrame: args.startFrame, maxFrames: args.maxFrames,
+      openCart: ctx.openCart, openRef: ctx.openRef, searchFrame: args.searchFrame, searchWindow: args.searchWindow, minSharpness: args.minSharpness,
       stride: args.stride, cartButtonMap: args.cartButtonMap,
     });
   } catch (e) {

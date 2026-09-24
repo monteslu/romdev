@@ -389,6 +389,87 @@ export function resolveAlignment(cartHost, refHost, layout, explicitOffset) {
   };
 }
 
+// ─── offset search ───────────────────────────────────────────────────────────
+
+/** True when the frame offset must be FOUND: caller 'auto', or the section's frameAlignment:'search'. */
+export function wantsSearch(layout, explicitOffset) {
+  if (explicitOffset === "auto") return true;
+  if (explicitOffset != null) return false;
+  return layout?.frameAlignment === "search";
+}
+
+/**
+ * Find the cart frame offset by picture, for carts whose frame axis does not
+ * follow the settle-frame arithmetic (a boot that takes a game-dependent
+ * number of frames longer or shorter than the reference's).
+ *
+ * Runs a FRESH cart and a FRESH reference (so the main run's hosts keep their
+ * whole history), steps the reference to `frame`, then steps the cart through
+ * frame+base-window .. frame+base+window scoring each picture against that one
+ * reference picture (moving pixels when enough moved, else content). The
+ * winner must reach the content bar and stand clear of every candidate more
+ * than one frame away from it by `minSharpness` points, or the search refuses:
+ * an attract loop, a still title or a fade matches many offsets equally and a
+ * guess there would verify the wrong frame.
+ *
+ * Cost bound: one cart run to frame+base+window and one reference run to
+ * `frame`, plus 2*window+1 screenshot scores (window <= 600).
+ *
+ * Input scheduled before `frame` reaches the search cart at the BASE offset,
+ * not at each candidate's; search at a frame before the first press (a title
+ * or attract frame) when the game's timeline depends on when input arrives.
+ */
+export async function searchFrameOffset({ openCart, openRef, schedule = [], nameMap = null, base = 0, frame,
+  window = 120, movingWindow = 10, bar = {}, origin = null, minSharpness = 2 }) {
+  if (!Number.isInteger(frame) || frame < 1) throw new Error("offset search needs a reference frame >= 1 to search at (searchFrame, default the first scored frame)");
+  window = Math.max(1, Math.min(600, window ?? 120));
+  minSharpness ??= 2;
+  const minMovingPx = bar.minMovingPx ?? 200, minContentPct = bar.minContentPct ?? 95;
+  const refHost = await openRef();
+  let cartHost;
+  try {
+    cartHost = await openCart();
+    const rd = new ScheduleDriver(refHost, schedule);
+    let prev = null;
+    if (frame - movingWindow >= 0) { await rd.to(frame - movingWindow); prev = snap(refHost.screenshotRgba()); }
+    await rd.to(frame);
+    const refPic = snap(refHost.screenshotRgba());
+    const cd = new ScheduleDriver(cartHost, shiftSchedule(schedule, base), nameMap);
+    const scores = [];
+    let o = null;
+    for (let d = base - window; d <= base + window; d++) {
+      const cf = frame + d;
+      if (cf < 0) continue;
+      await cd.to(cf);
+      const pic = snap(cartHost.screenshotRgba());
+      o ??= resolveOrigin(pic, refPic, origin);
+      const sc = scorePictures(pic, refPic, o, prev);
+      const useMoving = sc.movingTotal != null && sc.movingTotal >= minMovingPx;
+      scores.push({ offset: d, pct: sc.status === "OK" ? (useMoving ? sc.movingPct : sc.contentPct) : -1, metric: useMoving ? "moving" : "content", contentPct: sc.contentPct });
+    }
+    const top = [...scores].sort((x, y) => y.pct - x.pct).slice(0, 6).map((x) => ({ offset: x.offset, pct: x.pct, metric: x.metric }));
+    const best = top[0];
+    const refuse = (why) => {
+      throw new Error(`frame offset search refused: ${why}. Searched cart offsets ${base - window}..${base + window} at reference frame ${frame}; best candidates ${JSON.stringify(top)}. `
+        + "Search at a frame whose picture MOVES (searchFrame), widen searchWindow (max 600), or pass cartFrameOffset explicitly.");
+    };
+    if (!best || best.pct < 0) refuse("no candidate produced a scorable picture (blank cart or a one-colour reference frame)");
+    const plateau = scores.filter((x) => x.pct >= best.pct - 0.005).map((x) => x.offset).sort((x, y) => x - y);
+    const contiguous = plateau[plateau.length - 1] - plateau[0] === plateau.length - 1;
+    if (!contiguous || plateau.length > 4) refuse(`${plateau.length} offsets tie at ${best.pct}% (${plateau.slice(0, 8).join(", ")}${plateau.length > 8 ? ", ..." : ""}): the picture does not pin a frame`);
+    const outside = scores.filter((x) => x.offset < plateau[0] - 1 || x.offset > plateau[plateau.length - 1] + 1).map((x) => x.pct);
+    const sharpness = Math.round((best.pct - (outside.length ? Math.max(...outside) : 0)) * 100) / 100;
+    const chosen = scores.find((x) => x.offset === plateau[0]);
+    if ((chosen.contentPct ?? 0) < minContentPct) refuse(`the best offset scores only ${chosen.contentPct}% content, below the ${minContentPct}% bar`);
+    if (sharpness < minSharpness) refuse(`the peak is not sharp (${sharpness} points above the best candidate two or more frames away; need ${minSharpness})`);
+    return { offset: chosen.offset, frame, window: [base - window, base + window], metric: chosen.metric, peakPct: chosen.pct,
+      sharpness, plateau: plateau.length > 1 ? plateau : undefined, candidates: scores.length, top };
+  } finally {
+    disposeHost(cartHost);
+    disposeHost(refHost);
+  }
+}
+
 // ─── the verification ────────────────────────────────────────────────────────
 
 const DEFAULT_CONTROLS = ["vramZero", "wrongFrame", "wrongInput"];
@@ -423,7 +504,10 @@ function disposeHost(h) {
  * @param {number[]} a.frames                  REFERENCE frames to score
  * @param {Array|string} [a.input]             input schedule in reference frames
  * @param {Array|string} [a.wrongInput]        explicit schedule for the wrong-input control
- * @param {number} [a.cartFrameOffset]         override the computed alignment
+ * @param {number|"auto"} [a.cartFrameOffset] override the computed alignment; "auto" searches for it
+ * @param {number} [a.searchFrame]             reference frame the offset search runs at (default frames[0])
+ * @param {number} [a.searchWindow]            offsets searched either side of the computed one (default 120, max 600)
+ * @param {number} [a.minSharpness]            points the searched peak must stand above its non-neighbours (default 2)
  * @param {number} [a.sweep]                   also score cart frames +-sweep around the aligned one
  * @param {number[]} [a.cartOrigin]            [x,y] of the reference picture inside the cart framebuffer
  * @param {Record<string,string>} [a.cartButtonMap] rename buttons for the cart side only
@@ -442,7 +526,7 @@ export async function verifyRecompile(a) {
   if (!frames.length) throw new Error("verifyRecompile: `frames` must list at least one reference frame to score");
   if (frames[0] < 1) throw new Error("verifyRecompile: frames are reference frames stepped after loadMedia and must be >= 1");
   const schedule = parseInputSchedule(a.input);
-  const sweep = a.sweep ?? 0;
+  let sweep = a.sweep ?? 0;
   const mw = a.movingWindow ?? 10;
   const wfd = a.wrongFrameDelta ?? 30;
   const controls = a.controls ?? DEFAULT_CONTROLS;
@@ -457,8 +541,19 @@ export async function verifyRecompile(a) {
   // Any failure past this point must not leak two live emulator heaps.
   try {
 
-  const alignment = resolveAlignment(cartHost, refHost, layout, a.cartFrameOffset);
+  const searched = wantsSearch(layout, a.cartFrameOffset);
+  const alignment = resolveAlignment(cartHost, refHost, layout, searched ? undefined : a.cartFrameOffset);
+  if (searched) {
+    const found = await searchFrameOffset({
+      openCart: a.openCart, openRef: a.openRef, schedule, nameMap, base: alignment.computedOffset,
+      frame: a.searchFrame ?? frames[0], window: a.searchWindow, movingWindow: mw, bar,
+      origin: a.cartOrigin ?? layout.screen?.origin, minSharpness: a.minSharpness,
+    });
+    Object.assign(alignment, { offset: found.offset, source: "search", search: found });
+    alignment.meaning = `reference frame F is compared with cart frame F${found.offset >= 0 ? "+" : ""}${found.offset}, FOUND by searching cart offsets ${found.window[0]}..${found.window[1]} at reference frame ${found.frame} (peak ${found.peakPct}%, sharpness ${found.sharpness}); each scored frame may refine it by up to +-${Math.max(sweep, 2)} when its own sweep has a sharp peak (row.refinedBy).`;
+  }
   const off = alignment.offset;
+  if (searched && sweep < 2) sweep = 2;
   const ref = new ScheduleDriver(refHost, schedule);
   const cart = new ScheduleDriver(cartHost, shiftSchedule(schedule, off), nameMap);
 
@@ -482,8 +577,7 @@ export async function verifyRecompile(a) {
     refShots.set(r, snap(refHost.screenshotRgba()));
     if (!sampleSet.has(r)) continue;
     const F = r, refPic = refShots.get(F), prev = refShots.get(F - mw) ?? null;
-    const curve = [];
-    let aligned = null, alignedPic = null;
+    const curve = [], cands = [];
     for (let d = -sweep; d <= sweep; d++) {
       const cf = F + off + d;
       if (cf < cart.at || cf < 0) { curve.push({ d, skipped: "cart already past this frame (samples closer together than the sweep)" }); continue; }
@@ -492,32 +586,40 @@ export async function verifyRecompile(a) {
       origin ??= resolveOrigin(pic, refPic, a.cartOrigin ?? layout.screen?.origin);
       const s = scorePictures(pic, refPic, origin, prev);
       curve.push({ d, contentPct: s.contentPct, movingPct: s.movingPct, exactPct: s.exactPct, status: s.status });
-      if (d === 0) {
-        aligned = s; alignedPic = pic;
-        alignedCartPics.set(F, pic);
-        const row = { refFrame: F, cartFrame: cf, ...s, pass: passesBar(s, bar) };
-        row.regions = compareRegions(cartHost, refHost, layout.regions);
-        if (Object.keys(layout.fields ?? {}).length) row.fields = compareFields(cartHost, refHost, a.refPlatform, layout.fields);
-        if (Object.keys(layout.probe ?? {}).length) {
-          row.probe = readProbe(cartHost, layout.probe);
-          if (typeof row.probe.trapped === "number" && row.probe.trapped) trapped ??= { refFrame: F, cartFrame: cf, probe: row.probe };
-        }
-        if (a.outputDir) row.png = writeDiffPng(path.join(a.outputDir, `${tag}_ref${F}_cart${cf}.png`), pic, refPic, origin);
-        rows.push(row);
+      // State is read at every candidate the row might settle on: the aligned
+      // pair always, and in search mode every sweep point (the refine below
+      // may pick one of them).
+      if (d === 0 || searched) {
+        const c = { d, cf, pic, s, regions: compareRegions(cartHost, refHost, layout.regions) };
+        if (Object.keys(layout.fields ?? {}).length) c.fields = compareFields(cartHost, refHost, a.refPlatform, layout.fields);
+        if (Object.keys(layout.probe ?? {}).length) c.probe = readProbe(cartHost, layout.probe);
+        cands.push(c);
       }
     }
-    const row = rows[rows.length - 1];
-    if (row?.refFrame === F) {
-      const scored = curve.filter((c) => c.contentPct != null || c.movingPct != null);
-      const metric = (c) => (c.movingPct ?? c.contentPct ?? -1);
-      const peak = scored.reduce((b, c) => (b == null || metric(c) > metric(b) || (metric(c) === metric(b) && c.d === 0) ? c : b), null);
-      const others = scored.filter((c) => c !== peak).map(metric);
-      row.sweep = sweep ? curve : undefined;
-      if (sweep && peak) {
-        row.peak = { d: peak.d, metric: peak.movingPct != null ? "moving" : "content", pct: metric(peak) };
-        row.sharpness = others.length ? Math.round((metric(peak) - Math.max(...others)) * 100) / 100 : null;
-      }
+    const scored = curve.filter((c) => c.contentPct != null || c.movingPct != null);
+    const metric = (c) => (c.movingPct ?? c.contentPct ?? -1);
+    const peak = scored.reduce((b, c) => (b == null || metric(c) > metric(b) || (metric(c) === metric(b) && c.d === 0) ? c : b), null);
+    const others = scored.filter((c) => c !== peak).map(metric);
+    const sharpness = others.length && peak ? Math.round((metric(peak) - Math.max(...others)) * 100) / 100 : null;
+    // Search mode refines per frame: when the searched offset is off by a
+    // frame or two here (a lag frame, a 30 fps game) and the sweep has a sharp
+    // peak elsewhere, score that pair. Fixed offsets never move.
+    let pick = cands.find((c) => c.d === 0);
+    if (searched && peak && peak.d !== 0 && sharpness > 0) pick = cands.find((c) => c.d === peak.d) ?? pick;
+    if (!pick) continue;
+    alignedCartPics.set(F, pick.pic);
+    const row = { refFrame: F, cartFrame: pick.cf, ...(pick.d !== 0 ? { refinedBy: pick.d } : {}), ...pick.s, pass: passesBar(pick.s, bar), regions: pick.regions };
+    if (pick.fields) row.fields = pick.fields;
+    if (pick.probe) {
+      row.probe = pick.probe;
+      if (typeof row.probe.trapped === "number" && row.probe.trapped) trapped ??= { refFrame: F, cartFrame: pick.cf, probe: row.probe };
     }
+    if (a.outputDir) row.png = writeDiffPng(path.join(a.outputDir, `${tag}_ref${F}_cart${pick.cf}.png`), pick.pic, refPic, origin);
+    if (sweep) {
+      row.sweep = curve;
+      if (peak) { row.peak = { d: peak.d, metric: peak.movingPct != null ? "moving" : "content", pct: metric(peak) }; row.sharpness = sharpness; }
+    }
+    rows.push(row);
   }
 
   // ── controls ──
@@ -579,7 +681,10 @@ export async function verifyRecompile(a) {
   const scoredRows = rows.filter((r) => r.status === "OK" && r.contentTotal >= bar.minContentPx);
   if (!scoredRows.length) reasons.push(`no scored frame has >= ${bar.minContentPx} content pixels in the reference: nothing here is evidence (pick later frames with real pictures)`);
   for (const r of rows) {
-    if (r.status === "INCONCLUSIVE") continue;
+    // Too little in the reference picture to be evidence either way: reported
+    // (evidence:false), never counted as a pass OR a failure.
+    r.evidence = r.status !== "INCONCLUSIVE" && (r.status === "BLANK" || r.contentTotal >= bar.minContentPx);
+    if (!r.evidence) continue;
     if (!r.pass) reasons.push(`ref frame ${r.refFrame}: ${r.status !== "OK" ? r.status : `content ${r.contentPct}% (${r.contentPx}/${r.contentTotal})${r.movingTotal != null ? `, moving ${r.movingPct}% (${r.movingPx}/${r.movingTotal})` : ""}`} is below the bar`);
   }
   for (const [n, c] of Object.entries(ctl)) {
@@ -598,7 +703,7 @@ export async function verifyRecompile(a) {
   const table = [
     `| ref frame | cart frame | exact | content (px) | moving (px) |${regionNames.map((n) => ` ${n} |`).join("")} pass |`,
     `|---|---|---|---|---|${regionNames.map(() => "---|").join("")}---|`,
-    ...rows.map((r) => `| ${r.refFrame} | ${r.cartFrame} | ${r.exactPct}% | ${r.contentPct ?? "-"}% (${r.contentPx}/${r.contentTotal}) | ${r.movingTotal == null ? "-" : `${r.movingPct ?? "-"}% (${r.movingPx}/${r.movingTotal})`} |${regionNames.map((n) => ` ${r.regions?.[n]?.error ? "ERR" : `${r.regions?.[n]?.differ}/${r.regions?.[n]?.bytes}`} |`).join("")} ${r.status === "INCONCLUSIVE" ? "n/a" : r.pass ? "yes" : "NO"} |`),
+    ...rows.map((r) => `| ${r.refFrame} | ${r.cartFrame} | ${r.exactPct}% | ${r.contentPct ?? "-"}% (${r.contentPx}/${r.contentTotal}) | ${r.movingTotal == null ? "-" : `${r.movingPct ?? "-"}% (${r.movingPx}/${r.movingTotal})`} |${regionNames.map((n) => ` ${r.regions?.[n]?.error ? "ERR" : `${r.regions?.[n]?.differ}/${r.regions?.[n]?.bytes}`} |`).join("")} ${!r.evidence ? "n/a" : r.pass ? "yes" : "NO"} |`),
   ];
   const result = {
     op: "verifyRecompile",
@@ -650,7 +755,13 @@ export async function findRecompileDivergence(a) {
   }
   const schedule = parseInputSchedule(a.input);
   const nameMap = a.cartButtonMap ?? (layout.buttons === "byName" ? BY_NAME_CART_MAP : null);
-  const alignment = resolveAlignment(a.cartHost, a.refHost, layout, a.cartFrameOffset);
+  const alignment = resolveAlignment(a.cartHost, a.refHost, layout, wantsSearch(layout, a.cartFrameOffset) ? undefined : a.cartFrameOffset);
+  if (wantsSearch(layout, a.cartFrameOffset)) {
+    if (!a.openCart || !a.openRef) throw new Error("findDiverge: an offset search needs fresh hosts (openCart/openRef)");
+    const found = await searchFrameOffset({ openCart: a.openCart, openRef: a.openRef, schedule, nameMap, base: alignment.computedOffset,
+      frame: a.searchFrame ?? Math.max(a.startFrame ?? 0, 600), window: a.searchWindow, minSharpness: a.minSharpness, origin: layout.screen?.origin });
+    Object.assign(alignment, { offset: found.offset, source: "search", search: found });
+  }
   const off = alignment.offset;
   const ref = new ScheduleDriver(a.refHost, schedule);
   const cart = new ScheduleDriver(a.cartHost, shiftSchedule(schedule, off), nameMap);

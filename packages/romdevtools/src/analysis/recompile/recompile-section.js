@@ -12,6 +12,10 @@
 //     "platform": "sms",            source platform of the ROM the cart was built from
 //     "reference": "sms",           loadMedia platform id of the reference core (default = platform)
 //     "romSha1": "<hex>",           sha1 of the source ROM; checked against the reference ROM
+//     "frameAlignment": "settle",   "settle" (default): cart frame = reference frame + refSettle
+//                                   - 1 - warmupFrames. "search": the cart's boot takes a
+//                                   game-dependent number of frames, so the verifier FINDS the
+//                                   offset by picture (a sharp peak, or it refuses)
 //     "warmupFrames": 0,            frames the cart runs INSIDE its first wc_render beyond the
 //                                   one the wasmcart host's loadMedia settle frame counts
 //                                   (a GBA cart that runs 4 warm-up frames there declares 4)
@@ -222,6 +226,7 @@ export function validateRecompileLayout(layout) {
   const out = { ...layout, version: v };
   if (out.warmupFrames != null && !isInt(out.warmupFrames)) throw new Error("warmupFrames must be a non-negative integer");
   if (out.buttons != null && !["positional", "byName"].includes(out.buttons)) throw new Error("buttons must be 'positional' or 'byName'");
+  if (out.frameAlignment != null && !["settle", "search"].includes(out.frameAlignment)) throw new Error("frameAlignment must be 'settle' or 'search'");
   if (out.screen?.origin != null) {
     const o = out.screen.origin;
     if (!Array.isArray(o) || o.length !== 2 || !o.every((n) => Number.isInteger(n) && n >= 0)) throw new Error("screen.origin must be [x, y]");
