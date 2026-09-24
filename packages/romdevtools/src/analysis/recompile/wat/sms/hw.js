@@ -233,7 +233,10 @@ export const HLATTAB = 0x14E00;
  * @param {{region?: 'export'|'japan', pal?: boolean, fm?: boolean}} opts
  */
 function hwExactWat(platform, opts) {
-  const legacy = hwWat(platform);
+  // a Game Gear in SMS mode (opts.ggms): the GG's port decoding without its
+  // registers at $00-$06, and the Master System VDP's CRAM
+  const ggVdp = platform === "gg" && !opts.ggms;
+  const legacy = hwWat(ggVdp ? "gg" : "sms");
   const cut = legacy.indexOf("  (func $vdp_status_read");
   const gg = platform === "gg";
   // gpgx vdp_sms_ctrl_w: the first control byte already replaces the address
@@ -251,7 +254,7 @@ function hwExactWat(platform, opts) {
                         (global.get $vdp_latch))))`;
   if (!vdpPart.includes(regStore)) throw new Error("sms recompile: register store not found in the VDP text");
   vdpPart = vdpPart.replace(regStore, "            (call $vdp_reg_w (i32.and (local.get $v) (i32.const 0x0F)) (global.get $vdp_latch))))");
-  if (gg) {
+  if (ggVdp) {
     // gpgx vdp_z80_data_w_gg: CRAM is written a colour (two bytes) at a time;
     // an even address only latches the byte, the odd one stores the pair.
     const cramStore = `        (i32.store8 (i32.add (i32.const ${CRAM})
@@ -415,7 +418,10 @@ ${opts.sms1 ? "" : `    (local.set $mode (i32.or (i32.and (call $vreg (i32.const
     (local.set $v (i32.and (local.get $v) (i32.const 0xFF)))
     (if (i32.lt_u (local.get $g) (i32.const 0x40))
       (then
-${gg ? `        (if (i32.lt_u (local.get $p) (i32.const 7))
+${gg && opts.ggms ? `        ;; z80_gg_port_w: $00-$06 reach the GG registers only in GG mode
+        (if (i32.eq (local.get $p) (i32.const 0x3E)) (then (global.set $memctl (local.get $v)) (return)))
+        (if (i32.eq (local.get $p) (i32.const 0x3F)) (then ${IOCTL_W} (return)))
+        (return)))` : gg ? `        (if (i32.lt_u (local.get $p) (i32.const 7))
           (then
             (if (i32.or (i32.eq (local.get $p) (i32.const 1))
                         (i32.or (i32.eq (local.get $p) (i32.const 2)) (i32.eq (local.get $p) (i32.const 3))))
@@ -456,7 +462,9 @@ ${gg ? "" : japan ? `    ;; 315-5297: the FM audio control register at $F2 (FM i
     (if (i32.eq (local.get $g) (i32.const 0x80)) (then (return (call $vdp_data_read))))
     (if (i32.eq (local.get $g) (i32.const 0x81)) (then (return (call $vdp_status_read))))
 ${gg ? `    (if (i32.lt_u (local.get $g) (i32.const 0x40))
-      (then
+      (then${opts.ggms ? `
+        ;; z80_gg_port_r: no GG registers in SMS mode, an unused read is $FF
+        (return (i32.const 0xFF))))` : `
         (if (i32.eqz (local.get $p))
           (then (return (i32.and (i32.load8_u (i32.const ${IOREGS}))
                                  (i32.xor (i32.xor (global.get $ggstart) (i32.const 0x80)) (i32.const 0xFF))))))
@@ -466,7 +474,7 @@ ${gg ? `    (if (i32.lt_u (local.get $g) (i32.const 0x40))
                                 (i32.and (i32.load8_u (i32.const ${IOREGS + 2})) (i32.const 0x7F))))))
         (if (i32.lt_u (local.get $p) (i32.const 6))
           (then (return (i32.load8_u (i32.add (i32.const ${IOREGS}) (local.get $p))))))
-        (return (i32.const 0xFF))))
+        (return (i32.const 0xFF))))`}
     (if (i32.or (i32.eq (local.get $p) (i32.const 0xC0)) (i32.eq (local.get $p) (i32.const 0xDC)))
       (then (return (call $port_dc))))
     (if (i32.or (i32.eq (local.get $p) (i32.const 0xC1)) (i32.eq (local.get $p) (i32.const 0xDD)))
@@ -486,7 +494,7 @@ ${opts.fm ? `    (if (i32.eqz (i32.and (local.get $p) (i32.const 4))) (then (loc
       (then (local.set $g (i32.and (local.get $g)
               (if (result i32) (i32.and (local.get $p) (i32.const 1)) (then (call $port_dd)) (else (call $port_dc)))))))
     (local.get $g))`}
-${gg ? `  (data (i32.const ${IOREGS}) "${[io0, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF].map((b) => "\\" + b.toString(16).padStart(2, "0")).join("")}")
+${ggVdp ? `  (data (i32.const ${IOREGS}) "${[io0, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF].map((b) => "\\" + b.toString(16).padStart(2, "0")).join("")}")
 ` : ""}`;
 }
 

@@ -328,3 +328,24 @@ test("TMS9918 modes (Graphics I/II, Text, Multicolor, extended tables, invalid) 
     }
   }
 });
+
+test("a Game Gear cart gpgx runs in Master System mode (SYSTEM_GGMS): SMS CRAM and colours, 256x192, no GG registers, START is PAUSE", T, async () => {
+  const prog = (r0) => z80([
+    [0xF3, 0x31, 0xF0, 0xDF, 0xED, 0x56],
+    [0xDB, 0x00, 0x32, 0x00, 0xC0, 0xDB, 0x01, 0x32, 0x01, 0xC0, 0xDB, 0x05, 0x32, 0x02, 0xC0, 0x3E, 0x55, 0xD3, 0x06],   // $00/$01/$05 reads, a $06 write
+    ...tile4(0x0020, [0xFF, 0x0F, 0xF0, 0x3C], "a"),
+    vaddr(0x3800), [0x0E, 0x1C], "row:", [0x06, 0x20], "col:", [0x78, 0xD3, 0xBE, 0xAF, 0xD3, 0xBE], ["djnz", "col"], [0x0D], ["jr", "nz", "row"],
+    vaddr(0x0000), [0x06, 0x00], "g1:", [0x78, 0xD3, 0xBE], ["djnz", "g1"],     // Graphics I tables at $0000 (colour/pattern bytes)
+    vaddr(0, 3), [0x06, 0x20, 0xAF], "cr:", [0xD3, 0xBE, 0xC6, 0x03, 0xE6, 0x3F], ["djnz", "cr"],   // SMS CRAM: 32 single bytes
+    vreg(2, 0x0E), vreg(3, 0x00), vreg(4, 0x00), vreg(7, 0x03), vreg(0, r0), vreg(1, 0xC0),
+    "end:", ["jr", null, "end"]], 0x100);
+  for (const r0 of [0x06, 0x00]) {   // Mode 4, and the TMS Graphics I mode the GG powers on in
+    const rom = smsImage([0xC3, 0x00, 0x01], { region: 6, at: [[0x66, [0xF5, 0x3A, 0x20, 0xC0, 0x3C, 0x32, 0x20, 0xC0, 0xF1, 0xED, 0x45]], [0x100, prog(r0)]] });
+    // a USA SYSTEM_GGMS / MAPPER_SEGA entry of gpgx's database
+    const img = await forgeCrc32(rom, 0x4000, 0x59840FD6);
+    const r = await gpgxParity({ platform: "gg", rom: img, maxFrames: 12, input: "4:start:2,8:start:2", picture: true });
+    assert.equal(r.diverged, false, `R0=${r0}: ${divergenceText(r)}`);
+    assert.equal(r.picture.status, "OK", `R0=${r0}: ${JSON.stringify(r.picture)}`);
+    assert.equal(r.picture.exactPct, 100, `R0=${r0}: ${JSON.stringify(r.picture)}`);
+  }
+});

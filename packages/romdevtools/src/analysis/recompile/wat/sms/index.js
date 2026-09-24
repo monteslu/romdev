@@ -223,7 +223,8 @@ export function describe(rom, opts = {}) {
       supported = false;
       unsupportedReason = `genesis_plus_gx runs this cart (CRC ${db.crc}) with ${db.mapper}, which this backend does not model`;
     }
-    if (supported && !["SYSTEM_SMS2", "SYSTEM_SMS", "SYSTEM_GG"].includes(db.system)) {
+    // SYSTEM_GGMS: a Game Gear running the cart in its Master System mode
+    if (supported && !(["SYSTEM_SMS2", "SYSTEM_SMS", "SYSTEM_GG"].includes(db.system) || (db.system === "SYSTEM_GGMS" && platform === "gg"))) {
       supported = false;
       unsupportedReason = `genesis_plus_gx runs this cart (CRC ${db.crc}) as ${db.system}, which this backend does not model`;
     }
@@ -273,7 +274,12 @@ export function describe(rom, opts = {}) {
   }
   if (typeof opts.pal === "boolean") pal = opts.pal;
   // gpgx's model: SYSTEM_SMS is the 315-5124 VDP (no extended heights).
-  const vdp = db?.system === "SYSTEM_SMS" ? "315-5124" : platform === "gg" ? "gg" : "315-5246";
+  // SYSTEM_GGMS (gpgx): the Game Gear in Master System mode. Its VDP takes
+  // SMS CRAM writes, shows SMS colours and the whole 256x192 picture; the
+  // ports decode as a Game Gear's but without the GG registers at $00-$06,
+  // and START is the PAUSE button's NMI.
+  const ggms = platform === "gg" && db?.system === "SYSTEM_GGMS";
+  const vdp = db?.system === "SYSTEM_SMS" ? "315-5124" : platform === "gg" && !ggms ? "gg" : "315-5246";
   const emitter = opts.emitter || "banked";
   if (emitter !== "banked" && emitter !== "flat") throw new Error(`sms recompile: emitter must be 'banked' or 'flat', got '${emitter}'`);
   if (emitter === "flat" && (img.length > 0x8000 || ramRegions.length)) throw new Error("sms recompile: emitter 'flat' handles unbanked carts of 32KB or less with no RAM code");
@@ -301,6 +307,7 @@ export function describe(rom, opts = {}) {
     pal,
     fm: region === "japan" && platform === "sms" ? true : !!db?.fm,
     vdp,
+    ggms,
     bankShift,
     romBytes: img.length,
     banks: nbank,
@@ -316,7 +323,7 @@ export function describe(rom, opts = {}) {
     ramRegions,
     ramSnapshot: typeof opts.ramSnapshot === "string" ? opts.ramSnapshot
       : opts.ramSnapshot ? `${opts.ramSnapshot.length} bytes` : Number.isInteger(opts.ramSnapshotFrame) ? `reference frame ${opts.ramSnapshotFrame}` : null,
-    screen: platform === "gg" ? { width: 160, height: 144, origin: [48, 24] } : { width: 256, height: 192, origin: [0, 0] },
+    screen: platform === "gg" && !ggms ? { width: 160, height: 144, origin: [48, 24] } : { width: 256, height: 192, origin: [0, 0] },
   };
 }
 
@@ -863,8 +870,10 @@ ${RAMMAP_LOOKUP}    (i32.const 0))
 /** Block maps init, CRAM->RGBA present, the wasmcart ABI exports and wc_render's frame loop. */
 function abiWat(G, cfg, n, platform) {
   const { ABI, FB, AUDIO, TRACE, BTAB, BMAP0, BMAPP, BMAP1, BMAPR } = G;
-  const CRAMBODY = cramBody(platform, CRAM);
-  const STARTBTN = startBody(platform, !cfg.legacy);
+  // a Game Gear in SMS mode shows, colours and pauses as a Master System
+  const video = cfg.ggms ? "sms" : platform;
+  const CRAMBODY = cramBody(video, CRAM);
+  const STARTBTN = startBody(video, !cfg.legacy);
   const RAMMAP_STORE = cfg.ramRegions.length ? `      (if (i32.ge_u (local.get $a) (i32.const 0xC000))
         (then (i32.store (i32.add (i32.const ${BMAPR})
                  (i32.mul (i32.and (local.get $a) (i32.const 0x1FFF)) (i32.const 4)))
@@ -933,7 +942,7 @@ function abiWat(G, cfg, n, platform) {
   // ...and parses the sprites for line 0 then too (parse_satb(-1)).
   // ...and takes the PAUSE button's NMI between the two.
   const RELOAD_BEFORE = cfg.legacy ? "" : RELOAD.replace("(then (global.set $linectr (call $vreg (i32.const 10)))))",
-    `(then (global.set $linectr (call $vreg (i32.const 10)))\n${pauseNmiWat(platform)}          (call $parse_satb (i32.const -1))))`);
+    `(then (global.set $linectr (call $vreg (i32.const 10)))\n${pauseNmiWat(video)}          (call $parse_satb (i32.const -1))))`);
   const RELOAD_AFTER = cfg.legacy ? RELOAD : "";
   const RENDER_LINE = cfg.legacy ? `      (if (i32.lt_u (local.get $ln) (i32.const 192))
         (then (call $render_line (local.get $ln))))` : `      (if (i32.and (i32.lt_u (local.get $ln) ${VPH}) (i32.ne (local.get $ln) (global.get $earlyline)))
@@ -972,13 +981,13 @@ ${CRAMBODY}
         (i32.or (i32.shl (local.get $g) (i32.const 8)) (local.get $b)))))
 
   (func $present
-    (local $i i32)${!cfg.legacy && platform === "gg" ? " (local $s i32)" : ""}
+    (local $i i32)${!cfg.legacy && video === "gg" ? " (local $s i32)" : ""}
 ${cfg.legacy ? `    (block $d (loop $l
       (br_if $d (i32.ge_u (local.get $i) (i32.const 49152)))
       (i32.store (i32.add (i32.const ${FB}) (i32.mul (local.get $i) (i32.const 4)))
         (call $cram_rgba (i32.load8_u (i32.add (i32.const ${SMSFB}) (local.get $i)))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
-      (br $l))))` : platform === "gg" ? `    ;; the Game Gear shows 144 lines centred in the active height, so the
+      (br $l))))` : video === "gg" ? `    ;; the Game Gear shows 144 lines centred in the active height, so the
     ;; 192 presented rows start (height - 192) / 2 lines down
     (local.set $s (i32.shl (i32.shr_u (i32.sub (global.get $vph) (i32.const 192)) (i32.const 1)) (i32.const 8)))
     (block $d (loop $l
@@ -1467,12 +1476,13 @@ async function loadRamSnapshot(opts, platform) {
  */
 export function layoutFor(d) {
   const gg = d.platform === "gg";
+  const ggVdp = gg && !d.ggms;
   return {
     regions: {
       ram: { offset: 0xC000, length: 0x2000, ref: "system_ram" },
       vram: { offset: VRAM, length: 0x4000, ref: gg ? "gg_vram" : "sms_vram" },
       // gpgx keeps CRAM as 16-bit words; an SMS colour is the low byte.
-      cram: gg ? { offset: CRAM, length: 64, ref: "gg_cram" } : { offset: CRAM, length: 32, ref: "sms_cram", transform: "lowbyte16", mask: 0x3F },
+      cram: ggVdp ? { offset: CRAM, length: 64, ref: "gg_cram" } : { offset: CRAM, length: 32, ref: gg ? "gg_cram" : "sms_cram", transform: "lowbyte16", mask: 0x3F },
       // R0-R9. R10 (line counter reload) powers on $FF in gpgx and 0 here;
       // it only matters once a game enables line interrupts, and every game
       // that does writes it first.
@@ -1665,9 +1675,9 @@ export async function* emitWat(rom, opts = {}) {
     "  (global $linectr (mut i32) (i32.const 0))");
   head.push(cfg.legacy ? bankHelpersWat(G, cfg, NBANK) : bankHelpersExactWat(G, cfg, NBANK));
   head.push(flagHelpersWat({ exact: !cfg.legacy }));
-  head.push(hwWat(PLATFORM, { exact: !cfg.legacy, region: cfg.region, pal: cfg.pal, fm: cfg.fm, sms1: cfg.vdp === "315-5124" }));
+  head.push(hwWat(PLATFORM, { exact: !cfg.legacy, region: cfg.region, pal: cfg.pal, fm: cfg.fm, sms1: cfg.vdp === "315-5124", ggms: cfg.ggms }));
   // TMS9918-mode colours: the fixed Master System set, or the Game Gear's CRAM palette 1
-  head.push(renderWat({ exact: !cfg.legacy, sms1: cfg.vdp === "315-5124", tmsBase: PLATFORM === "sms" ? 0x20 : 0x10 }));
+  head.push(renderWat({ exact: !cfg.legacy, sms1: cfg.vdp === "315-5124", tmsBase: PLATFORM === "sms" && !cfg.ggms ? 0x20 : 0x10 }));
   // the exact model: genesis_plus_gx's PSG + blip_buf, s16 44100 Hz (psg.js)
   head.push(cfg.legacy ? psgWat(AUDIO, ABI, { pal: false }) : smsSoundWat({ base: AUDIO, cursorAddr: ABI + 256, pal: cfg.pal }));
   head.push(miscWat({ exact: !cfg.legacy }));
