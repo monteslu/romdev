@@ -12,7 +12,7 @@ import { assembleWat } from "../assemble.js";
 
 // ---- a tiny 6502 assembler over cpu.js's own opcode table ------------------
 const BY = new Map();
-for (const [op, [m, mode]] of OPS) BY.set(`${m} ${mode}`, op);
+for (const [op, [m, mode]] of OPS) if (!BY.has(`${m} ${mode}`)) BY.set(`${m} ${mode}`, op);
 const num = (s) => (s.startsWith("$") ? parseInt(s.slice(1), 16) : parseInt(s, 10));
 const BR = new Set(["bpl", "bmi", "bvc", "bvs", "bcc", "bcs", "bne", "beq"]);
 
@@ -28,7 +28,13 @@ function asm(src, org) {
       if (l.startsWith(".byte")) { const b = l.slice(5).split(",").map((t) => num(t.trim())); out.push(...b); pc += b.length; continue; }
       const [m, ...rest] = l.split(/\s+/);
       const arg = rest.join("");
-      const val = (t) => (/^[a-z_]\w*$/i.test(t) ? (labels[t] ?? (final ? NaN : 0)) : num(t));
+      const one = (t) => (/^[a-z_]\w*$/i.test(t) ? (labels[t] ?? (final ? NaN : 0)) : num(t));
+      const val = (t) => {
+        if (t[0] === "<") return val(t.slice(1)) & 0xFF;
+        if (t[0] === ">") return (val(t.slice(1)) >> 8) & 0xFF;
+        const mm = t.match(/^([a-z_]\w*)-([a-z_]\w*)$/i);
+        return mm ? (one(mm[1]) - one(mm[2])) & 0xFFFF : one(t);
+      };
       let mode, v = 0;
       if (!arg) mode = ["asl", "lsr", "rol", "ror"].includes(m) ? "acc" : "imp";
       else if (arg[0] === "#") { mode = "imm"; v = val(arg.slice(1)); }
@@ -309,6 +315,20 @@ test("mapper 2: an instruction at the end of a switchable bank reads its operand
   assert.deepEqual([x.ram[0x50], x.ram[0x51]], [0x42, 0x78]);
 });
 
+test("mapper 1: an instruction straddling the 16KB windows reads its operand through the CURRENT mapping ($dynop)", async () => {
+  const r = rom({
+    prgBanks: 4, flags6: 0x10,
+    main: "sei\nsta $51\ncld\nldx #$FF\ntxs\nlda $50\ncmp #$42\nbeq done\nlda #$42\nsta $50\njmp $BFFF\ndone:\n" + LOOP,
+  });
+  r[5] = 1;
+  const img = new Uint8Array(16 + 0x10000 + 0x2000);
+  img.set(r.subarray(0, 16)); img.set(r.subarray(16, 16 + 0x10000), 16);
+  img[16 + 0x3FFF] = 0xA9; img[16 + 0x4000] = 0x55; // bank 1's first byte is NOT mapped at $C000
+  const x = await run(img, 2);
+  assert.deepEqual([x.ram[0x50], x.ram[0x51]], [0x42, 0x78]);
+  assert.ok(x.p.ndyn > 0);
+});
+
 test("mapper 3 (CNROM): the latch picks the 8KB CHR bank the PPU sees (masked by the CHR size)", async () => {
   const r = await run(romMap({
     prgBanks: 2, chrBanks: 4, flags6: 0x31,
@@ -367,4 +387,108 @@ test("input devices: a cart fceumm gives a non-gamepad controller (ines.c SetInp
   assert.deepEqual(d.inputDevices, [1, 2, 0]);
   r[15] = 0;
   assert.equal(describeRom(r).supported, true);
+});
+
+// ---- undocumented opcodes (fceumm ops.h), from ROM and from RAM ------------------
+
+const UNOFF = {
+  anc: [[0x0B, "imm"], [0x2B, "imm"]], sax: [[0x87, "zp"], [0x97, "zpy"], [0x8F, "abs"], [0x83, "izx"]],
+  arr: [[0x6B, "imm"]], alr: [[0x4B, "imm"]], atx: [[0xAB, "imm"]], axs: [[0xCB, "imm"]], xaa: [[0x8B, "imm"]], sbc: [[0xEB, "imm"]],
+  lax: [[0xA7, "zp"], [0xB7, "zpy"], [0xAF, "abs"], [0xBF, "aby"], [0xA3, "izx"], [0xB3, "izy"]],
+  las: [[0xBB, "aby"]], sha: [[0x93, "izy"], [0x9F, "aby"]], shy: [[0x9C, "abx"]], shx: [[0x9E, "aby"]], tas: [[0x9B, "aby"]],
+  skb: [[0x04, "zp"], [0x14, "zpx"], [0x80, "imm"], [0x89, "imm"], [0xE2, "imm"], [0xF4, "zpx"]],
+  nop: [[0x1A, "imp"], [0xFA, "imp"]], top: [[0x0C, "abs"], [0x1C, "abx"], [0xFC, "abx"]],
+};
+for (const [m, base] of [["slo", 0x00], ["rla", 0x20], ["sre", 0x40], ["rra", 0x60], ["dcp", 0xC0], ["isb", 0xE0]]) {
+  UNOFF[m] = [[base + 7, "zp"], [base + 0x17, "zpx"], [base + 0xF, "abs"], [base + 0x1F, "abx"], [base + 0x1B, "aby"], [base + 3, "izx"], [base + 0x13, "izy"]];
+}
+
+/**
+ * Two cases per opcode (pseudo-random A/X/Y/P/operand, indexed modes both
+ * crossing and not crossing pages); each records A, X, Y, P, S and the operand
+ * byte. `ram`: each case is copied to $0200 and JSR'd, so it runs through the
+ * run-time executor ($dynop).
+ */
+let unoffSeed = 12345;
+function unoffRom(names, ram) {
+  const rnd = () => { unoffSeed = (unoffSeed * 1103515245 + 12345) & 0x7FFFFFFF; return (unoffSeed >> 8) & 0xFF; };
+  const h = (v) => "$" + v.toString(16);
+  const caseAsm = (op, mode, R) => {
+    const A = rnd(), X = rnd(), Y = rnd(), M = rnd(), P = (rnd() & 0xCB) | 0x24;
+    const idx = mode === "zpy" || mode === "aby" || mode === "izy" ? Y : X;
+    let ea = 0x20, ops = [], pre = "";
+    if (mode === "imm") ops = [M];
+    else if (mode === "zp") ops = [0x20];
+    else if (mode === "zpx" || mode === "zpy") ops = [(0x20 - idx) & 0xFF];
+    else if (mode === "abs") { ea = 0x0320; ops = [0x20, 0x03]; }
+    else if (mode === "abx" || mode === "aby") { ea = 0x0320; const b = (0x0320 - idx) & 0xFFFF; ops = [b & 0xFF, b >> 8]; }
+    else if (mode === "izx") { ea = 0x0320; ops = [(0x30 - X) & 0xFF]; pre = "lda #$20\nsta $30\nlda #$03\nsta $31\n"; }
+    else if (mode === "izy") { ea = 0x0320; const b = (0x0320 - Y) & 0xFFFF; ops = [0x30]; pre = `lda #${h(b & 0xFF)}\nsta $30\nlda #${h(b >> 8)}\nsta $31\n`; }
+    const E = ea === 0x20 ? "$20" : "$0320";
+    return `lda #${h(M)}\nsta ${E}\n${pre}tsx\nstx $43\nlda #${h(P)}\npha\nldx #${h(X)}\nldy #${h(Y)}\nlda #${h(A)}\nplp
+.byte ${[op, ...ops].map(h).join(",")}
+php\nsta ${h(R)}\nstx ${h(R + 1)}\nsty ${h(R + 2)}\npla\nsta ${h(R + 3)}\ntsx\nstx ${h(R + 4)}\nlda ${E}\nsta ${h(R + 5)}\nldx $43\ntxs\n`;
+  };
+  let main = "", snippets = "", k = 0;
+  for (const n of names) for (const [op, mode] of UNOFF[n]) for (let c = 0; c < 2; c++) {
+    const body = caseAsm(op, mode, 0x0400 + k * 6); k++;
+    if (ram) snippets += `sn${k}:\n${body}rts\nsn${k}_end:\n`; else main += body;
+  }
+  if (ram) {
+    for (let i = 1; i <= k; i++) main += `lda #<sn${i}\nsta $40\nlda #>sn${i}\nsta $41\nlda #sn${i}_end-sn${i}\nsta $42\njsr copyrun\n`;
+    main += "loop:\ninc $10\njmp loop\ncopyrun:\nldy #0\ncp:\nlda ($40),y\nsta $0200,y\niny\ncpy $42\nbne cp\njmp $0200\n" + snippets;
+  } else main += LOOP;
+  return rom({ main: PRO + main, prgBanks: 2 });
+}
+
+test("undocumented opcodes: all 93 that fceumm runs, from ROM arms and from RAM (the run-time executor)", async () => {
+  const names = Object.keys(UNOFF), half = Math.ceil(names.length / 2);
+  const want = {
+    rom0: ["69aeef2c65cfa7015fc486dcbe63c2ec87e33b8ae6db3b94cebdd55ebc9d9bdb", { pc: 51253, a: 0, x: 255, y: 200, s: 255, p: 101, count: -48 }],
+    ram0: ["3aeda3307eaf6a59f34371d481d3e22b0effa16ffe479ec1d93b11534c05ae60", { pc: 49817, a: 3, x: 253, y: 179, s: 255, p: 173, count: -96 }],
+    rom1: ["e8299adb423a9d721286d727ee7baeea14964f3faefb71d08879fa30523158c2", { pc: 54483, a: 24, x: 255, y: 35, s: 255, p: 172, count: -48 }],
+    ram1: ["2510aef7c76dde4e6b566e63cde5a7f4167cf560ad92c1e44841fd409de50883", { pc: 50807, a: 31, x: 253, y: 191, s: 255, p: 45, count: -48 }],
+  };
+  const { createHash } = await import("node:crypto");
+  unoffSeed = 12345; // the four images are generated in this order from one seed
+  for (const [key, [sha, cpu]] of Object.entries(want)) {
+    const part = key.endsWith("0") ? names.slice(0, half) : names.slice(half);
+    const r = await run(unoffRom(part, key.startsWith("ram")), 4);
+    assert.equal(createHash("sha256").update(r.ram).digest("hex"), sha, `${key}: RAM (2KB) differs from fceumm's`);
+    assertCpu(r, cpu);
+    if (key.startsWith("ram")) assert.ok(r.p.ndyn > 1000, "the cases ran through $dynop");
+  }
+});
+
+test("code in RAM: a routine copied to $0300 runs (branches, JSR/RTS, JMP (ind) and a self-modified operand)", async () => {
+  // $0300: ldx #5 ; l: inc $50 ; dex ; bne l ; jsr $0320 ; jmp ($0330)   $0320: inc $51 ; rts
+  // $0340 (via $0330): lda #$99 ; sta $0341 (patches its own operand) ; lda #$00 ; sta $52 ; rts-less: jmp done
+  const r = await run(rom({
+    main: PRO + `ldx #0
+cp:
+lda code,x
+sta $0300,x
+inx
+cpx #$60
+bne cp
+lda #$40
+sta $0330
+lda #$03
+sta $0331
+jsr $0300
+lda #$77
+sta $55
+` + LOOP + `code:
+.byte $A2,$05,$E6,$50,$CA,$D0,$FB,$20,$20,$03,$6C,$30,$03,$00,$00,$00
+.byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+.byte $E6,$51,$60,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+.byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+.byte $A9,$11,$8D,$46,$03,$A9,$00,$85,$52,$A9,$99,$8D,$41,$03,$A5,$50
+.byte $85,$53,$60,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00`,
+  }), 2);
+  // $0340: lda #$11 ; sta $0346 ; lda #$00(->$11) ; sta $52 ; lda #$99 ; sta $0341 ; lda $50 ; sta $53 ; rts
+  assert.deepEqual([...r.ram.slice(0x50, 0x56)], [4, 0, 0x11, 4, 0xFF, 0x77]);
+  assert.equal(r.ram[0x341], 0x99);
+  assert.ok(r.p.ndyn > 0);
+  assert.equal(r.p.trapped, 0);
 });

@@ -19,8 +19,10 @@
 //   MAP   mappers.js: NROM, UxROM, CNROM, MMC1 (fceumm boards/).
 //
 // Every PRG offset gets an arm (data bytes included) so any entry point the
-// game reaches is covered; an offset whose byte is not an official opcode
-// becomes a trap that records pc and opcode in the probe block.
+// game reaches is covered; only the twelve KIL/JAM bytes become traps (pc and
+// opcode recorded in the probe block). Code BELOW $8000 (copied into RAM or
+// WRAM) and instructions straddling a bank window run through $dynop: the
+// same lowering with the operand bytes read at run time.
 //
 // Ported from sms-wat src/emit_nes.py (commits 1dd6c1a + 219d233, 8 mapper-0
 // carts cycle-exact against fceumm through frame 2905 with input). The WAT
@@ -72,7 +74,7 @@ export const ABI = FB + FB_W * FB_H * 4 + 0x1000;
 export const PROBE_FIELDS = ["steps", "trapped", "trappc", "pc", "frame", "nnmi", "ts",
   "a", "x", "y", "s", "p", "ppu0", "ppu1", "ppustatus",
   "refaddr", "tmpaddr", "xoff", "joy", "trapop", "nvram",
-  "ringi", "nbrk", "nemph", "cnt", "apu4017", "dmcsize", "dmcirq", "nirq", "sirq", "mapwarn"];
+  "ringi", "nbrk", "nemph", "cnt", "apu4017", "dmcsize", "dmcirq", "nirq", "sirq", "mapwarn", "ndyn"];
 
 /**
  * The cart's `romdev.recompile` layout (schema: recompile/recompile-section.js):
@@ -101,7 +103,7 @@ export const layout = {
     p: { offset: p4("p"), size: 1, ref: "cpu:registers.P", mask: 0xCF },
     cycles: { offset: p4("cnt"), size: 4, signed: true, ref: "cpu:coreInternal.count" },
   },
-  probe: Object.fromEntries(["trapped", "trappc", "trapop", "steps", "frame", "nnmi", "nbrk", "dmcirq", "nirq", "mapwarn"]
+  probe: Object.fromEntries(["trapped", "trappc", "trapop", "steps", "frame", "nnmi", "nbrk", "dmcirq", "nirq", "mapwarn", "ndyn"]
     .map((f) => [f, { offset: p4(f), size: 4 }])),
   // The Python verifier's VRAM-zero control wiped nametables + CHR.
   vramZero: ["nametables", "chr"],
@@ -387,7 +389,7 @@ function cpuGlobals() {
     "ringi", "nbrk", "nemph", "apu4017", "lastts", "dmcbitcount",
     "dmcaddrlatch", "dmcsizelatch", "dmcformat", "dmcaddress", "dmcsize",
     "dmcshift", "dmchavedma", "dmcdmabuf", "dmchavesample", "dmcirq",
-    "nirq", "fcnt", "sirq", "ench", "len0", "len1", "len2", "len3", "mapwarn"];
+    "nirq", "fcnt", "sirq", "ench", "len0", "len1", "len2", "len3", "mapwarn", "d1", "d2", "ndyn"];
   let s = g.map((n) => `  (global $${n} (mut i32) (i32.const 0))\n`).join("");
   s += "  (global $s (mut i32) (i32.const 0xFD))\n";
   s += "  (global $fi (mut i32) (i32.const 1))\n";
@@ -686,30 +688,61 @@ function stepWat(mapper, probeStores, disp, ring = { offset: PCRING, entries: 10
 ${probeStores})
 
   (func $step
-    (local $o i32) (local $r i32)
+    (local $o i32) (local $r i32) (local $op i32)
     (global.set $pi (global.get $fi))
     (global.set $curpc (global.get $pc))
+    ;; b1 = RdMem(_PC): code below $8000 (RAM, WRAM) is fetched through the
+    ;; bus and run by $dynop, which reads its operands at run time too
     (if (i32.lt_u (global.get $pc) (i32.const 0x8000))
-      (then (call $trap (i32.const 0x100)) (return)))
-    (local.set $o ${mapper.pcOffset})
+      (then (local.set $op (call $rd8 (global.get $pc))))
+      (else
+        (local.set $o ${mapper.pcOffset})
+        (local.set $op (i32.load8_u (i32.add (i32.const ${mapper.prgBase}) (local.get $o))))))
     (local.set $r (i32.add (i32.const ${ring.offset})
       (i32.shl (i32.and (global.get $ringi) (i32.const ${ring.entries - 1})) (i32.const ${shift}))))
     (i32.store (local.get $r) (i32.or (global.get $pc)
-      (i32.shl (i32.load8_u (i32.add (i32.const ${mapper.prgBase}) (local.get $o))) (i32.const 16))))
+      (i32.shl (local.get $op) (i32.const 16))))
     (i32.store (i32.add (local.get $r) (i32.const 4)) (global.get $ts))${regStores}
     (global.set $ringi (i32.add (global.get $ringi) (i32.const 1)))
     (global.set $steps (i32.add (global.get $steps) (i32.const 1)))
     ;; X6502_Run: ADDCYC(CycTable[op]) at fetch, then the sound hook with
     ;; every cycle since the previous hook (this one's base, the previous
     ;; instruction's extras, DMA, NMI, and the hook's own DMC steals).
-    (local.set $r (i32.load8_u (i32.add (i32.const ${CYCTAB})
-      (i32.load8_u (i32.add (i32.const ${mapper.prgBase}) (local.get $o))))))
+    (local.set $r (i32.load8_u (i32.add (i32.const ${CYCTAB}) (local.get $op))))
     (global.set $cnt (i32.sub (global.get $cnt) (i32.mul (local.get $r) (i32.const 48))))
     (global.set $ts (i32.add (global.get $ts) (local.get $r)))
     (local.set $r (i32.sub (global.get $ts) (global.get $lastts)))
     (global.set $lastts (global.get $ts))
     (call $apu_hook (local.get $r))
+    (if (i32.lt_u (global.get $pc) (i32.const 0x8000))
+      (then (call $dynop (local.get $op)) (return)))
 ` + disp + ")";
+}
+
+/**
+ * $dynop(op): one arm per opcode with the operand bytes fetched at run time
+ * (cpu.js lower() with dynamic: true). Runs code outside ROM ($pc < $8000:
+ * RAM, WRAM) and instructions that straddle a bank window. The prologue in
+ * $step has already fetched the opcode, charged its base cycles and run the
+ * sound hook, exactly as for a ROM arm.
+ * @param {object} mapper
+ */
+function dynopWat(mapper) {
+  const view = { dynamic: true, romWritesMatter: mapper.romWritesMatter, fixedByte: () => null };
+  const parts = ["  (func $dynop (param $op i32)", "    (global.set $ndyn (i32.add (global.get $ndyn) (i32.const 1)))"];
+  for (let i = 255; i >= 0; i--) parts.push(`    (block $o${i}`);
+  parts.push("      (br_table " + Array.from({ length: 256 }, (_, i) => `$o${i}`).join(" ") + " (local.get $op))");
+  for (let i = 0; i < 256; i++) {
+    let body;
+    try { body = lower(i, 0, 0, view, 0); } catch (e) {
+      if (!(e instanceof Unsupported)) throw e;
+      body = `(call $trap (i32.const ${i}))`;
+    }
+    parts.push(`    ) ;; ${i.toString(16).toUpperCase().padStart(2, "0")}`);
+    parts.push(`    ${body} (return)`);
+  }
+  parts.push("  )");
+  return parts.join("\n");
 }
 
 /** $run, $do_irq, pads, the wasmcart ABI exports and FCEUPPU_Loop. */
@@ -886,7 +919,15 @@ export async function* emitWat(rom, opts = {}) {
   for (let off = 0; off < n; off++) {
     const op = prg[off];
     try {
-      bodies[off] = lower(op, mapper.operand(off, 1), mapper.operand(off, 2), view, mapper.armBase(off));
+      const ent = OPS.get(op);
+      const w = mapper.window || 0x10000;
+      if (ent && (mapper.armBase(off) & (w - 1)) + LEN[ent[1]] - 1 >= w) {
+        // the operand lies in the NEXT window, whose bank is only known at run time
+        lower(op, 0, 0, { dynamic: true }, 0);
+        bodies[off] = `(call $dynop (i32.const ${op}))`;
+      } else {
+        bodies[off] = lower(op, mapper.operand(off, 1), mapper.operand(off, 2), view, mapper.armBase(off));
+      }
       ok++;
     } catch (e) {
       if (!(e instanceof Unsupported)) throw e;
@@ -918,6 +959,7 @@ export async function* emitWat(rom, opts = {}) {
   yield globalsWat() + "\n";
   yield memWat(mapper) + "\n";
   if (mapper.funcs) yield mapper.funcs + "\n";
+  yield dynopWat(mapper) + "\n";
   yield ppuWat({
     NTSEL: mapper.ntSel || ntSelFixed(d.mirroring),
     CHRWRITE: d.chrRam ? `(i32.store8 (i32.add (i32.const ${CHR}) (local.get $tmp)) (local.get $v))` : "",

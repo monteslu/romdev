@@ -53,11 +53,37 @@ F1 sbc izy  F5 sbc zpx  F6 inc zpx  F8 sed imp  F9 sbc aby  FD sbc abx
 FE inc abx
 `;
 
-/** Official opcodes: opcode -> [mnemonic, addressing mode]. @type {Map<number, [string, string]>} */
+// The undocumented opcodes fceumm implements (ops.h, "AAC" onward), with
+// fceumm's semantics. skb = "DOP" (skips its operand byte WITHOUT reading
+// it); top = "TOP" (LD_AB/LD_ABX: a real read, page-cross cycle included);
+// atx = $AB ("ATX(OAL)": A |= $EE, A &= imm, X = A); las = $BB ("LAR",
+// done as a RMW_ABY in fceumm). The twelve KIL/JAM bytes stay traps.
+const UNOFFICIAL_TEXT = `
+0B anc imm  2B anc imm  87 sax zp   97 sax zpy  8F sax abs  83 sax izx
+6B arr imm  4B alr imm  AB atx imm  CB axs imm  8B xaa imm  EB sbc imm
+C7 dcp zp   D7 dcp zpx  CF dcp abs  DF dcp abx  DB dcp aby  C3 dcp izx  D3 dcp izy
+E7 isb zp   F7 isb zpx  EF isb abs  FF isb abx  FB isb aby  E3 isb izx  F3 isb izy
+07 slo zp   17 slo zpx  0F slo abs  1F slo abx  1B slo aby  03 slo izx  13 slo izy
+27 rla zp   37 rla zpx  2F rla abs  3F rla abx  3B rla aby  23 rla izx  33 rla izy
+47 sre zp   57 sre zpx  4F sre abs  5F sre abx  5B sre aby  43 sre izx  53 sre izy
+67 rra zp   77 rra zpx  6F rra abs  7F rra abx  7B rra aby  63 rra izx  73 rra izy
+A7 lax zp   B7 lax zpy  AF lax abs  BF lax aby  A3 lax izx  B3 lax izy
+BB las aby  93 sha izy  9F sha aby  9C shy abx  9E shx aby  9B tas aby
+04 skb imm  14 skb imm  34 skb imm  44 skb imm  54 skb imm  64 skb imm  74 skb imm
+80 skb imm  82 skb imm  89 skb imm  C2 skb imm  D4 skb imm  E2 skb imm  F4 skb imm
+1A nop imp  3A nop imp  5A nop imp  7A nop imp  DA nop imp  FA nop imp
+0C top abs  1C top abx  3C top abx  5C top abx  7C top abx  DC top abx  FC top abx
+`;
+
+/** Every opcode fceumm executes (official + undocumented, not KIL): opcode -> [mnemonic, addressing mode]. @type {Map<number, [string, string]>} */
 export const OPS = new Map();
+/** The 151 documented opcodes. @type {Set<number>} */
+export const OFFICIAL = new Set();
 {
   const t = OPS_TEXT.split(/\s+/).filter(Boolean);
-  for (let i = 0; i < t.length; i += 3) OPS.set(parseInt(t[i], 16), [t[i + 1], t[i + 2]]);
+  for (let i = 0; i < t.length; i += 3) { OPS.set(parseInt(t[i], 16), [t[i + 1], t[i + 2]]); OFFICIAL.add(parseInt(t[i], 16)); }
+  const u = UNOFFICIAL_TEXT.split(/\s+/).filter(Boolean);
+  for (let i = 0; i < u.length; i += 3) OPS.set(parseInt(u[i], 16), [u[i + 1], u[i + 2]]);
 }
 
 /** Instruction length by addressing mode. */
@@ -66,11 +92,14 @@ export const LEN = {
   izx: 2, izy: 2, abs: 3, abx: 3, aby: 3, ind: 3,
 };
 
-const READS = new Set(["lda", "ldx", "ldy", "ora", "and", "eor", "adc", "sbc", "cmp", "cpx", "cpy", "bit"]);
+const READS = new Set(["lda", "ldx", "ldy", "ora", "and", "eor", "adc", "sbc", "cmp", "cpx", "cpy", "bit",
+  "lax", "top", "anc", "alr", "arr", "atx", "axs", "xaa"]);
 const RMW = new Set(["asl", "lsr", "rol", "ror", "inc", "dec"]);
-const STORES = new Set(["sta", "stx", "sty"]);
+/** undocumented RMW + ALU pairs (fceumm RMW_xx(OP1;OP2)) */
+const RMW2 = { slo: ["asl", "ora"], rla: ["rol", "and"], sre: ["lsr", "eor"], rra: ["ror", "adc"], dcp: ["dec", "cmp"], isb: ["inc", "sbc"] };
+const STORES = new Set(["sta", "stx", "sty", "sax", "sha", "shx", "shy", "tas"]);
 
-/** Thrown for a byte that is not an official opcode; the arm becomes a trap. */
+/** Thrown for a KIL/JAM byte (fceumm jams the CPU); the arm becomes a trap. */
 export class Unsupported extends Error {}
 
 /**
@@ -155,6 +184,7 @@ function unpackP(src) {
  * @returns {[string, Kind|null, string]} [pre statements, kind, load expression]
  */
 function operand(mode, mnem, b1, b2, rom) {
+  if (rom.dynamic) return operandDyn(mode, mnem);
   const n16 = b1 | (b2 << 8);
   const isread = READS.has(mnem);
   if (mode === "imm") return ["", null, `(i32.const ${b1})`];
@@ -234,6 +264,60 @@ function operand(mode, mnem, b1, b2, rom) {
 }
 
 /**
+ * The same addressing modes with the operand bytes read at RUN time (in the
+ * globals $d1/$d2, fetched by the arm's prologue): code executing from RAM or
+ * WRAM, and instructions that straddle a bank window. Every access fceumm
+ * makes is kept (page-cross dummy reads and their X.DB, the extra cycle).
+ * @param {string} mode
+ * @param {string} mnem
+ * @returns {[string, Kind|null, string]}
+ */
+function operandDyn(mode, mnem) {
+  const isread = READS.has(mnem);
+  const D1 = "(global.get $d1)", D2 = "(global.get $d2)";
+  if (mode === "imm") return ["", null, D1];
+  if (mode === "zp") return [`(global.set $ea ${D1})`, ["zpd", null], "(i32.load8_u (global.get $ea))"];
+  if (mode === "zpx" || mode === "zpy") {
+    const r = mode === "zpx" ? "$x" : "$y";
+    return [`(global.set $ea (i32.and (i32.add (global.get ${r}) ${D1}) (i32.const 0xFF)))`, ["zpd", null], "(i32.load8_u (global.get $ea))"];
+  }
+  if (mode === "abs") {
+    return [`(global.set $ea (i32.or ${D1} (i32.shl ${D2} (i32.const 8))))`, ["dyn", null], "(call $rd8 (global.get $ea))"];
+  }
+  if (mode === "abx" || mode === "aby") {
+    const r = mode === "abx" ? "$x" : "$y";
+    let pre = `(global.set $ea (i32.and (i32.add (global.get ${r}) (i32.or ${D1} (i32.shl ${D2} (i32.const 8)))) (i32.const 0xFFFF)))`;
+    const unc = `(i32.or (i32.shl ${D2} (i32.const 8)) (i32.and (global.get $ea) (i32.const 0xFF)))`;
+    if (isread) {
+      pre += `(global.set $t3 ${D2})(if (i32.gt_u (i32.add (global.get ${r}) ${D1}) (i32.const 0xFF)) (then ` +
+        `(global.set $t3 (call $dummyrdb ${unc} ${D2})) (call $addcyc1)))`;
+      return [pre, ["dyn", null], "(call $rd8i (global.get $ea) (global.get $t3))"];
+    }
+    return [pre + `(call $dummyrd ${unc})`, ["dyn", null], "(call $rd8 (global.get $ea))"];
+  }
+  if (mode === "izx") {
+    const pre = `(global.set $t2 (i32.and (i32.add (global.get $x) ${D1}) (i32.const 0xFF)))` +
+      "(global.set $ea (i32.or (i32.load8_u (global.get $t2)) " +
+      "(i32.shl (i32.load8_u (i32.and (i32.add (global.get $t2) (i32.const 1)) (i32.const 0xFF))) (i32.const 8))))";
+    return [pre, ["dyn", null], "(call $rd8 (global.get $ea))"];
+  }
+  if (mode === "izy") {
+    let pre = `(global.set $t2 (i32.or (i32.load8_u ${D1}) ` +
+      `(i32.shl (i32.load8_u (i32.and (i32.add ${D1} (i32.const 1)) (i32.const 0xFF))) (i32.const 8))))` +
+      "(global.set $ea (i32.and (i32.add (global.get $t2) (global.get $y)) (i32.const 0xFFFF)))";
+    const unc = "(i32.or (i32.and (global.get $t2) (i32.const 0xFF00)) (i32.and (global.get $ea) (i32.const 0xFF)))";
+    if (isread) {
+      pre += "(global.set $t3 (i32.shr_u (global.get $t2) (i32.const 8)))" +
+        "(if (i32.gt_u (i32.add (i32.and (global.get $t2) (i32.const 0xFF)) (global.get $y)) (i32.const 0xFF)) (then " +
+        `(global.set $t3 (call $dummyrdb ${unc} (global.get $t3))) (call $addcyc1)))`;
+      return [pre, ["dyn", null], "(call $rd8i (global.get $ea) (global.get $t3))"];
+    }
+    return [pre + `(call $dummyrd ${unc})`, ["dyn", null], "(call $rd8 (global.get $ea))"];
+  }
+  throw new Unsupported(mode);
+}
+
+/**
  * @param {Kind} kind
  * @param {string} v
  */
@@ -305,131 +389,14 @@ function rmwOn(m, src) {
 }
 
 /**
- * Lower one instruction. `pcbase` is the canonical CPU address of the arm; it
- * only decides the static page-cross cost of a branch. The emitted code uses
- * the RUNTIME $pc for fall-through, pushes and branches, so an arm executed
- * through another mirror behaves exactly as the reference does there.
- *
- * @param {number} op
- * @param {number} b1
- * @param {number} b2
- * @param {RomView} rom
- * @param {number} pcbase
- * @returns {string} WAT statements that end by setting $pc
+ * ALU operation of a READ instruction on the value expression `load`
+ * (fceumm ops.h / x6502.c macros, including the undocumented ones).
+ * @param {string} m
+ * @param {string} load
+ * @returns {string[]}
  */
-export function lower(op, b1, b2, rom, pcbase) {
-  const ent = OPS.get(op);
-  if (!ent) throw new Unsupported(`opcode ${op.toString(16).toUpperCase().padStart(2, "0")}`);
-  const [m, mode] = ent;
-  const ln = LEN[mode];
-  // Base cycles are charged in $step (followed by the APU hook, as fceumm's
-  // X6502_Run does), not here.
-  const nxt = `(global.set $pc (i32.and (i32.add (global.get $pc) (i32.const ${ln})) (i32.const 0xFFFF)))`;
-  const n16 = b1 | (b2 << 8);
-
-  if (mode === "rel") {
-    const disp = b1 >= 128 ? b1 - 256 : b1;
-    const cond = BRANCH_COND[m];
-    const tmp = (pcbase + 2) & 0xFFFF;
-    const tgt = (tmp + disp) & 0xFFFF;
-    const pen = ((tmp ^ tgt) & 0x100) ? 2 : 1;
-    return `(if ${cond} (then ${cyc(pen)} (global.set $pc (i32.and (i32.add ` +
-      `(global.get $pc) (i32.const ${2 + disp})) (i32.const 0xFFFF)))) ` +
-      `(else ${nxt}))`;
-  }
-  if (m === "jmp") {
-    if (mode === "abs") return `(global.set $pc (i32.const ${n16}))`;
-    // JMP ($xxFF) reads the high byte from $xx00 (the 6502 page-wrap bug).
-    const hi = (n16 & 0xFF00) | ((n16 + 1) & 0xFF);
-    return `(global.set $pc (i32.or (call $rd8 (i32.const ${n16})) ` +
-      `(i32.shl (call $rd8 (i32.const ${hi})) (i32.const 8))))`;
-  }
-  if (m === "jsr") {
-    return "(global.set $t (i32.and (i32.add (global.get $pc) (i32.const 2)) (i32.const 0xFFFF)))" +
-      push("(i32.shr_u (global.get $t) (i32.const 8))") +
-      push("(i32.and (global.get $t) (i32.const 0xFF))") +
-      `(global.set $pc (i32.const ${n16}))`;
-  }
-  if (m === "rts") {
-    return `(global.set $t ${POP})` +
-      `(global.set $t (i32.or (global.get $t) (i32.shl ${POP} (i32.const 8))))` +
-      "(global.set $pc (i32.and (i32.add (global.get $t) (i32.const 1)) (i32.const 0xFFFF)))";
-  }
-  if (m === "rti") {
-    // fceumm RTI: _PI = _P, so a pending IRQ is taken right after it
-    return unpackP(POP) + "(global.set $pi (global.get $fi))" +
-      `(global.set $t ${POP})` +
-      `(global.set $pc (i32.or (global.get $t) (i32.shl ${POP} (i32.const 8))))`;
-  }
-  if (m === "brk") {
-    return "(global.set $t (i32.and (i32.add (global.get $pc) (i32.const 2)) (i32.const 0xFFFF)))" +
-      push("(i32.shr_u (global.get $t) (i32.const 8))") +
-      push("(i32.and (global.get $t) (i32.const 0xFF))") +
-      push(`(i32.or ${PACK_P} (i32.const 0x10))`) +
-      "(global.set $fi (i32.const 1))(global.set $pi (i32.const 1))" +
-      "(global.set $pc (i32.or (call $rd8 (i32.const 0xFFFE)) " +
-      "(i32.shl (call $rd8 (i32.const 0xFFFF)) (i32.const 8))))" +
-      "(global.set $nbrk (i32.add (global.get $nbrk) (i32.const 1)))";
-  }
-
-  // ---- implied / accumulator ----------------------------------------------
-  if ((mode === "imp" || mode === "acc") && !RMW.has(m)) {
-    let s = IMPLIED[m];
-    if (s === undefined) {
-      if (TRANSFERS[m]) {
-        const [a, b] = TRANSFERS[m];
-        s = `(global.set $${b} (global.get $${a}))` + nz(`(global.get $${b})`);
-      } else if (m === "inx" || m === "iny" || m === "dex" || m === "dey") {
-        const r = (m === "inx" || m === "dex") ? "$x" : "$y";
-        const d = m[0] === "i" ? 1 : 0xFF;
-        s = `(global.set ${r} (i32.and (i32.add (global.get ${r}) (i32.const ${d})) (i32.const 0xFF)))` +
-          nz(`(global.get ${r})`);
-      } else {
-        throw new Unsupported(m);
-      }
-    }
-    return s + nxt;
-  }
-
-  // ---- shifts / rotates / inc / dec ---------------------------------------
-  if (RMW.has(m)) {
-    if (mode === "acc") {
-      return rmwOn(m, "(global.get $a)") + "(global.set $a (global.get $t))" +
-        nz("(global.get $a)") + nxt;
-    }
-    const [pre, kind, load] = operand(mode, m, b1, b2, rom);
-    const body = [pre];
-    // RMW_AB/RMW_ABI: read, write the OLD value back, then the new one. Only
-    // visible on I/O, so the double write is emitted only there.
-    let dbl = false;
-    if (kind[0] === "abs" && kind[1] >= 0x2000 && kind[1] < 0x4020) dbl = true;
-    if (mode === "abx" && (ioPage(b2) || ioPage((b2 + 1) & 0xFF))) dbl = true;
-    // mapper registers live at $8000+: `inc $8000` writes the old value
-    // first (an MMC1 reset idiom relies on it)
-    if (rom.romWritesMatter && kind[0] === "abs" && kind[1] >= 0x8000) dbl = true;
-    if (rom.romWritesMatter && mode === "abx" && b2 >= 0x7F) dbl = true;
-    if (dbl) {
-      body.push(`(global.set $t3 ${load})`);
-      body.push(storeTo(kind, "(global.get $t3)"));
-      body.push(rmwOn(m, "(global.get $t3)"));
-    } else {
-      body.push(rmwOn(m, load));
-    }
-    body.push(storeTo(kind, "(global.get $t)"));
-    body.push(nz("(global.get $t)"));
-    body.push(nxt);
-    return body.join("");
-  }
-
-  // ---- stores ---------------------------------------------------------------
-  if (STORES.has(m)) {
-    const [pre, kind] = operand(mode, m, b1, b2, rom);
-    return pre + storeTo(kind, `(global.get $${m[2]})`) + nxt;
-  }
-
-  // ---- reads ----------------------------------------------------------------
-  const [pre, , load] = operand(mode, m, b1, b2, rom);
-  const body = [pre];
+function aluOn(m, load) {
+  const body = [];
   if (m === "lda" || m === "ldx" || m === "ldy") {
     const r = "$" + m[2];
     body.push(`(global.set ${r} ${load})`);
@@ -459,9 +426,227 @@ export function lower(op, b1, b2, rom, pcbase) {
     body.push("(global.set $fz (i32.eqz (i32.and (global.get $a) (global.get $t))))");
     body.push("(global.set $fn (i32.shr_u (global.get $t) (i32.const 7)))");
     body.push("(global.set $fv (i32.and (i32.shr_u (global.get $t) (i32.const 6)) (i32.const 1)))");
+  } else if (m === "lax") {
+    // LAX: LDA; LDX
+    body.push(`(global.set $a ${load})`, "(global.set $x (global.get $a))", nz("(global.get $a)"));
+  } else if (m === "top") {
+    // TOP: LD_AB / LD_ABX with an empty op: the read (and its side effects) only
+    body.push(`(drop ${load})`);
+  } else if (m === "anc") {
+    // AAC: AND; C = bit 7 of the result
+    body.push(`(global.set $a (i32.and (global.get $a) ${load}))`, nz("(global.get $a)"),
+      "(global.set $fc (i32.shr_u (global.get $a) (i32.const 7)))");
+  } else if (m === "alr") {
+    // ASR: AND; LSRA
+    body.push(`(global.set $a (i32.and (global.get $a) ${load}))`,
+      "(global.set $fc (i32.and (global.get $a) (i32.const 1)))",
+      "(global.set $a (i32.shr_u (global.get $a) (i32.const 1)))", nz("(global.get $a)"));
+  } else if (m === "arr") {
+    // ARR: AND; V = bit 6 ^ bit 5 of the AND result; rotate right through
+    // the OLD carry; C = bit 7 of the AND result
+    body.push(`(global.set $a (i32.and (global.get $a) ${load}))`,
+      "(global.set $fv (i32.and (i32.shr_u (i32.xor (global.get $a) (i32.shr_u (global.get $a) (i32.const 1))) (i32.const 6)) (i32.const 1)))",
+      "(global.set $t2 (i32.shr_u (global.get $a) (i32.const 7)))",
+      "(global.set $a (i32.or (i32.shr_u (global.get $a) (i32.const 1)) (i32.shl (global.get $fc) (i32.const 7))))",
+      "(global.set $fc (global.get $t2))", nz("(global.get $a)"));
+  } else if (m === "atx") {
+    // ATX(OAL): A |= $EE; AND; X = A
+    body.push(`(global.set $a (i32.and (i32.or (global.get $a) (i32.const 0xEE)) ${load}))`, nz("(global.get $a)"),
+      "(global.set $x (global.get $a))");
+  } else if (m === "xaa") {
+    // XAA: A |= $EE; A &= X; AND imm
+    body.push(`(global.set $a (i32.and (i32.and (i32.or (global.get $a) (i32.const 0xEE)) (global.get $x)) ${load}))`,
+      nz("(global.get $a)"));
+  } else if (m === "axs") {
+    // AXS: t = (A & X) - imm; ZN(t & $FF); C = no borrow; X = t
+    body.push(`(global.set $t2 ${load})`,
+      "(global.set $fc (i32.ge_u (i32.and (global.get $a) (global.get $x)) (global.get $t2)))",
+      "(global.set $x (i32.and (i32.sub (i32.and (global.get $a) (global.get $x)) (global.get $t2)) (i32.const 0xFF)))",
+      nz("(global.get $x)"));
   } else {
     throw new Unsupported(m);
   }
-  body.push(nxt);
-  return body.join("");
+  return body;
+}
+
+/** The unstable stores' value: reg & (((EA - index) >> 8) + 1), fceumm's formula. */
+function hiPlusOne(v, idx) {
+  return `(i32.and ${v} (i32.add (i32.shr_u (i32.sub (global.get $ea) (global.get ${idx})) (i32.const 8)) (i32.const 1)))`;
+}
+
+/**
+ * Lower one instruction. `pcbase` is the canonical CPU address of the arm; it
+ * only decides the static page-cross cost of a branch. The emitted code uses
+ * the RUNTIME $pc for fall-through, pushes and branches, so an arm executed
+ * through another mirror behaves exactly as the reference does there.
+ *
+ * With `rom.dynamic` the operand bytes are NOT known: the arm fetches them at
+ * run time (the RAM/WRAM executor, and straddling instructions) and every
+ * static shortcut (constant ROM operands, static branch costs) is off.
+ *
+ * @param {number} op
+ * @param {number} b1
+ * @param {number} b2
+ * @param {RomView} rom
+ * @param {number} pcbase
+ * @returns {string} WAT statements that end by setting $pc
+ */
+export function lower(op, b1, b2, rom, pcbase) {
+  const ent = OPS.get(op);
+  if (!ent) throw new Unsupported(`opcode ${op.toString(16).toUpperCase().padStart(2, "0")}`);
+  const [m, mode] = ent;
+  const ln = LEN[mode];
+  const dyn = !!rom.dynamic;
+  // Base cycles are charged in $step (followed by the APU hook, as fceumm's
+  // X6502_Run does), not here.
+  const nxt = `(global.set $pc (i32.and (i32.add (global.get $pc) (i32.const ${ln})) (i32.const 0xFFFF)))`;
+  const n16 = b1 | (b2 << 8);
+  // dynamic: operand bytes from memory, as fceumm's RdMem(_PC) does
+  const fetch = (k) => `(global.set $d${k} (call $rd8 (i32.and (i32.add (global.get $pc) (i32.const ${k})) (i32.const 0xFFFF))))`;
+  const pro = dyn ? (ln >= 2 ? fetch(1) : "") + (ln >= 3 ? fetch(2) : "") : "";
+  const N16 = dyn ? "(i32.or (global.get $d1) (i32.shl (global.get $d2) (i32.const 8)))" : `(i32.const ${n16})`;
+  return pro + lowerBody();
+
+  function lowerBody() {
+  if (mode === "rel") {
+    const cond = BRANCH_COND[m];
+    if (dyn) {
+      // JR: tmp = pc after the operand; pc = tmp + (int8)disp; +1, +1 more on a page change
+      return `(if ${cond} (then ${cyc(1)}` +
+        "(global.set $t (i32.and (i32.add (global.get $pc) (i32.const 2)) (i32.const 0xFFFF)))" +
+        "(global.set $t2 (i32.and (i32.add (global.get $t) (i32.sub (i32.xor (global.get $d1) (i32.const 0x80)) (i32.const 0x80))) (i32.const 0xFFFF)))" +
+        `(if (i32.and (i32.xor (global.get $t) (global.get $t2)) (i32.const 0x100)) (then ${cyc(1)}))` +
+        `(global.set $pc (global.get $t2))) (else ${nxt}))`;
+    }
+    const disp = b1 >= 128 ? b1 - 256 : b1;
+    const tmp = (pcbase + 2) & 0xFFFF;
+    const tgt = (tmp + disp) & 0xFFFF;
+    const pen = ((tmp ^ tgt) & 0x100) ? 2 : 1;
+    return `(if ${cond} (then ${cyc(pen)} (global.set $pc (i32.and (i32.add ` +
+      `(global.get $pc) (i32.const ${2 + disp})) (i32.const 0xFFFF)))) ` +
+      `(else ${nxt}))`;
+  }
+  if (m === "jmp") {
+    if (mode === "abs") return `(global.set $pc ${N16})`;
+    // JMP ($xxFF) reads the high byte from $xx00 (the 6502 page-wrap bug).
+    if (dyn) {
+      return `(global.set $t ${N16})` +
+        "(global.set $pc (i32.or (call $rd8 (global.get $t)) (i32.shl (call $rd8 (i32.or (i32.and (global.get $t) (i32.const 0xFF00)) " +
+        "(i32.and (i32.add (global.get $t) (i32.const 1)) (i32.const 0xFF)))) (i32.const 8))))";
+    }
+    const hi = (n16 & 0xFF00) | ((n16 + 1) & 0xFF);
+    return `(global.set $pc (i32.or (call $rd8 (i32.const ${n16})) ` +
+      `(i32.shl (call $rd8 (i32.const ${hi})) (i32.const 8))))`;
+  }
+  if (m === "jsr") {
+    return "(global.set $t (i32.and (i32.add (global.get $pc) (i32.const 2)) (i32.const 0xFFFF)))" +
+      push("(i32.shr_u (global.get $t) (i32.const 8))") +
+      push("(i32.and (global.get $t) (i32.const 0xFF))") +
+      `(global.set $pc ${N16})`;
+  }
+  if (m === "rts") {
+    return `(global.set $t ${POP})` +
+      `(global.set $t (i32.or (global.get $t) (i32.shl ${POP} (i32.const 8))))` +
+      "(global.set $pc (i32.and (i32.add (global.get $t) (i32.const 1)) (i32.const 0xFFFF)))";
+  }
+  if (m === "rti") {
+    // fceumm RTI: _PI = _P, so a pending IRQ is taken right after it
+    return unpackP(POP) + "(global.set $pi (global.get $fi))" +
+      `(global.set $t ${POP})` +
+      `(global.set $pc (i32.or (global.get $t) (i32.shl ${POP} (i32.const 8))))`;
+  }
+  if (m === "brk") {
+    return "(global.set $t (i32.and (i32.add (global.get $pc) (i32.const 2)) (i32.const 0xFFFF)))" +
+      push("(i32.shr_u (global.get $t) (i32.const 8))") +
+      push("(i32.and (global.get $t) (i32.const 0xFF))") +
+      push(`(i32.or ${PACK_P} (i32.const 0x10))`) +
+      "(global.set $fi (i32.const 1))(global.set $pi (i32.const 1))" +
+      "(global.set $pc (i32.or (call $rd8 (i32.const 0xFFFE)) " +
+      "(i32.shl (call $rd8 (i32.const 0xFFFF)) (i32.const 8))))" +
+      "(global.set $nbrk (i32.add (global.get $nbrk) (i32.const 1)))";
+  }
+  // DOP: `_PC++`, the operand byte is not even read
+  if (m === "skb") return nxt;
+
+  // ---- implied / accumulator ----------------------------------------------
+  if ((mode === "imp" || mode === "acc") && !RMW.has(m)) {
+    let s = IMPLIED[m];
+    if (s === undefined) {
+      if (TRANSFERS[m]) {
+        const [a, b] = TRANSFERS[m];
+        s = `(global.set $${b} (global.get $${a}))` + nz(`(global.get $${b})`);
+      } else if (m === "inx" || m === "iny" || m === "dex" || m === "dey") {
+        const r = (m === "inx" || m === "dex") ? "$x" : "$y";
+        const d = m[0] === "i" ? 1 : 0xFF;
+        s = `(global.set ${r} (i32.and (i32.add (global.get ${r}) (i32.const ${d})) (i32.const 0xFF)))` +
+          nz(`(global.get ${r})`);
+      } else {
+        throw new Unsupported(m);
+      }
+    }
+    return s + nxt;
+  }
+
+  // ---- shifts / rotates / inc / dec, and the undocumented RMW pairs ---------
+  if (RMW.has(m) || RMW2[m] || m === "las") {
+    if (mode === "acc") {
+      return rmwOn(m, "(global.get $a)") + "(global.set $a (global.get $t))" +
+        nz("(global.get $a)") + nxt;
+    }
+    const [pre, kind, load] = operand(mode, m, b1, b2, rom);
+    const body = [pre];
+    // RMW_AB/RMW_ABI/RMW_IX/RMW_IY: read, write the OLD value back, then the
+    // new one (RMW_ZP/ZPX: no double write). Only visible on I/O and mapper
+    // registers, so statically it is emitted only where it can matter.
+    let dbl = false;
+    if (kind[0] === "abs" && kind[1] >= 0x2000 && kind[1] < 0x4020) dbl = true;
+    if ((mode === "abx" || mode === "aby") && !dyn && (ioPage(b2) || ioPage((b2 + 1) & 0xFF))) dbl = true;
+    // mapper registers live at $8000+: `inc $8000` writes the old value
+    // first (an MMC1 reset idiom relies on it)
+    if (rom.romWritesMatter && kind[0] === "abs" && kind[1] >= 0x8000) dbl = true;
+    if (rom.romWritesMatter && (mode === "abx" || mode === "aby") && !dyn && b2 >= 0x7F) dbl = true;
+    // an address only known at run time: always (harmless on RAM)
+    if (kind[0] === "dyn" && (dyn || mode === "izx" || mode === "izy")) dbl = true;
+    if (dbl) {
+      body.push(`(global.set $t3 ${load})`);
+      body.push(storeTo(kind, "(global.get $t3)"));
+    }
+    const src = dbl ? "(global.get $t3)" : load;
+    if (m === "las") {
+      // LAR: RMW_ABY(_S &= x; _A = _X = _S; X_ZN(_X)): x itself is unchanged
+      body.push(`(global.set $t ${src})`,
+        "(global.set $s (i32.and (global.get $s) (global.get $t)))",
+        "(global.set $a (global.get $s))", "(global.set $x (global.get $s))", nz("(global.get $x)"));
+      body.push(storeTo(kind, "(global.get $t)"));
+    } else if (RMW2[m]) {
+      body.push(rmwOn(RMW2[m][0], src));
+      body.push(storeTo(kind, "(global.get $t)"));
+      body.push(...aluOn(RMW2[m][1], "(global.get $t)"));
+    } else {
+      body.push(rmwOn(m, src));
+      body.push(storeTo(kind, "(global.get $t)"));
+      body.push(nz("(global.get $t)"));
+    }
+    body.push(nxt);
+    return body.join("");
+  }
+
+  // ---- stores ---------------------------------------------------------------
+  if (STORES.has(m)) {
+    const [pre, kind] = operand(mode, m, b1, b2, rom);
+    if (m === "sax") return pre + storeTo(kind, "(i32.and (global.get $a) (global.get $x))") + nxt;
+    if (m === "sha") return pre + storeTo(kind, hiPlusOne("(i32.and (global.get $a) (global.get $x))", "$y")) + nxt;
+    if (m === "shx") return pre + storeTo(kind, hiPlusOne("(global.get $x)", "$y")) + nxt;
+    if (m === "shy") return pre + storeTo(kind, hiPlusOne("(global.get $y)", "$x")) + nxt;
+    if (m === "tas") {
+      return "(global.set $s (i32.and (global.get $a) (global.get $x)))" + pre +
+        storeTo(kind, hiPlusOne("(global.get $s)", "$y")) + nxt;
+    }
+    return pre + storeTo(kind, `(global.get $${m[2]})`) + nxt;
+  }
+
+  // ---- reads ----------------------------------------------------------------
+  const [pre, , load] = operand(mode, m, b1, b2, rom);
+  return [pre, ...aluOn(m, load), nxt].join("");
+  }
 }

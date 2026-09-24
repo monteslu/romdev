@@ -235,6 +235,7 @@ function makeMmc1(d, prg) {
     pcOffset: win("(global.get $pc)"),
     fixedByte: () => null,
     armBase: (off) => 0x8000 | (off & 0x3FFF),
+    window: 0x4000,
     operand: (off, k) => prg[(off + k) % n],
     romWrite: `
     (if (i32.ge_u (local.get $a) (i32.const 0x8000)) (then (call $mmc1_write (local.get $a) (local.get $v))))`,

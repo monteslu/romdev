@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { describe as describeRom, emitWat, emitWatString, layout, recompileSection, platforms, PROBE_FIELDS } from "./index.js";
-import { lower, Unsupported, OPS } from "./cpu.js";
+import { lower, Unsupported, OFFICIAL } from "./cpu.js";
 import { backendFor } from "../index.js";
 import { validateRecompileLayout } from "../../recompile-section.js";
 import { assembleWat } from "../assemble.js";
@@ -128,20 +128,22 @@ test("cpu: indexed I/O access does the dummy read, RAM access does not", () => {
   assert.match(ram, /i32\.const 0x7FF/);
 });
 
-test("cpu: every official opcode lowers, every other byte is Unsupported", () => {
-  const view = { fixedByte: () => 0 };
-  let n = 0;
-  for (let op = 0; op < 256; op++) {
-    if (OPS.has(op)) {
+test("cpu: every opcode fceumm executes lowers (151 official + 93 undocumented), only the 12 KIL/JAM bytes trap", () => {
+  const KIL = [0x02, 0x12, 0x22, 0x32, 0x42, 0x52, 0x62, 0x72, 0x92, 0xB2, 0xD2, 0xF2];
+  for (const dynamic of [false, true]) {
+    const view = { fixedByte: () => 0, dynamic };
+    let n = 0;
+    for (let op = 0; op < 256; op++) {
+      if (KIL.includes(op)) { assert.throws(() => lower(op, 0, 0, view, 0xC000), Unsupported); continue; }
       const s = lower(op, 0x34, 0x12, view, 0xC000);
       assert.match(s, /\$pc/, `opcode ${op.toString(16)} never sets $pc`);
       checkBalanced(s);
+      if (dynamic) assert.doesNotMatch(s, /i32\.const 4660|i32\.const 52\)/, `dynamic ${op.toString(16)} used a static operand`);
       n++;
-    } else {
-      assert.throws(() => lower(op, 0, 0, view, 0xC000), Unsupported);
     }
+    assert.equal(n, 244);
   }
-  assert.equal(n, 151);
+  assert.equal(OFFICIAL.size, 151);
 });
 
 test("emitWat: one arm per PRG byte, traps for non-opcodes, balanced module", async () => {
