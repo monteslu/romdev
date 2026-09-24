@@ -319,7 +319,9 @@ const GLOBAL_NAMES = ["sp0", "sp4", "pc", "fx", "fn", "fz", "fv", "fc", "fs", "f
   "region", "frames", "nvint", "nhint", "ndma", "nz80r", "z80rpc", "nlock",
   "lockpc", "ymread", "fm_busy", "ym_status", "z80irq", "nredraw", "nm4", "nim2",
   // 6-button pads (gamepad.c Counter / Timeout per port)
-  "th0_cnt", "th0_to", "th1_cnt", "th1_to"];
+  "th0_cnt", "th0_to", "th1_cnt", "th1_to",
+  // m68ki_cpu.instr_mode / run_mode (address error frames)
+  "instrmode", "runmode"];
 
 export function globalsWat() {
   const g = [];
@@ -371,9 +373,41 @@ export function cpuWat() {
     (if (i32.gt_u (global.get $ilevel) (global.get $imask))
       (then (call $exception_interrupt (i32.shr_u (global.get $ilevel) (i32.const 8))))))
 
+  ;; m68ki_exception_address_error, entered from an arm (see ctrans) in place
+  ;; of the handler's longjmp: fc is FLAG_S | FUNCTION_CODE_USER_DATA as the
+  ;; access saw it. A second address error before rte halts the CPU.
+  (func $address_error (param $a i32) (param $mode i32)
+    (local $sr i32) (local $fc i32)
+    (local.set $fc (i32.or (global.get $fs) (i32.const 1)))
+    (local.set $sr (call $get_sr))
+    (global.set $ft1 (i32.const 0))
+    (call $set_s_flag (i32.const 4))
+    (if (global.get $runmode)
+      (then (global.set $stopped (i32.const 2))
+            (global.set $mc (i32.sub (global.get $mcend)
+              (i32.mul (i32.load8_u (i32.add (i32.const ${CYCTAB}) (global.get $ir))) (i32.const 7))))
+            (return)))
+    (global.set $runmode (i32.const 1))
+    ;; m68ki_stack_frame_buserr
+    (global.set $r15 (i32.sub (global.get $r15) (i32.const 4)))
+    (call $wr32 (global.get $r15) (global.get $pc))
+    (global.set $r15 (i32.sub (global.get $r15) (i32.const 2)))
+    (call $wr16 (global.get $r15) (local.get $sr))
+    (global.set $r15 (i32.sub (global.get $r15) (i32.const 2)))
+    (call $wr16 (global.get $r15) (global.get $ir))
+    (global.set $r15 (i32.sub (global.get $r15) (i32.const 4)))
+    (call $wr32 (global.get $r15) (local.get $a))
+    (global.set $r15 (i32.sub (global.get $r15) (i32.const 2)))
+    (call $wr16 (global.get $r15) (i32.or (i32.or (local.get $mode) (global.get $instrmode)) (local.get $fc)))
+    (global.set $pc (call $rd32 (i32.const 12)))
+    ;; CYC_EXCEPTION[3] - CYC_INSTRUCTION[ir] (the handler's own cycles never ran)
+    (global.set $mc (i32.add (global.get $mc) (i32.sub (i32.const 350)
+      (i32.mul (i32.load8_u (i32.add (i32.const ${CYCTAB}) (global.get $ir))) (i32.const 7))))))
+
   ;; m68ki_exception_interrupt
   (func $exception_interrupt (param $lv i32)
     (local $sr i32) (local $npc i32) (local $vec i32)
+    (global.set $instrmode (i32.const 8))
     (global.set $stopped (i32.and (global.get $stopped) (i32.const 6)))
     (if (global.get $stopped) (then (return)))
     (call $trace (i32.or (i32.const 0x80000000) (local.get $lv)))

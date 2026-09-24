@@ -104,7 +104,7 @@ const GLOBAL_FIELDS = {
   cycles: "$mc", refresh_cycles: "$refresh", cycle_end: "$mcend",
   x_flag: "$fx", n_flag: "$fn", not_z_flag: "$fz", v_flag: "$fv", c_flag: "$fc",
   s_flag: "$fs", int_mask: "$imask", int_level: "$ilevel", stopped: "$stopped",
-  t1_flag: "$ft1", instr_mode: "$dummy", run_mode: "$dummy", aerr_enabled: "$dummy",
+  t1_flag: "$ft1", instr_mode: "$instrmode", run_mode: "$runmode", aerr_enabled: "$dummy",
 };
 
 // Musashi helpers implemented by hand in the runtime (runtime.js); calls to
@@ -609,6 +609,12 @@ export class Tr {
       vals = vals.map((v) => (v.c === null ? a.mat(v) : v));
       if (name.startsWith("m68ki_read_") || name.startsWith("m68ki_write_")) a.usesRead = true;
       a.flushPc();
+      // m68ki_check_address_error: an odd word/long access leaves the
+      // handler here (gpgx longjmps out of it) and takes the address error
+      if (/^m68ki_(read|write)_(16|32)$/.test(name) && (vals[0].c === null || vals[0].c & 1)) {
+        const odd = vals[0].c === null ? `(i32.and ${vals[0].e()} (i32.const 1))` : "(i32.const 1)";
+        a.emit(`(if ${odd} (then (call $address_error ${vals[0].e()} (i32.const ${name.startsWith("m68ki_read") ? 0x10 : 0})) (return)))`);
+      }
       const call = `(call ${fn} ${vals.map((v) => v.e()).join(" ")})`;
       if (PC_MOVERS.has(name)) {
         a.pc = null;

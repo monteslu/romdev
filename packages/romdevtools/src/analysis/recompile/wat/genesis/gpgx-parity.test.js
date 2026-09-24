@@ -164,3 +164,27 @@ test("code the game builds in work RAM at run time is found by running the refer
   const r = await gpgxParity({ platform: "genesis", rom: mdImage(prog), maxFrames: 40 });
   assert.equal(r.diverged, false, divergenceText(r));
 });
+
+test("address errors: an odd word/long access takes vector 3 with gpgx's bus-error frame; a second one before rte halts", T, async () => {
+  // faults: postincrement read, predecrement write, abs.l read (pc past the
+  // extension words), movem, one inside the vblank handler (instruction bit
+  // of the frame set), one in user mode, then one in the handler (halt)
+  const main = [
+    ...W(0x41f9), ...L(0xff0001), ...W(0x3018),            // lea $FF0001,a0; move.w (a0)+,d0
+    ...W(0x43f9), ...L(0xff0011), ...W(0x2301),            // lea $FF0011,a1; move.l d1,-(a1)
+    ...W(0x3439), ...L(0xff0103),                          // move.w $FF0103,d2
+    ...W(0x45f9), ...L(0xff0021), ...W(0x48d2, 0x000f),    // lea $FF0021,a2; movem.l d0-d3,(a2)
+    ...W(0x33fc, 0x8004), ...L(0xc00004), ...W(0x33fc, 0x8164), ...L(0xc00004),
+    ...W(0x46fc, 0x2000),                                  // interrupts on
+    ...W(0x0c87), ...L(5), ...W(0x66f8),                   // wait for the vblank fault
+    ...W(0x267c), ...L(0xff8000), ...W(0x4e63, 0x027c, 0xdfff), // usp; user mode
+    ...W(0x3839), ...L(0xff0005),                          // user-mode fault
+    ...W(0x3839), ...L(0xff0007),                          // the handler faults again: halt
+    ...W(0x60fe),
+  ];
+  const vint = [...W(0x4a39), ...L(0xff0100), ...W(0x660c, 0x50f9), ...L(0xff0100), ...W(0x3639), ...L(0xff0009), ...W(0x4e73)];
+  const aeh = [...W(0x5287, 0x0c87), ...L(7), ...W(0x6d06, 0x3839), ...L(0xff000b), ...W(0x508f, 0x4e73)];
+  const rom = mdImage(main, { at: [[0x0c, L(0x380)], [0x78, L(0x300)], [0x300, vint], [0x380, aeh]] });
+  const r = await gpgxParity({ platform: "genesis", rom, maxFrames: 12 });
+  assert.equal(r.diverged, false, divergenceText(r));
+});
