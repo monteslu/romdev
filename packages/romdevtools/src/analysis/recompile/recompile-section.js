@@ -61,7 +61,10 @@
 //       "skipIf": { "offset": 0, "bit": 31 },    optional: entries with this bit set are events
 //       "fields": { "sp": { "offset": 8, "mask": 65535 } },  per-entry values; a name the
 //                                   reference core also records per instruction (GBA r0-r15,
-//                                   cpsr; GB sp, hl, bc, de) is compared instruction by instruction
+//                                   cpsr; GB sp, hl, bc, de; NES a x y s p; SMS/GG af bc de hl
+//                                   ix iy sp r af2 bc2 de2 hl2 i; Genesis d0-d7 a0-a7 sr; SNES
+//                                   a x y s d db p: LibretroHost.traceRegisterNames) is
+//                                   compared instruction by instruction
 //       "filter": { "romOnly": "snesLoRom", "skip": [[lo, hi]] }  what the ring leaves out, so the
 //                                   reference stream is filtered the same way
 //     }

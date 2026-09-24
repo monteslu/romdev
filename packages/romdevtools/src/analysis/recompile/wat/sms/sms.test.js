@@ -124,3 +124,31 @@ test("region comes from the header region code", () => {
   const jp = new Uint8Array(rom); jp[0x7FFF] = 0x3C;
   assert.equal(describeRom(jp).region, "japan");
 });
+
+test("options.traceEntries records every instruction with the Z80 registers; breakArm flips A after one", async () => {
+  const rom = tinyRom();
+  const plain = await emitWatString(rom, {});
+  const opts = { traceEntries: 1024, breakArm: "$0004" };
+  const stats = {};
+  const text = await emitWatString(rom, { ...opts, stats });
+  assert.notEqual(text, plain);
+  assert.equal(stats.brokenArms, 1);
+  const sec = recompileSection(rom, "00", opts).json;
+  const { validateRecompileLayout } = await import("../../recompile-section.js");
+  validateRecompileLayout(sec);
+  assert.equal(recompileSection(rom, "00", {}).json.trace, undefined, "the default cart declares no register ring");
+  assert.ok(sec.warning.includes("breakArm"));
+  const { instance } = await WebAssembly.instantiate(assembleWatSync(text));
+  const e = instance.exports;
+  e.wc_get_info(); e.wc_init(); e.wc_render();
+  const dv = new DataView(e.memory.buffer);
+  const t = sec.trace;
+  const base = dv.getUint32(t.baseField.offset, true);
+  const count = dv.getUint32(t.cursor.offset, true);
+  assert.ok(count > 10, `ring recorded ${count}`);
+  const entry = (k) => ({ pc: dv.getUint32(base + k * t.stride, true) & 0xFFFF, af: dv.getUint32(base + k * t.stride + 4, true) & 0xFFFF, sp: dv.getUint32(base + k * t.stride + 16, true) & 0xFFFF });
+  assert.deepEqual([0, 1, 2, 3].map((k) => entry(k).pc), [0x0000, 0x0001, 0x0004, 0x0006]);
+  assert.equal(entry(2).sp, 0xDFF0, "registers are the state BEFORE the instruction (sp set by the previous one)");
+  assert.equal(entry(3).af >> 8, 0x43, "ld a,$42 at the broken arm left A with bit 0 flipped");
+  assert.throws(() => describeRom(rom, { traceEntries: 1000 }), /power of two/);
+});

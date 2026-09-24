@@ -243,3 +243,30 @@ test("recompileToWasmcart embeds the romdev.recompile section",
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+test("options.traceEntries records a whole frame with registers; breakArm flips L after one instruction", async () => {
+  const rom = makeRom(CGB_RED_BYTES);
+  const blocks = handBlocks(rom, [...CGB_RED, [0x166, "ld", "hl,$1234", 3], [0x169, "jr", "$0166", 2]]);
+  rom.set([0x21, 0x34, 0x12, 0x18, 0xFB], 0x166);
+  const opts = { blocks, traceEntries: 16384, breakArm: 0x166 };
+  const chunks = [];
+  const stats = {};
+  for await (const c of emitWat(rom, { ...opts, stats })) chunks.push(c);
+  assert.equal(stats.brokenArms, 1);
+  const sec = recompileSection(rom, "00", opts).json;
+  validateRecompileLayout(sec);
+  assert.equal(recompileSection(rom).json.trace, undefined, "the default cart keeps the derived 2048-entry ring");
+  const { instance } = await WebAssembly.instantiate(assembleWatSync(chunks.join("")), {});
+  const x = instance.exports;
+  x.wc_get_info(); x.wc_init(); x.wc_render();
+  const dv = new DataView(x.memory.buffer);
+  const t = sec.trace;
+  const count = dv.getUint32(t.cursor.offset, true);
+  assert.ok(count > 2048 && count <= t.entries, `a frame of the spin loop is more than the default ring holds and fits this one (${count})`);
+  const at = (k, f) => dv.getUint32(t.offset + (k % t.entries) * t.stride + f, true) & 0xFFFF;
+  assert.deepEqual([0, 1, 2].map((k) => at(k, 0)), [0x100, 0x101, 0x150], "from the frame's first instruction");
+  let k = 0;
+  while (at(k, 0) !== 0x169) k++;
+  assert.equal(at(k, 12), 0x1235, "hl after the broken ld hl,$1234 has bit 0 of L flipped");
+  assert.equal(at(3, 8), 0xFFFE, "registers are the state before the instruction (sp set by the previous one)");
+});

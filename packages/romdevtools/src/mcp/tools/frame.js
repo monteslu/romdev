@@ -897,7 +897,8 @@ export function registerFrameTools(server, z, sessionKey) {
     "$80 bank mirrors, the GBA core's pipeline pc, the SNES ring's ROM-only filter), reports an interrupt handler entered at a " +
     "different instruction (kind 'interrupt-timing') and then strips handler runs to find the first divergence in program LOGIC, " +
     "compares per-instruction cycle costs when both sides record a clock (firstClockDivergence), compares per-instruction registers " +
-    "where both traces carry them (GBA r0-r15/cpsr, GB sp/hl) and names the instruction that first produced a different value " +
+    "where both traces carry them (GBA r0-r15/cpsr; NES a/x/y/s/p, GB sp/hl/bc/de, SMS/GG af..iy/sp/r, Genesis d0-d7/a0-a7/sr, SNES a/x/y/s/d/db/p " +
+    "when the cart was built with options.traceEntries, which also makes the NES/GB ring hold a whole frame) and names the instruction that first produced a different value " +
     "(registers.producedBy), and reads the reference CPU at the first pc divergence (firstDivergence.refCpuHere). `atFrame` = the reference frame to trace (its execution from " +
     "the end of atFrame-1; 0 = the load-time frames from power-on); omitted, the per-frame differ runs first and the first differing frame is traced.\n" +
     "'compareRender': the PRESENTATION oracle - compare the decoded RENDERING STATE of slot A vs slot B (BG/sprites " +
@@ -999,7 +1000,7 @@ export function registerFrameTools(server, z, sessionKey) {
       outputDir: z.string().optional().describe("op=verifyRecompile: directory for the [cart|ref|diff] PNGs (default a temp dir, reported as outputDir)."),
       tag: z.string().optional().describe("op=verifyRecompile: PNG filename prefix (default the cart's basename)."),
       level: z.enum(["frame", "instruction"]).optional().describe("op=findDiverge (recompile mode): 'frame' (default) compares regions/fields per frame; 'instruction' traces one frame on both sides and returns the first divergent instruction (see the op description)."),
-      atFrame: z.number().int().min(1).optional().describe("op=findDiverge level:'instruction': the REFERENCE frame whose execution is traced (from the end of atFrame-1 to the end of atFrame). Default: the first frame the per-frame differ finds different (bounded by startFrame/maxFrames)."),
+      atFrame: z.number().int().min(0).optional().describe("op=findDiverge level:'instruction': the REFERENCE frame whose execution is traced (from the end of atFrame-1 to the end of atFrame). Default: the first frame the per-frame differ finds different (bounded by startFrame/maxFrames)."),
       context: z.number().int().min(0).max(200).optional().describe("op=findDiverge level:'instruction': instructions of context reported on each side of a divergence (default 8)."),
       refState: z.boolean().optional().describe("op=findDiverge level:'instruction': read the reference CPU registers at the first pc divergence by replaying the frame to that instruction under the instruction watchdog (default true; single-CPU cores)."),
       seeds: z.array(z.number().int()).min(1).max(64).optional().describe("op=fuzzRecompile: seeds of the random play scripts (default [1,2,3])."),

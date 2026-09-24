@@ -62,6 +62,24 @@ export function regwatchWat(pc) {
 }
 
 /**
+ * options.traceEntries: the register ring entry for the instruction about to
+ * run, written beside the ROM pc ring entry (same cursor, same filter). The
+ * registers are the state the instruction starts from, as snes9x's dispatch
+ * hook sees them.
+ * @param {import("./layout.js").SnesLayout & {REGRING:number, REGRING_N:number}} lay
+ */
+function regRingWat(lay) {
+  const at = `(i32.add (i32.const ${lay.REGRING}) (i32.shl (i32.and (global.get $npc) (i32.const ${lay.REGRING_N - 1})) (i32.const 5)))`;
+  const two = (lo, hi) => `(i32.or (global.get $${lo}) (i32.shl (global.get $${hi}) (i32.const 16)))`;
+  return `
+                    (i32.store ${at} (global.get $pc))
+                    (i32.store offset=4 ${at} ${two("a", "x")})
+                    (i32.store offset=8 ${at} ${two("y", "s")})
+                    (i32.store offset=12 ${at} ${two("d", "db")})
+                    (i32.store offset=16 ${at} (i32.or (call $packp) (i32.shl (global.get $fe) (i32.const 8))))`;
+}
+
+/**
  * The $step function head, up to the shard dispatch.
  * @param {string} regwatch  regwatchWat() output or ''
  * @param {string} pcringExcl  WAT i32 condition: pc is outside every skipped range
@@ -132,7 +150,7 @@ export function stepHeadWat(regwatch, pcringExcl, lay) {
                       (i32.mul (i32.rem_u (global.get $npc)
                                           (i32.const ${PCRING_N}))
                                (i32.const 4)))
-                      (global.get $pc))
+                      (global.get $pc))${lay.REGRING != null ? regRingWat(lay) : ""}
                     (global.set $npc
                       (i32.add (global.get $npc) (i32.const 1)))))))
     (if (i32.or (i32.lt_u (local.get $off) (i32.const 0x8000))

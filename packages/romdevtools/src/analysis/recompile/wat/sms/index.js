@@ -40,6 +40,10 @@ const RESET_T = Math.floor(Math.floor(((262 - 192 + 159) * 3420 + 1004) / 7) * 7
 
 /** Arms per dispatch shard (a single giant br_table blows V8's compiler zone). */
 const SHARD_SZ = 1024;
+/** options.traceEntries: the register ring's entry size, its maximum length, and where its base is published. */
+const BIGRING_STRIDE = 32;
+const BIGRING_MAX = 65536;
+const BIGRING_BASE_PROBE = 112;
 
 // ---------------------------------------------------------------------------
 // ROM facts
@@ -108,7 +112,14 @@ function segaHeader(img) {
  *   legacy: boolean          reproduce sms-wat's emit_bank.py module exactly
  *                            (interrupts sampled only at scanline starts, no
  *                            register probe); for the differential gate.
- *   ramCode: true | {frames, input}
+ *   ramCode: true | false | {frames, input}
+ *                            DEFAULT (option absent, banked emitter, ROM on
+ *                            disk, no ramRegions / ramSnapshot*): AUTOMATIC.
+ *                            The reference runs 3000 frames from power-on
+ *                            with no input; if it executes any RAM pc, the
+ *                            cart is built as with ramCode:true, otherwise
+ *                            exactly as without it. false turns that off.
+ *                            true / {frames, input}:
  *                            DISCOVER RAM-resident code from the reference
  *                            itself: run it `frames` frames from power-on
  *                            (default 3000) on the `input` schedule, record
@@ -117,6 +128,22 @@ function segaHeader(img) {
  *                            RAM instruction the discovery never saw traps
  *                            instead of running stale bytes). Implies a
  *                            whole-RAM region ($C000, 8KB).
+ *   traceEntries: number     ALSO record a whole-frame instruction ring WITH
+ *                            the Z80 registers for findDiverge
+ *                            level:'instruction' (a power of two, 1024 to
+ *                            65536; a frame runs ~5,000-15,000 instructions,
+ *                            so 16384 or more holds one): 32 bytes per
+ *                            instruction {pc | line<<16, AF | BC<<16,
+ *                            DE | HL<<16, IX | IY<<16, SP | R<<16,
+ *                            AF' | BC'<<16, DE' | HL'<<16, I} after the ring
+ *                            the default build keeps, base at probe +112.
+ *                            Off by default: the default module is unchanged.
+ *                            Banked emitter only.
+ *   breakArm: number         DEBUG / MUST-FAIL CONTROL: every arm at this Z80
+ *                            address also flips bit 0 of A after it runs, so
+ *                            an instruction-level differ must name exactly
+ *                            this instruction. Pick a straight-line
+ *                            instruction; the section carries a warning.
  *   emitter: 'banked'|'flat' 'banked' (default) is the full model: paged
  *                            windows, scanline budget carry, line interrupts.
  *                            'flat' is sms-wat's older emitter for carts of
@@ -172,6 +199,13 @@ export function describe(rom, opts = {}) {
   const emitter = opts.emitter || "banked";
   if (emitter !== "banked" && emitter !== "flat") throw new Error(`sms recompile: emitter must be 'banked' or 'flat', got '${emitter}'`);
   if (emitter === "flat" && (img.length > 0x8000 || ramRegions.length)) throw new Error("sms recompile: emitter 'flat' handles unbanked carts of 32KB or less with no RAM code");
+  const traceEntries = opts.traceEntries == null ? null : opts.traceEntries;
+  if (traceEntries != null) {
+    if (!Number.isInteger(traceEntries) || traceEntries < 1024 || traceEntries > BIGRING_MAX || (traceEntries & (traceEntries - 1))) {
+      throw new Error(`sms recompile: options.traceEntries must be a power of two from 1024 to ${BIGRING_MAX}, got ${opts.traceEntries}`);
+    }
+    if (emitter === "flat") throw new Error("sms recompile: options.traceEntries needs the banked emitter");
+  }
 
   return {
     platform,
@@ -179,6 +213,8 @@ export function describe(rom, opts = {}) {
     emitter,
     region,
     legacy: opts.legacy === true,
+    traceEntries,
+    breakArm: parseBreakArm(opts.breakArm),
     probeRegs: opts.probeRegs !== false && opts.legacy !== true,
     supported,
     unsupportedReason: supported ? null : `ROM size ${img.length} is not a multiple of 8KB up to 4MB`,
@@ -367,6 +403,56 @@ export function computeLayout(narms, romLen, nbank, pagesSlot1) {
 
 // ---------------------------------------------------------------------------
 // The module
+
+/**
+ * Automatic RAM-code discovery applies when the caller said nothing about RAM
+ * code (ramCode absent, no ramRegions / ramSnapshot / ramSnapshotFrame), the
+ * ROM is on disk, and the build is the default banked, non-legacy model.
+ * @param {object} opts
+ * @param {ReturnType<typeof describe>} cfg
+ */
+function autoRamEligible(opts, cfg) {
+  return opts.ramCode === undefined && !opts.ramRegions && opts.ramSnapshot == null && opts.ramSnapshotFrame == null
+    && typeof opts.romPath === "string" && cfg.emitter === "banked" && !cfg.legacy;
+}
+
+/**
+ * options.breakArm as a Z80 address (a number or "$1234" / "0x1234" / "1234" hex).
+ * @param {unknown} v
+ * @returns {number|null}
+ */
+function parseBreakArm(v) {
+  if (v == null) return null;
+  const n = typeof v === "number" ? v : parseInt(String(v).replace(/^\$|^0x/i, ""), 16);
+  if (!Number.isInteger(n) || n < 0 || n > 0xFFFF) throw new Error(`sms recompile: options.breakArm must be a Z80 address, got ${JSON.stringify(v)}`);
+  return n;
+}
+
+/**
+ * options.traceEntries: one 32-byte entry per dispatched instruction, at the
+ * same point as the default ring (after the interrupt check, before the arm
+ * runs), so the registers are the state the instruction starts from - what
+ * genesis_plus_gx's trace records at its dispatch hook.
+ * @param {number} base
+ * @param {number} entries
+ * @returns {string[]}
+ */
+function bigRingWat(base, entries) {
+  const pair = (hi, lo) => `(i32.or (i32.shl (global.get $${hi}) (i32.const 8)) (global.get $${lo}))`;
+  const two = (lo, hi) => `(i32.or ${lo} (i32.shl ${hi} (i32.const 16)))`;
+  const st = (off, v) => `      (i32.store (i32.add (local.get $tr) (i32.const ${off})) ${v})`;
+  return [
+    `      (local.set $tr (i32.add (i32.const ${base}) (i32.shl (i32.and (global.get $tracei) (i32.const ${entries - 1})) (i32.const 5))))`,
+    "      (i32.store (local.get $tr) (i32.or (global.get $pc) (i32.shl (global.get $line) (i32.const 16))))",
+    st(4, two(pair("a", "f"), pair("b", "c"))),
+    st(8, two(pair("d", "e"), pair("h", "l"))),
+    st(12, two(pair("ixh", "ixl"), pair("iyh", "iyl"))),
+    st(16, two("(global.get $sp)", "(global.get $rreg)")),
+    st(20, two(pair("a2", "f2"), pair("b2", "c2"))),
+    st(24, two(pair("d2", "e2"), pair("h2", "l2"))),
+    st(28, "(global.get $ireg)"),
+  ];
+}
 
 /** Mapper / paging / RAM-code WAT pieces for the memory accessors. */
 function bankHelpersWat(G, cfg, nbank) {
@@ -713,7 +799,7 @@ ${RELOAD_AFTER}${VINT_SET}
     (i32.store (i32.add (i32.const ${PROBE}) (i32.const 36)) (global.get $tracei))
     (i32.store (i32.add (i32.const ${PROBE}) (i32.const 40)) (global.get $bank2))
     (i32.store (i32.add (i32.const ${PROBE}) (i32.const 44)) (global.get $bank1))
-${REGPROBE}  )
+${REGPROBE}${cfg.traceEntries ? `    (i32.store (i32.const ${PROBE + BIGRING_BASE_PROBE}) (i32.const ${G.BIGRING}))\n` : ""}  )
 
   (export "dbg_pc" (global $pc))
   (export "dbg_trapped" (global $trapped))
@@ -945,6 +1031,10 @@ class Emitter {
       // INI/IND read the port before their extra 4 T are charged.
       if (!this.cfg.legacy && IN_OPS.has(mn)) parts.push(`    (global.set $curbudget ${mn === "in" ? "(local.get $budget)" : "(i32.add (local.get $budget) (i32.const 4))"})`);
       if (wat) parts.push("    " + wat);
+      if (this.cfg.breakArm === za) {
+        parts.push("    (global.set $a (i32.xor (global.get $a) (i32.const 1))) ;; options.breakArm (must-fail control)");
+        this.broken = (this.broken ?? 0) + 1;
+      }
       if (flow) {
         const [tk, nt] = costOf(mn, ops);
         parts.push(emitFlow(flow, tk - nt));
@@ -1088,6 +1178,29 @@ export function layoutFor(d) {
 }
 
 /**
+ * The options.traceEntries ring in recompile-section.js's `trace` schema. A
+ * cart built without the option declares none: findDiverge derives the
+ * default pc-only ring from the probe block.
+ * @param {number} entries
+ */
+export function traceFor(entries) {
+  const lo = (offset) => ({ offset, mask: 0xFFFF });
+  const hi = (offset) => ({ offset, shift: 16, mask: 0xFFFF });
+  return {
+    baseField: { offset: PROBE + BIGRING_BASE_PROBE, note: "written by wc_render at every frame end" },
+    entries, stride: BIGRING_STRIDE,
+    cursor: { offset: PROBE + 36, mode: "count", note: "probe tracei, mirrored at every frame end" },
+    pc: lo(0),
+    fields: {
+      line: hi(0), af: lo(4), bc: hi(4), de: lo(8), hl: hi(8), ix: lo(12), iy: hi(12),
+      sp: lo(16), r: { offset: 16, shift: 16, mask: 0xFF }, af2: lo(20), bc2: hi(20), de2: lo(24), hl2: hi(24),
+      i: { offset: 28, mask: 0xFF },
+    },
+    note: "registers before the instruction runs, compared with genesis_plus_gx's per-instruction Z80 columns",
+  };
+}
+
+/**
  * @param {Uint8Array} rom
  * @param {string|null} sha1
  * @param {object} [opts]
@@ -1113,6 +1226,8 @@ export function recompileSection(rom, sha1, opts = {}) {
         pcRing: { note: "base at probe traceBase, 8192 x u32 (line<<16 | pc), write index at probe tracei" },
         frameBuffer: { note: "wc_get_info fbPtr, 256x192 RGBA" },
       },
+      ...(d.traceEntries ? { trace: traceFor(d.traceEntries) } : {}),
+      ...(d.breakArm != null ? { debugBreakArm: d.breakArm, warning: "built with options.breakArm: one instruction also flips bit 0 of A (a must-fail control), NOT a faithful cart" } : {}),
     },
   };
 }
@@ -1129,12 +1244,22 @@ export function recompileSection(rom, sha1, opts = {}) {
  */
 export async function* emitWat(rom, opts = {}) {
   const IMG = toBytes(rom);
-  const cfg = describe(IMG, opts);
+  let cfg = describe(IMG, opts);
   if (!cfg.supported) throw new Error(`sms recompile: ${cfg.unsupportedReason}`);
   const PLATFORM = cfg.platform;
   const NBANK = cfg.banks;
   const stats = opts.stats || {};
 
+  // RAM code, automatically: a cart whose reference executes RAM code with
+  // no input gets the discovery; any other builds exactly as before.
+  let autoRam = null;
+  if (autoRamEligible(opts, cfg)) {
+    autoRam = await discoverRamCode(opts.romPath, PLATFORM, {});
+    if (autoRam.executed.size) {
+      opts = { ...opts, ramCode: { frames: autoRam.frames } };
+      cfg = describe(IMG, opts);
+    }
+  }
   const { idx, stats: irStats } = await instructionIndex(IMG, PLATFORM);
   if (cfg.emitter === "flat") {
     yield* emitFlatWat(IMG, cfg, idx, stats);
@@ -1149,7 +1274,7 @@ export async function* emitWat(rom, opts = {}) {
   if (cfg.ramRegions.some((r) => r.src === "snapshot")) {
     let raws;
     if (opts.ramCode) {
-      discovery = await discoverRamCode(opts.romPath, PLATFORM, opts.ramCode === true ? {} : opts.ramCode);
+      discovery = autoRam && autoRam.executed.size ? autoRam : await discoverRamCode(opts.romPath, PLATFORM, opts.ramCode === true ? {} : opts.ramCode);
       raws = discovery.snapshots;
       executed = discovery.executed;
     } else {
@@ -1182,7 +1307,9 @@ export async function* emitWat(rom, opts = {}) {
   const n = items.length;
   const G = computeLayout(n, IMG.length, NBANK, cfg.pagesSlot1);
   const { ABI, TRACE, AUDIO, ROMIMG, BTAB } = G;
-  const pages = Math.floor((G.TOP + 0xFFFF) / 0x10000) + 1;
+  // options.traceEntries: the register ring goes above everything else.
+  if (cfg.traceEntries) G.BIGRING = G.TOP;
+  const pages = Math.floor((G.TOP + (cfg.traceEntries ? cfg.traceEntries * BIGRING_STRIDE : 0) + 0xFFFF) / 0x10000) + 1;
 
   const head = ["(module", `  (memory (export "memory") ${pages})`];
   for (const g of ["a", "f", "b", "c", "d", "e", "h", "l", "ixh", "ixl", "iyh", "iyl", "rreg", "ireg",
@@ -1235,7 +1362,7 @@ export async function* emitWat(rom, opts = {}) {
   // (normally <= 0); the caller carries it into the next line so an
   // overshooting block is paid for, not forgiven.
   const r = ["  (func $run (param $budget i32) (result i32)",
-    "    (local $id i32) (local $sh i32)",
+    "    (local $id i32) (local $sh i32)" + (cfg.traceEntries ? " (local $tr i32)" : ""),
     "    (block $exit (loop $next",
     "      (br_if $exit (i32.le_s (local.get $budget) (i32.const 0)))",
     "      (br_if $exit (global.get $trapped))",
@@ -1267,6 +1394,7 @@ export async function* emitWat(rom, opts = {}) {
     "(i32.mul (i32.and (global.get $tracei) (i32.const 8191)) (i32.const 4))) " +
     "(i32.or (global.get $pc) " +
     "(i32.shl (global.get $line) (i32.const 16))))",
+    ...(cfg.traceEntries ? bigRingWat(G.BIGRING, cfg.traceEntries) : []),
     "      (global.set $tracei (i32.add (global.get $tracei) (i32.const 1)))"];
   // Host-settable PC watches (0 = slot off).
   for (let w = 0; w < 4; w++) {
@@ -1340,10 +1468,15 @@ export async function* emitWat(rom, opts = {}) {
     pagesSlot1: cfg.pagesSlot1,
     ramArms: cfg.ramRegions.reduce((a, rr) => a + Math.min(rr.bytes, 0x10000 - rr.cpu), 0),
     ramVariants: em.ramVariants,
-    ...(discovery ? { ramCode: { frames: discovery.frames, snapshots: discovery.snapshots.length, executedRamPcs: discovery.executed.size } } : {}),
+    ...(discovery ? { ramCode: { frames: discovery.frames, snapshots: discovery.snapshots.length, executedRamPcs: discovery.executed.size, ...(autoRam ? { automatic: true } : {}) } }
+      : autoRam ? { ramCode: { automatic: true, frames: autoRam.frames, executedRamPcs: 0, note: "the reference executed no RAM code with no input; pass ramCode:{input} if gameplay reaches some" } } : {}),
     irUnresolvedOffsets: irStats.unresolvedOffsets,
     memory: { pages, ...G },
   });
+  if (cfg.breakArm != null) {
+    if (!em.broken) throw new Error(`sms recompile: options.breakArm $${cfg.breakArm.toString(16)} is not the start of any compiled instruction`);
+    stats.brokenArms = em.broken;
+  }
 }
 
 /**

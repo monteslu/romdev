@@ -253,3 +253,35 @@ test("a cart that executes BRK falls to the interpreter, which traps", async () 
   const { ex } = await runCart(rom, 1);
   assert.equal(ex.dbg_trapped(), 1);
 });
+
+test("options.traceEntries records the 65816 registers per ROM instruction; breakArm flips A after one", async () => {
+  const code = [
+    0x78,                         // $8000 sei
+    0x18, 0xfb,                   // $8001 clc / $8002 xce
+    0xc2, 0x30,                   // $8003 rep #$30: 16-bit A, X, Y
+    0xa9, 0x34, 0x12,             // $8005 lda #$1234
+    0xa2, 0x78, 0x56,             // $8008 ldx #$5678
+    0x80, 0xfe,                   // $800B bra *
+  ];
+  const rom = synthRom({ code });
+  const opts = { traceEntries: 1 << 18, breakArm: "$808005" };
+  const stats = {};
+  const { bytes } = await assembleWat(emitWat(rom, { ...opts, stats }));
+  assert.equal(stats.brokenArms, 1);
+  const sec = recompileSection(rom, "00", opts).json;
+  assert.equal(recompileSection(rom, "00", {}).json.trace.fields, undefined, "the default ring has no registers");
+  assert.notEqual(recompileSection(rom, "00", {}).json.trace.offset, sec.trace.offset);
+  assert.equal(describeRom(rom).memory.pages + Math.ceil((1 << 18) * 32 / 0x10000), describeRom(rom, opts).memory.pages, "the ring is added above the default map");
+  const { instance } = await WebAssembly.instantiate(bytes, {});
+  const ex = instance.exports;
+  ex.wc_init(); ex.wc_render();
+  const dv = new DataView(ex.memory.buffer);
+  const t = sec.trace;
+  const e = (k, f) => dv.getUint32(t.offset + k * t.stride + f, true);
+  assert.ok(dv.getUint32(t.cursor.offset, true) <= t.entries, "one frame fits the ring");
+  assert.deepEqual([0, 1, 2, 3, 4, 5].map((k) => e(k, 0) & 0xffff), [0x8000, 0x8001, 0x8002, 0x8003, 0x8005, 0x8008]);
+  assert.equal(e(5, 4) & 0xffff, 0x1235, "A after the broken lda #$1234 has bit 0 flipped");
+  assert.equal(e(2, 16) >> 8, 1, "emulation flag set before xce");
+  assert.equal(e(6, 16) >> 8, 0, "native mode after xce");
+  assert.equal(e(6, 4) >>> 16, 0x5678, "X loaded");
+});

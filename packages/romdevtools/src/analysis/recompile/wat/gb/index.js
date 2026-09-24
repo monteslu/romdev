@@ -18,9 +18,19 @@
 //              PROBE+128), default none
 //   stopAt     {pc, fromFrame?}: trap the first time that pc is dispatched on
 //              or after host frame `fromFrame` (debug), default off
+//   traceEntries  ALSO record a whole-frame instruction ring (a power of two,
+//              1024 to 65536; a frame runs ~5,000-15,000 instructions, so
+//              16384 or more holds one) of {pc, rombank, sp, hl, bc, de, af}
+//              for findDiverge level:'instruction', which otherwise sees the
+//              default ring's last 2,048. Off by default: the default module
+//              is unchanged.
+//   breakArm   DEBUG / MUST-FAIL CONTROL: every arm at this CPU address also
+//              flips bit 0 of L after it runs, so an instruction-level differ
+//              must name exactly this instruction (the section carries a
+//              warning). Pick a straight-line instruction.
 //   stats      an object filled with arm/lowering counts after emit
 import { createHash } from "node:crypto";
-import { emitGbWat, gbLayout, gbOriginAndPages, PROBE, PROBE_FIELDS } from "./emit.js";
+import { emitGbWat, gbLayout, gbOriginAndPages, gbBigRing, PROBE, PROBE_FIELDS } from "./emit.js";
 import { mbcKind, VRAM0, VRAM1, WRAMX, BGPAL, OBJPAL } from "./hw-gbc.js";
 import { OAM, IOREG, WRAM, FB_W, FB_H } from "./hw-gb.js";
 import { discoverBlocks, blocksFromJson } from "./blocks.js";
@@ -146,8 +156,33 @@ export function describe(rom, opts = {}) {
  * (schema: src/analysis/recompile/recompile-section.js).
  * @param {Uint8Array} rom
  */
-export function recompileSection(rom) {
-  return { json: describe(rom).layout };
+export function recompileSection(rom, sha1, opts = {}) {
+  const layout = describe(rom).layout;
+  if (opts.traceEntries != null) {
+    // the block index has one arm per ROM offset (emitWat refuses anything else)
+    const big = gbBigRing(rom.length, rom.length, opts.traceEntries);
+    const lo = (offset) => ({ offset, mask: 0xffff });
+    layout.trace = {
+      offset: big.offset, entries: big.entries, stride: big.stride,
+      cursor: { offset: big.cursor, mode: "count", writable: true, note: "every dispatched instruction, RAM-interpreted ones included" },
+      pc: lo(0),
+      fields: { rombank: { offset: 4 }, sp: lo(8), hl: lo(12), bc: lo(16), de: lo(20), af: lo(24) },
+      note: "options.traceEntries: registers before each instruction; sp/hl/bc/de are compared with gambatte's per-instruction columns",
+    };
+  }
+  if (opts.breakArm != null) Object.assign(layout, { debugBreakArm: parseBreakArm(opts.breakArm), warning: "built with options.breakArm: one instruction also flips bit 0 of L (a must-fail control), NOT a faithful cart" });
+  return { json: layout };
+}
+
+/**
+ * @param {unknown} v  a CPU address: a number or "$1234" / "0x1234" / "1234" hex
+ * @returns {number|null}
+ */
+function parseBreakArm(v) {
+  if (v == null) return null;
+  const n = typeof v === "number" ? v : parseInt(String(v).replace(/^\$|^0x/i, ""), 16);
+  if (!Number.isInteger(n) || n < 0 || n > 0x7fff) throw new Error(`gb recompile: options.breakArm must be a ROM CPU address ($0000-$7FFF), got ${JSON.stringify(v)}`);
+  return n;
 }
 
 /**
@@ -161,7 +196,7 @@ export async function* emitWat(rom, opts = {}) {
   if (!blocks) blocks = await discoverBlocks(rom);
   else if (!(blocks instanceof Map)) blocks = blocksFromJson(blocks);
   if (blocks.size !== rom.length) throw new Error(`gb: block index covers ${blocks.size} offsets; the ROM has ${rom.length}. A hole becomes a silent trap.`);
-  yield* emitGbWat(rom, blocks, { cgb: d.cgb, mbc: d.mbc, watch: opts.watch, hits: opts.hits, stopAt: opts.stopAt, stats: opts.stats });
+  yield* emitGbWat(rom, blocks, { cgb: d.cgb, mbc: d.mbc, watch: opts.watch, hits: opts.hits, stopAt: opts.stopAt, stats: opts.stats, traceEntries: opts.traceEntries, breakArm: parseBreakArm(opts.breakArm) });
 }
 
 export { gbLayout, gbOriginAndPages };

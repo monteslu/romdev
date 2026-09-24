@@ -229,3 +229,33 @@ test("RAM-resident code: discovered, trapped when disabled, restored by options.
   assert.equal(manual.trapped, 0);
   assert.equal(manual.d2, 0xbeef);
 });
+
+test("options.traceEntries records d0-d7/a0-a7/sr per instruction; breakArm flips d0 after one", async () => {
+  const code = Uint8Array.from([
+    ...W(0x203c), ...L(0x12345678), // $200 move.l #$12345678,d0
+    ...W(0x2200),                   // $206 move.l d0,d1
+    ...W(0x5281, 0x60fc),           // $208 loop: addq.l #1,d1 ; bra.s loop
+  ]);
+  const rom = synthRom(code);
+  const opts = { traceEntries: 1 << 16, breakArm: "$000200" };
+  const sec = recompileSection(rom, "00", opts).json;
+  assert.equal(recompileSection(rom, "00", {}).json.trace.stride, 16, "the default ring is unchanged");
+  assert.equal(sec.trace.stride, 128);
+  assert.ok(sec.warning.includes("breakArm"));
+  const c = await cartOf(rom, opts);
+  assert.equal(c.stats.brokenArms, 1);
+  const t = sec.trace;
+  c.dv().setUint32(t.enable.offset, 1, true);
+  c.frame(1);
+  const dv = c.dv();
+  const base = dv.getUint32(t.baseField.offset, true);
+  const n = dv.getUint32(t.cursor.offset, true);
+  assert.ok(n > 3 && n < t.entries, `one frame fits (${n})`);
+  const e = (k, f) => dv.getUint32(base + k * t.stride + f, true);
+  const steps = [];
+  for (let k = 0; k < n && steps.length < 3; k++) if (!(e(k, 0) >>> 31)) steps.push(k);
+  assert.deepEqual(steps.map((k) => e(k, 0) & 0xffffff), [0x200, 0x206, 0x208]);
+  assert.equal(e(steps[1], 16), 0x12345679, "d0 after the broken move.l has bit 0 flipped");
+  assert.equal(e(steps[0], 16 + 4 * 15), 0x00fffe00, "a7 = the stack pointer before the first instruction");
+  assert.equal(e(steps[0], 80) & 0x2700, 0x2700, "sr: supervisor, interrupts masked at reset");
+});

@@ -37,6 +37,25 @@ const ROMIMG = 0x160000;
 const RAMWORDS = 0x8000;
 const STATE = RT.TRACE; // per-frame CPU/VDP state block for the differ
 const TRACEN = 1 << 18; // instruction ring entries (enabled by STATE+0xF8)
+/** options.traceEntries: the ring with the 68000 registers (d0-d7, a0-a7, sr) per entry. */
+const REGRING_STRIDE = 128;
+const REGRING_MAX = 1 << 18;
+
+/**
+ * The instruction ring for these options: the default 2^18 x 16 bytes
+ * {pc, mc, refresh, mcend}, or options.traceEntries entries (a power of two,
+ * 1024 to 2^18) of 128 bytes that add d0-d7 and a0-a7 at +16 and sr at +80.
+ * A frame runs ~10,000-20,000 68000 instructions, so 32768 holds one.
+ * @param {object} [opts]
+ */
+export function traceRingFor(opts = {}) {
+  const n = opts.traceEntries;
+  if (n == null) return { entries: TRACEN, stride: 16, regs: false };
+  if (!Number.isInteger(n) || n < 1024 || n > REGRING_MAX || (n & (n - 1))) {
+    throw new Error(`genesis recompile: options.traceEntries must be a power of two from 1024 to ${REGRING_MAX}, got ${n}`);
+  }
+  return { entries: n, stride: REGRING_STRIDE, regs: true };
+}
 const SH = 1024; // arms per dispatch shard
 
 /**
@@ -298,6 +317,12 @@ export const conventions = { settleFrames: { cart: 1, reference: 5 }, cartFrameO
  */
 export function recompileSection(rom, sha1, opts = {}) {
   const d = describe(rom, opts);
+  const ring = traceRingFor(opts);
+  const regFields = ring.regs ? {
+    ...Object.fromEntries(Array.from({ length: 8 }, (_, i) => [`d${i}`, { offset: 16 + 4 * i }])),
+    ...Object.fromEntries(Array.from({ length: 8 }, (_, i) => [`a${i}`, { offset: 48 + 4 * i }])),
+    sr: { offset: 80, mask: 0xffff },
+  } : {};
   return {
     name: "romdev.recompile",
     json: {
@@ -318,7 +343,7 @@ export function recompileSection(rom, sha1, opts = {}) {
       conventions,
       // the instruction ring $trace writes (findDiverge level:'instruction')
       trace: {
-        baseField: { offset: STATE + 0xf4 }, entries: TRACEN, stride: 16,
+        baseField: { offset: STATE + 0xf4 }, entries: ring.entries, stride: ring.stride,
         cursor: { offset: STATE + 0xfc, mode: "index", writable: true, note: "wraps at entries" },
         enable: { offset: STATE + 0xf8 },
         pc: { offset: 0, mask: 0xffffff }, skipIf: { offset: 0, bit: 31, note: "interrupt-entry event records" },
@@ -326,11 +351,13 @@ export function recompileSection(rom, sha1, opts = {}) {
         // same point of an instruction as gpgx's m68k.cycles at dispatch (the
         // two differ by up to ~130 cycles mid-frame and agree again), so it is
         // reported as a field, not compared as a per-instruction clock
-        fields: { mc: { offset: 4 }, refresh: { offset: 8 }, cycleEnd: { offset: 12 } },
+        fields: { mc: { offset: 4 }, refresh: { offset: 8 }, cycleEnd: { offset: 12 }, ...regFields },
+        ...(ring.regs ? { note: "options.traceEntries: d0-d7, a0-a7 (a7 = the active stack pointer) and sr before each instruction, compared with genesis_plus_gx's per-instruction 68000 columns" } : {}),
       },
       ramCode: d.ramCode.map(({ romOffset, ramAddress, length, source }) => ({ romOffset, ramAddress, length, source })),
       trapHint: "probe trapped=1 with trappc in work RAM ($FFxxxxxx) means the game ran code it copied to RAM that discovery missed: rebuild with options.ramCode:[{romOffset, ramAddress, length}]",
       license: d.licenseNote,
+      ...(opts.breakArm != null ? { debugBreakArm: parseBreakArm(opts.breakArm), warning: "built with options.breakArm: one instruction also flips bit 0 of d0 (a must-fail control), NOT a faithful cart" } : {}),
     },
   };
 }
@@ -368,7 +395,8 @@ const hex6 = (v) => (v >>> 0).toString(16).toUpperCase().padStart(6, "0");
 /**
  * Emit the whole cart as WAT text chunks of ONE (module ...).
  * @param {Uint8Array} rom
- * @param {{ramCode?:object[], discoverRamCode?:boolean, onProgress?:(s:string)=>void}} [opts]
+ * @param {{ramCode?:object[], discoverRamCode?:boolean, traceEntries?:number, breakArm?:number|string, onProgress?:(s:string)=>void}} [opts]
+ *   traceEntries: record d0-d7/a0-a7/sr per instruction (see traceRingFor); breakArm: see parseBreakArm
  */
 export async function* emitWat(rom, opts = {}) {
   const img = rom instanceof Uint8Array ? rom : new Uint8Array(rom);
@@ -407,8 +435,9 @@ export async function* emitWat(rom, opts = {}) {
   ];
   const zlay = RT.z80Layout();
   tabsegs.push(...RT.z80Segments(zlay, D.z80.cc));
+  const ring = traceRingFor(opts);
   const tracebuf = (PACKED + narms * 8 + 0xffff) & ~0xffff;
-  const pages = Math.floor((tracebuf + TRACEN * 16) / 0x10000) + 1;
+  const pages = Math.floor((tracebuf + ring.entries * ring.stride) / 0x10000) + 1;
 
   yield `(module\n  (memory (export "memory") ${pages})\n  `;
   yield RT.globalsWat();
@@ -428,7 +457,8 @@ export async function* emitWat(rom, opts = {}) {
     yield buf.join("");
   }
   // the 68000 arms, one br_table shard per SH arms
-  let bad = 0;
+  let bad = 0, broken = 0;
+  const breakAt = parseBreakArm(opts.breakArm);
   for (let si = 0; si < nsh; si++) {
     const sh = arms.slice(si * SH, (si + 1) * SH);
     const bodies = [];
@@ -444,6 +474,11 @@ export async function* emitWat(rom, opts = {}) {
         bad++;
       }
       if (nloc > nl) nl = nloc;
+      if (breakAt !== null && (pc & 0xffffff) === breakAt) {
+        // DEBUG / MUST-FAIL CONTROL (options.breakArm)
+        body += " (global.set $r0 (i32.xor (global.get $r0) (i32.const 1)))";
+        broken++;
+      }
       bodies.push(`      ) ;; $${hex6(pc)}\n    ${body} (return)\n`);
     }
     const parts = [`  (func $shard${si} (param $id i32)\n`];
@@ -466,14 +501,14 @@ export async function* emitWat(rom, opts = {}) {
   yield `
   ;; instruction ring for the differ: (pc, master cycle) per step, plus
   ;; events with bit 31 set (interrupt entry). Off unless STATE+0xF8 != 0.
-  (func $trace (param $p i32)
+  (func $trace (param $p i32)${ring.regs ? regTraceWat(tracebuf, ring.entries) : `
     (if (i32.load (i32.const ${STATE + 0xF8}))
       (then
         (i32.store (i32.add (i32.const ${tracebuf}) (i32.shl (i32.load (i32.const ${STATE + 0xFC})) (i32.const 4))) (local.get $p))
         (i32.store (i32.add (i32.const ${tracebuf + 4}) (i32.shl (i32.load (i32.const ${STATE + 0xFC})) (i32.const 4))) (global.get $mc))
         (i32.store (i32.add (i32.const ${tracebuf + 8}) (i32.shl (i32.load (i32.const ${STATE + 0xFC})) (i32.const 4))) (global.get $refresh))
         (i32.store (i32.add (i32.const ${tracebuf + 12}) (i32.shl (i32.load (i32.const ${STATE + 0xFC})) (i32.const 4))) (global.get $mcend))
-        (i32.store (i32.const ${STATE + 0xFC}) (i32.and (i32.add (i32.load (i32.const ${STATE + 0xFC})) (i32.const 1)) (i32.const ${TRACEN - 1}))))))
+        (i32.store (i32.const ${STATE + 0xFC}) (i32.and (i32.add (i32.load (i32.const ${STATE + 0xFC})) (i32.const 1)) (i32.const ${TRACEN - 1}))))))`}
   (func (export "dbg_tracebuf") (result i32) (i32.const ${tracebuf}))
   (func $step
     (local $id i32) (local $p i32)
@@ -509,8 +544,45 @@ export async function* emitWat(rom, opts = {}) {
   yield `  (data (i32.const ${ROMIMG}) "${watBytes(ROMDATA)}")\n`;
   yield frameWat(narms, PACKED, PCTAB, img).replace("(call $initmap)", `(call $initmap) (i32.store (i32.const ${STATE + 0xf4}) (i32.const ${tracebuf}))`);
   yield ")\n";
-  if (opts.stats) Object.assign(opts.stats, { arms: narms, lowered: narms - bad, trapped: bad, shards: nsh, ramCodeArms: narms - Math.ceil(img.length / 2) });
+  if (breakAt !== null && !broken) throw new Error(`genesis recompile: options.breakArm $${breakAt.toString(16)} is not an instruction address of this cart`);
+  if (opts.stats) Object.assign(opts.stats, { arms: narms, lowered: narms - bad, trapped: bad, shards: nsh, ramCodeArms: narms - Math.ceil(img.length / 2), ...(broken ? { brokenArms: broken } : {}) });
   if (opts.onProgress) opts.onProgress(`genesis: ${narms} arms (${bad} untranslated)`);
+}
+
+/**
+ * options.breakArm (DEBUG / MUST-FAIL CONTROL): the arm at this 68000 address
+ * also flips bit 0 of d0 after it runs, so an instruction-level differ must
+ * name exactly this instruction. Pick a straight-line instruction.
+ * @param {unknown} v  a number or "$1234" / "0x1234" / "1234" hex
+ * @returns {number|null}
+ */
+function parseBreakArm(v) {
+  if (v == null) return null;
+  const n = typeof v === "number" ? v : parseInt(String(v).replace(/^\$|^0x/i, ""), 16);
+  if (!Number.isInteger(n) || n < 0 || n > 0xffffff || (n & 1)) throw new Error(`genesis recompile: options.breakArm must be an even 68000 address, got ${JSON.stringify(v)}`);
+  return n;
+}
+
+/**
+ * options.traceEntries: the $trace body with the registers. Called at the top
+ * of $step (the state the instruction starts from, as gpgx's dispatch hook
+ * sees it) and for interrupt-entry events (bit 31, skipped by the reader).
+ * @param {number} tracebuf
+ * @param {number} entries
+ */
+function regTraceWat(tracebuf, entries) {
+  const regs = Array.from({ length: 16 }, (_, i) => `
+        (i32.store offset=${16 + 4 * i} (local.get $e) (global.get $r${i}))`).join("");
+  return ` (local $e i32)
+    (if (i32.load (i32.const ${STATE + 0xF8}))
+      (then
+        (local.set $e (i32.add (i32.const ${tracebuf}) (i32.shl (i32.load (i32.const ${STATE + 0xFC})) (i32.const 7))))
+        (i32.store (local.get $e) (local.get $p))
+        (i32.store offset=4 (local.get $e) (global.get $mc))
+        (i32.store offset=8 (local.get $e) (global.get $refresh))
+        (i32.store offset=12 (local.get $e) (global.get $mcend))${regs}
+        (i32.store offset=80 (local.get $e) (call $get_sr))
+        (i32.store (i32.const ${STATE + 0xFC}) (i32.and (i32.add (i32.load (i32.const ${STATE + 0xFC})) (i32.const 1)) (i32.const ${entries - 1}))))))`;
 }
 
 function frameWat(narms, PACKED, PCTAB, img) {

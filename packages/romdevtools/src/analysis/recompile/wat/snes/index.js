@@ -57,11 +57,22 @@ const COPROCESSORS = {
 
 const MAPPINGS = { lorom: 0x7fc0, hirom: 0xffc0, exhirom: 0x40ffc0 };
 
+/** options.traceEntries: the register ring's entry size and maximum length. */
+const REGRING_STRIDE = 32;
+const REGRING_MAX = 1 << 18;
+
 /**
  * @typedef {object} SnesOptions
  * @property {number} [regwatchPc]  16-bit ROM address for the REGISTER WATCH probe (0/absent = off)
  * @property {Array<[number, number]>|string} [pcSkip]  extra pc-ring skip ranges, [[lo,hi],...] or "806B-806D,9A74-9A8A"
  * @property {number} [limit]  emit arms only for ROM offsets below this (tests / debugging)
+ * @property {number} [traceEntries]  ALSO record a ring WITH the 65816 registers for findDiverge
+ *   level:'instruction' (a power of two, 1024 to 262144; the entries are the ROM pc ring's, so
+ *   the same filter applies): 32 bytes {pc24, A | X<<16, Y | S<<16, D | DB<<16, P | E<<8}
+ *   above the cart's other memory. Off by default: the default module is unchanged.
+ * @property {number|string} [breakArm]  DEBUG / MUST-FAIL CONTROL: the arm at this 24-bit ROM
+ *   address (the $80 mirror is the same) also flips bit 0 of A after it runs, so an
+ *   instruction-level differ must name exactly this instruction
  * @property {object} [stats]  filled with {arms, lowered, interpreted, dual, reasons}
  */
 
@@ -135,6 +146,16 @@ export function describe(rom, opts = {}) {
   else if (best.mapping !== "lorom") refusal = `cart is ${best.mapping === "hirom" ? "HiROM" : "ExHiROM"} (map mode $${mapMode.toString(16)}); the SNES recompiler implements the LoROM memory map only`;
 
   const layout = computeLayout(img.length, sramMask, Math.max(1, opts.limit ? Math.min(opts.limit, img.length) : img.length));
+  const tn = opts.traceEntries;
+  if (tn != null) {
+    if (!Number.isInteger(tn) || tn < 1024 || tn > REGRING_MAX || (tn & (tn - 1))) {
+      throw new Error(`snes recompile: options.traceEntries must be a power of two from 1024 to ${REGRING_MAX}, got ${tn}`);
+    }
+    // above everything computeLayout placed, so the default map is untouched
+    layout.REGRING = layout.pages * 0x10000;
+    layout.REGRING_N = tn;
+    layout.pages += Math.ceil((tn * REGRING_STRIDE) / 0x10000);
+  }
   return {
     platform: "snes",
     referenceCore: "snes9x",
@@ -160,6 +181,8 @@ export function describe(rom, opts = {}) {
       regwatchPc: "16-bit ROM address: record (A, X, Y, P, $8D, D, [$00]) each time execution reaches it (REGWATCH probe)",
       pcSkip: "extra 16-bit pc ranges the ROM pc ring skips, [[lo,hi],...] or \"806B-806D,9A74-9A8A\"",
       limit: "emit arms only below this ROM offset (debugging)",
+      breakArm: "DEBUG / must-fail control: 24-bit ROM address whose arm also flips bit 0 of A",
+      traceEntries: "power of two 1024-262144: also record the 65816 registers per ROM instruction for findDiverge level:'instruction' (off by default)",
     },
   };
 }
@@ -235,11 +258,16 @@ export function recompileSection(rom, sha1, opts = {}) {
       romSha1: sha1 || null,
       mapping: d.mapping,
       warmupFrames: 0,
+      // the cart boots a game-dependent number of frames ahead of snes9x (no
+      // APU timing): the verify ops FIND the offset by picture, callers never
+      // pass one (recompile-section.js frameAlignment)
+      frameAlignment: "search",
       regions: L.regions,
       diagnosticRegions: L.diagnosticRegions,
       probe: L.probe.fields,
       trap: L.trap,
       pcRing: L.pcRing,
+      ...(opts.breakArm != null ? { debugBreakArm: parseBreakArm(opts.breakArm), warning: "built with options.breakArm: one instruction also flips bit 0 of A (a must-fail control), NOT a faithful cart" } : {}),
       // the ROM pc ring in recompile-section.js's `trace` schema: it records
       // ROM pcs only (bank < $7E, offset >= $8000) minus the skip ranges, so
       // the differ filters the reference the same way
@@ -248,6 +276,16 @@ export function recompileSection(rom, sha1, opts = {}) {
         cursor: { offset: L.probe.fields.npc.offset, mode: "count" },
         pc: { offset: 0, mask: 0xffffff },
         filter: { romOnly: "snesLoRom", skip: [...PCRING_SKIP_DEFAULT, ...parsePcSkip(opts.pcSkip)] },
+        ...(d.memory.REGRING != null ? {
+          offset: d.memory.REGRING, entries: d.memory.REGRING_N, stride: REGRING_STRIDE,
+          fields: {
+            a: { offset: 4, mask: 0xffff }, x: { offset: 4, shift: 16, mask: 0xffff },
+            y: { offset: 8, mask: 0xffff }, s: { offset: 8, shift: 16, mask: 0xffff },
+            d: { offset: 12, mask: 0xffff }, db: { offset: 12, shift: 16, mask: 0xff },
+            p: { offset: 16, mask: 0x1ff },
+          },
+          note: "options.traceEntries: registers before each ROM instruction (p = the status byte, emulation flag at bit 8), compared with snes9x's per-instruction columns",
+        } : {}),
       },
       framebuffer: L.framebuffer,
       vramZero: ["vram"],
@@ -258,6 +296,25 @@ export function recompileSection(rom, sha1, opts = {}) {
 
 /** ROM offset -> [bank, 16-bit address] under the LoROM map. */
 const loromAddr = (off) => [off >> 15, 0x8000 + (off & 0x7fff)];
+/** ROM offset -> 24-bit address with the bank's $80 mirror folded. */
+const armAddr = (off) => { const [b, a] = loromAddr(off); return ((b & 0x7f) << 16) | a; };
+
+/**
+ * options.breakArm as a 24-bit address with the $80 mirror folded.
+ * @param {unknown} v  a number or "$808123" / "0x808123" / "808123" hex
+ * @returns {number|null}
+ */
+function parseBreakArm(v) {
+  if (v == null) return null;
+  const n = typeof v === "number" ? v : parseInt(String(v).replace(/^\$|^0x/i, ""), 16);
+  if (!Number.isInteger(n) || n < 0 || n > 0xffffff) throw new Error(`snes recompile: options.breakArm must be a 24-bit address, got ${JSON.stringify(v)}`);
+  return (((n >>> 16) & 0x7f) << 16) | (n & 0xffff);
+}
+/** @param {any} stats */
+function breakFlip(stats) {
+  stats.brokenArms = (stats.brokenArms ?? 0) + 1;
+  return " (global.set $a (i32.xor (global.get $a) (i32.const 1)))";
+}
 
 const HEXESC = Array.from({ length: 256 }, (_, i) => "\\" + i.toString(16).padStart(2, "0"));
 
@@ -306,6 +363,7 @@ export async function* emitWat(rom, opts = {}) {
   const lay = d.memory;
   const narms = lay.narms;
   const stats = opts.stats ?? {};
+  const breakAt = parseBreakArm(opts.breakArm);
   Object.assign(stats, { arms: narms, lowered: 0, interpreted: 0, trapped: 0, dual: 0, reasons: {} });
 
   yield `(module\n  (memory (export "memory") ${lay.pages})`;
@@ -336,10 +394,13 @@ export async function* emitWat(rom, opts = {}) {
     for (let i = 0; i < cnt; i++) {
       const a = lo + i;
       lines.push(`    ) ;; $s${i} @ ${a.toString(16).toUpperCase().padStart(6, "0")}`);
-      lines.push(`    ${armCode(img, a, stats)} (return)`);
+      lines.push(`    ${armCode(img, a, stats)}${breakAt !== null && armAddr(a) === breakAt ? breakFlip(stats) : ""} (return)`);
     }
     lines.push("    (call $trap))");
     yield "\n" + lines.join("\n");
+  }
+  if (breakAt !== null) {
+    if (!stats.brokenArms) throw new Error(`snes recompile: options.breakArm $${breakAt.toString(16)} is not a ROM address of this cart`);
   }
 
   const skip = [...PCRING_SKIP_DEFAULT, ...parsePcSkip(opts.pcSkip)];

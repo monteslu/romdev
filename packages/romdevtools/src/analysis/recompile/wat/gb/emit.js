@@ -86,11 +86,57 @@ export function gbLayout(romLen) {
   return { romEnd, FB, ABI, PCTAB, PCSPAN, PACKED, INPUT: ABI + 0x100, TIME: ABI + 0x180 };
 }
 
+/**
+ * The options.traceEntries ring stores for the instruction about to run: the
+ * registers it starts from, as gambatte's dispatch hook records them.
+ * @param {{cursor:number, offset:number, entries:number}} big
+ */
+function bigRingWat(big) {
+  const pair = (hi, lo) => `(i32.or (i32.shl (global.get $${hi}) (i32.const 8)) (global.get $${lo}))`;
+  return `
+    (local.set $tr (i32.add (i32.const ${big.offset})
+      (i32.shl (i32.and (i32.load (i32.const ${big.cursor})) (i32.const ${big.entries - 1})) (i32.const 5))))
+    (i32.store (i32.const ${big.cursor}) (i32.add (i32.load (i32.const ${big.cursor})) (i32.const 1)))
+    (i32.store (local.get $tr) (global.get $pc))
+    (i32.store offset=4 (local.get $tr) (global.get $rombank))
+    (i32.store offset=8 (local.get $tr) (global.get $sp))
+    (i32.store offset=12 (local.get $tr) ${pair("h", "l")})
+    (i32.store offset=16 (local.get $tr) ${pair("b", "c")})
+    (i32.store offset=20 (local.get $tr) ${pair("d", "e")})
+    (i32.store offset=24 (local.get $tr) ${pair("a", "f")})`;
+}
+
 /** RAM-code provenance table base and the page count, given the arm count. */
 export function gbOriginAndPages(L, nArms) {
   const ORIGIN = (L.PACKED + nArms * 8 + 0x1000 + 0xFFF) & ~0xFFF;
   const pages = Math.floor((ORIGIN + 0x8080 * 4 + 0xFFFF) / 65536) + 1;
   return { ORIGIN, pages };
+}
+
+/** options.traceEntries: the whole-frame ring's entry size and maximum length. */
+export const BIGRING_STRIDE = 32;
+export const BIGRING_MAX = 65536;
+
+/**
+ * options.traceEntries: where the whole-frame instruction ring goes (above
+ * everything gbOriginAndPages placed, so the default map is untouched) and
+ * the page count with it. A u32 count of entries written at `cursor`, then
+ * the entries (32 bytes): {pc, rombank, sp, hl, bc, de, a<<8|f}, written for
+ * EVERY dispatched instruction, before the RAM interpreter takes the ones it
+ * runs (the default ring records compiled arms only, so an HRAM routine such
+ * as an OAM DMA wait loop is missing from it).
+ * @param {number} romLen
+ * @param {number} nArms  arm count (one per ROM offset)
+ * @param {number} entries  a power of two, 1024 to BIGRING_MAX
+ */
+export function gbBigRing(romLen, nArms, entries) {
+  if (!Number.isInteger(entries) || entries < 1024 || entries > BIGRING_MAX || (entries & (entries - 1))) {
+    throw new Error(`gb recompile: options.traceEntries must be a power of two from 1024 to ${BIGRING_MAX}, got ${entries}`);
+  }
+  const { pages } = gbOriginAndPages(gbLayout(romLen), nArms);
+  const cursor = pages * 65536;
+  const offset = cursor + 256;
+  return { cursor, offset, entries, stride: BIGRING_STRIDE, pages: pages + Math.ceil((256 + entries * BIGRING_STRIDE) / 65536) };
 }
 
 const hex = (n, w) => n.toString(16).toUpperCase().padStart(w, "0");
@@ -742,7 +788,9 @@ export function* emitGbWat(img, blocks, o) {
   const { FB, ABI, PCTAB, PCSPAN, PACKED } = L;
   const [WATCH_LO, WATCH_HI] = o.watch ?? [0x10000, 0];
   const addrs = [...blocks.keys()].sort((a, b) => a - b);
-  const { ORIGIN, pages } = gbOriginAndPages(L, addrs.length);
+  const { ORIGIN, pages: basePages } = gbOriginAndPages(L, addrs.length);
+  const big = o.traceEntries != null ? gbBigRing(IMGLEN, addrs.length, o.traceEntries) : null;
+  const pages = big ? big.pages : basePages;
   const mask = Math.max(1, IMGLEN) - 1;
 
   const cyclesFor = (off) => {
@@ -780,7 +828,7 @@ export function* emitGbWat(img, blocks, o) {
   yield part(ramTemplatesWat(img, blocks));
 
   // ---- one arm per ROM offset ----
-  let ok = 0, bad = 0;
+  let ok = 0, bad = 0, broken = 0;
   const bodyFor = (a) => {
     const rec = blocks.get(a);
     // THE FALLTHROUGH ADDRESS IS A CPU ADDRESS, NOT A ROM OFFSET: `$pc` holds
@@ -791,6 +839,11 @@ export function* emitGbWat(img, blocks, o) {
     let body, flow;
     try { [body, flow] = lower(rec.m, rec.o ?? "", cpuAddr(a), nxt); ok++; }
     catch { body = "(call $trap)"; flow = null; bad++; }
+    if (o.breakArm != null && cpuAddr(a) === o.breakArm) {
+      // DEBUG / MUST-FAIL CONTROL (options.breakArm): flip bit 0 of L after the instruction
+      body += " (global.set $l (i32.xor (global.get $l) (i32.const 1)))";
+      broken++;
+    }
     let tail;
     if (flow === null) tail = `(global.set $pc (i32.const ${nxt}))`;
     else if (flow.kind === "jp") tail = `(global.set $pc (i32.const ${flow.target}))`;
@@ -842,7 +895,7 @@ export function* emitGbWat(img, blocks, o) {
   yield part(`
   (func $exec
     (local $id i32)
-    (local $rs i32)
+    (local $rs i32)${big ? "\n    (local $tr i32)" : ""}
     ;; LY must be LIVE inside a line, not only between lines: a game that
     ;; polls \`ldh a,($44)\` until LY == N spins forever if the value is
     ;; constant for the whole 456-cycle line it polls in (shocklobster does
@@ -856,7 +909,7 @@ export function* emitGbWat(img, blocks, o) {
     ;; drifted against the real per-instruction costs, which cost Flappyboy
     ;; its exact match.
     
-    (global.set $curpc (global.get $pc))
+    (global.set $curpc (global.get $pc))${big ? bigRingWat(big) : ""}
     (if (i32.ge_u (global.get $pc) (i32.const 0x8000)) (then (if (call $ram_interp) (then (return)))))
     ;; pc -> ROM OFFSET. $0000-$3FFF is fixed bank 0; $4000-$7FFF is the
     ;; switched bank, so its offset depends on $rombank. Above $8000 the pc
@@ -1071,5 +1124,6 @@ export function* emitGbWat(img, blocks, o) {
 `);
   yield part(`  (data (i32.const ${ROMIMG}) "${watBytes(img)}")`);
   yield part(")");
-  if (o.stats) Object.assign(o.stats, { arms: addrs.length, lowered: ok, trapped: bad, shards: nShards, pages, origin: ORIGIN });
+  if (o.breakArm != null && !broken) throw new Error(`gb recompile: options.breakArm $${o.breakArm.toString(16)} is not an instruction address of this cart`);
+  if (o.stats) Object.assign(o.stats, { arms: addrs.length, lowered: ok, trapped: bad, shards: nShards, pages, origin: ORIGIN, ...(broken ? { brokenArms: broken } : {}) });
 }

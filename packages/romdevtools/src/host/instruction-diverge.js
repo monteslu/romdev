@@ -29,7 +29,9 @@
 //    until it changes a branch (and a register can differ and reconverge, so
 //    bisecting on "registers differ" finds A transition, not the first). When
 //    the cart's trace carries registers the core also records per instruction
-//    (GBA: r0-r15, cpsr; GB: sp, hl), every matched instruction's registers
+//    (GBA: r0-r15, cpsr; and with the backends' options.traceEntries rings:
+//    NES a/x/y/s/p, GB sp/hl/bc/de, SMS/GG af/bc/de/hl/ix/iy/sp/r/af'../i,
+//    Genesis d0-d7/a0-a7/sr, SNES a/x/y/s/d/db/p), every matched instruction's registers
 //    are compared, and the instruction that first produced a different value
 //    is named. Elsewhere the reference CPU state at the divergence is read by
 //    stopping a replay with the instruction watchdog.
