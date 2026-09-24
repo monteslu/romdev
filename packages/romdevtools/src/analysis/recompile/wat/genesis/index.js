@@ -70,6 +70,16 @@ function padRom(img) {
   return rom;
 }
 
+/**
+ * gpgx getrominfo/input_init: 6-button pads when any of the 14 I/O support
+ * bytes at $190 is '6'.
+ * @param {Uint8Array} img
+ */
+export function sixButtonPads(img) {
+  for (let i = 0; i < 14; i++) if (img[0x190 + i] === 0x36) return true;
+  return false;
+}
+
 /** loadrom.c: USA > JAPAN > EUROPE from the header country field. */
 export function regionCode(img) {
   const s = String.fromCharCode(...img.subarray(0x1f0, 0x1f4));
@@ -287,6 +297,9 @@ export function describe(rom, opts = {}) {
     title: txt(0x150, 0x180) || txt(0x120, 0x150), // overseas name, else domestic (ASCII only)
     regionField: txt(0x1f0, 0x1f4),
     regionCode: regionCode(img),
+    // gpgx input_init: a '6' in the header's I/O support field ($190-$19D)
+    // connects 6-button pads, anything else 3-button ones
+    sixButton: sixButtonPads(img),
     ramCode,
     arms: narms,
     shards: Math.ceil(narms / SH),
@@ -443,7 +456,7 @@ export async function* emitWat(rom, opts = {}) {
   yield RT.globalsWat();
   yield RT.cpuWat();
   yield RT.memWat(ROMIMG, ROMSIZE);
-  yield RT.ioWat();
+  yield RT.ioWat({ sixButton: sixButtonPads(img) });
   yield RT.vdpWat();
   yield RT.renderWat();
   // the Z80: one function per opcode handler, dispatched via the table
@@ -647,18 +660,11 @@ function frameWat(narms, PACKED, PCTAB, img) {
     (if (i32.eqz (global.get $v_h_counter))
       (then (global.set $v_hint_pending (i32.const 0x10))
             (if (i32.and ${R(0)} (i32.const 0x10)) (then (call $update_irq (i32.const 4))))))
-    ;; osd_input_update: the pad state the game sees for this whole frame
-    (local.set $b (i32.load16_u (i32.const ${ABI + 288})))
-    (local.set $p (i32.const 0))
-    (if (i32.and (local.get $b) (i32.const 0x100)) (then (local.set $p (i32.or (local.get $p) (i32.const 0x01)))))
-    (if (i32.and (local.get $b) (i32.const 0x200)) (then (local.set $p (i32.or (local.get $p) (i32.const 0x02)))))
-    (if (i32.and (local.get $b) (i32.const 0x400)) (then (local.set $p (i32.or (local.get $p) (i32.const 0x04)))))
-    (if (i32.and (local.get $b) (i32.const 0x800)) (then (local.set $p (i32.or (local.get $p) (i32.const 0x08)))))
-    (if (i32.and (local.get $b) (i32.const 0x001)) (then (local.set $p (i32.or (local.get $p) (i32.const 0x10)))))
-    (if (i32.and (local.get $b) (i32.const 0x002)) (then (local.set $p (i32.or (local.get $p) (i32.const 0x20)))))
-    (if (i32.and (local.get $b) (i32.const 0x004)) (then (local.set $p (i32.or (local.get $p) (i32.const 0x40)))))
-    (if (i32.and (local.get $b) (i32.const 0x040)) (then (local.set $p (i32.or (local.get $p) (i32.const 0x80)))))
-    (global.set $pad0 (local.get $p))
+    (call $input_refresh)
+    ;; osd_input_update: the pad state the game sees for this whole frame,
+    ;; both ports (wasmcart pads 0 and 1)
+    (global.set $pad0 (call $pad_bits (i32.load16_u (i32.const ${ABI + 288}))))
+    (global.set $pad1 (call $pad_bits (i32.load16_u (i32.const ${ABI + 304}))))
     (if (i32.ne (global.get $v_v_counter) (global.get $vp_h))
       (then
         (global.set $v_v_counter (global.get $vp_h))
@@ -677,6 +683,7 @@ function frameWat(narms, PACKED, PCTAB, img) {
     (local.set $line (i32.add (global.get $vp_h) (i32.const 1)))
     (block $d (loop $l
       (global.set $v_v_counter (local.get $line))
+      (call $input_refresh)
       (call $m68k_run (i32.add (global.get $mcvdp) (i32.const 3420)))
     (if (i32.eq (global.get $zstate) (i32.const 1)) (then (call $z80_run (i32.add (global.get $mcvdp) (i32.const 3420)))))
       (global.set $mcvdp (i32.add (global.get $mcvdp) (i32.const 3420)))
@@ -687,6 +694,7 @@ function frameWat(narms, PACKED, PCTAB, img) {
     (global.set $v_status (i32.and (global.get $v_status) (i32.const -9)))
     (if (global.get $v_dma_length) (then (call $dma_update (global.get $mcvdp))))
     (if (i32.and ${R(1)} (i32.const 0x40)) (then (if (i32.and ${R(1)} (i32.const 4)) (then (call $parse_satb (i32.const -1))))))
+    (call $input_refresh)
     (call $m68k_run (i32.add (global.get $mcvdp) (i32.const 3420)))
     (if (i32.eq (global.get $zstate) (i32.const 1)) (then (call $z80_run (i32.add (global.get $mcvdp) (i32.const 3420)))))
     (global.set $mcvdp (i32.add (global.get $mcvdp) (i32.const 3420)))
@@ -695,6 +703,7 @@ function frameWat(narms, PACKED, PCTAB, img) {
       (global.set $v_v_counter (local.get $line))
       (if (global.get $v_dma_length) (then (call $dma_update (global.get $mcvdp))))
       (call $render_line (local.get $line))
+      (call $input_refresh)
       (if (i32.eqz (global.get $v_h_counter))
         (then (global.set $v_h_counter ${R(10)})
               (global.set $v_hint_pending (i32.const 0x10))
@@ -728,6 +737,25 @@ function frameWat(narms, PACKED, PCTAB, img) {
     (global.set $mc (i32.sub (global.get $mc) (global.get $mcvdp)))
     (global.set $v_dma_end (i32.const 0))
     (global.set $frames (i32.add (global.get $frames) (i32.const 1))))
+
+  ;; wasmcart buttons (by position) -> gpgx INPUT_* as its libretro port maps
+  ;; the RetroPad: south B, east C, west A; 6-button pads add L X, north Y,
+  ;; R Z, SELECT MODE
+  (func $pad_bits (param $b i32) (result i32)
+    (local $p i32)
+    (if (i32.and (local.get $b) (i32.const 0x100)) (then (local.set $p (i32.or (local.get $p) (i32.const 0x01)))))
+    (if (i32.and (local.get $b) (i32.const 0x200)) (then (local.set $p (i32.or (local.get $p) (i32.const 0x02)))))
+    (if (i32.and (local.get $b) (i32.const 0x400)) (then (local.set $p (i32.or (local.get $p) (i32.const 0x04)))))
+    (if (i32.and (local.get $b) (i32.const 0x800)) (then (local.set $p (i32.or (local.get $p) (i32.const 0x08)))))
+    (if (i32.and (local.get $b) (i32.const 0x001)) (then (local.set $p (i32.or (local.get $p) (i32.const 0x10)))))
+    (if (i32.and (local.get $b) (i32.const 0x002)) (then (local.set $p (i32.or (local.get $p) (i32.const 0x20)))))
+    (if (i32.and (local.get $b) (i32.const 0x004)) (then (local.set $p (i32.or (local.get $p) (i32.const 0x40)))))
+    (if (i32.and (local.get $b) (i32.const 0x040)) (then (local.set $p (i32.or (local.get $p) (i32.const 0x80)))))${sixButtonPads(img) ? `
+    (if (i32.and (local.get $b) (i32.const 0x010)) (then (local.set $p (i32.or (local.get $p) (i32.const 0x400)))))
+    (if (i32.and (local.get $b) (i32.const 0x008)) (then (local.set $p (i32.or (local.get $p) (i32.const 0x200)))))
+    (if (i32.and (local.get $b) (i32.const 0x020)) (then (local.set $p (i32.or (local.get $p) (i32.const 0x100)))))
+    (if (i32.and (local.get $b) (i32.const 0x080)) (then (local.set $p (i32.or (local.get $p) (i32.const 0x800)))))` : ""}
+    (local.get $p))
 
   (func $initmap
     (local $i i32) (local $p i32)

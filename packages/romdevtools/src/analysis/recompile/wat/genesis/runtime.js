@@ -315,7 +315,9 @@ const GLOBAL_NAMES = ["sp0", "sp4", "pc", "fx", "fn", "fz", "fv", "fc", "fs", "f
   // io / z80 bus
   "zstate", "pad0", "pad1", "th0_state", "th0_lat", "th1_state", "th1_lat",
   "region", "frames", "nvint", "nhint", "ndma", "nz80r", "z80rpc", "nlock",
-  "lockpc", "ymread", "fm_busy", "ym_status", "z80irq", "nredraw", "nm4", "nim2"];
+  "lockpc", "ymread", "fm_busy", "ym_status", "z80irq", "nredraw", "nm4", "nim2",
+  // 6-button pads (gamepad.c Counter / Timeout per port)
+  "th0_cnt", "th0_to", "th1_cnt", "th1_to"];
 
 export function globalsWat() {
   const g = [];
@@ -657,8 +659,11 @@ export function memWat(romimg, romsize) {
 `;
 }
 
-// I/O chip (io_ctrl.c) + 3-button pad (input_hw/gamepad.c)
-export function ioWat() {
+// I/O chip (io_ctrl.c) + 3- or 6-button pads (input_hw/gamepad.c). gpgx
+// connects 6-button pads when the header's I/O field lists '6'
+// (input_init: rominfo.peripherals & 2), 3-button ones otherwise.
+export function ioWat(opts = {}) {
+  const six = !!opts.sixButton;
   const IOR = PROBE + 0x30; // io_reg[16]
   return `
   (func $ioreg (param $i i32) (result i32) (i32.load8_u (i32.add (i32.const ${IOR}) (local.get $i))))
@@ -676,17 +681,25 @@ export function ioWat() {
     (call $ioreg_set (i32.const 15) (i32.const 0))
     (global.set $th0_state (i32.const 0x40)) (global.set $th1_state (i32.const 0x40)))
 
-  ;; gamepad_read (3-button). pad bits: UP 1 DOWN 2 LEFT 4 RIGHT 8 B 0x10 C 0x20
-  ;; A 0x40 START 0x80 (gpgx INPUT_*).
+  ;; gamepad_read. pad bits: UP 1 DOWN 2 LEFT 4 RIGHT 8 B 0x10 C 0x20
+  ;; A 0x40 START 0x80 Z 0x100 Y 0x200 X 0x400 MODE 0x800 (gpgx INPUT_*).
   (func $gamepad_read (param $port i32) (result i32)
     (local $data i32) (local $pad i32) (local $step i32) (local $st i32) (local $lat i32)
     (local.set $st (select (global.get $th1_state) (global.get $th0_state) (local.get $port)))
     (local.set $lat (select (global.get $th1_lat) (global.get $th0_lat) (local.get $port)))
     (local.set $pad (select (global.get $pad1) (global.get $pad0) (local.get $port)))
     (local.set $data (i32.or (local.get $st) (i32.const 0x3F)))
-    (local.set $step (i32.shr_u (local.get $data) (i32.const 6)))
+    (local.set $step (i32.or (select (global.get $th1_cnt) (global.get $th0_cnt) (local.get $port))
+                             (i32.shr_u (local.get $data) (i32.const 6))))
     (if (i32.lt_s (global.get $mc) (local.get $lat))
       (then (local.set $step (i32.and (local.get $step) (i32.const -2)))))
+    ;; 6-button sequence: 3rd low = signature, 4th high = MXYZ, 4th low = 1111
+    (if (i32.eq (local.get $step) (i32.const 4))
+      (then (return (i32.and (local.get $data) (i32.xor (i32.or (i32.and (i32.shr_u (local.get $pad) (i32.const 2)) (i32.const 0x30)) (i32.const 0x0F)) (i32.const -1))))))
+    (if (i32.eq (local.get $step) (i32.const 7))
+      (then (return (i32.and (local.get $data) (i32.xor (i32.or (i32.and (local.get $pad) (i32.const 0x30)) (i32.and (i32.shr_u (local.get $pad) (i32.const 8)) (i32.const 0x0F))) (i32.const -1))))))
+    (if (i32.eq (local.get $step) (i32.const 6))
+      (then (return (i32.and (local.get $data) (i32.xor (i32.and (i32.shr_u (local.get $pad) (i32.const 2)) (i32.const 0x30)) (i32.const -1))))))
     (if (i32.and (local.get $step) (i32.const 1))
       (then (local.set $data (i32.and (local.get $data)
               (i32.xor (i32.and (local.get $pad) (i32.const 0x3F)) (i32.const -1)))))
@@ -700,7 +713,14 @@ export function ioWat() {
     (if (i32.and (local.get $mask) (i32.const 0x40))
       (then (local.set $data (i32.and (local.get $data) (i32.const 0x40)))
             (if (local.get $port) (then (global.set $th1_lat (i32.const 0)))
-                                  (else (global.set $th0_lat (i32.const 0)))))
+                                  (else (global.set $th0_lat (i32.const 0))))${six ? `
+            ;; 6-button pad: count TH 0->1 transitions (up to 4)
+            (if (i32.and (i32.ne (local.get $data) (i32.const 0)) (i32.eqz (select (global.get $th1_state) (global.get $th0_state) (local.get $port))))
+              (then (if (local.get $port)
+                      (then (if (i32.lt_u (global.get $th1_cnt) (i32.const 8))
+                              (then (global.set $th1_cnt (i32.add (global.get $th1_cnt) (i32.const 2))) (global.set $th1_to (i32.const 0)))))
+                      (else (if (i32.lt_u (global.get $th0_cnt) (i32.const 8))
+                              (then (global.set $th0_cnt (i32.add (global.get $th0_cnt) (i32.const 2))) (global.set $th0_to (i32.const 0))))))))` : ""})
       (else
         (local.set $data (i32.const 0x40))
         (if (local.get $port)
@@ -710,6 +730,14 @@ export function ioWat() {
                   (then (global.set $th0_lat (i32.add (global.get $mc) (i32.const 172)))))))))
     (if (local.get $port) (then (global.set $th1_state (local.get $data)))
                           (else (global.set $th0_state (local.get $data)))))
+
+  ;; input_refresh -> gamepad_refresh, once a line: a 6-button pad drops
+  ;; back to the start of its sequence when TH stops toggling
+  (func $input_refresh${six ? `
+    (if (i32.gt_u (global.get $th0_to) (i32.const 25)) (then (global.set $th0_cnt (i32.const 0)) (global.set $th0_to (i32.const 0)))
+      (else (global.set $th0_to (i32.add (global.get $th0_to) (i32.const 1)))))
+    (if (i32.gt_u (global.get $th1_to) (i32.const 25)) (then (global.set $th1_cnt (i32.const 0)) (global.set $th1_to (i32.const 0)))
+      (else (global.set $th1_to (i32.add (global.get $th1_to) (i32.const 1)))))` : ""})
 
   (func $port_data_r (param $i i32) (result i32)
     (if (i32.eq (local.get $i) (i32.const 0)) (then (return (call $gamepad_read (i32.const 0)))))
