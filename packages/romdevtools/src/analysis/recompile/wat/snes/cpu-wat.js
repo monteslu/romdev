@@ -12,7 +12,7 @@
 // Plain JS ESM + JSDoc.
 
 import {
-  WRAM, SRAMB, PPUREG, INPUT, MAPTAB, ICOST, OPTAB, HDMAST, DPWATCH, DMALOG, DMALOG_N, DMALOG_STRIDE,
+  WRAM, PPUREG, INPUT, MAPTAB, HDMAST, DPWATCH, DMALOG, DMALOG_N, DMALOG_STRIDE,
 } from "./layout.js";
 import { ppuGlobalsWat } from "./ppu-wat.js";
 
@@ -113,6 +113,8 @@ export function globalsWat(lay) {
   (global $istart (mut i32) (i32.const 0))
   (global $iio (mut i32) (i32.const 0))
   (global $ifl (mut i32) (i32.const 0))
+  ;; STP is re-executing (snes9x OpDB: PCw--, no cycles of its own)
+  (global $stp (mut i32) (i32.const 0))
   (global $nmiearly (mut i32) (i32.const 0))
   (global $hmax (mut i32) (i32.const 1364))
   (global $refpos (mut i32) (i32.const 538))
@@ -122,10 +124,13 @@ export function globalsWat(lay) {
   (global $wai (mut i32) (i32.const 0))
   (global $hpos (mut i32) (i32.const 0))
   (global $segend (mut i32) (i32.const 0))
-  ;; The H/V timer IRQ position in this line (99999 = none), the frame-end
+  ;; The H/V timer IRQ position (snes9x Timings.NextIRQTimer, $0FFFFFFF = none), the frame-end
   ;; flag, and a general DMA running (with the HDMA channels that ran
   ;; inside it, snes9x CPU.HDMARanInDMA).
-  (global $ipos (mut i32) (i32.const 99999))
+  (global $ipos (mut i32) (i32.const 0x0FFFFFFF))
+  ;; V_Max (262; 263 on an interlaced even field) and IPPU.Interlace
+  (global $vmax (mut i32) (i32.const 262))
+  (global $interlace (mut i32) (i32.const 0))
   (global $fdone (mut i32) (i32.const 0))
   (global $ingdma (mut i32) (i32.const 0))
   (global $hdmaran (mut i32) (i32.const 0))
@@ -212,12 +217,12 @@ export function memWat(lay) {
         (then (return (call $io_read (local.get $x)))))
       (return (global.get $ob)))
       ;; LoROM SRAM: ((bank >> 1) | offset & $7FFF) & SRAMMask.
-      (return (i32.load8_u (i32.add (i32.const ${SRAMB})
+      (return (i32.load8_u (i32.add (i32.const ${lay.SRAM})
         (i32.and (i32.or (i32.shr_u (i32.and (local.get $a) (i32.const 0xFF0000)) (i32.const 1))
                          (i32.and (local.get $a) (i32.const 0x7FFF)))
                  (i32.const ${lay.sram}))))))
       ;; HiROM SRAM: (offset - $6000 + (bank & $1F) * $2000) & SRAMMask.
-      (return (i32.load8_u (i32.add (i32.const ${SRAMB})
+      (return (i32.load8_u (i32.add (i32.const ${lay.SRAM})
         (i32.and (i32.add (i32.sub (i32.and (local.get $a) (i32.const 0x7FFF)) (i32.const 0x6000))
                           (i32.shr_u (i32.and (local.get $a) (i32.const 0x1F0000)) (i32.const 3)))
                  (i32.const ${lay.sram}))))))
@@ -253,6 +258,41 @@ export function memWat(lay) {
     (i32.or (call $rd8 (local.get $a))
             (i32.shl (call $rd8 (i32.add (local.get $a) (i32.const 1)))
                      (i32.const 8))))
+
+  ;; One-byte push / pull: PushB / PullB, or in emulation mode PushBE /
+  ;; PullBE (S stays in page 1).
+  (func $push8 (param $v i32)
+    (call $wr8 (global.get $s) (i32.and (local.get $v) (i32.const 0xFF)))
+    (global.set $s (if (result i32) (global.get $fe)
+      (then (i32.or (i32.and (global.get $s) (i32.const 0xFF00)) (i32.and (i32.sub (global.get $s) (i32.const 1)) (i32.const 0xFF))))
+      (else (i32.and (i32.sub (global.get $s) (i32.const 1)) (i32.const 0xFFFF))))))
+  (func $pull8 (result i32)
+    (global.set $s (if (result i32) (global.get $fe)
+      (then (i32.or (i32.and (global.get $s) (i32.const 0xFF00)) (i32.and (i32.add (global.get $s) (i32.const 1)) (i32.const 0xFF))))
+      (else (i32.and (i32.add (global.get $s) (i32.const 1)) (i32.const 0xFFFF)))))
+    (call $rd8 (global.get $s)))
+  ;; PushWE: SL--, S9xSetWord(w, S, WRAP_PAGE, WRITE_10), SL--.
+  (func $push16e (param $v i32)
+    (local $a i32)
+    (local.set $a (i32.or (i32.and (global.get $s) (i32.const 0xFF00)) (i32.and (i32.sub (global.get $s) (i32.const 1)) (i32.const 0xFF))))
+    (if (i32.eq (i32.and (local.get $a) (i32.const 0xFF)) (i32.const 0xFF))
+      (then (call $wr8 (i32.and (local.get $a) (i32.const 0xFF00)) (i32.shr_u (local.get $v) (i32.const 8)))
+            (call $wr8 (local.get $a) (i32.and (local.get $v) (i32.const 0xFF))))
+      (else (if (call $fast2 (local.get $a) (i32.const 2))
+        (then (call $wr16fast (local.get $a) (local.get $v)))
+        (else (call $wr8 (i32.add (local.get $a) (i32.const 1)) (i32.shr_u (local.get $v) (i32.const 8)))
+              (call $wr8 (local.get $a) (i32.and (local.get $v) (i32.const 0xFF)))))))
+    (global.set $s (i32.or (i32.and (local.get $a) (i32.const 0xFF00)) (i32.and (i32.sub (local.get $a) (i32.const 1)) (i32.const 0xFF)))))
+  ;; PullWE: SL++, S9xGetWord(S, WRAP_PAGE), SL++.
+  (func $pull16e (result i32)
+    (local $a i32) (local $v i32)
+    (local.set $a (i32.or (i32.and (global.get $s) (i32.const 0xFF00)) (i32.and (i32.add (global.get $s) (i32.const 1)) (i32.const 0xFF))))
+    (if (i32.eq (i32.and (local.get $a) (i32.const 0xFF)) (i32.const 0xFF))
+      (then (local.set $v (call $rd8 (local.get $a)))
+            (local.set $v (i32.or (local.get $v) (i32.shl (call $rd8 (i32.and (local.get $a) (i32.const 0xFF00))) (i32.const 8)))))
+      (else (local.set $v (call $rd16 (local.get $a)))))
+    (global.set $s (i32.or (i32.and (local.get $a) (i32.const 0xFF00)) (i32.and (i32.add (local.get $a) (i32.const 1)) (i32.const 0xFF))))
+    (local.get $v))
 
   ;; snes9x PushW: S9xSetWord(w, S - 1, WRAP_BANK, WRITE_10), S -= 2.
   (func $push16 (param $v i32)
@@ -440,13 +480,13 @@ export function memWat(lay) {
       (return))
       ;; SRAM writes need an SRAM (snes9x: if (Memory.SRAMMask)).
       ${lay.sram ? "" : ";; this cart has no SRAM: writes are dropped\n      (return)"}
-      (i32.store8 (i32.add (i32.const ${SRAMB})
+      (i32.store8 (i32.add (i32.const ${lay.SRAM})
         (i32.and (i32.or (i32.shr_u (i32.and (local.get $a) (i32.const 0xFF0000)) (i32.const 1))
                          (i32.and (local.get $a) (i32.const 0x7FFF)))
                  (i32.const ${lay.sram}))) (local.get $v))
       (return))
       ${lay.sram ? "" : "(return)"}
-      (i32.store8 (i32.add (i32.const ${SRAMB})
+      (i32.store8 (i32.add (i32.const ${lay.SRAM})
         (i32.and (i32.add (i32.sub (i32.and (local.get $a) (i32.const 0x7FFF)) (i32.const 0x6000))
                           (i32.shr_u (i32.and (local.get $a) (i32.const 0x1F0000)) (i32.const 3)))
                  (i32.const ${lay.sram}))) (local.get $v))
@@ -457,11 +497,18 @@ export function memWat(lay) {
   ;; the result registers ($4214-$4217) are written INTO it by the unit so a
   ;; plain shadow read returns them.
   (func $io_write (param $r i32) (param $v i32)
-    (local $p i32) (local $q i32)
+    (local $p i32) (local $q i32) (local $old i32)
+    (local.set $old (call $io_reg (local.get $r)))
     (i32.store8 (i32.add (i32.const ${PPUREG + 0x80})
       (i32.and (local.get $r) (i32.const 0x1FF))) (local.get $v))
+    ;; HTIME / VTIME: a changed value moves the timer (S9xUpdateIRQPositions).
+    (if (i32.and (i32.ge_u (local.get $r) (i32.const 0x4207)) (i32.le_u (local.get $r) (i32.const 0x420A)))
+      (then (if (i32.ne (local.get $v) (local.get $old))
+              (then (call $irq_update (i32.ge_u (local.get $r) (i32.const 0x4209)))))
+            (return)))
     (if (i32.eq (local.get $r) (i32.const 0x4200))
       (then
+        (if (i32.eq (local.get $v) (local.get $old)) (then (return)))
         ;; Enabling NMI while the vblank flag is already set fires it.
         (if (i32.and (i32.and (i32.eqz (global.get $nmien))
                               (i32.ne (i32.and (local.get $v) (i32.const 0x80))
@@ -475,6 +522,10 @@ export function memWat(lay) {
         (global.set $nmien (i32.and (local.get $v) (i32.const 0x80)))
         (if (i32.eqz (i32.and (local.get $v) (i32.const 0x30)))
           (then (global.set $irqline (i32.const 0))))
+        ;; "Only allow instantaneous IRQ if turning it completely on or off"
+        (if (i32.ne (i32.and (local.get $v) (i32.const 0x30)) (i32.and (local.get $old) (i32.const 0x30)))
+          (then (call $irq_update (i32.or (i32.eqz (i32.and (local.get $v) (i32.const 0x30)))
+                                          (i32.eqz (i32.and (local.get $old) (i32.const 0x30)))))))
         (return)))
     ;; $4203 WRMPYB: unsigned 8x8 product into $4216/$4217.
     (if (i32.eq (local.get $r) (i32.const 0x4203))
@@ -666,7 +717,7 @@ export function memWat(lay) {
     (local $dir i32) (local $k i32) (local $p i32) (local $abort i32)
     ;; Timings.DMACPUSync, once per $420B write that starts a channel.
     (if (i32.and (local.get $mask) (i32.const 0xFF))
-      (then (global.set $cyc (i32.sub (global.get $cyc) (i32.const 18)))))
+      (then (global.set $cyc (i32.sub (global.get $cyc) (i32.const ${lay.fixes?.dmaCpuSync ?? 18})))))
     (local.set $ch (i32.const 0))
     (block $d (loop $l
       (br_if $d (i32.ge_u (local.get $ch) (i32.const 8)))
@@ -703,15 +754,27 @@ export function memWat(lay) {
           (global.set $cyc (i32.sub (global.get $cyc) (i32.const 8)))
           (global.set $indma (i32.const 1))
           (global.set $ingdma (i32.const 1))
-          ;; snes9x inWRAM_DMA: a WRAM A-bus address cannot also reach the
-          ;; WRAM port $2180 (the write is dropped / the read is open bus).
-          (global.set $wramdma (if (result i32) (local.get $dir)
-            (then (i32.eq (i32.and (i32.shr_u (local.get $src) (i32.const 17)) (i32.const 0x7F)) (i32.const 0x3F)))
-            (else (i32.or (i32.eq (i32.and (i32.shr_u (local.get $src) (i32.const 17)) (i32.const 0x7F)) (i32.const 0x3F))
-                          (i32.and (i32.eqz (i32.and (local.get $src) (i32.const 0x400000)))
-                                   (i32.lt_u (i32.and (local.get $src) (i32.const 0xFFFF)) (i32.const 0x2000)))))))
           (block $td (loop $tl
             (br_if $td (i32.ge_u (local.get $i) (local.get $cnt)))
+            ;; snes9x CPU.InWRAMDMAorHDMA: a WRAM A-bus address cannot also
+            ;; reach the WRAM port ($2180 writes dropped, reads open bus,
+            ;; $2181-$2183 unchanged). CPU -> PPU: set per 4KB block of the
+            ;; A address (bank $7E/$7F, or banks $00-$3F with the address
+            ;; below $2000). PPU -> CPU: bank $7E/$7F, except to $217C-$2183
+            ;; from banks $00-$3F, where each byte tests the address.
+            (if (local.get $dir)
+              (then (global.set $wramdma
+                (if (result i32) (i32.and (i32.and (i32.gt_u (local.get $bport) (i32.const 0x7C)) (i32.le_u (local.get $bport) (i32.const 0x83)))
+                                          (i32.eqz (i32.and (local.get $src) (i32.const 0x400000))))
+                  (then (i32.lt_u (i32.and (local.get $src) (i32.const 0xFFFF)) (i32.const 0x2000)))
+                  (else (i32.eq (i32.and (i32.shr_u (local.get $src) (i32.const 17)) (i32.const 0x7F)) (i32.const 0x3F))))))
+              (else (if (i32.or (i32.eqz (local.get $i))
+                                (i32.or (i32.and (i32.eq (local.get $step) (i32.const 1)) (i32.eqz (i32.and (local.get $src) (i32.const 0xFFF))))
+                                        (i32.and (i32.eq (local.get $step) (i32.const -1)) (i32.eq (i32.and (local.get $src) (i32.const 0xFFF)) (i32.const 0xFFF)))))
+                (then (global.set $wramdma
+                  (i32.or (i32.eq (i32.and (i32.shr_u (local.get $src) (i32.const 17)) (i32.const 0x7F)) (i32.const 0x3F))
+                          (i32.and (i32.eqz (i32.and (local.get $src) (i32.const 0x400000)))
+                                   (i32.lt_u (i32.and (local.get $src) (i32.const 0xFFFF)) (i32.const 0x2000)))))))))
             (call $dma_byte (local.get $src)
               (i32.or (i32.const 0x2100) (i32.and
                 (i32.add (local.get $bport) (call $dmaoff (local.get $mode) (local.get $k)))
@@ -773,17 +836,28 @@ export function memWat(lay) {
       (local.set $ch (i32.add (local.get $ch) (i32.const 1)))
       (br $l))))
 
-  ;; One DMA byte between A-bus $src and B-bus $b (snes9x S9xDoDMA): the
-  ;; A bus cannot address the B bus, so an A-bus $21xx reads open bus and
-  ;; is not written.
+  ;; A-bus access during (H)DMA (snes9x S9xGetByte / S9xSetByte with
+  ;; InDMAorHDMA): the A bus cannot reach the B bus, so $21xx in banks
+  ;; $00-$3F/$80-$BF reads open bus and drops writes; and the (H)DMA read
+  ;; leaves the data bus (OpenBus) as it was, which only the CPU's own
+  ;; instructions set.
+  (func $dma_rd_a (param $a i32) (result i32)
+    (local $ob i32) (local $v i32)
+    (if (i32.eq (i32.and (local.get $a) (i32.const 0x40FF00)) (i32.const 0x2100))
+      (then (return (global.get $ob))))
+    (local.set $ob (global.get $ob))
+    (local.set $v (call $rd8 (local.get $a)))
+    (global.set $ob (local.get $ob))
+    (local.get $v))
+  (func $dma_wr_a (param $a i32) (param $v i32)
+    (if (i32.eq (i32.and (local.get $a) (i32.const 0x40FF00)) (i32.const 0x2100))
+      (then (return)))
+    (call $wr8 (local.get $a) (local.get $v)))
+  ;; One DMA byte between A-bus $src and B-bus $b (snes9x S9xDoDMA).
   (func $dma_byte (param $src i32) (param $b i32) (param $dir i32)
-    (local $ab i32)
-    (local.set $ab (i32.eq (i32.and (local.get $src) (i32.const 0x40FF00)) (i32.const 0x2100)))
     (if (local.get $dir)
-      (then (local.set $b (call $rd8 (local.get $b)))
-            (if (i32.eqz (local.get $ab)) (then (call $wr8 (local.get $src) (local.get $b)))))
-      (else (call $wr8 (local.get $b)
-              (if (result i32) (local.get $ab) (then (global.get $ob)) (else (call $rd8 (local.get $src))))))))
+      (then (call $dma_wr_a (local.get $src) (call $rd8 (local.get $b))))
+      (else (call $wr8 (local.get $b) (call $dma_rd_a (local.get $src))))))
 
   (func $io_reg (param $r i32) (result i32)
     (i32.load8_u (i32.add (i32.const ${PPUREG + 0x80})
@@ -794,6 +868,15 @@ export function memWat(lay) {
   ;; the table address in $43x8/9 (A2A), the indirect address in $43x5/6
   ;; (DAS), and the line counter / repeat flag behind $43xA. HDMAST+ch*16
   ;; holds +4 line counter, +5 repeat, +6 do-transfer.
+  ;; S9xGetWord during (H)DMA: no data-bus change, except that a word
+  ;; split across a 4KB block leaves its first byte there.
+  (func $dma_rd16 (param $a i32) (result i32)
+    (local $lo i32)
+    (local.set $lo (call $dma_rd_a (local.get $a)))
+    (if (i32.eq (i32.and (local.get $a) (i32.const 0xFFF)) (i32.const 0xFFF))
+      (then (global.set $ob (local.get $lo))))
+    (i32.or (local.get $lo) (i32.shl (call $dma_rd_a (i32.and (i32.add (local.get $a) (i32.const 1)) (i32.const 0xFFFFFF))) (i32.const 8))))
+
   (func $hdma_linecount (param $ch i32) (result i32)
     (local $st i32) (local $base i32) (local $bank i32) (local $ad i32)
     (local $line i32)
@@ -802,7 +885,7 @@ export function memWat(lay) {
     (local.set $bank (i32.shl (call $io_reg (i32.add (local.get $base) (i32.const 4)))
                               (i32.const 16)))
     (local.set $ad (call $io_reg16 (i32.add (local.get $base) (i32.const 8))))
-    (local.set $line (call $rd8 (i32.or (local.get $bank) (local.get $ad))))
+    (local.set $line (call $dma_rd_a (i32.or (local.get $bank) (local.get $ad))))
     (global.set $cyc (i32.sub (global.get $cyc) (i32.const 8)))
     (if (i32.eqz (local.get $line))
       (then
@@ -817,7 +900,7 @@ export function memWat(lay) {
                     (global.set $cyc (i32.sub (global.get $cyc) (i32.const 16))))
               (else (global.set $cyc (i32.sub (global.get $cyc) (i32.const 8)))))
             (call $io_set16 (i32.add (local.get $base) (i32.const 5))
-              (call $rd16 (i32.or (local.get $bank) (local.get $ad))))
+              (call $dma_rd16 (i32.or (local.get $bank) (local.get $ad))))
             (local.set $ad (i32.and (i32.add (local.get $ad) (i32.const 1)) (i32.const 0xFFFF)))))
         (call $io_set16 (i32.add (local.get $base) (i32.const 8))
           (i32.and (i32.add (local.get $ad) (i32.const 1)) (i32.const 0xFFFF)))
@@ -835,7 +918,7 @@ export function memWat(lay) {
       (then
         (global.set $cyc (i32.sub (global.get $cyc) (i32.const 16)))
         (call $io_set16 (i32.add (local.get $base) (i32.const 5))
-          (call $rd16 (i32.or (local.get $bank) (local.get $ad))))
+          (call $dma_rd16 (i32.or (local.get $bank) (local.get $ad))))
         (local.set $ad (i32.and (i32.add (local.get $ad) (i32.const 2)) (i32.const 0xFFFF)))))
     (call $io_set16 (i32.add (local.get $base) (i32.const 8)) (local.get $ad))
     (i32.const 1))
@@ -855,7 +938,7 @@ export function memWat(lay) {
     (local $ch i32) (local $base i32) (local $sv i32)
     (global.set $hdmaon (call $io_reg (i32.const 0x420C)))
     (global.set $hdmaended (i32.const 0))
-    (if (global.get $hdmaon) (then (global.set $cyc (i32.sub (global.get $cyc) (i32.const 18)))))
+    (if (global.get $hdmaon) (then (global.set $cyc (i32.sub (global.get $cyc) (i32.const ${lay.fixes?.dmaCpuSync ?? 18})))))
     ;; (H)DMA state is saved around it: this can run inside a general DMA.
     (local.set $sv (i32.or (global.get $indma) (i32.shl (global.get $wramdma) (i32.const 1))))
     (global.set $indma (i32.const 1))
@@ -883,15 +966,31 @@ export function memWat(lay) {
     (global.set $hdmaran (if (result i32) (global.get $ingdma) (then (global.get $hdmaon)) (else (i32.const 0)))))
 
   ;; S9xDoHDMA, once per visible line.
+  ;; HDMA's InWRAMDMAorHDMA test for a source address.
+  (func $hdma_inwram (param $a i32) (result i32)
+    (i32.or (i32.eq (i32.and (i32.shr_u (local.get $a) (i32.const 17)) (i32.const 0x7F)) (i32.const 0x3F))
+            (i32.and (i32.eqz (i32.and (local.get $a) (i32.const 0x400000)))
+                     (i32.lt_u (i32.and (local.get $a) (i32.const 0xFFFF)) (i32.const 0x2000)))))
+  ;; S9xGetMemPointer is not NULL: ROM / RAM blocks, and SRAM whose mask
+  ;; covers a whole 4KB block.
+  (func $hdma_direct (param $a i32) (result i32)
+    (local $t i32)
+    (local.set $t (i32.load (i32.add (i32.const ${MAPTAB}) (i32.shl (i32.shr_u (i32.and (local.get $a) (i32.const 0xFFFFFF)) (i32.const 12)) (i32.const 3)))))
+    (if (result i32) (i32.or (i32.eq (local.get $t) (i32.const 1)) (i32.eq (local.get $t) (i32.const 2)))
+      (then (i32.const 1))
+      (else (i32.and (i32.or (i32.eq (local.get $t) (i32.const 5)) (i32.eq (local.get $t) (i32.const 6)))
+                     (i32.eq (i32.and (i32.const ${lay.sram}) (i32.const 0xFFF)) (i32.const 0xFFF))))))
+
   (func $hdma_do
     (local $ch i32) (local $st i32) (local $base i32) (local $p i32)
     (local $mode i32) (local $n i32) (local $k i32) (local $src i32)
     (local $ind i32) (local $bb i32) (local $lc i32) (local $breg i32) (local $sv i32)
+    (local $slow i32) (local $aa i32) (local $v i32)
     (if (i32.eqz (global.get $hdmaon)) (then (return)))
     ;; CPU.HDMARanInDMA = CPU.InDMA ? byte : 0
     (global.set $hdmaran (if (result i32) (global.get $ingdma) (then (global.get $hdmaon)) (else (i32.const 0))))
     ;; Timings.DMACPUSync per HDMA line.
-    (global.set $cyc (i32.sub (global.get $cyc) (i32.const 18)))
+    (global.set $cyc (i32.sub (global.get $cyc) (i32.const ${lay.fixes?.dmaCpuSync ?? 18})))
     (local.set $sv (i32.or (global.get $indma) (i32.shl (global.get $wramdma) (i32.const 1))))
     (global.set $indma (i32.const 1))
     (global.set $wramdma (i32.const 0))
@@ -910,7 +1009,11 @@ export function memWat(lay) {
                                   (i32.shl (local.get $mode) (i32.const 2))) (i32.const 15)))
           (local.set $bb (call $io_reg (i32.add (local.get $base) (i32.const 1))))
           (if (i32.load8_u (i32.add (local.get $st) (i32.const 6)))
-            (then
+            (then${lay.fixes?.uniracers ? `
+              ;; snes9x per-title fix (SNESGameFixes.Uniracers): an HDMA
+              ;; transfer to $2104 first resets the OAM address to $10C.
+              (if (i32.eq (local.get $bb) (i32.const 4))
+                (then (global.set $oamaddr (i32.const 0x10C)) (global.set $oamflip (i32.const 0))))` : ""}
               (local.set $src (if (result i32) (local.get $ind)
                 (then (i32.or (i32.shl (call $io_reg (i32.add (local.get $base) (i32.const 7)))
                                        (i32.const 16))
@@ -919,20 +1022,32 @@ export function memWat(lay) {
                                        (i32.const 16))
                               (call $io_reg16 (i32.add (local.get $base) (i32.const 8)))))))
               (global.set $inhdma (i32.const 1))
+              ;; snes9x S9xDoHDMA paths: a transfer whose bytes cross a 4KB
+              ;; block, or a reverse one, goes byte by byte (InWRAMDMAorHDMA
+              ;; per byte address); otherwise the flag is set once from the
+              ;; transfer's address, and a direct-memory source is read
+              ;; through HDMAMemPointers (mode 1 leaves its second byte on
+              ;; the data bus).
+              (local.set $slow (i32.or (i32.ne (i32.and (local.get $p) (i32.const 0x80)) (i32.const 0))
+                (i32.ge_u (i32.add (i32.and (local.get $src) (i32.const 0xFFF)) (local.get $n)) (i32.const 0x1000))))
+              (global.set $wramdma (call $hdma_inwram (local.get $src)))
               (local.set $k (i32.const 0))
               (block $kd (loop $kl
                 (br_if $kd (i32.ge_u (local.get $k) (local.get $n)))
                 (local.set $breg (i32.or (i32.const 0x2100) (i32.and
                   (i32.add (local.get $bb) (call $dmaoff (local.get $mode) (local.get $k)))
                   (i32.const 0xFF))))
+                (local.set $aa (i32.or (i32.and (local.get $src) (i32.const 0xFF0000))
+                  (i32.and (i32.add (local.get $src) (local.get $k)) (i32.const 0xFFFF))))
+                (if (local.get $slow) (then (global.set $wramdma (call $hdma_inwram (local.get $aa)))))
                 (if (i32.eqz (i32.and (local.get $p) (i32.const 0x80)))
-                  (then (call $wr8 (local.get $breg)
-                          (call $rd8 (i32.or (i32.and (local.get $src) (i32.const 0xFF0000))
-                            (i32.and (i32.add (local.get $src) (local.get $k)) (i32.const 0xFFFF))))))
+                  (then (local.set $v (call $dma_rd_a (local.get $aa)))
+                        (if (i32.and (i32.and (i32.eq (local.get $mode) (i32.const 1)) (i32.eq (local.get $k) (i32.const 1)))
+                                     (i32.and (i32.eqz (local.get $slow)) (call $hdma_direct (local.get $aa))))
+                          (then (global.set $ob (local.get $v))))
+                        (call $wr8 (local.get $breg) (local.get $v)))
                   ;; Reverse HDMA: B bus to A bus.
-                  (else (call $wr8 (i32.or (i32.and (local.get $src) (i32.const 0xFF0000))
-                            (i32.and (i32.add (local.get $src) (local.get $k)) (i32.const 0xFFFF)))
-                          (call $rd8 (local.get $breg)))))
+                  (else (call $dma_wr_a (local.get $aa) (call $rd8 (local.get $breg)))))
                 (local.set $k (i32.add (local.get $k) (i32.const 1)))
                 (br $kl)))
               (global.set $inhdma (i32.const 0))
@@ -983,597 +1098,37 @@ export function memWat(lay) {
 `;
 }
 
-// m65816.py interp_wat() lines 343-952
-/** @param {import("./layout.js").SnesLayout} lay */
+
+// The RAM interpreter: lower.js generates it from the same lowering as the
+// arms (interpWat there), so RAM code runs exactly what a ROM arm would.
+/** @param {import("./layout.js").SnesLayout} _lay */
 export function interpWat(_lay) {
   return `
-  ;; One interpreted instruction, charged the way an arm is: the program
-  ;; bytes at the code region's speed and the static internal cycles
-  ;; (ICOST, from lower.js cycles()) before it runs, its data accesses as
-  ;; they happen, one more cycle for a direct page off a page boundary and
-  ;; for a taken branch.
+  ;; One interpreted instruction: the generated $interp charges it as an
+  ;; arm does (program bytes, internal cycles, conditional ones) and runs
+  ;; the arm body.
   (func $istep
-    (local $op i32) (local $lf i32) (local $n i32) (local $pc0 i32)
-    (local.set $pc0 (global.get $pc))
-    (local.set $op (call $rd8m (global.get $pc)))
-    (local.set $lf (i32.load8_u (i32.add (i32.const ${ICOST}) (i32.shl (local.get $op) (i32.const 1)))))
-    (local.set $n (i32.and (local.get $lf) (i32.const 7)))
-    (if (i32.and (i32.ne (i32.and (local.get $lf) (i32.const 0x80)) (i32.const 0)) (i32.eqz (global.get $fm)))
-      (then (local.set $n (i32.add (local.get $n) (i32.const 1)))))
-    (if (i32.and (i32.ne (i32.and (local.get $lf) (i32.const 0x40)) (i32.const 0)) (i32.eqz (global.get $fx)))
-      (then (local.set $n (i32.add (local.get $n) (i32.const 1)))))
-    (global.set $cyc (i32.sub (global.get $cyc) (i32.add
-      (i32.mul (global.get $ms) (local.get $n))
-      (i32.mul (i32.and (i32.load8_u offset=1 (i32.add (i32.const ${ICOST}) (i32.shl (local.get $op) (i32.const 1)))) (i32.const 0x7F)) (i32.const 6)))))
-    (if (i32.and (i32.ne (i32.and (local.get $lf) (i32.const 0x20)) (i32.const 0)) (i32.ne (i32.and (global.get $d) (i32.const 0xFF)) (i32.const 0)))
-      (then (global.set $cyc (i32.sub (global.get $cyc) (i32.const 6)))))
-    (call $interp)
-    (if (i32.and (i32.ne (i32.and (local.get $lf) (i32.const 0x10)) (i32.const 0))
-                 (i32.ne (global.get $pc) (i32.or (i32.and (local.get $pc0) (i32.const 0xFF0000))
-                                                  (i32.and (i32.add (local.get $pc0) (i32.const 2)) (i32.const 0xFFFF)))))
-      (then (global.set $cyc (i32.sub (global.get $cyc) (i32.const 6))))))
+    (call $interp))
 
   ;; Fetch the byte at PC+k without disturbing PC (the fetch is charged by
-  ;; $istep, not here).
+  ;; the generated code, not here).
   (func $ifetch (param $k i32) (result i32)
     (call $rd8m (i32.or
       (i32.and (global.get $pc) (i32.const 0xFF0000))
       (i32.and (i32.add (global.get $pc) (local.get $k))
                (i32.const 0xFFFF)))))
 
-  ;; Advance PC by n, wrapping INSIDE the bank - the 65816's PC does not
-  ;; carry into the program bank.
-  (func $ipc (param $n i32)
-    (global.set $pc (i32.or
-      (i32.and (global.get $pc) (i32.const 0xFF0000))
-      (i32.and (i32.add (global.get $pc) (local.get $n))
-               (i32.const 0xFFFF)))))
-
-  (func $interp
-    (local $op i32) (local $ea i32) (local $u8 i32) (local $u16 i32)
-    (local $u24 i32) (local $v i32) (local $r i32) (local $n i32)
-    (local $d i32) (local $w i32)
-    (local.set $op (call $ifetch (i32.const 0)))
-    (local.set $u8  (call $ifetch (i32.const 1)))
-    (local.set $u16 (i32.or (local.get $u8)
-      (i32.shl (call $ifetch (i32.const 2)) (i32.const 8))))
-    (local.set $u24 (i32.or (local.get $u16)
-      (i32.shl (call $ifetch (i32.const 3)) (i32.const 16))))
-
-    ;; ---- implied and single-byte opcodes -----------------------------
-    (if (i32.eq (local.get $op) (i32.const 0xEA))   ;; nop
-      (then (call $ipc (i32.const 1)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0x18))
-      (then (global.set $fc (i32.const 0)) (call $ipc (i32.const 1)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0x38))
-      (then (global.set $fc (i32.const 1)) (call $ipc (i32.const 1)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0x58))
-      (then (global.set $ichg (i32.or (global.get $ichg) (i32.const 1))) (call $ipc (i32.const 1)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0x78))
-      (then (global.set $ichg (i32.or (global.get $ichg) (i32.const 2))) (call $ipc (i32.const 1)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0xB8))
-      (then (global.set $fv (i32.const 0)) (call $ipc (i32.const 1)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0xD8))
-      (then (global.set $fd (i32.const 0)) (call $ipc (i32.const 1)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0xF8))
-      (then (global.set $fd (i32.const 1)) (call $ipc (i32.const 1)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0xFB))   ;; xce
-      (then (local.set $v (global.get $fc))
-            (global.set $fc (global.get $fe))
-            (global.set $fe (local.get $v))
-            (if (global.get $fe) (then
-              (global.set $fm (i32.const 1)) (global.set $fx (i32.const 1))
-              (call $narrowx)))
-            (call $ipc (i32.const 1)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0xEB))   ;; xba
-      (then (global.set $a (i32.or
-               (i32.shr_u (global.get $a) (i32.const 8))
-               (i32.and (i32.shl (global.get $a) (i32.const 8))
-                        (i32.const 0xFF00))))
-            (call $setnz (global.get $a) (i32.const 1))
-            (call $ipc (i32.const 1)) (return)))
-    ;; rep / sep
-    (if (i32.or (i32.eq (local.get $op) (i32.const 0xC2))
-                (i32.eq (local.get $op) (i32.const 0xE2)))
-      (then
-        (local.set $v (i32.eq (local.get $op) (i32.const 0xE2)))
-        (if (i32.and (local.get $u8) (i32.const 0x80))
-          (then (global.set $fn (local.get $v))))
-        (if (i32.and (local.get $u8) (i32.const 0x40))
-          (then (global.set $fv (local.get $v))))
-        (if (i32.and (local.get $u8) (i32.const 0x20))
-          (then (global.set $fm (local.get $v))))
-        (if (i32.and (local.get $u8) (i32.const 0x10))
-          (then (global.set $fx (local.get $v)) (call $narrowx)))
-        (if (i32.and (local.get $u8) (i32.const 0x08))
-          (then (global.set $fd (local.get $v))))
-        (if (i32.and (local.get $u8) (i32.const 0x04))
-          (then (global.set $fi (local.get $v))))
-        (if (i32.and (local.get $u8) (i32.const 0x02))
-          (then (global.set $fz (local.get $v))))
-        (if (i32.and (local.get $u8) (i32.const 0x01))
-          (then (global.set $fc (local.get $v))))
-        (call $ipc (i32.const 2)) (return)))
-
-    ;; ---- register transfers -------------------------------------------
-    (if (i32.eq (local.get $op) (i32.const 0xAA))   ;; tax
-      (then (global.set $x (i32.and (global.get $a)
-                                    (call $wmask (global.get $fx))))
-            (call $setnz (global.get $x) (global.get $fx))
-            (call $ipc (i32.const 1)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0xA8))   ;; tay
-      (then (global.set $y (i32.and (global.get $a)
-                                    (call $wmask (global.get $fx))))
-            (call $setnz (global.get $y) (global.get $fx))
-            (call $ipc (i32.const 1)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0x8A))   ;; txa
-      (then (call $seta (global.get $x))
-            (call $setnz (global.get $a) (global.get $fm))
-            (call $ipc (i32.const 1)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0x98))   ;; tya
-      (then (call $seta (global.get $y))
-            (call $setnz (global.get $a) (global.get $fm))
-            (call $ipc (i32.const 1)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0x9B))   ;; txy
-      (then (global.set $y (i32.and (global.get $x)
-                                    (call $wmask (global.get $fx))))
-            (call $setnz (global.get $y) (global.get $fx))
-            (call $ipc (i32.const 1)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0xBB))   ;; tyx
-      (then (global.set $x (i32.and (global.get $y)
-                                    (call $wmask (global.get $fx))))
-            (call $setnz (global.get $x) (global.get $fx))
-            (call $ipc (i32.const 1)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0xBA))   ;; tsx
-      (then (global.set $x (i32.and (global.get $s)
-                                    (call $wmask (global.get $fx))))
-            (call $setnz (global.get $x) (global.get $fx))
-            (call $ipc (i32.const 1)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0x9A))   ;; txs
-      (then (global.set $s (global.get $x))
-            (call $ipc (i32.const 1)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0x1B))   ;; tcs
-      (then (global.set $s (global.get $a))
-            (call $ipc (i32.const 1)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0x3B))   ;; tsc
-      (then (global.set $a (global.get $s))
-            (call $setnz (global.get $a) (i32.const 0))
-            (call $ipc (i32.const 1)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0x5B))   ;; tcd
-      (then (global.set $d (global.get $a))
-            (call $setnz (global.get $d) (i32.const 0))
-            (call $ipc (i32.const 1)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0x7B))   ;; tdc
-      (then (global.set $a (global.get $d))
-            (call $setnz (global.get $a) (i32.const 0))
-            (call $ipc (i32.const 1)) (return)))
-
-    ;; ---- inc/dec of index registers and the accumulator ---------------
-    (if (i32.or (i32.eq (local.get $op) (i32.const 0xE8))
-                (i32.eq (local.get $op) (i32.const 0xCA)))   ;; inx / dex
-      (then (global.set $x (i32.and (i32.add (global.get $x)
-              (if (result i32) (i32.eq (local.get $op) (i32.const 0xE8))
-                (then (i32.const 1)) (else (i32.const -1))))
-              (call $wmask (global.get $fx))))
-            (call $setnz (global.get $x) (global.get $fx))
-            (call $ipc (i32.const 1)) (return)))
-    (if (i32.or (i32.eq (local.get $op) (i32.const 0xC8))
-                (i32.eq (local.get $op) (i32.const 0x88)))   ;; iny / dey
-      (then (global.set $y (i32.and (i32.add (global.get $y)
-              (if (result i32) (i32.eq (local.get $op) (i32.const 0xC8))
-                (then (i32.const 1)) (else (i32.const -1))))
-              (call $wmask (global.get $fx))))
-            (call $setnz (global.get $y) (global.get $fx))
-            (call $ipc (i32.const 1)) (return)))
-    (if (i32.or (i32.eq (local.get $op) (i32.const 0x1A))
-                (i32.eq (local.get $op) (i32.const 0x3A)))   ;; inc a / dec a
-      (then (local.set $r (i32.and (i32.add
-               (i32.and (global.get $a) (call $wmask (global.get $fm)))
-               (if (result i32) (i32.eq (local.get $op) (i32.const 0x1A))
-                 (then (i32.const 1)) (else (i32.const -1))))
-               (call $wmask (global.get $fm))))
-            (call $seta (local.get $r))
-            (call $setnz (local.get $r) (global.get $fm))
-            (call $ipc (i32.const 1)) (return)))
-
-    ;; ---- stack ---------------------------------------------------------
-    (if (i32.eq (local.get $op) (i32.const 0x48))   ;; pha
-      (then (call $ipush (global.get $a) (global.get $fm))
-            (call $ipc (i32.const 1)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0xDA))   ;; phx
-      (then (call $ipush (global.get $x) (global.get $fx))
-            (call $ipc (i32.const 1)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0x5A))   ;; phy
-      (then (call $ipush (global.get $y) (global.get $fx))
-            (call $ipc (i32.const 1)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0x0B))   ;; phd
-      (then (call $ipush (global.get $d) (i32.const 0))
-            (call $ipc (i32.const 1)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0x8B))   ;; phb
-      (then (call $ipush (global.get $db) (i32.const 1))
-            (call $ipc (i32.const 1)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0x4B))   ;; phk
-      (then (call $ipush (i32.shr_u (global.get $pc) (i32.const 16))
-                         (i32.const 1))
-            (call $ipc (i32.const 1)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0x08))   ;; php
-      (then (call $ipush (call $packp) (i32.const 1))
-            (call $ipc (i32.const 1)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0xF4))   ;; pea
-      (then (call $ipush (local.get $u16) (i32.const 0))
-            (call $ipc (i32.const 3)) (return)))
-    ;; PEI IS TWO BYTES, not three: its operand is a DIRECT-PAGE offset, and
-    ;; only the 16-bit value it reads from there is pushed. Advancing 3 put
-    ;; the interpreter one byte into the next instruction.
-    (if (i32.eq (local.get $op) (i32.const 0xD4))   ;; pei
-      (then (call $ipush (call $rd16 (call $idp (local.get $u8)))
-                         (i32.const 0))
-            (call $ipc (i32.const 2)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0x68))   ;; pla
-      (then (local.set $v (call $ipull (global.get $fm)))
-            (call $seta (local.get $v))
-            (call $setnz (local.get $v) (global.get $fm))
-            (call $ipc (i32.const 1)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0xFA))   ;; plx
-      (then (global.set $x (call $ipull (global.get $fx)))
-            (call $setnz (global.get $x) (global.get $fx))
-            (call $ipc (i32.const 1)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0x7A))   ;; ply
-      (then (global.set $y (call $ipull (global.get $fx)))
-            (call $setnz (global.get $y) (global.get $fx))
-            (call $ipc (i32.const 1)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0x2B))   ;; pld
-      (then (global.set $d (call $ipull (i32.const 0)))
-            (call $setnz (global.get $d) (i32.const 0))
-            (call $ipc (i32.const 1)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0xAB))   ;; plb
-      (then (local.set $v (call $ipull (i32.const 1)))
-            (call $setdb (local.get $v))
-            (call $setnz (local.get $v) (i32.const 1))
-            (call $ipc (i32.const 1)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0x28))   ;; plp
-      (then (call $unpackp (call $ipull (i32.const 1)))
-            (call $ipc (i32.const 1)) (return)))
-
-    ;; ---- returns --------------------------------------------------------
-    (if (i32.eq (local.get $op) (i32.const 0x60))   ;; rts
-      (then (global.set $pc (i32.or
-               (i32.and (global.get $pc) (i32.const 0xFF0000))
-               (i32.and (i32.add (call $ipull (i32.const 0)) (i32.const 1))
-                        (i32.const 0xFFFF))))
-            ;; Op60: the last internal cycle comes after the pull.
-            (global.set $cyc (i32.sub (global.get $cyc) (i32.const 6)))
-            (return)))
-    (if (i32.eq (local.get $op) (i32.const 0x6B))   ;; rtl
-      (then (local.set $v (i32.and (i32.add (call $ipull (i32.const 0))
-                                            (i32.const 1))
-                                   (i32.const 0xFFFF)))
-            (global.set $pc (i32.or
-              (i32.shl (call $ipull (i32.const 1)) (i32.const 16))
-              (local.get $v)))
-            (return)))
-    (if (i32.eq (local.get $op) (i32.const 0x40))   ;; rti
-      (then (call $unpackp (call $ipull (i32.const 1)))
-            (local.set $v (call $ipull (i32.const 0)))
-            (global.set $pc (i32.or
-              (i32.shl (call $ipull (i32.const 1)) (i32.const 16))
-              (local.get $v)))
-            (return)))
-
-    ;; ---- jumps and calls -------------------------------------------------
-    (if (i32.eq (local.get $op) (i32.const 0x4C))   ;; jmp abs
-      (then (global.set $pc (i32.or
-               (i32.and (global.get $pc) (i32.const 0xFF0000))
-               (local.get $u16))) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0x5C))   ;; jml long
-      (then (global.set $pc (local.get $u24)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0x6C))   ;; jmp (abs)
-      (then (global.set $pc (i32.or
-               (i32.and (global.get $pc) (i32.const 0xFF0000))
-               (call $rd16 (local.get $u16)))) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0x7C))   ;; jmp (abs,x)
-      (then (global.set $pc (i32.or
-               (i32.and (global.get $pc) (i32.const 0xFF0000))
-               (call $rd16 (i32.or
-                 (i32.and (global.get $pc) (i32.const 0xFF0000))
-                 (i32.and (i32.add (local.get $u16) (global.get $x))
-                          (i32.const 0xFFFF)))))) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0xDC))   ;; jml [abs]
-      (then (global.set $pc (call $rd24 (local.get $u16))) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0x20))   ;; jsr abs
-      (then (call $ipush (i32.and (i32.add (global.get $pc) (i32.const 2))
-                                  (i32.const 0xFFFF)) (i32.const 0))
-            (global.set $pc (i32.or
-              (i32.and (global.get $pc) (i32.const 0xFF0000))
-              (local.get $u16))) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0x22))   ;; jsl long
-      (then (call $ipush (i32.shr_u (global.get $pc) (i32.const 16))
-                         (i32.const 1))
-            (call $ipush (i32.and (i32.add (global.get $pc) (i32.const 3))
-                                  (i32.const 0xFFFF)) (i32.const 0))
-            (global.set $pc (local.get $u24)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0xFC))   ;; jsr (abs,x)
-      (then (call $ipush (i32.and (i32.add (global.get $pc) (i32.const 2))
-                                  (i32.const 0xFFFF)) (i32.const 0))
-            (global.set $pc (i32.or
-              (i32.and (global.get $pc) (i32.const 0xFF0000))
-              (call $rd16 (i32.or
-                (i32.and (global.get $pc) (i32.const 0xFF0000))
-                (i32.and (i32.add (local.get $u16) (global.get $x))
-                         (i32.const 0xFFFF)))))) (return)))
-
-    ;; ---- block move, one byte per step as the hardware does it ----------
-    ;; MVN/MVP operand bytes are (dest bank, src bank). The instruction
-    ;; re-executes (pc does not advance) until A wraps to $FFFF.
-    (if (i32.or (i32.eq (local.get $op) (i32.const 0x54))
-                (i32.eq (local.get $op) (i32.const 0x44)))
-      (then
-        (call $setdb (local.get $u8))
-        (call $wr8 (i32.or (i32.shl (local.get $u8) (i32.const 16))
-                           (global.get $y))
-          (call $rd8 (i32.or (i32.shl (i32.and (i32.shr_u (local.get $u16)
-                                                          (i32.const 8))
-                                               (i32.const 0xFF))
-                                      (i32.const 16))
-                             (global.get $x))))
-        (local.set $v (if (result i32) (i32.eq (local.get $op) (i32.const 0x54))
-          (then (i32.const 1)) (else (i32.const -1))))
-        (global.set $x (i32.and (i32.add (global.get $x) (local.get $v))
-                                (call $wmask (global.get $fx))))
-        (global.set $y (i32.and (i32.add (global.get $y) (local.get $v))
-                                (call $wmask (global.get $fx))))
-        (global.set $a (i32.and (i32.sub (global.get $a) (i32.const 1))
-                                (i32.const 0xFFFF)))
-        ;; Op54/Op44 end with AddCycles(TWO_CYCLES), after the byte moved.
-        (global.set $cyc (i32.sub (global.get $cyc) (i32.const 12)))
-        (if (i32.eq (global.get $a) (i32.const 0xFFFF))
-          (then (call $ipc (i32.const 3))))
-        (return)))
-    (if (i32.eq (local.get $op) (i32.const 0x62))   ;; per
-      (then (call $ipush (i32.and (i32.add (i32.add (global.get $pc)
-                                                    (i32.const 3))
-                                           (local.get $u16))
-                                  (i32.const 0xFFFF)) (i32.const 0))
-            (call $ipc (i32.const 3)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0x42))   ;; wdm: 2-byte no-op
-      (then (call $ipc (i32.const 2)) (return)))
-    (if (i32.eq (local.get $op) (i32.const 0xCB))   ;; wai, see lower()
-      (then (global.set $wai (i32.const 1)) (call $ipc (i32.const 1)) (return)))
-
-    ;; ---- relative branches ------------------------------------------------
-    (if (i32.eq (local.get $op) (i32.const 0x82))   ;; brl
-      (then (call $ipc (i32.add (i32.const 3)
-               (i32.shr_s (i32.shl (local.get $u16) (i32.const 16))
-                          (i32.const 16)))) (return)))
-    (local.set $d (i32.shr_s (i32.shl (local.get $u8) (i32.const 24))
-                             (i32.const 24)))
-    (local.set $r (i32.const -1))
-    (if (i32.eq (local.get $op) (i32.const 0x80))
-      (then (local.set $r (i32.const 1))))
-    (if (i32.eq (local.get $op) (i32.const 0x10))
-      (then (local.set $r (i32.eqz (global.get $fn)))))
-    (if (i32.eq (local.get $op) (i32.const 0x30))
-      (then (local.set $r (global.get $fn))))
-    (if (i32.eq (local.get $op) (i32.const 0x50))
-      (then (local.set $r (i32.eqz (global.get $fv)))))
-    (if (i32.eq (local.get $op) (i32.const 0x70))
-      (then (local.set $r (global.get $fv))))
-    (if (i32.eq (local.get $op) (i32.const 0x90))
-      (then (local.set $r (i32.eqz (global.get $fc)))))
-    (if (i32.eq (local.get $op) (i32.const 0xB0))
-      (then (local.set $r (global.get $fc))))
-    (if (i32.eq (local.get $op) (i32.const 0xD0))
-      (then (local.set $r (i32.eqz (global.get $fz)))))
-    (if (i32.eq (local.get $op) (i32.const 0xF0))
-      (then (local.set $r (global.get $fz))))
-    (if (i32.ne (local.get $r) (i32.const -1))
-      (then (call $ipc (i32.add (i32.const 2)
-               (if (result i32) (local.get $r) (then (local.get $d))
-                                               (else (i32.const 0)))))
-            (return)))
-
-    ;; ---- everything with an addressing mode -------------------------------
-    ;; $ea is the effective address, $n the instruction length, $w the width
-    ;; flag (1 = 8-bit). -1 in $n means "not an addressed opcode", and -2
-    ;; means an IMMEDIATE, whose value is already in $u8/$u16.
-    (local.set $n (call $iaddr (local.get $op) (local.get $u8)
-                               (local.get $u16) (local.get $u24)))
-    (if (i32.lt_s (local.get $n) (i32.const 0))
-      (then (call $trap) (return)))
-    (local.set $ea (global.get $t3))
-    (local.set $w (global.get $t4))
-
-    ;; The opcode's high 3 bits and low 2 give the operation for the regular
-    ;; grid; the irregular ones were all handled above.
-    (local.set $v (i32.const 0))
-    (if (global.get $t2)              ;; immediate: value, not address
-      (then (local.set $v (if (result i32) (local.get $w)
-              (then (local.get $u8)) (else (local.get $u16)))))
-      ;; Stores (operation ids 4-7: sta stx sty stz) do not read their
-      ;; target: a read of an I/O register has side effects ($2139 moves the
-      ;; VRAM address, $4210 clears the NMI flag) and costs a bus cycle.
-      (else (if (i32.gt_u (i32.sub (i32.load8_u (i32.add (i32.const ${OPTAB}) (local.get $op))) (i32.const 4)) (i32.const 3))
-              (then (local.set $v (call $rdw (local.get $ea) (local.get $w)))))))
-
-    ;; lda / ldx / ldy
-    (if (call $isop (local.get $op) (i32.const 0xA9) (i32.const 1))
-      (then (call $seta (local.get $v))
-            (call $setnz (local.get $v) (global.get $fm))
-            (call $ipc (local.get $n)) (return)))
-    (if (call $isop (local.get $op) (i32.const 0xA2) (i32.const 2))
-      (then (global.set $x (local.get $v))
-            (call $setnz (local.get $v) (global.get $fx))
-            (call $ipc (local.get $n)) (return)))
-    (if (call $isop (local.get $op) (i32.const 0xA0) (i32.const 3))
-      (then (global.set $y (local.get $v))
-            (call $setnz (local.get $v) (global.get $fx))
-            (call $ipc (local.get $n)) (return)))
-    ;; sta / stx / sty / stz
-    (if (call $isop (local.get $op) (i32.const 0x85) (i32.const 4))
-      (then (call $wrw (local.get $ea) (global.get $a) (global.get $fm))
-            (call $ipc (local.get $n)) (return)))
-    (if (call $isop (local.get $op) (i32.const 0x86) (i32.const 5))
-      (then (call $wrw (local.get $ea) (global.get $x) (global.get $fx))
-            (call $ipc (local.get $n)) (return)))
-    (if (call $isop (local.get $op) (i32.const 0x84) (i32.const 6))
-      (then (call $wrw (local.get $ea) (global.get $y) (global.get $fx))
-            (call $ipc (local.get $n)) (return)))
-    (if (call $isop (local.get $op) (i32.const 0x64) (i32.const 7))
-      (then (call $wrw (local.get $ea) (i32.const 0) (global.get $fm))
-            (call $ipc (local.get $n)) (return)))
-    ;; and / ora / eor
-    (if (call $isop (local.get $op) (i32.const 0x29) (i32.const 8))
-      (then (local.set $r (i32.and
-               (i32.and (global.get $a) (call $wmask (global.get $fm)))
-               (local.get $v)))
-            (call $seta (local.get $r))
-            (call $setnz (local.get $r) (global.get $fm))
-            (call $ipc (local.get $n)) (return)))
-    (if (call $isop (local.get $op) (i32.const 0x09) (i32.const 9))
-      (then (local.set $r (i32.or
-               (i32.and (global.get $a) (call $wmask (global.get $fm)))
-               (local.get $v)))
-            (call $seta (local.get $r))
-            (call $setnz (local.get $r) (global.get $fm))
-            (call $ipc (local.get $n)) (return)))
-    (if (call $isop (local.get $op) (i32.const 0x49) (i32.const 10))
-      (then (local.set $r (i32.xor
-               (i32.and (global.get $a) (call $wmask (global.get $fm)))
-               (local.get $v)))
-            (call $seta (local.get $r))
-            (call $setnz (local.get $r) (global.get $fm))
-            (call $ipc (local.get $n)) (return)))
-    ;; adc / sbc
-    (if (call $isop (local.get $op) (i32.const 0x69) (i32.const 11))
-      (then (call $iadc (local.get $v) (i32.const 0))
-            (call $ipc (local.get $n)) (return)))
-    (if (call $isop (local.get $op) (i32.const 0xE9) (i32.const 12))
-      (then (call $iadc (local.get $v) (i32.const 1))
-            (call $ipc (local.get $n)) (return)))
-    ;; cmp / cpx / cpy
-    (if (call $isop (local.get $op) (i32.const 0xC9) (i32.const 13))
-      (then (call $icmp (global.get $a) (local.get $v) (global.get $fm))
-            (call $ipc (local.get $n)) (return)))
-    (if (call $isop (local.get $op) (i32.const 0xE0) (i32.const 14))
-      (then (call $icmp (global.get $x) (local.get $v) (global.get $fx))
-            (call $ipc (local.get $n)) (return)))
-    (if (call $isop (local.get $op) (i32.const 0xC0) (i32.const 15))
-      (then (call $icmp (global.get $y) (local.get $v) (global.get $fx))
-            (call $ipc (local.get $n)) (return)))
-    ;; bit
-    (if (call $isop (local.get $op) (i32.const 0x89) (i32.const 16))
-      (then
-        (global.set $fz (i32.eqz (i32.and
-          (i32.and (global.get $a) (call $wmask (global.get $fm)))
-          (local.get $v))))
-        ;; BIT #imm touches Z ONLY; the addressed forms also set N and V
-        ;; from the OPERAND's top two bits.
-        (if (i32.eqz (global.get $t2)) (then
-          (global.set $fn (i32.and (i32.shr_u (local.get $v)
-            (call $wsign (global.get $fm))) (i32.const 1)))
-          (global.set $fv (i32.and (i32.shr_u (local.get $v)
-            (i32.sub (call $wsign (global.get $fm)) (i32.const 1)))
-            (i32.const 1)))))
-        (call $ipc (local.get $n)) (return)))
-    ;; inc / dec on memory
-    (if (call $isop (local.get $op) (i32.const 0xE6) (i32.const 17))
-      (then (local.set $r (i32.and (i32.add (local.get $v) (i32.const 1))
-                                   (call $wmask (global.get $fm))))
-            (call $wrw (local.get $ea) (local.get $r) (global.get $fm))
-            (call $setnz (local.get $r) (global.get $fm))
-            (call $ipc (local.get $n)) (return)))
-    (if (call $isop (local.get $op) (i32.const 0xC6) (i32.const 18))
-      (then (local.set $r (i32.and (i32.sub (local.get $v) (i32.const 1))
-                                   (call $wmask (global.get $fm))))
-            (call $wrw (local.get $ea) (local.get $r) (global.get $fm))
-            (call $setnz (local.get $r) (global.get $fm))
-            (call $ipc (local.get $n)) (return)))
-    ;; asl / lsr / rol / ror, memory or accumulator
-    (if (call $isop (local.get $op) (i32.const 0x0A) (i32.const 19))
-      (then (call $ishift (local.get $op) (local.get $ea) (local.get $v)
-                          (local.get $n)) (return)))
-    ;; tsb / trb
-    (if (call $isop (local.get $op) (i32.const 0x04) (i32.const 20))
-      (then (global.set $fz (i32.eqz (i32.and (local.get $v)
-               (i32.and (global.get $a) (call $wmask (global.get $fm))))))
-            (call $wrw (local.get $ea) (i32.or (local.get $v)
-               (i32.and (global.get $a) (call $wmask (global.get $fm))))
-               (global.get $fm))
-            (call $ipc (local.get $n)) (return)))
-    (if (call $isop (local.get $op) (i32.const 0x14) (i32.const 21))
-      (then (global.set $fz (i32.eqz (i32.and (local.get $v)
-               (i32.and (global.get $a) (call $wmask (global.get $fm))))))
-            (call $wrw (local.get $ea) (i32.and (local.get $v)
-               (i32.xor (i32.and (global.get $a)
-                                 (call $wmask (global.get $fm)))
-                        (i32.const -1)))
-               (global.get $fm))
-            (call $ipc (local.get $n)) (return)))
-    (call $trap))
-
-  ;; A is narrow-preserving: an 8-bit write keeps B, the high byte.
-  (func $seta (param $v i32)
-    (global.set $a (if (result i32) (global.get $fm)
-      (then (i32.or (i32.and (global.get $a) (i32.const 0xFF00))
-                    (i32.and (local.get $v) (i32.const 0xFF))))
-      (else (i32.and (local.get $v) (i32.const 0xFFFF))))))
-
-  (func $setnz (param $v i32) (param $f i32)
-    (local.set $v (i32.and (local.get $v) (call $wmask (local.get $f))))
-    (global.set $fz (i32.eqz (local.get $v)))
-    (global.set $fn (i32.and (i32.shr_u (local.get $v)
-      (call $wsign (local.get $f))) (i32.const 1))))
-
-  (func $ipush (param $v i32) (param $f i32)
-    (if (i32.eqz (local.get $f))
-      (then (call $wr8 (i32.and (global.get $s) (i32.const 0xFFFF))
-                       (i32.shr_u (local.get $v) (i32.const 8)))
-            (global.set $s (i32.and (i32.sub (global.get $s) (i32.const 1))
-                                    (i32.const 0xFFFF)))))
-    (call $wr8 (i32.and (global.get $s) (i32.const 0xFFFF)) (local.get $v))
-    (global.set $s (i32.and (i32.sub (global.get $s) (i32.const 1))
-                            (i32.const 0xFFFF))))
-
-  (func $ipull (param $f i32) (result i32)
-    (local $v i32)
-    (global.set $s (i32.and (i32.add (global.get $s) (i32.const 1))
-                            (i32.const 0xFFFF)))
-    (local.set $v (call $rd8 (i32.and (global.get $s) (i32.const 0xFFFF))))
-    (if (i32.eqz (local.get $f))
-      (then (global.set $s (i32.and (i32.add (global.get $s) (i32.const 1))
-                                    (i32.const 0xFFFF)))
-            (local.set $v (i32.or (local.get $v)
-              (i32.shl (call $rd8 (i32.and (global.get $s)
-                                           (i32.const 0xFFFF)))
-                       (i32.const 8))))))
-    (local.get $v))
-
+  ;; P as a byte, NVMXDIZC (the trace ring records it).
   (func $packp (result i32)
     (i32.or (i32.shl (global.get $fn) (i32.const 7)) (i32.or
-    (i32.shl (global.get $fv) (i32.const 6)) (i32.or
-    (i32.shl (global.get $fm) (i32.const 5)) (i32.or
-    (i32.shl (global.get $fx) (i32.const 4)) (i32.or
-    (i32.shl (global.get $fd) (i32.const 3)) (i32.or
-    (i32.shl (global.get $fi) (i32.const 2)) (i32.or
-    (i32.shl (global.get $fz) (i32.const 1)) (global.get $fc)))))))))
+      (i32.shl (global.get $fv) (i32.const 6)) (i32.or
+      (i32.shl (global.get $fm) (i32.const 5)) (i32.or
+      (i32.shl (global.get $fx) (i32.const 4)) (i32.or
+      (i32.shl (global.get $fd) (i32.const 3)) (i32.or
+      (i32.shl (global.get $fi) (i32.const 2)) (i32.or
+      (i32.shl (global.get $fz) (i32.const 1)) (global.get $fc)))))))))
 
-  (func $unpackp (param $v i32)
-    (global.set $fn (i32.and (i32.shr_u (local.get $v) (i32.const 7)) (i32.const 1)))
-    (global.set $fv (i32.and (i32.shr_u (local.get $v) (i32.const 6)) (i32.const 1)))
-    (global.set $fm (i32.and (i32.shr_u (local.get $v) (i32.const 5)) (i32.const 1)))
-    (global.set $fx (i32.and (i32.shr_u (local.get $v) (i32.const 4)) (i32.const 1)))
-    (global.set $fd (i32.and (i32.shr_u (local.get $v) (i32.const 3)) (i32.const 1)))
-    (global.set $fi (i32.and (i32.shr_u (local.get $v) (i32.const 2)) (i32.const 1)))
-    (global.set $fz (i32.and (i32.shr_u (local.get $v) (i32.const 1)) (i32.const 1)))
-    (global.set $fc (i32.and (local.get $v) (i32.const 1)))
-    (call $narrowx))
-
-  (func $idp (param $o i32) (result i32)
-    (i32.and (i32.add (global.get $d) (local.get $o)) (i32.const 0xFFFF)))
-
-  ;; Decimal-mode ADC/SBC (snes9x cpumacro.h ADC/SBC, CheckDecimal branch):
-  ;; nibble by nibble with the +6/-6 corrections, V from the result before
-  ;; the top-nibble correction, 8- or 16-bit by M. $v is the raw operand.
+  ;; snes9x decimal-mode ADC/SBC.
   (func $adc_dec (param $v i32) (param $sub i32)
     (local $a i32) (local $r i32) (local $c i32) (local $top i32)
     (local.set $a (i32.and (global.get $a) (call $wmask (global.get $fm))))
@@ -1619,155 +1174,5 @@ export function interpWat(_lay) {
     (global.set $fz (i32.eqz (local.get $r)))
     (global.set $fn (i32.ne (i32.and (local.get $r) (local.get $top)) (i32.const 0))))
 
-  (func $iadc (param $v i32) (param $sub i32)
-    (local $t i32) (local $acc i32)
-    (if (global.get $fd) (then (call $adc_dec (local.get $v) (local.get $sub)) (return)))
-    (if (local.get $sub)
-      (then (local.set $v (i32.xor (local.get $v)
-                                   (call $wmask (global.get $fm))))))
-    (local.set $acc (i32.and (global.get $a) (call $wmask (global.get $fm))))
-    (local.set $t (i32.add (i32.add (local.get $acc) (local.get $v))
-                           (global.get $fc)))
-    (global.set $fv (i32.and (i32.shr_u (i32.and
-      (i32.xor (local.get $acc) (i32.xor (local.get $v) (i32.const -1)))
-      (i32.xor (local.get $acc) (local.get $t)))
-      (call $wsign (global.get $fm))) (i32.const 1)))
-    (global.set $fc (i32.gt_u (local.get $t) (call $wmask (global.get $fm))))
-    (call $seta (local.get $t))
-    (call $setnz (local.get $t) (global.get $fm)))
-
-  (func $icmp (param $reg i32) (param $v i32) (param $f i32)
-    (local.set $reg (i32.and (local.get $reg) (call $wmask (local.get $f))))
-    (global.set $fc (i32.ge_u (local.get $reg) (local.get $v)))
-    (call $setnz (i32.sub (local.get $reg) (local.get $v)) (local.get $f)))
-
-  (func $ishift (param $op i32) (param $ea i32) (param $v i32) (param $n i32)
-    (local $c i32) (local $r i32) (local $acc i32)
-    (local.set $acc (i32.or (i32.eq (local.get $op) (i32.const 0x0A))
-                    (i32.or (i32.eq (local.get $op) (i32.const 0x2A))
-                    (i32.or (i32.eq (local.get $op) (i32.const 0x4A))
-                            (i32.eq (local.get $op) (i32.const 0x6A))))))
-    (if (local.get $acc)
-      (then (local.set $v (i32.and (global.get $a)
-                                   (call $wmask (global.get $fm))))))
-    ;; The operation is the opcode's top nibble: $0x asl, $2x rol, $4x lsr,
-    ;; $6x ror.
-    (if (i32.lt_u (i32.and (local.get $op) (i32.const 0xF0)) (i32.const 0x40))
-      (then     ;; asl or rol - shift LEFT, carry out of the sign bit
-        (local.set $c (i32.and (i32.shr_u (local.get $v)
-          (call $wsign (global.get $fm))) (i32.const 1)))
-        (local.set $r (i32.shl (local.get $v) (i32.const 1)))
-        (if (i32.eq (i32.and (local.get $op) (i32.const 0xF0))
-                    (i32.const 0x20))
-          (then (local.set $r (i32.or (local.get $r) (global.get $fc))))))
-      (else     ;; lsr or ror - shift RIGHT, carry out of bit 0
-        (local.set $c (i32.and (local.get $v) (i32.const 1)))
-        (local.set $r (i32.shr_u (local.get $v) (i32.const 1)))
-        (if (i32.eq (i32.and (local.get $op) (i32.const 0xF0))
-                    (i32.const 0x60))
-          (then (local.set $r (i32.or (local.get $r)
-            (i32.shl (global.get $fc)
-                     (call $wsign (global.get $fm)))))))))
-    (local.set $r (i32.and (local.get $r) (call $wmask (global.get $fm))))
-    (global.set $fc (local.get $c))
-    (if (local.get $acc)
-      (then (call $seta (local.get $r)))
-      (else (call $wrw (local.get $ea) (local.get $r) (global.get $fm))))
-    (call $setnz (local.get $r) (global.get $fm))
-    (call $ipc (local.get $n)))
-`;
-}
-
-// m65816.py interp_tables_wat() lines 955-1049
-/** @param {import("./layout.js").SnesLayout} lay */
-export function interpTablesWat(lay, opbase, modebase) {
-  return `
-  ;; Does \`op\` perform operation \`id\`? The \`base\` parameter is ignored - it
-  ;; documents at the call site which opcode the id stands for.
-  (func $isop (param $op i32) (param $base i32) (param $id i32) (result i32)
-    (i32.eq (i32.load8_u (i32.add (i32.const ${opbase}) (local.get $op)))
-            (local.get $id)))
-
-  ;; Compute the effective address into $t3, the operand width flag into $t4
-  ;; and an "is immediate" marker into $t2; return the instruction LENGTH, or
-  ;; -1 for an opcode with no addressing mode this handles.
-  (func $iaddr (param $op i32) (param $u8 i32) (param $u16 i32)
-               (param $u24 i32) (result i32)
-    (local $m i32) (local $w i32) (local $idx i32)
-    (local.set $m (i32.load8_u (i32.add (i32.const ${modebase}) (local.get $op))))
-    (global.set $t2 (i32.const 0))
-    (global.set $t3 (i32.const 0))
-    ;; WIDTH. Index operations use X, everything else uses M. \`ldx\`/\`stx\`/
-    ;; \`cpx\`/\`ldy\`/\`sty\`/\`cpy\` are the index set; the table of operation ids
-    ;; says which.
-    (local.set $idx (i32.load8_u (i32.add (i32.const ${opbase}) (local.get $op))))
-    (local.set $w (global.get $fm))
-    (if (i32.or (i32.eq (local.get $idx) (i32.const 2))   ;; ldx
-        (i32.or (i32.eq (local.get $idx) (i32.const 3))   ;; ldy
-        (i32.or (i32.eq (local.get $idx) (i32.const 5))   ;; stx
-        (i32.or (i32.eq (local.get $idx) (i32.const 6))   ;; sty
-        (i32.or (i32.eq (local.get $idx) (i32.const 14))  ;; cpx
-                (i32.eq (local.get $idx) (i32.const 15))))))) ;; cpy
-      (then (local.set $w (global.get $fx))))
-    (global.set $t4 (local.get $w))
-
-    (if (i32.eq (local.get $m) (i32.const 18))     ;; accumulator
-      (then (return (i32.const 1))))
-    ;; IMMEDIATE. Its LENGTH is what the flag in force says, which is the one
-    ;; place a static arm has to commit and this does not.
-    (if (i32.or (i32.eq (local.get $m) (i32.const 1))
-                (i32.eq (local.get $m) (i32.const 2)))
-      (then (global.set $t2 (i32.const 1))
-            (return (if (result i32) (local.get $w)
-              (then (i32.const 2)) (else (i32.const 3))))))
-    (if (i32.eq (local.get $m) (i32.const 3))      ;; dp
-      (then (global.set $t3 (call $idp (local.get $u8))) (return (i32.const 2))))
-    (if (i32.eq (local.get $m) (i32.const 4))      ;; dp,x
-      (then (global.set $t3 (i32.and (i32.add (call $idp (local.get $u8))
-               (global.get $x)) (i32.const 0xFFFF))) (return (i32.const 2))))
-    (if (i32.eq (local.get $m) (i32.const 5))      ;; dp,y
-      (then (global.set $t3 (i32.and (i32.add (call $idp (local.get $u8))
-               (global.get $y)) (i32.const 0xFFFF))) (return (i32.const 2))))
-    (if (i32.eq (local.get $m) (i32.const 6))      ;; (dp)
-      (then (global.set $t3 (i32.add (global.get $db24)
-               (call $rd16 (call $idp (local.get $u8))))) (return (i32.const 2))))
-    (if (i32.eq (local.get $m) (i32.const 7))      ;; (dp,x)
-      (then (global.set $t3 (i32.add (global.get $db24)
-               (call $rd16 (i32.and (i32.add (call $idp (local.get $u8))
-                 (global.get $x)) (i32.const 0xFFFF))))) (return (i32.const 2))))
-    (if (i32.eq (local.get $m) (i32.const 8))      ;; (dp),y
-      (then (global.set $t3 (i32.add (i32.add (global.get $db24)
-               (call $rd16 (call $idp (local.get $u8)))) (global.get $y)))
-            (return (i32.const 2))))
-    (if (i32.eq (local.get $m) (i32.const 9))      ;; [dp] - bank from POINTER
-      (then (global.set $t3 (call $rd24 (call $idp (local.get $u8))))
-            (return (i32.const 2))))
-    (if (i32.eq (local.get $m) (i32.const 10))     ;; [dp],y
-      (then (global.set $t3 (i32.and (i32.add
-               (call $rd24 (call $idp (local.get $u8))) (global.get $y))
-               (i32.const 0xFFFFFF))) (return (i32.const 2))))
-    (if (i32.eq (local.get $m) (i32.const 11))     ;; abs
-      (then (global.set $t3 (i32.add (global.get $db24) (local.get $u16)))
-            (return (i32.const 3))))
-    (if (i32.eq (local.get $m) (i32.const 12))     ;; abs,x
-      (then (global.set $t3 (i32.add (i32.add (global.get $db24)
-               (local.get $u16)) (global.get $x))) (return (i32.const 3))))
-    (if (i32.eq (local.get $m) (i32.const 13))     ;; abs,y
-      (then (global.set $t3 (i32.add (i32.add (global.get $db24)
-               (local.get $u16)) (global.get $y))) (return (i32.const 3))))
-    (if (i32.eq (local.get $m) (i32.const 14))     ;; long
-      (then (global.set $t3 (local.get $u24)) (return (i32.const 4))))
-    (if (i32.eq (local.get $m) (i32.const 15))     ;; long,x
-      (then (global.set $t3 (i32.and (i32.add (local.get $u24)
-               (global.get $x)) (i32.const 0xFFFFFF))) (return (i32.const 4))))
-    (if (i32.eq (local.get $m) (i32.const 16))     ;; dp,s - always bank 0
-      (then (global.set $t3 (i32.and (i32.add (global.get $s) (local.get $u8))
-               (i32.const 0xFFFF))) (return (i32.const 2))))
-    (if (i32.eq (local.get $m) (i32.const 17))     ;; (dp,s),y
-      (then (global.set $t3 (i32.add (i32.add (global.get $db24)
-               (call $rd16 (i32.and (i32.add (global.get $s) (local.get $u8))
-                 (i32.const 0xFFFF)))) (global.get $y)))
-            (return (i32.const 2))))
-    (i32.const -1))
 `;
 }

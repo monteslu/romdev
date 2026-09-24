@@ -145,6 +145,9 @@ export function ppuWat(_lay) {
             (global.set $wmadd (i32.and (i32.add (global.get $wmadd)
                                                  (i32.const 1))
                                         (i32.const 0x1FFFF))) (return)))
+    ;; $2181-$2183 do not change during a WRAM-to-WRAM (H)DMA (InWRAMDMAorHDMA).
+    (if (i32.and (i32.and (i32.ge_u (local.get $r) (i32.const 0x81)) (i32.le_u (local.get $r) (i32.const 0x83))) (global.get $wramdma))
+      (then (return)))
     (if (i32.eq (local.get $r) (i32.const 0x81))
       (then (global.set $wmadd (i32.or (i32.and (global.get $wmadd)
               (i32.const 0x1FF00)) (local.get $v))) (return)))
@@ -258,9 +261,12 @@ export function ppuWat(_lay) {
                 (i32.eq (local.get $r) (i32.const 0x19)))
       (then
         (local.set $a (i32.eq (local.get $r) (i32.const 0x19)))
+        ;; CHECK_INBLANK: a dropped write still steps the address when it is
+        ;; the byte VMAIN increments on ($2118 with VMA.High clear, $2119 with
+        ;; it set: snes9x redefines the macro for REGISTER_2119).
         (if (call $vram_blocked)
           (then
-            (if (i32.and (call $reg (i32.const 0x15)) (i32.const 0x80))
+            (if (i32.eq (i32.ne (i32.and (call $reg (i32.const 0x15)) (i32.const 0x80)) (i32.const 0)) (local.get $a))
               (then (call $vinc)))
             (return)))
         (i32.store8 (i32.add (i32.const ${VRAM})

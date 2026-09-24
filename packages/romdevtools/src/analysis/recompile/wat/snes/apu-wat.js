@@ -28,7 +28,7 @@
 //
 // Plain JS ESM + JSDoc.
 
-import { APUST, AUDIO, AUDIO_FRAMES } from "./layout.js";
+import { APUST, AUDIO, AUDIO_FRAMES, RESAMP, RESAMP_SIZE } from "./layout.js";
 import apu from "./snes9x-apu.json" with { type: "json" };
 
 /** @type {{iplrom:number[], ops:string[], functions:Record<string,string>, opTemps:number, dsp:{gauss:number[], counterRates:number[], counterOffsets:number[], initialRegs:number[]}}} */
@@ -67,7 +67,8 @@ export function apuDataWat() {
   ].map(([at, b]) => `  (data (i32.const ${at}) "${bytesWat(b)}")\n`).join("");
 }
 
-const G = (names) => names.map((n) => `  (global $${n} (mut i32) (i32.const 0))`).join("\n");
+const G = (names) => names.map((n) => `  (global $${n} (mut i32) (i32.const 0))`).join("\n") +
+  "\n  (global $rs_frac (mut f32) (f32.const 0))";
 
 /** Globals of the SMP, the DSP and the CPU<->APU clock. */
 export function apuGlobalsWat() {
@@ -91,6 +92,10 @@ export function apuGlobalsWat() {
     "d_mo0", "d_mo1", "d_eo0", "d_eo1", "d_ei0", "d_ei1", "d_hpos",
     // CPU side (apu.cpp): reference position and remainder, in master clocks.
     "apu_ref", "apu_rem", "apu_nsmp", "apu_nout",
+    // snes9x's Resampler (apu/resampler.h) when a per-title APU speedup
+    // makes its time ratio differ from 1: ring start/end and the Hermite
+    // history (r_frac is the f32 below).
+    "rs_start", "rs_end", "rs_l0", "rs_l1", "rs_l2", "rs_l3", "rs_r0", "rs_r1", "rs_r2", "rs_r3",
   ]) + "\n";
 }
 
@@ -584,10 +589,14 @@ ${phdisp})
  * @param {import("./layout.js").SnesLayout} lay
  */
 export function apuWat(lay) {
+  // Timings.APUSpeedup (a per-title fix): S9xAPUTimingSetSpeedup scales the
+  // clock ratio's denominator by (256 - ticks) / 256 (integer division).
+  const speed = lay.fixes?.apuSpeedup ?? 0;
+  const den = Math.floor((328125 * (256 - speed)) / 256);
   return smpWat(lay) + dspWat(lay) + `
 
-  ;; A DSP output sample (echo_27, SPC_DSP_OUT_HOOK) into the host's ring.
-  (func $apu_out (param $l i32) (param $r i32)
+  ;; One stereo sample into the host's ring.
+  (func $apu_put (param $l i32) (param $r i32)
     (local $at i32)
     ${ls("at", `(i32.add ${c(AUDIO)} (i32.shl (i32.and ${gg("apu_nout")} ${c(AUDIO_FRAMES - 1)}) ${c(2)}))`)}
     (i32.store16 ${lg("at")} ${lg("l")})
@@ -599,16 +608,22 @@ export function apuWat(lay) {
   ;; returns: samples an instruction or DMA running past that point makes
   ;; belong to the next frame. So the ring's write cursor is published
   ;; here, not per sample.
+${speed ? resamplerWat(lay, speed) : `
+  ;; A DSP output sample (echo_27, SPC_DSP_OUT_HOOK). The resampler's time
+  ;; ratio is 1 (SoundInputRate = SoundPlaybackRate = 32040), so snes9x
+  ;; pulls the DSP stream as it is: straight into the host's ring.
+  (func $apu_out (param $l i32) (param $r i32)
+    (call $apu_put ${lg("l")} ${lg("r")}))
   (func $apu_flush
-    (i32.store ${c(lay.ABI + 0x100)} (i32.and ${gg("apu_nout")} ${c(AUDIO_FRAMES - 1)})))
+    (i32.store ${c(lay.ABI + 0x100)} (i32.and ${gg("apu_nout")} ${c(AUDIO_FRAMES - 1)})))`}
 
   ;; S9xAPUExecute: run the SMP up to CPU position $pos (master clocks from
   ;; the start of this scanline, snes9x's CPU.Cycles).
   (func $apu_sync (param $pos i32)
     (local $t i64)
     ${ls("t", `(i64.add (i64.mul (i64.const 15664) (i64.extend_i32_s (i32.sub ${lg("pos")} ${gg("apu_ref")}))) (i64.extend_i32_u ${gg("apu_rem")}))`)}
-    ${gs("s_clock", `(i32.sub ${gg("s_clock")} (i32.wrap_i64 (i64.div_s ${lg("t")} (i64.const 328125))))`)}
-    ${gs("apu_rem", "(i32.wrap_i64 (i64.rem_s (local.get $t) (i64.const 328125)))")}
+    ${gs("s_clock", `(i32.sub ${gg("s_clock")} (i32.wrap_i64 (i64.div_s ${lg("t")} (i64.const ${den}))))`)}
+    ${gs("apu_rem", `(i32.wrap_i64 (i64.rem_s (local.get $t) (i64.const ${den})))`)}
     (call $smp_enter)
     ${gs("apu_ref", lg("pos"))})
 
@@ -645,4 +660,78 @@ export function apuWat(lay) {
     (call $s_setp ${c(0x02)})
     ${gs("s_iplen", c(1))}
     ${gs("d_noise", c(0x4000))} ${gs("d_eos", c(1))})`;
+}
+
+/**
+ * snes9x's Resampler with a time ratio other than 1 (a per-title APU
+ * speedup): the DSP pushes into a 2050-sample ring (S9xInitSound(32)), and
+ * S9xSyncSpeed reads avail() samples through the 4-point Hermite
+ * interpolator, in f32 as the C does.
+ * @param {import("./layout.js").SnesLayout} lay
+ * @param {number} ticks  Timings.APUSpeedup
+ */
+function resamplerWat(lay, ticks) {
+  const size = RESAMP_SIZE;   // int16 samples (even)
+  const step = Math.fround((32040 * 256) / (32040 * (256 - ticks)));
+  const f = (v) => `(f32.const ${v})`;
+  const filled = `(call $rs_filled)`;
+  return `
+  (func $rs_filled (result i32)
+    (local $n i32)
+    ${ls("n", `(i32.sub ${gg("rs_end")} ${gg("rs_start")})`)}
+    (if (i32.lt_s ${lg("n")} ${c(0)}) (then ${ls("n", `(i32.add ${lg("n")} ${c(size)})`)}))
+    ${lg("n")})
+  ;; push_sample: dropped when fewer than 2 slots are free
+  (func $apu_out (param $l i32) (param $r i32)
+    (if (i32.lt_s (i32.sub ${c(size - 2)} ${filled}) ${c(2)}) (then (return)))
+    (i32.store16 (i32.add ${c(RESAMP)} (i32.shl ${gg("rs_end")} ${c(1)})) ${lg("l")})
+    (i32.store16 (i32.add ${c(RESAMP + 2)} (i32.shl ${gg("rs_end")} ${c(1)})) ${lg("r")})
+    ${gs("rs_end", `(i32.rem_u (i32.add ${gg("rs_end")} ${c(2)}) ${c(size)})`)})
+  ;; hermite(mu1, a, b, c, d)
+  (func $rs_herm (param $mu1 f32) (param $a f32) (param $b f32) (param $c f32) (param $d f32) (result f32)
+    (local $mu2 f32) (local $mu3 f32) (local $m0 f32) (local $m1 f32)
+    (local.set $mu2 (f32.mul (local.get $mu1) (local.get $mu1)))
+    (local.set $mu3 (f32.mul (local.get $mu2) (local.get $mu1)))
+    (local.set $m0 (f32.mul (f32.sub (local.get $c) (local.get $a)) ${f(0.5)}))
+    (local.set $m1 (f32.mul (f32.sub (local.get $d) (local.get $b)) ${f(0.5)}))
+    (f32.add (f32.add (f32.add
+      (f32.mul (f32.add (f32.sub (f32.mul ${f(2)} (local.get $mu3)) (f32.mul ${f(3)} (local.get $mu2))) ${f(1)}) (local.get $b))
+      (f32.mul (f32.add (f32.sub (local.get $mu3) (f32.mul ${f(2)} (local.get $mu2))) (local.get $mu1)) (local.get $m0)))
+      (f32.mul (f32.sub (local.get $mu3) (local.get $mu2)) (local.get $m1)))
+      (f32.mul (f32.add (f32.mul ${f(-2)} (local.get $mu3)) (f32.mul ${f(3)} (local.get $mu2))) (local.get $c))))
+  ;; short_clamp((int)v)
+  (func $rs_clamp (param $v f32) (result i32)
+    (local $n i32)
+    (local.set $n (i32.trunc_sat_f32_s (local.get $v)))
+    (if (result i32) (i32.ne (i32.extend16_s (local.get $n)) (local.get $n))
+      (then (i32.xor (i32.shr_s (local.get $n) (i32.const 31)) (i32.const 0x7fff)))
+      (else (local.get $n))))
+  ;; S9xSyncSpeed: avail() = trunc(((filled >> 1) - r_frac) / r_step) * 2,
+  ;; then read(avail) into the host's ring.
+  (func $apu_flush
+    (local $want i32) (local $o i32) (local $sl i32) (local $sr i32)
+    ${ls("want", `(i32.shl (i32.trunc_sat_f32_s (f32.div (f32.sub (f32.convert_i32_s (i32.shr_s ${filled} ${c(1)})) (global.get $rs_frac)) ${f(step)})) ${c(1)})`)}
+    (block $done (loop $outer
+      (br_if $done (i32.ge_s ${lg("o")} ${lg("want")}))
+      (br_if $done (i32.lt_s ${filled} ${c(2)}))
+      ${ls("sl", `(i32.load16_s (i32.add ${c(RESAMP)} (i32.shl ${gg("rs_start")} ${c(1)})))`)}
+      ${ls("sr", `(i32.load16_s (i32.add ${c(RESAMP + 2)} (i32.shl ${gg("rs_start")} ${c(1)})))`)}
+      (block $inner_done (loop $inner
+        (br_if $inner_done (f32.gt (global.get $rs_frac) ${f(1)}))
+        (br_if $inner_done (i32.ge_s ${lg("o")} ${lg("want")}))
+        (call $apu_put
+          (call $rs_clamp (call $rs_herm (global.get $rs_frac) (f32.convert_i32_s ${gg("rs_l0")}) (f32.convert_i32_s ${gg("rs_l1")}) (f32.convert_i32_s ${gg("rs_l2")}) (f32.convert_i32_s ${gg("rs_l3")})))
+          (call $rs_clamp (call $rs_herm (global.get $rs_frac) (f32.convert_i32_s ${gg("rs_r0")}) (f32.convert_i32_s ${gg("rs_r1")}) (f32.convert_i32_s ${gg("rs_r2")}) (f32.convert_i32_s ${gg("rs_r3")}))))
+        ${ls("o", `(i32.add ${lg("o")} ${c(2)})`)}
+        (global.set $rs_frac (f32.add (global.get $rs_frac) ${f(step)}))
+        (br $inner)))
+      (if (f32.gt (global.get $rs_frac) ${f(1)})
+        (then
+          ${gs("rs_l0", gg("rs_l1"))} ${gs("rs_l1", gg("rs_l2"))} ${gs("rs_l2", gg("rs_l3"))} ${gs("rs_l3", lg("sl"))}
+          ${gs("rs_r0", gg("rs_r1"))} ${gs("rs_r1", gg("rs_r2"))} ${gs("rs_r2", gg("rs_r3"))} ${gs("rs_r3", lg("sr"))}
+          (global.set $rs_frac (f32.sub (global.get $rs_frac) ${f(1)}))
+          ${gs("rs_start", `(i32.add ${gg("rs_start")} ${c(2)})`)}
+          (if (i32.ge_s ${gg("rs_start")} ${c(size)}) (then ${gs("rs_start", `(i32.sub ${gg("rs_start")} ${c(size)})`)}))))
+      (br $outer)))
+    (i32.store ${c(lay.ABI + 0x100)} (i32.and ${gg("apu_nout")} ${c(AUDIO_FRAMES - 1)})))`;
 }

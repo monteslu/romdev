@@ -12,7 +12,7 @@
 // Plain JS ESM + JSDoc.
 
 import {
-  FB_W, FB_H, WRAM, PPUREG, INPUT, PROBE, ITRACE, PCRING, PCRING_N, MAPTAB, ROM, SRAMB, HDMAST, AUDIO, AUDIO_FRAMES, ICOST,
+  FB_W, FB_H, WRAM, PPUREG, INPUT, PROBE, ITRACE, PCRING, PCRING_N, MAPTAB, ROM, HDMAST, AUDIO, AUDIO_FRAMES, ICOST,
   REGWATCH, REGWATCH_N, REGWATCH_STRIDE,
 } from "./layout.js";
 
@@ -98,6 +98,7 @@ export function stepHeadWat(regwatch, pcringExcl, lay) {
     (if (global.get $wai)
       (then (global.set $cyc (i32.sub (global.get $cyc) (i32.add (global.get $ms) (i32.const 6))))
             (return)))
+    (global.set $stp (i32.const 0))
     (global.set $curpc (global.get $pc))
     (global.set $istart (call $hnow))
     (local.set $bank (i32.and (i32.shr_u (global.get $pc) (i32.const 16))
@@ -269,8 +270,9 @@ export function frameWat(lay) {
     ;; snes9x S9xReset: work RAM powers on as $55 (cpu.cpp memset), not zero.
     ;; Games that read a byte before writing it see $55.
     (memory.fill (i32.const ${WRAM}) (i32.const 0x55) (i32.const 0x20000))
-    ;; snes9x ClearSRAM: cartridge SRAM powers on as $60.
-    (memory.fill (i32.const ${SRAMB}) (i32.const 0x60) (i32.const 0x8000))
+    ;; snes9x ClearSRAM: the 512KB SRAM buffer powers on as
+    ;; SNESGameFixes.SRAMInitialValue ($60 unless a per-title fix says otherwise).
+    (memory.fill (i32.const ${lay.SRAM}) (i32.const ${lay.fixes?.sramInit ?? 0x60}) (i32.const 0x80000))
     ;; snes9x S9xResetPPU / S9xResetDMA register state that the cart keeps
     ;; in its shadow: WRIO/RDIO $FF, both windows empty (left 1 > right 0),
     ;; the H/V IRQ positions $1FF, every DMA channel register $FF and each
@@ -308,6 +310,7 @@ export function frameWat(lay) {
 
   (func $nmi
     (global.set $wai (i32.const 0))
+    (global.set $stp (i32.const 0))
     ;; snes9x S9xOpcode_NMI: an opcode fetch and an internal cycle, then the
     ;; pushes and the vector read (charged by $wr8/$rd8).
     (global.set $cyc (i32.sub (global.get $cyc) (i32.add (global.get $ms) (i32.const 6))))
@@ -323,8 +326,11 @@ export function frameWat(lay) {
       (global.set $s (i32.and (i32.sub (global.get $s) (i32.const 1))
                               (i32.const 0xFFFF)))))
     ;; PushW(PC): one word access (snes9x S9xOpcode_NMI).
-    (call $push16 (i32.and (global.get $pc) (i32.const 0xFFFF)))
-    (call $wr8 (global.get $s) (i32.or
+    ;; PushWE in emulation mode, PushW otherwise
+    (if (global.get $fe)
+      (then (call $push16e (i32.and (global.get $pc) (i32.const 0xFFFF))))
+      (else (call $push16 (i32.and (global.get $pc) (i32.const 0xFFFF)))))
+    (call $push8 (i32.or
       (i32.shl (global.get $fn) (i32.const 7)) (i32.or
       (i32.shl (global.get $fv) (i32.const 6)) (i32.or
       (i32.shl (global.get $fm) (i32.const 5)) (i32.or
@@ -332,8 +338,6 @@ export function frameWat(lay) {
       (i32.shl (global.get $fd) (i32.const 3)) (i32.or
       (i32.shl (global.get $fi) (i32.const 2)) (i32.or
       (i32.shl (global.get $fz) (i32.const 1)) (global.get $fc)))))))))
-    (global.set $s (i32.and (i32.sub (global.get $s) (i32.const 1))
-                            (i32.const 0xFFFF)))
     (global.set $fi (i32.const 1))
     (global.set $fd (i32.const 0))
     (global.set $pc (call $rd16 (if (result i32) (global.get $fe) (then (i32.const 0xFFFA)) (else (i32.const 0xFFEA))))))
@@ -353,8 +357,10 @@ export function frameWat(lay) {
       ;; A trapped cart runs no code; time still passes to the frame end.
       (if (i32.and (global.get $trapped) (i32.gt_s (global.get $cyc) (i32.const 0)))
         (then (global.set $cyc (i32.const 0))))
-      ;; Events the last instruction's fetch or internal cycles crossed.
-      (if (i32.le_s (global.get $cyc) (i32.const 0))
+      ;; Events the last instruction's fetch or internal cycles crossed
+      ;; (none for a re-executing STP: it has no access or AddCycles of its
+      ;; own, and snes9x's opcode fetch does not look at events).
+      (if (i32.and (i32.le_s (global.get $cyc) (i32.const 0)) (i32.eqz (global.get $stp)))
         (then (call $ev_process (call $evpos (call $hnow)))
               (call $ev_due)))
       ;; snes9x S9xMainLoop: a pending NMI is taken at the first instruction
@@ -369,7 +375,7 @@ export function frameWat(lay) {
               (call $nmi)))
       ;; The H/V timer (snes9x Timings.NextIRQTimer) is looked at here only.
       (if (i32.ge_s (call $hnow) (global.get $ipos))
-        (then (global.set $ipos (i32.const 99999))
+        (then (call $irq_update (i32.const 0))
               (global.set $irqline (i32.const 1))))
       ;; An IRQ line wakes WAI even with I set.
       (if (i32.and (global.get $irqline) (global.get $wai))
@@ -382,10 +388,14 @@ export function frameWat(lay) {
       ;; the check above still saw the old flag.
       (call $apply_ichg)
       (br_if $d (global.get $fdone))
-      (if (i32.gt_s (global.get $cyc) (i32.const 0))
+      (if (i32.or (i32.gt_s (global.get $cyc) (i32.const 0)) (global.get $stp))
         (then (if (i32.eqz (global.get $trapped))
           (then (call $step)
                 (global.set $steps (i32.add (global.get $steps) (i32.const 1)))))))
+      ;; An STP loop never reaches another event: snes9x gives up when
+      ;; CPU.Cycles passes 1000000 ("CPU is deadlocked") and every later
+      ;; frame runs just the interrupt checks and one more STP fetch.
+      (br_if $d (i32.and (global.get $stp) (i32.gt_s (call $hnow) (i32.const 1000000))))
       (br $l))))
 
   ;; snes9x CHECK_FOR_IRQ_CHANGE: Timings.IRQFlagChanging applied at the
@@ -404,6 +414,7 @@ export function frameWat(lay) {
 
   (func $irq
     (global.set $wai (i32.const 0))
+    (global.set $stp (i32.const 0))
     ;; snes9x S9xOpcode_IRQ: an opcode fetch and an internal cycle (one
     ;; AddCycles, so an event it reaches happens right here), then the
     ;; pushes and the vector read (charged by $wr8/$rd16).
@@ -412,8 +423,11 @@ export function frameWat(lay) {
     (if (i32.eqz (global.get $fe)) (then
       (call $wr8 (global.get $s) (i32.shr_u (global.get $pc) (i32.const 16)))
       (global.set $s (i32.and (i32.sub (global.get $s) (i32.const 1)) (i32.const 0xFFFF)))))
-    (call $push16 (i32.and (global.get $pc) (i32.const 0xFFFF)))
-    (call $wr8 (global.get $s) (i32.or
+    ;; PushWE in emulation mode, PushW otherwise
+    (if (global.get $fe)
+      (then (call $push16e (i32.and (global.get $pc) (i32.const 0xFFFF))))
+      (else (call $push16 (i32.and (global.get $pc) (i32.const 0xFFFF)))))
+    (call $push8 (i32.or
       (i32.shl (global.get $fn) (i32.const 7)) (i32.or
       (i32.shl (global.get $fv) (i32.const 6)) (i32.or
       (i32.shl (global.get $fm) (i32.const 5)) (i32.or
@@ -421,34 +435,82 @@ export function frameWat(lay) {
       (i32.shl (global.get $fd) (i32.const 3)) (i32.or
       (i32.shl (global.get $fi) (i32.const 2)) (i32.or
       (i32.shl (global.get $fz) (i32.const 1)) (global.get $fc)))))))))
-    (global.set $s (i32.and (i32.sub (global.get $s) (i32.const 1)) (i32.const 0xFFFF)))
     (global.set $fi (i32.const 1))
     (global.set $fd (i32.const 0))
     (global.set $pc (call $rd16 (if (result i32) (global.get $fe) (then (i32.const 0xFFFE)) (else (i32.const 0xFFEE))))))
 
-  ;; H/V timer IRQ position on line $ln in master clocks, or 99999
-  ;; (snes9x S9xUpdateIRQPositions: HTIME dots x 4 + IRQTriggerCycles 14,
-  ;; minus a dot at HTIME 0, plus half a dot past dots 322 and 326; a V-only
-  ;; IRQ fires at 14 - 4).
-  (func $irqpos (param $ln i32) (result i32)
-    (local $en i32) (local $vt i32) (local $ht i32) (local $p i32)
+  ;; snes9x CyclesUntilNext: master clocks from the start of the current
+  ;; line to (hc, vc), across lines and the frame wrap, one dot shorter
+  ;; past line 240 of an odd non-interlaced field.
+  (func $cycles_until_next (param $hc i32) (param $vc i32) (result i32)
+    (local $total i32) (local $vpos i32)
+    (local.set $vpos (global.get $scanline))
+    (if (i32.gt_s (i32.sub (local.get $vc) (local.get $vpos)) (i32.const 0))
+      (then
+        (local.set $total (i32.mul (i32.sub (local.get $vc) (local.get $vpos)) (i32.const 1364)))
+        (if (i32.and (i32.and (i32.le_s (local.get $vpos) (i32.const 240)) (i32.gt_s (local.get $vc) (i32.const 240)))
+                     (i32.and (i32.ne (global.get $field) (i32.const 0)) (i32.eqz (global.get $interlace))))
+          (then (local.set $total (i32.sub (local.get $total) (i32.const 4))))))
+      (else
+        (if (i32.and (i32.eq (local.get $vc) (local.get $vpos)) (i32.gt_s (local.get $hc) (call $hnow)))
+          (then (return (local.get $hc))))
+        (local.set $total (i32.mul (i32.sub (global.get $vmax) (local.get $vpos)) (i32.const 1364)))
+        (if (i32.and (i32.le_s (local.get $vpos) (i32.const 240))
+                     (i32.and (i32.ne (global.get $field) (i32.const 0)) (i32.eqz (global.get $interlace))))
+          (then (local.set $total (i32.sub (local.get $total) (i32.const 4)))))
+        (local.set $total (i32.add (local.get $total) (i32.mul (local.get $vc) (i32.const 1364))))
+        (if (i32.and (i32.gt_s (local.get $vc) (i32.const 240))
+                     (i32.and (i32.eqz (global.get $field)) (i32.eqz (global.get $interlace))))
+          (then (local.set $total (i32.sub (local.get $total) (i32.const 4)))))))
+    (i32.add (local.get $total) (local.get $hc)))
+
+  ;; snes9x S9xUpdateIRQPositions: Timings.NextIRQTimer ($ipos, master
+  ;; clocks from the start of the current line; $0FFFFFFF = none) from
+  ;; HTIME/VTIME and the $4200 enables. Called when the timer fires and on
+  ;; writes to $4200 and $4207-$420A; the line end moves it back by H_Max.
+  (func $irq_update (param $initial i32)
+    (local $hb i32) (local $vb i32) (local $htp i32) (local $en i32) (local $next i32) (local $vpos i32) (local $f i32)
+    (local.set $hb (i32.or (call $io_reg (i32.const 0x4207)) (i32.shl (i32.and (call $io_reg (i32.const 0x4208)) (i32.const 1)) (i32.const 8))))
+    (local.set $vb (i32.or (call $io_reg (i32.const 0x4209)) (i32.shl (i32.and (call $io_reg (i32.const 0x420A)) (i32.const 1)) (i32.const 8))))
+    (local.set $htp (i32.add (i32.shl (local.get $hb) (i32.const 2)) (i32.const 14)))
+    (if (i32.eqz (local.get $hb)) (then (local.set $htp (i32.sub (local.get $htp) (i32.const 4)))))
+    (if (i32.gt_u (local.get $hb) (i32.const 322)) (then (local.set $htp (i32.add (local.get $htp) (i32.const 2)))))
+    (if (i32.gt_u (local.get $hb) (i32.const 326)) (then (local.set $htp (i32.add (local.get $htp) (i32.const 2)))))
     (local.set $en (i32.and (call $io_reg (i32.const 0x4200)) (i32.const 0x30)))
-    (if (i32.eqz (local.get $en)) (then (return (i32.const 99999))))
-    (local.set $vt (i32.or (call $io_reg (i32.const 0x4209))
-      (i32.shl (i32.and (call $io_reg (i32.const 0x420A)) (i32.const 1)) (i32.const 8))))
-    (local.set $ht (i32.or (call $io_reg (i32.const 0x4207))
-      (i32.shl (i32.and (call $io_reg (i32.const 0x4208)) (i32.const 1)) (i32.const 8))))
-    (local.set $p (i32.add (i32.shl (local.get $ht) (i32.const 2)) (i32.const 14)))
-    (if (i32.eqz (local.get $ht)) (then (local.set $p (i32.sub (local.get $p) (i32.const 4)))))
-    (if (i32.gt_u (local.get $ht) (i32.const 322)) (then (local.set $p (i32.add (local.get $p) (i32.const 2)))))
-    (if (i32.gt_u (local.get $ht) (i32.const 326)) (then (local.set $p (i32.add (local.get $p) (i32.const 2)))))
+    (if (i32.and (i32.ne (i32.and (local.get $en) (i32.const 0x20)) (i32.const 0))
+                 (i32.ge_s (local.get $vb) (i32.add (global.get $vmax) (global.get $interlace))))
+      (then (global.set $ipos (i32.const 0x0FFFFFFF)) (return)))
+    (if (i32.eqz (local.get $en)) (then (global.set $ipos (i32.const 0x0FFFFFFF)) (return)))
+    (if (i32.eq (local.get $en) (i32.const 0x10))
+      (then
+        (local.set $vpos (global.get $scanline))
+        (local.set $next (local.get $htp))
+        (if (i32.gt_s (call $hnow) (i32.sub (local.get $next) (i32.const 14)))
+          (then (local.set $next (i32.add (local.get $next) (global.get $hmax)))
+                (local.set $vpos (i32.add (local.get $vpos) (i32.const 1)))))
+        (if (i32.and (i32.eq (local.get $vpos) (i32.const 240))
+                     (i32.and (i32.ne (global.get $field) (i32.const 0)) (i32.eqz (global.get $interlace))))
+          (then
+            (if (i32.le_u (local.get $hb) (i32.const 322)) (then (local.set $next (i32.sub (local.get $next) (i32.const 2)))))
+            (if (i32.le_u (local.get $hb) (i32.const 326)) (then (local.set $next (i32.sub (local.get $next) (i32.const 2)))))))
+        (global.set $ipos (local.get $next))
+        (return)))
     (if (i32.eq (local.get $en) (i32.const 0x20))
-      (then (return (if (result i32) (i32.eq (local.get $ln) (local.get $vt))
-        (then (i32.const 10)) (else (i32.const 99999))))))
-    (if (i32.ge_u (local.get $p) (global.get $hmax)) (then (return (i32.const 99999))))
-    (if (i32.eq (local.get $en) (i32.const 0x10)) (then (return (local.get $p))))
-    (if (result i32) (i32.eq (local.get $ln) (local.get $vt))
-      (then (local.get $p)) (else (i32.const 99999))))
+      (then
+        (if (i32.and (i32.eq (global.get $scanline) (local.get $vb)) (local.get $initial))
+          (then (global.set $ipos (i32.add (call $hnow) (i32.const 10))))
+          (else (global.set $ipos (call $cycles_until_next (i32.const 10) (local.get $vb)))))
+        (return)))
+    (local.set $next (call $cycles_until_next (local.get $htp) (local.get $vb)))
+    (local.set $f (i32.ne (global.get $field) (i32.const 0)))
+    (if (i32.or (i32.lt_s (local.get $vb) (global.get $scanline))
+                (i32.and (i32.eq (local.get $vb) (global.get $scanline)) (i32.gt_s (local.get $next) (global.get $hmax))))
+      (then (local.set $f (i32.eqz (local.get $f)))))
+    (if (i32.and (i32.eq (local.get $vb) (i32.const 240)) (i32.and (local.get $f) (i32.eqz (global.get $interlace))))
+      (then
+        (if (i32.le_u (local.get $hb) (i32.const 322)) (then (local.set $next (i32.sub (local.get $next) (i32.const 2)))))
+        (if (i32.le_u (local.get $hb) (i32.const 326)) (then (local.set $next (i32.sub (local.get $next) (i32.const 2)))))))
+    (global.set $ipos (local.get $next)))
 
   ;; The next event after kind $k (0 = the line has just begun) in this
   ;; line, snes9x S9xReschedule without its no-op events: HDMA table
@@ -462,7 +524,7 @@ export function frameWat(lay) {
     (local.set $k (if (result i32) (i32.and (i32.eqz (local.get $k)) (i32.ne (global.get $scanline) (i32.const 0)))
       (then (i32.const 2)) (else (i32.add (local.get $k) (i32.const 1)))))
     (local.set $t (if (result i32) (i32.eq (local.get $k) (i32.const 1)) (then (i32.const 20))
-      (else (if (result i32) (i32.eq (local.get $k) (i32.const 2)) (then (i32.const 512))
+      (else (if (result i32) (i32.eq (local.get $k) (i32.const 2)) (then (i32.const ${lay.fixes?.renderPos ?? 512}))
       (else (if (result i32) (i32.eq (local.get $k) (i32.const 3)) (then (global.get $refpos))
       (else (if (result i32) (i32.eq (local.get $k) (i32.const 4)) (then (i32.const 1106))
       (else (global.get $hmax))))))))))
@@ -487,13 +549,11 @@ export function frameWat(lay) {
     (global.set $nmipos (i32.sub (global.get $nmipos) (global.get $hmax)))
     ;; A timer position this line never reached stays due (NextIRQTimer
     ;; -= H_Max), so a DMA that ran past it still raises it afterwards.
-    (if (i32.ne (global.get $ipos) (i32.const 99999))
+    (if (i32.ne (global.get $ipos) (i32.const 0x0FFFFFFF))
       (then (global.set $ipos (i32.sub (global.get $ipos) (global.get $hmax)))))
     (local.set $ln (i32.add (global.get $scanline) (i32.const 1)))
     (if (i32.eq (local.get $ln) (i32.const 262)) (then (local.set $ln (i32.const 0))))
     (call $line_begin (local.get $ln))
-    (if (i32.eq (global.get $ipos) (i32.const 99999))
-      (then (global.set $ipos (call $irqpos (local.get $ln)))))
     ;; VBlank begins: libretro's frame is over (SCAN_KEYS_FLAG).
     (if (i32.eq (local.get $ln) (i32.const 225))
       (then (global.set $fdone (i32.const 1))
@@ -604,6 +664,10 @@ export function frameWat(lay) {
         (global.set $nmiearly (i32.const 0))
         (global.set $maxbright (i32.and (i32.load8_u (i32.const ${PPUREG}))
                                         (i32.const 15)))
+        ;; snes9x re-reads forced blank from $2100 here (PPU.ForcedBlanking =
+        ;; FillRAM[0x2100] >> 7): a cart that never wrote $2100 leaves the
+        ;; power-on forced blank at its first vblank.
+        (global.set $fblank (i32.shr_u (i32.load8_u (i32.const ${PPUREG})) (i32.const 7)))
         (if (i32.eqz (global.get $fblank)) (then (call $oam_vblank_reset)))
         (if (i32.and (i32.ne (global.get $nmien) (i32.const 0))
                      (i32.eqz (global.get $trapped)))
@@ -624,7 +688,7 @@ export function frameWat(lay) {
     (if (i32.eqz (global.get $started))
       (then (global.set $started (i32.const 1))
             (call $line_begin (i32.const 0))
-            (global.set $ipos (call $irqpos (i32.const 0)))
+            (global.set $ipos (i32.const 0x0FFFFFFF))
             (global.set $segend (i32.const 0))
             (global.set $cyc (i32.sub (i32.const 0) (global.get $hpos)))
             (call $ev_sched (i32.const 0))))

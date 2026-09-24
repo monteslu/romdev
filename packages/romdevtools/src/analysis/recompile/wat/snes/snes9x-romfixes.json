@@ -1,0 +1,375 @@
+{
+ "source": "snes9x memmap.cpp: LoadROMInt (forced LoROM titles), InitROM (LoROM board maps by name), CMemory::ApplyROMFixes",
+ "provenance": {
+  "repo": "https://github.com/libretro/snes9x.git",
+  "commit": "185488cd83aaf274752a742c94d45561cbecb7af",
+  "file": "memmap.cpp",
+  "sha256": "a75e41db53f9fd550c9f848c12f5cf8bb87d376a75084316745fb24facf43c69"
+ },
+ "license": "snes9x (non-commercial): data derived from its source",
+ "matching": {
+  "na": "ROMName == str (the header name, NUL at 22, cut after 21 when char 21 is a space, trailing spaces stripped)",
+  "nn": "ROMName starts with str",
+  "nc": "ROMName starts with str, ignoring case",
+  "id": "ROMId (header $FFB2-$FFB5 of the cart's header block) starts with str",
+  "loRomMaps": "strncmp(untruncated ROMName, name, length) == 0",
+  "forceLoRom": "strncmp(ROM + offset, name, length) == 0, before the LoROM/HiROM choice"
+ },
+ "forceLoRom": [
+  {
+   "offset": 32704,
+   "name": "YUYU NO QUIZ DE GO!GO!",
+   "length": 22
+  },
+  {
+   "offset": 65472,
+   "name": "BATMAN--REVENGE JOKER",
+   "length": 21
+  }
+ ],
+ "loRomMaps": [
+  {
+   "name": "WANDERERS FROM YS",
+   "length": 17,
+   "map": "NoMAD1LoROM"
+  },
+  {
+   "name": "SOUND NOVEL-TCOOL",
+   "length": 17,
+   "map": "ROM24MBSLoROM"
+  },
+  {
+   "name": "DERBY STALLION 96",
+   "length": 17,
+   "map": "ROM24MBSLoROM"
+  },
+  {
+   "name": "THOROUGHBRED BREEDER3",
+   "length": 21,
+   "map": "SRAM512KLoROM"
+  },
+  {
+   "name": "RPG-TCOOL 2",
+   "length": 11,
+   "map": "SRAM512KLoROM"
+  },
+  {
+   "name": "ADD-ON BASE CASSETE",
+   "length": 19,
+   "map": "SufamiTurboPseudoLoROM"
+  }
+ ],
+ "applyRomFixes": [
+  [
+   {
+    "when": null,
+    "sets": [
+     {
+      "set": "Settings.BlockInvalidVRAMAccess",
+      "value": {
+       "expr": "Settings.BlockInvalidVRAMAccessMaster"
+      }
+     }
+    ]
+   }
+  ],
+  [
+   {
+    "when": [
+     [
+      {
+       "match": "na",
+       "str": "CIRCUIT USA"
+      }
+     ]
+    ],
+    "sets": [
+     {
+      "set": "Timings.APUSpeedup",
+      "value": 3
+     }
+    ]
+   }
+  ],
+  [
+   {
+    "when": null,
+    "call": "S9xAPUTimingSetSpeedup",
+    "args": [
+     "Timings.APUSpeedup"
+    ]
+   }
+  ],
+  [
+   {
+    "when": [
+     [
+      {
+       "match": "na",
+       "str": "BATTLE GRANDPRIX"
+      }
+     ]
+    ],
+    "sets": [
+     {
+      "set": "Timings.DMACPUSync",
+      "value": 20
+     }
+    ]
+   },
+   {
+    "when": [
+     [
+      {
+       "match": "na",
+       "str": "KORYU NO MIMI ENG"
+      }
+     ]
+    ],
+    "sets": [
+     {
+      "set": "Timings.DMACPUSync",
+      "value": 20
+     }
+    ]
+   }
+  ],
+  [
+   {
+    "when": [
+     [
+      {
+       "match": "na",
+       "str": "HITOMI3"
+      }
+     ]
+    ],
+    "sets": [
+     {
+      "set": "SRAMSize",
+      "value": 1
+     },
+     {
+      "set": "SRAMMask",
+      "value": {
+       "expr": "( ( 1 << ( SRAMSize + 3 ) ) * 128 ) - 1"
+      }
+     }
+    ]
+   }
+  ],
+  [
+   {
+    "when": [
+     [
+      {
+       "match": "na",
+       "str": "SUPER DRIFT OUT"
+      }
+     ],
+     [
+      {
+       "match": "na",
+       "str": "SATAN IS OUR FATHER!"
+      }
+     ],
+     [
+      {
+       "match": "na",
+       "str": "S.F.S.95 della SerieA"
+      }
+     ],
+     [
+      {
+       "match": "id",
+       "str": "AACJ"
+      }
+     ],
+     [
+      {
+       "match": "na",
+       "str": "goemon 4"
+      }
+     ]
+    ],
+    "sets": [
+     {
+      "set": "SNESGameFixes.SRAMInitialValue",
+      "value": 0
+     }
+    ]
+   }
+  ],
+  [
+   {
+    "when": [
+     [
+      {
+       "match": "na",
+       "str": "SFX Å²Ä¶ÞÝÀÞÑÓÉ¶ÞÀØ 1"
+      }
+     ]
+    ],
+    "sets": [
+     {
+      "set": "SNESGameFixes.SRAMInitialValue",
+      "value": 107
+     }
+    ]
+   }
+  ],
+  [
+   {
+    "when": [
+     [
+      {
+       "match": "nn",
+       "str": "UNIRACERS"
+      }
+     ]
+    ],
+    "sets": [
+     {
+      "set": "SNESGameFixes.Uniracers",
+      "value": true
+     }
+    ]
+   }
+  ],
+  [
+   {
+    "when": [
+     [
+      {
+       "match": "na",
+       "str": "Sugoro Quest++"
+      }
+     ]
+    ],
+    "sets": [
+     {
+      "set": "Timings.RenderPos",
+      "value": 128
+     }
+    ]
+   },
+   {
+    "when": [
+     [
+      {
+       "match": "na",
+       "str": "FIREPOWER 2000"
+      }
+     ],
+     [
+      {
+       "match": "na",
+       "str": "SUPER SWIV"
+      }
+     ]
+    ],
+    "sets": [
+     {
+      "set": "Timings.RenderPos",
+      "value": 32
+     }
+    ]
+   },
+   {
+    "when": [
+     [
+      {
+       "match": "na",
+       "str": "DERBY STALLION 98"
+      }
+     ]
+    ],
+    "sets": [
+     {
+      "set": "Timings.RenderPos",
+      "value": 128
+     }
+    ]
+   },
+   {
+    "when": [
+     [
+      {
+       "match": "na",
+       "str": "AIR STRIKE PATROL"
+      }
+     ],
+     [
+      {
+       "match": "na",
+       "str": "DESERT FIGHTER"
+      }
+     ]
+    ],
+    "sets": [
+     {
+      "set": "Timings.RenderPos",
+      "value": 128
+     }
+    ]
+   },
+   {
+    "when": [
+     [
+      {
+       "match": "na",
+       "str": "FULL THROTTLE RACING"
+      }
+     ]
+    ],
+    "sets": [
+     {
+      "set": "Timings.RenderPos",
+      "value": 128
+     }
+    ]
+   },
+   {
+    "when": [
+     [
+      {
+       "match": "na",
+       "str": "NHL '94"
+      }
+     ],
+     [
+      {
+       "match": "na",
+       "str": "NHL PROHOCKEY'94"
+      }
+     ]
+    ],
+    "sets": [
+     {
+      "set": "Timings.RenderPos",
+      "value": 32
+     }
+    ]
+   },
+   {
+    "when": [
+     [
+      {
+       "match": "na",
+       "str": "ADVENTURES OF FRANKEN"
+      },
+      {
+       "setting": "PAL"
+      }
+     ]
+    ],
+    "sets": [
+     {
+      "set": "Timings.RenderPos",
+      "value": 32
+     }
+    ]
+   }
+  ]
+ ]
+}
