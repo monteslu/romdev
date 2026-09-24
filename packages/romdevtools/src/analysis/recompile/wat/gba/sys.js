@@ -84,6 +84,10 @@ export function sysWat(L, rom_size, idle_loop, savetype) {
   (global $prefetch (mut i32) (i32.const 0))
   (global $lpp (mut i32) (i32.const 0))      ;; lastPrefetchedPc
   (global $biosPrefetch (mut i32) (i32.const 0))
+  ;; the instruction pipeline for code in RAM (arm.c ARMStep/ThumbStep:
+  ;; prefetch[0]/[1]). Tag = address | thumb, -1 = empty.
+  (global $pfa0 (mut i32) (i32.const -1)) (global $pfw0 (mut i32) (i32.const 0))
+  (global $pfa1 (mut i32) (i32.const -1)) (global $pfw1 (mut i32) (i32.const 0))
   (global $haltPending (mut i32) (i32.const 0))
   (global $bus (mut i32) (i32.const 0))
   (global $performingDMA (mut i32) (i32.const 0))
@@ -372,11 +376,51 @@ export function sysWat(L, rom_size, idle_loop, savetype) {
     (global.set $anon32 (i32.load8_s (i32.add (i32.const ${WS + 512}) (global.get $areg))))
     (global.set $anon16 (i32.load8_s (i32.add (i32.const ${WS}) (global.get $areg)))))
 
+  ;; regions 2-7 (EWRAM..OAM): memory code can be written to. ROM and BIOS
+  ;; never change, so their instructions are dispatched by address.
+  (func $pipe_region (param $a i32) (result i32)
+    (i32.lt_u (i32.sub (i32.shr_u (local.get $a) (i32.const 24)) (i32.const 2)) (i32.const 6)))
+
+  ;; ARMWritePC/ThumbWritePC load prefetch[0] and [1] from the target AT
+  ;; THE BRANCH (a store the branch target makes to its own next word does
+  ;; not change what runs)
+  (func $pipe_fill (param $p i32) (param $t i32)
+    (if (i32.eqz (call $pipe_region (local.get $p)))
+      (then (global.set $pfa0 (i32.const -1)) (return)))
+    (global.set $pfa0 (i32.or (local.get $p) (local.get $t)))
+    (global.set $pfa1 (i32.add (global.get $pfa0) (i32.const 4)))
+    (if (local.get $t)
+      (then (global.set $pfa1 (i32.add (global.get $pfa0) (i32.const 2)))
+            (global.set $pfw0 (call $fetch16 (local.get $p)))
+            (global.set $pfw1 (call $fetch16 (i32.add (local.get $p) (i32.const 2)))))
+      (else (global.set $pfw0 (call $fetch32 (local.get $p)))
+            (global.set $pfw1 (call $fetch32 (i32.add (local.get $p) (i32.const 4)))))))
+
+  ;; The word/halfword executed at $e when it is in RAM, through the pipeline:
+  ;; it was fetched when gprs[PC] reached it (two instructions earlier, or at
+  ;; the branch), not now. A store the running code makes to the next two
+  ;; instructions is not seen (the pipeline already holds them), as in mGBA.
+  (func $pipe_word (param $e i32) (result i32)
+    (local $t i32) (local $w i32) (local $v i32)
+    (local.set $t (global.get $thumb))
+    (local.set $w (if (result i32) (local.get $t) (then (i32.const 2)) (else (i32.const 4))))
+    (if (i32.ne (global.get $pfa0) (i32.or (local.get $e) (local.get $t)))
+      (then (call $pipe_fill (local.get $e) (local.get $t))))
+    (local.set $v (global.get $pfw0))
+    (global.set $pfa0 (global.get $pfa1))
+    (global.set $pfw0 (global.get $pfw1))
+    (global.set $pfa1 (i32.add (global.get $pfa0) (local.get $w)))
+    (global.set $pfw1 (if (result i32) (local.get $t)
+      (then (call $fetch16 (i32.add (local.get $e) (i32.const 4))))
+      (else (call $fetch32 (i32.add (local.get $e) (i32.const 8))))))
+    (local.get $v))
+
   ;; ThumbWritePC / ARMWritePC: -> cycles. $pc becomes the target.
   (func $thumb_write_pc (result i32)
     (local $p i32)
     (local.set $p (i32.and (i32.load (i32.const ${REGS + 60})) (i32.const -2)))
     (call $set_active_region (local.get $p))
+    (call $pipe_fill (local.get $p) (i32.const 1))
     (i32.store (i32.const ${REGS + 60}) (i32.add (local.get $p) (i32.const 2)))
     (global.set $pc (local.get $p))
     (i32.add (i32.add (i32.const 2) (global.get $anon16)) (global.get $aseq16)))
@@ -385,6 +429,7 @@ export function sysWat(L, rom_size, idle_loop, savetype) {
     (local $p i32)
     (local.set $p (i32.and (i32.load (i32.const ${REGS + 60})) (i32.const -2)))
     (call $set_active_region (local.get $p))
+    (call $pipe_fill (i32.and (local.get $p) (i32.const -4)) (i32.const 0))
     (i32.store (i32.const ${REGS + 60}) (i32.add (local.get $p) (i32.const 4)))
     (global.set $pc (i32.and (local.get $p) (i32.const -4)))
     (i32.add (i32.add (i32.const 2) (global.get $anon32)) (global.get $aseq32)))

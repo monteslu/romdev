@@ -535,7 +535,7 @@ export async function* emitWat(rom, opts = {}) {
     const romchk = `(i32.and (i32.lt_u (i32.sub (i32.shr_u (local.get $e) (i32.const 24)) (i32.const 8)) (i32.const 6)) `
       + `(i32.lt_u (i32.and (local.get $e) (i32.const ${romMask(ROMLEN)})) (i32.const ${ROMLEN})))`;
     THUMB_DISPATCH = "(global.set $nstatic (i32.add (global.get $nstatic) (i32.const 1))) "
-      + "(call $sthumb (call $fetch16 (local.get $e)))";
+      + "(call $sthumb (if (result i32) (local.get $ram) (then (local.get $pw)) (else (call $fetch16 (local.get $e)))))";
     ARM_STATIC = `
         (local.set $op (i32.const -1))
         (if ${romchk}
@@ -544,7 +544,7 @@ export async function* emitWat(rom, opts = {}) {
           (else (if (i32.eqz (i32.shr_u (local.get $e) (i32.const 24)))
             (then (local.set $op (i32.load (i32.add (i32.const ${L.BTAB})
                     (i32.and (local.get $e) (i32.const 0x3FFC))))))
-            (else (local.set $op (call $ahash_find (call $fetch32 (local.get $e))))))))
+            (else (local.set $op (call $ahash_find (if (result i32) (local.get $ram) (then (local.get $pw)) (else (call $fetch32 (local.get $e))))))))))
         (if (i32.ge_s (local.get $op) (i32.const 0))
           (then (global.set $nstatic (i32.add (global.get $nstatic) (i32.const 1)))
                 (global.set $cc (i32.add (i32.const 1) (global.get $aseq32)))
@@ -567,7 +567,7 @@ export async function* emitWat(rom, opts = {}) {
       (br $l))
     (i32.const -1))`;
   } else {
-    THUMB_DISPATCH = "(call $interp_thumb (call $fetch16 (local.get $e)))";
+    THUMB_DISPATCH = "(call $interp_thumb (if (result i32) (local.get $ram) (then (local.get $pw)) (else (call $fetch16 (local.get $e)))))";
     ARM_STATIC = "(global.set $ninterp (i32.add (global.get $ninterp) (i32.const 1)))";
     AHASH_FN = "";
   }
@@ -685,9 +685,15 @@ export async function* emitWat(rom, opts = {}) {
 
   ;; One instruction (ARMStep / ThumbStep).
   (func $step
-    (local $e i32) (local $op i32) (local $ti i32)
+    (local $e i32) (local $op i32) (local $ti i32) (local $ram i32) (local $pw i32)
     (local.set $e (global.get $pc))
     (global.set $exec (local.get $e))
+    ;; code in RAM runs what the pipeline fetched ($pipe_word); ROM and BIOS
+    ;; code by address
+    (local.set $ram (call $pipe_region (local.get $e)))
+    (if (local.get $ram)
+      (then (local.set $pw (call $pipe_word (local.get $e))))
+      (else (global.set $pfa0 (i32.const -1))))
     ;; trace hook: record the instruction about to execute, as the native
     ;; reference's hook does (pc, thumb, time, r0-r15 with r15 = gprs[PC]
     ;; before the step, cpsr, vcount)
@@ -715,7 +721,7 @@ export async function* emitWat(rom, opts = {}) {
         (i32.store (i32.const ${REGS + 60}) (i32.add (local.get $e) (i32.const 8)))
         (global.set $pc (i32.add (local.get $e) (i32.const 4)))
         ${ARM_STATIC}
-        (local.set $op (call $fetch32 (local.get $e)))
+        (local.set $op (if (result i32) (local.get $ram) (then (local.get $pw)) (else (call $fetch32 (local.get $e)))))
         (if (i32.ne (i32.shr_u (local.get $op) (i32.const 28)) (i32.const 14))
           (then (if (i32.eqz (call $cond_ok (i32.shr_u (local.get $op) (i32.const 28))))
             (then (global.set $cycles (i32.add (global.get $cycles) (i32.add (i32.const 1) (global.get $aseq32))))
