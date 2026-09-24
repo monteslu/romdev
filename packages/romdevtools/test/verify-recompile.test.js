@@ -11,7 +11,7 @@ import { assembleWatSync } from "../src/analysis/recompile/wat/assemble.js";
 import { WasmcartHost } from "../src/host/WasmcartHost.js";
 import {
   verifyRecompile, findRecompileDivergence, parseInputSchedule, shiftSchedule, scorePictures,
-  resolveOrigin, wrongInputSchedule, ScheduleDriver,
+  resolveOrigin, wrongInputSchedule, ScheduleDriver, fuzzRecompile,
 } from "../src/host/verify-recompile.js";
 import {
   readRecompileLayout, validateRecompileLayout, withRecompileSection, wascFromWasm, cartWasmBytes,
@@ -486,4 +486,21 @@ test("wrong-input control: withholding all input is tried first; a control no va
     assert.match(r2.result.controls.wrongInput.couldNotFail, /no input variant changed the picture/);
     assert.equal(r2.result.verdict, "NOT VERIFIED");
   } finally { dispose(r2); }
+});
+
+test("fuzzRecompile reports the first trap frame per seed, and nothing when nothing traps", async () => {
+  // the south-press counter stands in for a trap flag: random play presses south sooner or later
+  const trapLayout = validateRecompileLayout({ ...LAYOUT, probe: { trapped: { offset: 8, size: 4 } } });
+  const r = await fuzzRecompile({ openCart: () => openCartFrom(cartBytes()), layout: trapLayout, frames: 600, seeds: [1, 2] });
+  assert.equal(r.verdict, "TRAPPED");
+  for (const run of r.runs) {
+    assert.equal(run.trapped, true);
+    assert.ok(run.atCartFrame > 60 && run.atCartFrame <= 600, `trap after the play script starts (${run.atCartFrame})`);
+    assert.ok(run.probe.trapped > 0);
+  }
+  // control: a probe word nothing writes (offset 12) never reads as a trap
+  const quiet = validateRecompileLayout({ ...LAYOUT, probe: { trapped: { offset: 12, size: 4 } } });
+  const q = await fuzzRecompile({ openCart: () => openCartFrom(cartBytes()), layout: quiet, frames: 300, seeds: [1] });
+  assert.equal(q.verdict, "NO TRAP");
+  await assert.rejects(() => fuzzRecompile({ openCart: () => openCartFrom(cartBytes()), layout: validateRecompileLayout({ regions: {} }) }), /probe.trapped/);
 });

@@ -11,7 +11,7 @@ import path from "node:path";
 import { LibretroHost } from "romdev-core-host/index.js";
 import { resolveCore } from "../../cores/registry.js";
 import { WasmcartHost } from "../../host/WasmcartHost.js";
-import { verifyRecompile, findRecompileDivergence } from "../../host/verify-recompile.js";
+import { verifyRecompile, findRecompileDivergence, fuzzRecompile } from "../../host/verify-recompile.js";
 import { findInstructionDivergence } from "../../host/instruction-diverge.js";
 import { readRecompileLayout, validateRecompileLayout, cartWasmBytes, wascFromWasm } from "../../analysis/recompile/recompile-section.js";
 import { installHost, installHostB, getHost, getHostBOrNull } from "../state.js";
@@ -147,4 +147,21 @@ export async function runInstructionDiverge(sessionKey, args) {
     return { ...result, ...describeSides(ctx, cartHost, refHost), slots: "slot A = the cart, slot B = the reference, both at the end of the traced frame." };
   }
   return { ...result, cart: { path: ctx.cartPath, layoutSource: ctx.layoutSource }, reference: { platform: ctx.platform, core: ctx.core, path: ctx.refPath, sha1: ctx.refSha1 } };
+}
+
+/** frame({op:'fuzzRecompile', cart}) - seeded random play on the cart alone, first trap per seed. */
+export async function runFuzzRecompile(sessionKey, args) {
+  const cartPath = args.cart ?? (() => { try { const h = getHost(sessionKey); return h?.status?.platform === "wasmcart" ? h.status.mediaPath : null; } catch { return null; } })();
+  if (!cartPath) throw new Error("frame({op:'fuzzRecompile'}): pass cart:'<path to .wasc or .wasm>'");
+  if (!existsSync(cartPath)) throw new Error(`frame({op:'fuzzRecompile'}): no file at ${cartPath}`);
+  const cartBytes = new Uint8Array(readFileSync(cartPath));
+  const section = readRecompileLayout(cartBytes);
+  let layout = section ? { ...section } : { regions: {}, fields: {}, probe: {} };
+  if (args.probe && Object.keys(args.probe).length) layout.probe = { ...(layout.probe ?? {}), ...args.probe };
+  layout = validateRecompileLayout(layout);
+  const wasm = cartWasmBytes(cartBytes);
+  const loadBytes = wasm === cartBytes ? wascFromWasm(cartBytes, path.basename(cartPath, ".wasm")) : cartBytes;
+  const openCart = async () => { const h = new WasmcartHost(); await h.loadMedia({ platform: "wasmcart", bytes: loadBytes }); return h; };
+  const r = await fuzzRecompile({ openCart, layout, frames: args.frames === 1 ? undefined : args.frames, seeds: args.seeds, input: args.input, cartButtonMap: args.cartButtonMap });
+  return { ...r, cart: cartPath };
 }

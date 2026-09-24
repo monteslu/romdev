@@ -13,7 +13,7 @@ import { decodeOAM, decodePpuRegs, ppuRegsPopulated } from "../../platforms/snes
 import { stepInstructionCore, stepInstructionsCore, attachObserverFrame } from "./watch-memory.js";
 import { getRenderingContextCore } from "./rendering-context.js";
 import { humanCoDriveWarning } from "./playtest.js";
-import { runVerifyRecompile, runRecompileDiverge, runInstructionDiverge } from "./verify-recompile-op.js";
+import { runVerifyRecompile, runRecompileDiverge, runInstructionDiverge, runFuzzRecompile } from "./verify-recompile-op.js";
 import { traceInstructionsCore } from "./trace-instructions.js";
 
 // Normalize each platform's render-context into a CONSERVATIVE renderEnabled
@@ -856,7 +856,7 @@ export function registerFrameTools(server, z, sessionKey) {
 
   server.tool(
     "frame",
-    "Advance the emulator and capture frames. `op`: 'step' | 'screenshot' | 'stepAndShot' | 'sideBySide' | 'compareRam' | 'findDiverge' | 'compareRender' | 'portStatus' | 'stepInstruction' | 'stepInstructions' | 'traceInstructions' | 'verify' | 'verifyRecompile'.\n" +
+    "Advance the emulator and capture frames. `op`: 'step' | 'screenshot' | 'stepAndShot' | 'sideBySide' | 'compareRam' | 'findDiverge' | 'compareRender' | 'portStatus' | 'stepInstruction' | 'stepInstructions' | 'traceInstructions' | 'verify' | 'verifyRecompile' | 'fuzzRecompile'.\n" +
     "'step': advance N `frames` as fast as possible - NO pacing/audio/vsync. Cores run at WASM speed, so frames:3600 " +
     "(1 min of game time) finishes in ~5-30ms, cheaper than a screenshot. Don't be timid - skip a title with 300, a " +
     "level with 7200; prefer ONE big call.\n" +
@@ -947,10 +947,14 @@ export function registerFrameTools(server, z, sessionKey) {
     "(equal at the aligned frame, different at the wrong one); `signal` says which decided, couldNotFail when neither can), wrongInput (a second cart run with ALL input withheld, then a perturbed schedule if that did not fail; couldNotFail explains a control no variant could fail). Verdict VERIFIED needs every scored frame >= 95% content " +
     "on >= 2000 content px (and >= 95% moving where >= 200 px moved), every control failing, no trap; reasons[] names each " +
     "miss. Returns a per-frame markdown `table`. Afterwards slot A = the cart and slot B = the reference at the last frame.\n" +
+    "'fuzzRecompile': run a recompiled `cart` ALONE under seeded random play (`seeds`, default [1,2,3]; `frames` per seed, default 3600 (the tool-wide frames default of 1 counts as unset), " +
+    "`input` presses kept in every script, e.g. the Start that leaves the title) and report the first frame each seed TRAPS " +
+    "at (its romdev.recompile probe.trapped) with the probe block there (trappc). A trap is invisible from outside - the host keeps " +
+    "presenting the last picture - and the verified schedule only covers the code it reaches.\n" +
     "IMAGE CONTRACT (screenshot/stepAndShot): the image goes to `path` (default, returns {path}) OR inline:true - " +
     "you MUST pass one. Keeps PNGs out of context unless asked.",
     {
-      op: z.enum(["step", "screenshot", "stepAndShot", "sideBySide", "compareRam", "findDiverge", "compareRender", "portStatus", "stepInstruction", "stepInstructions", "traceInstructions", "verify", "verifyRecompile"]).describe("traceInstructions = the free-running instruction stream over N frames; step frames; capture a screenshot; step+capture in one call; capture both hosts side-by-side (A|B); compareRam = diff slot-A vs slot-B work-RAM (the logic-port oracle); findDiverge = find the first frame+byte where the two slots split (root-cause finder; with `cart` it runs the recompile per-frame state differ); compareRender = diff the decoded rendering state of the two slots (the presentation oracle); portStatus = ONE fused 'state of your port' verdict + next action (the capstone); single-step one CPU instruction; stepInstructions = bulk single-step N instructions into one ordered trace; verify the game is actually rendering/alive (no vision needed); verifyRecompile = verify a recompiled wasmcart against its reference core (scores, state compare, controls, verdict)."),
+      op: z.enum(["step", "screenshot", "stepAndShot", "sideBySide", "compareRam", "findDiverge", "compareRender", "portStatus", "stepInstruction", "stepInstructions", "traceInstructions", "verify", "verifyRecompile", "fuzzRecompile"]).describe("fuzzRecompile = seeded random play on a recompiled cart, first trap per seed; traceInstructions = the free-running instruction stream over N frames; step frames; capture a screenshot; step+capture in one call; capture both hosts side-by-side (A|B); compareRam = diff slot-A vs slot-B work-RAM (the logic-port oracle); findDiverge = find the first frame+byte where the two slots split (root-cause finder; with `cart` it runs the recompile per-frame state differ); compareRender = diff the decoded rendering state of the two slots (the presentation oracle); portStatus = ONE fused 'state of your port' verdict + next action (the capstone); single-step one CPU instruction; stepInstructions = bulk single-step N instructions into one ordered trace; verify the game is actually rendering/alive (no vision needed); verifyRecompile = verify a recompiled wasmcart against its reference core (scores, state compare, controls, verdict)."),
       count: z.number().int().min(1).max(1_000_000).optional().describe("op=stepInstructions/step: stepInstructions = how many CPU instructions to single-step into the trace (default 16, max 4096); step = accepted as an alias for `frames`, since the unit is fixed by the op."),
       withRegisters: z.boolean().default(false).describe("op=stepInstructions: include the CPU register file at each step (heavier payload; omit if you only need pc/width/bytes for boundary+immediate-width analysis)."),
       stepFormat: z.enum(["full", "compact"]).default("full").describe("op=stepInstructions: 'full' = per-step objects (pc/flow/width/nextPc); 'compact' = one string per step (`$PC flow->$target`) + a `pcRanges` loop-map with hit counts (~90% fewer tokens for triage)."),
@@ -998,6 +1002,7 @@ export function registerFrameTools(server, z, sessionKey) {
       atFrame: z.number().int().min(1).optional().describe("op=findDiverge level:'instruction': the REFERENCE frame whose execution is traced (from the end of atFrame-1 to the end of atFrame). Default: the first frame the per-frame differ finds different (bounded by startFrame/maxFrames)."),
       context: z.number().int().min(0).max(200).optional().describe("op=findDiverge level:'instruction': instructions of context reported on each side of a divergence (default 8)."),
       refState: z.boolean().optional().describe("op=findDiverge level:'instruction': read the reference CPU registers at the first pc divergence by replaying the frame to that instruction under the instruction watchdog (default true; single-CPU cores)."),
+      seeds: z.array(z.number().int()).min(1).max(64).optional().describe("op=fuzzRecompile: seeds of the random play scripts (default [1,2,3])."),
       fromPc: z.number().int().min(0).optional().describe("op=traceInstructions: start the returned stream at the first execution of this pc (in the host's own pc spelling)."),
       maxEntries: z.number().int().min(4096).max(4194304).optional().describe("op=traceInstructions: core trace ring capacity (default 2,097,152 entries; the oldest are overwritten past it)."),
       head: z.number().int().min(0).max(4096).optional().describe("op=traceInstructions: entries returned inline (default 64); the rest go to outputPath."),
@@ -1042,6 +1047,7 @@ export function registerFrameTools(server, z, sessionKey) {
           if (args.count != null && args.count > 4096) throw new Error(`frame({op:'stepInstructions'}): count ${args.count} is over the 4096 cap - trace in chunks of <= 4096.`);
           return await stepInstructionsCore(sessionKey, { count: args.count ?? 16, withRegisters: args.withRegisters, format: args.format === "full" || args.format === "compact" ? args.format : args.stepFormat });
         case "verifyRecompile": return jsonContent(await runVerifyRecompile(sessionKey, { ...args }));
+        case "fuzzRecompile": return jsonContent(await runFuzzRecompile(sessionKey, { ...args, frames: args.frames === 1 ? undefined : args.frames }));
         case "traceInstructions": return await traceInstructionsCore(sessionKey, { frames: args.frames, slot: args.slot, maxEntries: args.maxEntries, fromPc: args.fromPc, outputPath: args.path, head: args.head });
         case "verify":          return await doVerify(args);
         default: throw new Error(`frame: unknown op '${args.op}'`);

@@ -937,3 +937,58 @@ export async function findRecompileDivergence(a) {
       : "The compared state never changed, so matching says nothing about execution (an idle or spin loop matches trivially). Compare later frames, or add regions that the game writes every frame.",
   };
 }
+
+// ─── trap fuzzing ────────────────────────────────────────────────────────────
+
+/**
+ * Run a recompiled cart ALONE under several seeded random play scripts and
+ * report the first frame each one TRAPS at (the section's probe.trapped),
+ * with the probe block there. A trap is invisible from outside (the host
+ * keeps presenting the last picture at full frame rate), and a run on the
+ * verified schedule only covers the code that schedule reaches; random play
+ * reaches the rest (RAM routines a discovery pass never saw, rarely used
+ * paths). Replaces sms-wat's fuzz.cjs / run_ak.cjs / run_gh.cjs.
+ *
+ * @param {object} a
+ * @param {() => Promise<object>} a.openCart
+ * @param {object} a.layout                  the cart's romdev.recompile layout (needs probe.trapped)
+ * @param {number} [a.frames=3600]           frames per seed
+ * @param {number[]} [a.seeds=[1,2,3]]
+ * @param {Array|string} [a.input]           presses kept in every script (e.g. the Start that leaves the title)
+ * @param {Record<string,string>} [a.cartButtonMap]
+ */
+export async function fuzzRecompile(a) {
+  const layout = a.layout ?? {};
+  if (!layout.probe?.trapped) throw new Error("fuzz: the cart's romdev.recompile section declares no probe.trapped, so a trap cannot be seen; pass probe:{trapped:{offset}} for a cart that has one");
+  const frames = a.frames ?? 3600, seeds = a.seeds?.length ? a.seeds : [1, 2, 3];
+  if (!Number.isInteger(frames) || frames < 1 || frames > 100000) throw new Error("fuzz: frames must be 1..100000");
+  const base = parseInputSchedule(a.input);
+  const nameMap = a.cartButtonMap ?? (layout.buttons === "byName" ? BY_NAME_CART_MAP : null);
+  const from = base.length ? Math.max(...base.map((p) => p.frame + p.hold)) + 30 : 60;
+  const runs = [];
+  for (const seed of seeds) {
+    // keep the caller's presses, add seeded play from `from` on
+    const play = wrongInputSchedule([{ frame: from, buttons: ["a"], hold: 1 }], frames, seed).filter((p) => p.frame >= from);
+    const schedule = [...base, ...play].sort((x, y) => x.frame - y.frame);
+    const h = await a.openCart();
+    try {
+      const d = new ScheduleDriver(h, schedule, nameMap);
+      let trapAt = null, probe = null;
+      for (let f = 1; f <= frames; f++) {
+        await d.to(f);
+        const t = readCartScalar(h, layout.probe.trapped);
+        if (t) { trapAt = f; probe = readProbe(h, layout.probe); break; }
+      }
+      runs.push({ seed, presses: schedule.length, framesRun: trapAt ?? frames, trapped: trapAt != null,
+        ...(trapAt != null ? { atCartFrame: trapAt, probe, schedule: schedule.filter((p) => p.frame <= trapAt).slice(-8) } : {}) });
+    } finally { disposeHost(h); }
+  }
+  const trapped = runs.filter((r) => r.trapped);
+  return {
+    op: "fuzzRecompile", frames, seeds, runs,
+    verdict: trapped.length ? "TRAPPED" : "NO TRAP",
+    note: trapped.length
+      ? `${trapped.length} of ${runs.length} seeded scripts trapped; the first at cart frame ${Math.min(...trapped.map((r) => r.atCartFrame))}. The probe names where (trappc); the last presses before it are in schedule. Rebuild with the backend's RAM-code options if trappc is a RAM address, or trace the frame with findDiverge level:'instruction' (atFrame = the cart frame minus the section's alignment).`
+      : `No trap in ${runs.length} x ${frames} frames of random play. Evidence of coverage for the paths those scripts reached, not proof that none exists.`,
+  };
+}
