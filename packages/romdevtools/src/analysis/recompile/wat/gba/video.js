@@ -446,6 +446,7 @@ export function renderWat() {
     (local $dx i32) (local $dy i32) (local $ent i32) (local $d1 i32) (local $dc i32)
     (local $sy i32) (local $ly i32) (local $mosh i32) (local $mosr i32) (local $t i32) (local $cond i32)
     (local $xa i32) (local $ya i32) (local $rem i32) (local $last i32) (local $ocyc i32)
+    (local $cbase i32) (local $ostr i32) (local $mlo i32) (local $mhi i32)
     (local.set $x (i32.const 0))
     (block $cd (loop $cl
       (br_if $cd (i32.ge_u (local.get $x) (i32.const ${FB_W})))
@@ -539,6 +540,14 @@ export function renderWat() {
       ;; tile space, and tiles below 512 are not displayed.
       (br_if $ol (i32.and (i32.ge_u (i32.and (local.get $dc) (i32.const 7)) (i32.const 3))
                           (i32.lt_u (local.get $tile) (i32.const 512))))
+      (local.set $cbase (i32.shl (i32.and (local.get $tile)
+        (if (result i32) (i32.and (i32.ne (local.get $bpp8) (i32.const 0)) (i32.eqz (local.get $d1))) (then (i32.const -2)) (else (i32.const -1))))
+        (i32.const 5)))
+      (local.set $ostr (if (result i32) (local.get $d1)
+        (then (i32.shr_u (local.get $w) (if (result i32) (local.get $bpp8) (then (i32.const 0)) (else (i32.const 1)))))
+        (else (i32.const 0x80))))
+      (local.set $mlo (if (result i32) (local.get $d1) (then (i32.const 0x7FFE)) (else (i32.const 0x3FE))))
+      (local.set $mhi (if (result i32) (local.get $d1) (then (i32.const 0)) (else (i32.and (local.get $cbase) (i32.const 0x7C00)))))
       ;; the first pixel drawn and the end (condition): the box's right edge
       ;; clipped to the screen, rounded up to a mosaic run
       (local.set $px (if (result i32) (i32.lt_s (local.get $ox) (i32.const 0)) (then (i32.sub (i32.const 0) (local.get $ox))) (else (i32.const 0))))
@@ -624,32 +633,28 @@ export function renderWat() {
                 (if (i32.gt_s (local.get $tx) (i32.sub (local.get $w) (i32.const 1)))
                   (then (local.set $tx (i32.sub (local.get $w) (i32.const 1)))))))))
         (br_if $pl (i32.lt_s (local.get $sx) (i32.const 0)))
-        ;; Tile number of the 8x8 cell. 1D mapping lays a sprite's cells out
-        ;; consecutively (row stride = its width in cells); 2D mapping uses a
-        ;; fixed 32-cell row. An 8bpp cell is two 32-byte units wide.
-        (local.set $tn (i32.add (local.get $tile)
-          (i32.add
-            (i32.mul (i32.shr_u (local.get $ty) (i32.const 3))
-              (if (result i32) (local.get $d1)
-                (then (i32.shl (i32.shr_u (local.get $w) (i32.const 3))
-                               (if (result i32) (local.get $bpp8) (then (i32.const 1)) (else (i32.const 0)))))
-                (else (i32.const 32))))
-            (i32.shl (i32.shr_u (local.get $tx) (i32.const 3))
-                     (if (result i32) (local.get $bpp8) (then (i32.const 1)) (else (i32.const 0)))))))
-        (local.set $tn (i32.add (i32.const ${VRAM + 0x10000})
-          (i32.shl (i32.and (local.get $tn) (i32.const 0x3FF)) (i32.const 5))))
+        ;; the OBJ VRAM halfword as mGBA addresses it (SPRITE_XBASE/_YBASE,
+        ;; SPRITE_DRAW_PIXEL): 1D mapping, row stride = the sprite's width in
+        ;; bytes; 2D mapping, a 32-cell (1KB) row that the x offset WRAPS
+        ;; inside (maskLo $3FE + the row base in maskHi), and an 8bpp
+        ;; sprite's tile number rounded down to even
+        (local.set $tn (if (result i32) (local.get $bpp8)
+          (then (i32.add (i32.add (i32.mul (i32.and (local.get $ty) (i32.const -8)) (local.get $ostr))
+                                  (i32.shl (i32.and (local.get $ty) (i32.const 7)) (i32.const 3)))
+                         (local.get $mhi)))
+          (else (i32.add (i32.add (i32.mul (i32.and (local.get $ty) (i32.const -8)) (local.get $ostr))
+                                  (i32.shl (i32.and (local.get $ty) (i32.const 7)) (i32.const 2)))
+                         (local.get $mhi)))))
+        (local.set $ci (if (result i32) (local.get $bpp8)
+          (then (i32.add (i32.shl (i32.and (local.get $tx) (i32.const -8)) (i32.const 3)) (i32.and (local.get $tx) (i32.const 6))))
+          (else (i32.add (i32.shl (i32.and (local.get $tx) (i32.const -8)) (i32.const 2)) (i32.and (i32.shr_u (local.get $tx) (i32.const 1)) (i32.const 2))))))
+        (local.set $ci (i32.load16_u (i32.add (i32.const ${VRAM + 0x10000})
+          (i32.and (i32.add (local.get $tn) (i32.and (i32.add (local.get $ci) (local.get $cbase)) (local.get $mlo)))
+                   (i32.const 0x7FFE)))))
         (if (local.get $bpp8)
-          (then
-            (local.set $ci (i32.load8_u (i32.add (local.get $tn)
-              (i32.add (i32.shl (i32.and (local.get $ty) (i32.const 7)) (i32.const 3))
-                       (i32.and (local.get $tx) (i32.const 7)))))))
+          (then (local.set $ci (i32.and (i32.shr_u (local.get $ci) (i32.shl (i32.and (local.get $tx) (i32.const 1)) (i32.const 3))) (i32.const 0xFF))))
           (else
-            (local.set $ci (i32.load8_u (i32.add (local.get $tn)
-              (i32.add (i32.shl (i32.and (local.get $ty) (i32.const 7)) (i32.const 2))
-                       (i32.shr_u (i32.and (local.get $tx) (i32.const 7)) (i32.const 1))))))
-            (local.set $ci (if (result i32) (i32.and (local.get $tx) (i32.const 1))
-              (then (i32.shr_u (local.get $ci) (i32.const 4)))
-              (else (i32.and (local.get $ci) (i32.const 0xF)))))
+            (local.set $ci (i32.and (i32.shr_u (local.get $ci) (i32.shl (i32.and (local.get $tx) (i32.const 3)) (i32.const 2))) (i32.const 0xF)))
             (if (local.get $ci)
               (then (local.set $ci (i32.or (local.get $ci)
                       (i32.shl (local.get $pal) (i32.const 4))))))))

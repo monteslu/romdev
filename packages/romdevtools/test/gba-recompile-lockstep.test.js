@@ -287,6 +287,37 @@ const SCENES = {
       [IO + 0x20, [0x0110, 0x0000, 0x0000, 0x0100]], [IO + 0x28, [-0x0400 & 0xFFFF, 0xFFFF, 0x0000, 0x0000]],
       [IO + 0x00, [0x0414]]];
   },
+  // windows: WIN0 with x1 > x2 (wraps), WIN1 with y1 > y2, the OBJ window,
+  // WININ/WINOUT layer and effect enables, alpha blend of BG0 over BG1
+  windows: () => [...common(),
+    oam([
+      [0x0800 | 30, (2 << 14) | 50, 0x0000],             // OBJ-window sprite 32x32
+      [0x0800 | 100, (3 << 14) | 150, 0x0010],           // OBJ-window sprite 64x64
+      [0x0400 | 60, (2 << 14) | 90, 0x0400 | 0x20],      // semi-transparent sprite
+      [0x2000 | 20, (1 << 14) | 180, 0x0031],            // 8bpp, odd tile, 2D mapping
+      [0x0000 | 120, (2 << 14) | 20, 0x001E],            // 32x32 4bpp from tile 30: wraps inside its 2D row
+    ]),
+    [IO + 0x08, [0x1000, 0x1101, 0x1202, 0x1303]],       // BG0-3CNT, maps 16-19, prio 0-3
+    [IO + 0x10, [3, 5, 7, 11, 13, 17, 19, 23]],          // scroll
+    [IO + 0x40, [(200 << 8) | 40, (120 << 8) | 60]],     // WIN0H x1=200 > x2=40 (wraps), WIN1H
+    [IO + 0x44, [(20 << 8) | 100, (150 << 8) | 30]],     // WIN0V, WIN1V y1=150 > y2=30
+    [IO + 0x48, [0x3D27]],                               // WININ
+    [IO + 0x4A, [0x3E19]],                               // WINOUT (outside, OBJ window)
+    [IO + 0x50, [0x0241 | 0x0010]],                      // BLDCNT: alpha, BG0+OBJ first, BG1 second
+    [IO + 0x52, [0x0A07]],                               // BLDALPHA
+    [IO + 0x00, [0xFF00]],                               // mode 0, all layers, WIN0/WIN1/OBJWIN, 2D mapping
+  ],
+  // brighten and darken with BLDY, and the backdrop as a target
+  fade: () => [...common(),
+    [IO + 0x08, [0x1000, 0x1101]],
+    [IO + 0x40, [(120 << 8) | 0, (240 << 8) | 120]],
+    [IO + 0x44, [(160 << 8) | 0, (160 << 8) | 0]],
+    [IO + 0x48, [0x2323]],                               // WIN0: BG0/BG1 + effects, WIN1: same
+    [IO + 0x4A, [0x0003]],
+    [IO + 0x50, [0x00A1]],                               // brighten BG0 + backdrop
+    [IO + 0x54, [9]],                                    // BLDY
+    [IO + 0x00, [0x6300]],
+  ],
   // OBJ line budget: 64x64 sprites on the same lines, more than 1210 cycles
   budget: () => {
     const s = []; for (let i = 0; i < 40; i++) s.push([0x0000 | 10, (3 << 14) | ((i * 5) & 0x1FF), (i * 16) & 0x3FF]);
@@ -294,12 +325,12 @@ const SCENES = {
   },
 };
 
-
 for (const [name, what] of [
   ["mode1", "mode 1: text and affine BG mosaic; OBJ mosaic (normal, h-flipped, affine double-size), an affine sprite clipped at the left edge, one wrapping past line 255, a prohibited-mode one"],
   ["mode3", "mode 3: a rotated, scaled bitmap with mosaic"],
   ["mode4", "mode 4: a paletted bitmap page with mosaic, runs starting outside a non-wrapping BG2"],
   ["budget", "the OBJ line budget: 40 64x64 sprites on the same lines, more than OBJ_LENGTH cycles"],
+  ["windows", "windows (wrapping WIN0/WIN1, OBJ window), alpha blend, an 8bpp sprite on an odd tile and a 4bpp one wrapping inside its 32-cell row in 2D mapping"],
 ]) {
   test(`renderer as mGBA's: ${what}`, { skip, timeout: 180000 }, async () => {
     await assertLockstep(sceneRom(SCENES[name]()), 12);
