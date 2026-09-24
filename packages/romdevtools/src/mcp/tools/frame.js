@@ -960,7 +960,11 @@ export function registerFrameTools(server, z, sessionKey) {
     "stereoDrop (right channel zeroed) re-score the cart's own stream altered; channelDrop re-runs a fresh cart with one mixer " +
     "channel silenced through the section's audio.muteMask. A silent reference is never evidence. `audioWav:true` writes " +
     "[cart|ref|diff] WAVs to outputDir. The section's audio.streams (per-channel / pre-mix debug buffers) are captured per frame " +
-    "and compared with their `ref` stream regions. The cart-side contract is AUDIO_CONTRACT in src/analysis/recompile/wat/cart-abi.js.\n" +
+    "and compared with their `ref` stream regions. The cart-side contract is AUDIO_CONTRACT in src/analysis/recompile/wat/cart-abi.js; " +
+    "which stream each platform's cart must match (and each core's chain, rate and per-frame count) is AUDIO_REFERENCE there, echoed as " +
+    "audio.referenceDoc. Pre-resample streams the romdev cores expose: gba_audio_raw (mGBA native, before its sinc resampler), gb_apu_raw " +
+    "(gambatte's 2 MiHz PSG output, before blipper), gpgx_blip_deltas (genesis/sms/gg: every FM/PSG delta into blip_buf as time, delta_l, " +
+    "delta_r); fceumm and snes9x need none (their output is the integer chain itself).\n" +
     "'fuzzRecompile': run a recompiled `cart` ALONE under seeded random play (`seeds`, default [1,2,3]; `frames` per seed, default 3600 (the tool-wide frames default of 1 counts as unset), " +
     "`input` presses kept in every script, e.g. the Start that leaves the title) and report the first frame each seed TRAPS " +
     "at (its romdev.recompile probe.trapped) with the probe block there (trappc). A trap is invisible from outside - the host keeps " +

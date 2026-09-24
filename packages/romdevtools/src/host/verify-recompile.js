@@ -35,6 +35,7 @@ import { PNG } from "pngjs";
 import { getCPUState } from "romdev-core-host/cpu-state.js";
 import { normalizeFieldRef } from "../analysis/recompile/recompile-section.js";
 import { AudioCapture, scoreAudio, syntheticAudioControls, writeAudioWavs, audioChunkHash } from "./audio-verify.js";
+import { AUDIO_REFERENCE } from "../analysis/recompile/wat/cart-abi.js";
 
 // ─── input schedule ──────────────────────────────────────────────────────────
 
@@ -623,6 +624,9 @@ async function finishAudio({ a, run, layout, refHost, cartHost, schedule, nameMa
     verdict: verdictReasons.length ? "AUDIO DIFFERS" : "AUDIO VERIFIED",
     required: a.audio === "required",
   };
+  const plat = AUDIO_REFERENCE[a.refPlatform]?.alias ?? a.refPlatform;
+  const refDoc = AUDIO_REFERENCE[plat];
+  if (refDoc) report.referenceDoc = { core: refDoc.core, rate: refDoc.rate, match: refDoc.match, perFrame: refDoc.perFrame, streams: refDoc.streams };
   delete report.reasons;
   report.reasons = verdictReasons;
   return { report, verdictReasons };

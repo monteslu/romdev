@@ -332,3 +332,53 @@ ${stores}))
 export function audioSection(o) {
   return validateAudioBlock({ channels: 2, format: "s16", reference: "output", ...o });
 }
+
+/**
+ * Which reference stream a recompiled cart must match, per platform, with the
+ * core's chain from chip to audio_batch_cb (default core options; romdev sets
+ * no audio options and does not answer GET_TARGET_SAMPLE_RATE). "output" is
+ * the libretro stream; the named regions are RDAS streams the romdev core
+ * patches expose (frame({op:'verifyRecompile', audio, audioStream}) or a cart
+ * debug stream's `ref`). Every chain listed is integer and deterministic
+ * unless it says otherwise.
+ */
+export const AUDIO_REFERENCE = Object.freeze({
+  nes: {
+    core: "fceumm", rate: 48000, match: "output",
+    chain: "low-quality renderer (fceumm_sndquality Low): DoSQ1/DoSQ2/DoTriangle/DoNoise/DoPCM accumulate into int32 Wave[] in 16 sub-steps per output sample, flushed before every $4000-$4017 write and at frame end; FlushEmulateSound runs SexyFilter (volume 179 from fceumm_sndvolume 7, two-pole integer high-pass, int16 clamp); mono duplicated to L = R; lowpass and stereo delay off",
+    perFrame: "one audio_batch_cb per retro_run, 798/799 samples (the 1/16-sample remainder carries over)",
+    streams: {},
+  },
+  gb: {
+    core: "gambatte", rate: 32768, match: "output (needs the blipper port) or gb_apu_raw through a cart debug stream",
+    chain: "PSG writes stereo deltas at 2097152 Hz (one sample per 2 CPU clocks), fillBuffer prefix-sums them to int16; the libretro port resamples with fixed-point blipper (32 taps, cutoff 0.85, Kaiser beta 6.5, decimation 64; its int16 filter table is built once in double: dump it, do not recompute) with a leaky integrator, >>15 and a clamp (gambatte_audio_resampler 'sinc'; 'cc' gives 65536 Hz)",
+    perFrame: "blipper is drained mid-frame once 768 samples are available and at frame end; one audio_batch_cb, 548/549 samples",
+    streams: { gb_apu_raw: "stereo s16 at 2097152 Hz, every sample frame runFor produced this retro_run (35112 +- a few): the blipper input" },
+  },
+  gbc: { alias: "gb" },
+  sms: {
+    core: "genesis_plus_gx", rate: 44100, match: "output (port blip_buf)",
+    chain: "SN76489 deltas every 240 master clocks (psg_preamp 150) into blip_buf; YM2413 FM 'auto'; blip_buf (stereo, hq: blip_add_delta) is read with its bass_shift 9 high-pass and clamp; audio_filter disabled (no low-pass, no EQ)",
+    perFrame: "one audio_batch_cb, 735/736 samples NTSC, about 887 PAL (blip fractional time)",
+    streams: { gpgx_blip_deltas: "s32 x 3 events (blip clock time, delta_l, delta_r): every nonzero delta into the main blip buffer this retro_run, i.e. the chip output before blip_buf" },
+  },
+  gg: { alias: "sms" },
+  genesis: {
+    core: "genesis_plus_gx", rate: 44100, match: "output (port blip_buf)",
+    chain: "YM2612 (ym2612 'mame', discrete, not ym3438) samples every 1008 master clocks (~53267 Hz) into fm_buffer, scaled by fm_preamp 100/100 and added to blip_buf as deltas; PSG as on sms (psg_preamp 150); blip_buf read with its high-pass and clamp; audio_filter disabled",
+    perFrame: "one audio_batch_cb, 735/736 samples NTSC, about 887 PAL",
+    streams: { gpgx_blip_deltas: "as on sms: FM and PSG deltas in time order" },
+  },
+  snes: {
+    core: "snes9x", rate: 32040, match: "output",
+    chain: "the integer S-DSP (gaussian interpolation, echo, master volume, clamp inside) pushes one stereo sample per 32 SPC clocks into the resampler ring; the resampler's time_ratio is 1.0, so output IS the DSP stream sample for sample (a per-game APU speedup hack or MSU-1 switches to a float Hermite path; those are not exact)",
+    perFrame: "one audio_batch_cb from S9xSyncSpeed at VBlank START, not at the end of retro_run: 533/534 samples, set by how far the SPC has been caught up (ratio 15664/328125)",
+    streams: {},
+  },
+  gba: {
+    core: "mgba", rate: 65536, match: "output when SOUNDBIAS resolution is 1 (native 65536 Hz is copied straight through); otherwise gba_audio_raw",
+    chain: "GBAAudioSample mixes PSG (>> 4 - volume) and FIFO A/B, applies SOUNDBIAS (clamp 0..0x3FF, masterVolume) every 1024 cycles, 2 << resolution samples, native rate 16777216/sampleInterval; when that is not 65536 the libretro port resamples with a DOUBLE-precision sinc (sin() from libm), which is not integer-portable; the low-pass is off",
+    perFrame: "native samples arrive in pairs, 548/550 per frame at resolution 0 (1096/1100 at 1); the resampled output is ~1097 and lags by the resampler's high-water mark",
+    streams: { gba_audio_raw: "stereo s16 at 16777216/sampleInterval Hz (the header's rate follows SOUNDBIAS): GBAAudioSample's output this retro_run, before the resampler" },
+  },
+});
