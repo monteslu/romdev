@@ -587,16 +587,22 @@ export class Tr {
     const args = node.args ? node.args.exprs : [];
     if (name === "m68ki_read_imm_16" || name === "m68ki_read_imm_8" || name === "m68ki_read_imm_32") {
       if (a.pc === null) throw new TrError("imm read with dynamic pc");
+      // fetch16 may answer a WAT expression instead of a number: an
+      // extension word read from memory when the arm runs (RAM code whose
+      // operands the game patches); anything that needs it constant throws
+      const w = (p) => { const x = a.fetch16(p); return typeof x === "string" ? x : `(i32.const ${x})`; };
       let v;
       if (name === "m68ki_read_imm_32") {
-        v = a.fetch16(a.pc) * 0x10000 + a.fetch16(a.pc + 2);
+        const hi = a.fetch16(a.pc), lo = a.fetch16(a.pc + 2);
+        v = typeof hi === "number" && typeof lo === "number" ? hi * 0x10000 + lo
+          : `(i32.or (i32.shl ${w(a.pc)} (i32.const 16)) ${w(a.pc + 2)})`;
         a.pc += 4;
       } else {
         v = a.fetch16(a.pc);
+        if (name === "m68ki_read_imm_8") v = typeof v === "number" ? v & 0xff : `(i32.and ${v} (i32.const 0xFF))`;
         a.pc += 2;
-        if (name === "m68ki_read_imm_8") v &= 0xff;
       }
-      return cv(v, U32);
+      return typeof v === "number" ? cv(v, U32) : a.mat(vw(v, U32));
     }
     if (name === "abs") {
       const v = a.mat(this.expr(args[0], sc));

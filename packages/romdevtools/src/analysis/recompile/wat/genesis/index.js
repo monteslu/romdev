@@ -26,6 +26,7 @@
 // Plain JS ESM + JSDoc.
 
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { loadGpgxData } from "./gpgx-data.js";
 import { translateM68k, translateZ80, z80HandlerNames, TrError, ZREGS } from "./ctrans.js";
 import * as RT from "./runtime.js";
@@ -228,6 +229,27 @@ export function eepromConfig(img) {
   return null;
 }
 
+// md_cart.c rom_database (scripts/recompile-gen/md-gpgx-db.mjs)
+let MD_DB = null;
+const mdDb = () => (MD_DB ??= JSON.parse(readFileSync(new URL("./gpgx-md-db.json", import.meta.url), "utf8")));
+// the rom_database handlers this backend models (runtime.js cartHwWat)
+const HW_MODELLED = new Set(["default_regs_r", "default_regs_r_16", "default_regs_w", "custom_regs_r", "custom_regs_w",
+  "custom_alt_regs_w", "m68k_unused_8_w", "mapper_realtec_w"]);
+
+/**
+ * md_cart_init's rom_database lookup (header checksum + real checksum, first
+ * match): protection / bank registers in $400000-$7FFFFF, the !TIME handlers
+ * and the Realtec mapper, with the handlers this backend does not model.
+ * @param {Uint8Array} img
+ */
+export function cartHardware(img) {
+  const checksum = (img[0x18e] << 8) | img[0x18f];
+  const real = realChecksum(img);
+  const g = mdDb().games.find((e) => e.chk === checksum && e.realChk === real);
+  if (!g) return null;
+  return { ...g, unmodelled: [g.timeR, g.timeW, g.regsR, g.regsW].filter((h) => h && !HW_MODELLED.has(h)) };
+}
+
 /**
  * md_cart_init's mapper choice, for the ones this backend models ('default'
  * = default_time_w, 'ssf2' = mapper_ssf2_w) or the reason it refuses.
@@ -237,6 +259,10 @@ export function cartMapper(img) {
   const consoleType = headerText(img, 0x100, 0x110), romType = headerText(img, 0x180, 0x182), product = headerText(img, 0x182, 0x18e);
   const international = romName(img, 0x150), domestic = romName(img, 0x120);
   if (international.includes("DEMONS OF ASTEBORG") || international.includes("ASTEBROS") || domestic.includes("DAEMON CLAW")) return { kind: "default" };
+  if (img[0x1c8] === 0x53 && img[0x1c9] === 0x56) return { kind: null, reason: "the SVP chip (Samsung SSP1601 DSP, 'SV' at $1C8)" };
+  const hw = cartHardware(img);
+  if (hw && hw.unmodelled.length) return { kind: null, reason: `its rom_database entry's ${hw.unmodelled.join(" / ")} hardware` };
+  if (hw && hw.realtec) return { kind: "realtec" };
   if (consoleType.includes("SEGA SSF")) return { kind: null, reason: "the Everdrive extended SSF mapper (\"SEGA SSF\" console type)" };
   if (domestic.includes("SUPER STREET FIGHTER2")) return { kind: "ssf2" };
   if (product.includes("T-5740")) return { kind: null, reason: "the T-5740 mapper with its SPI EEPROM" };
@@ -417,7 +443,9 @@ export async function discoverRamCodeTrace(romPath, o = {}) {
       const b = host.readMemory("genesis_m68k", 0, 0x40 * 20);
       return Array.from({ length: 0x40 }, (_, i) => (b[i * 20] | (b[i * 20 + 1] << 8) | (b[i * 20 + 2] << 16) | (b[i * 20 + 3] << 24)) >>> 0);
     };
-    const cartRom = bases()[0];
+    const realtec0 = !!cartHardware(normalizeRom(new Uint8Array(readFileSync(romPath))))?.realtec;
+    // bank 0 holds cart.rom at power-on, except on a Realtec board (its boot ROM copy at cart.rom + $400000)
+    const cartRom = bases()[0] - (realtec0 ? 0x400000 : 0);
     const remap = new Map();
     // the mapper writes ($A130xx) of each frame, with the writing pc, replayed
     // against the trace so each pc gets the mapping it ran under
@@ -426,6 +454,18 @@ export async function discoverRamCodeTrace(romPath, o = {}) {
     const img0 = normalizeRom(new Uint8Array(readFileSync(romPath)));
     const ssf2 = cartMapper(img0).kind === "ssf2";
     const sramOn = sramConfig(img0).on || !!(eepromConfig(img0)?.eeprom);
+    const realtec = !!cartHardware(img0)?.realtec;
+    // mapper registers carried across frames (default_time_w's saved bank, the Realtec registers)
+    const saved = { sram: sramOn, reg0: undefined, rt: [0, 0, 0] };
+    // mapper_realtec_w on the table
+    const realtecW = (m, a, v, s) => {
+      if (a === 0x402000) s.rt[1] = (v & 3) << 1;
+      else if (a === 0x404000) s.rt[2] = (v & 3) << 1;
+      else if (a === 0x400000 && (v & 1) && !s.rt[0]) {
+        for (let i = 0; i < 0x40; i++) m[i] = ((((i & 7) & ~s.rt[1]) | (s.rt[2] & s.rt[1])) << 16) & cmask;
+        s.rt[0] = v;
+      }
+    };
     const evbuf = watch ? mod._malloc(4096 * 12 + 8) : 0;
     const timeWrites = () => {
       const n = mod._romdev_range_get(evbuf, 4096, evbuf + 4096 * 12);
@@ -449,12 +489,17 @@ export async function discoverRamCodeTrace(romPath, o = {}) {
       if (v & 1) { if (m[0x20] !== -1 && saved.sram) { saved.reg0 = m[0x20]; m[0x20] = -1; } }
       else if (m[0x20] === -1) m[0x20] = saved.reg0;
     };
-    let from = 0, instructions = 0;
+    let from = 0, instructions = 0, recaptured = 0;
+    const canBreak = host.pcBreakSupported?.() ?? false;
+    const suspects = new Map();
     for (let f = 1; f <= frames + settle; f++) {
       const rf = f - settle;
       if (rf >= 0) driver._apply(driver._want(rf));
       const before = bases();
-      if (watch) mod._romdev_range_set(0xa13000, 0xa130ff, 2, 1);
+      const ramBefore = host.readMemory("system_ram", 0, 0x10000).slice();
+      const state0 = canBreak ? host.serializeState() : null;
+      // (a Realtec board's mapper is its $400000-$404000 registers instead)
+      if (watch) mod._romdev_range_set(realtec ? 0x400000 : 0xa13000, realtec ? 0x404001 : 0xa130ff, 2, 1);
       await host.stepFrames(1);
       const after = bases();
       const ev = watch ? timeWrites() : [];
@@ -464,9 +509,10 @@ export async function discoverRamCodeTrace(romPath, o = {}) {
       instructions += tr.pc.length;
       let ram = null, sram = null;
       // the replayed table: offsets from cart.rom, or -1 for backup RAM
-      const rel = (m) => m.map((b) => { const o = b - cartRom; return o >= 0 && o <= cmask ? o : -1; });
+      // the Realtec boot ROM copies (cart.rom + $400000) are -4, as the cart's bank table has them
+      const rel = (m) => m.map((b) => { const o = b - cartRom; return o >= 0 && o <= cmask ? o : realtec && o >= 0x400000 && o < 0x410000 ? -4 : -1; });
       const cur = rel(before), relAfter = rel(after);
-      const saved = { sram: sramOn, reg0: (0x20 << 16) & cmask };
+      saved.reg0 ??= (0x20 << 16) & cmask;
       let e = 0;
       for (const pc of tr.pc) {
         const pa = pc & 0xffffff;
@@ -474,14 +520,18 @@ export async function discoverRamCodeTrace(romPath, o = {}) {
         if (pa < 0x400000) {
           const bank = pa >>> 16, own = (pa & 0x3f0000) & cmask;
           // no mapper write this frame: the frame's two ends
-          if (cur[bank] !== own) tables = [[cur[bank], bank < 0x3f ? cur[bank + 1] : -1]];
-          if (!ev.length && relAfter[bank] !== own) (tables ??= []).push([relAfter[bank], bank < 0x3f ? relAfter[bank + 1] : -1]);
+          // (a pc in a mirror of a smaller ROM counts too: the ROM arms
+          // were compiled at the ROM offset, not at the mirror's address)
+          const mirror = pa > cmask;
+          if (cur[bank] !== own || mirror) tables = [[cur[bank], bank < 0x3f ? cur[bank + 1] : -1]];
+          if (!ev.length && (relAfter[bank] !== own || mirror)) (tables ??= []).push([relAfter[bank], bank < 0x3f ? relAfter[bank + 1] : -1]);
         }
-        while (e < ev.length && ev[e].pc === pa) { timeW(cur, ev[e].a, ev[e].v, saved); e++; }
+        while (e < ev.length && ev[e].pc === pa) { (realtec ? realtecW : timeW)(cur, ev[e].a, ev[e].v, saved); e++; }
         if (tables) {
           for (const [off, next] of tables) {
             let key;
             if (off >= 0) key = `rom:${off}:${next}`;
+            else if (realtec && off === -4) key = "boot";
             else {
               // not the ROM: backup RAM (sram.sram), read through save_ram
               // (libretro sizes it to the last byte that is not $FF while running)
@@ -501,15 +551,42 @@ export async function discoverRamCodeTrace(romPath, o = {}) {
         if (pa < 0xe00000) continue;
         if (!ram) ram = host.readMemory("system_ram", 0, 0x10000);
         const a = pc & 0xffff;
-        let key = "";
-        for (let k = 0; k < 10; k++) key += ram[(a + k) & 0xffff].toString(16).padStart(2, "0");
         let set = windows.get(pc >>> 0);
         if (!set) windows.set(pc >>> 0, (set = new Set()));
-        set.add(key);
+        // what the frame ran may be what was there when it began (the game
+        // rewrites the routine later in the frame) or what it left
+        const keys = [ramBefore, ram].map((m) => { let key = ""; for (let k = 0; k < 10; k++) key += m[(a + k) & 0xffff].toString(16).padStart(2, "0"); return key; });
+        for (const key of keys) set.add(key);
+        // code written and gone within the frame (or rewritten while it
+        // ran) is in neither: re-run the frame to a breakpoint at it
+        if (canBreak && (keys[0] !== keys[1] || keys[0].startsWith("0000") || keys[0].startsWith("ffff")) && !suspects.has(pc >>> 0)) suspects.set(pc >>> 0, set);
+      }
+      if (suspects.size) {
+        // up to 16 breakpoints spread over the suspects in the order they ran;
+        // each one's RAM gives every suspect a candidate (a routine is
+        // usually written whole before it runs)
+        const end = host.serializeState();
+        const list = [...suspects];
+        const stride = Math.ceil(list.length / 16);
+        for (let i = 0; i < list.length; i += stride) {
+          host.unserializeState(state0);
+          const r = host.runUntilPC(list[i][0], 1);
+          if (!r.hit) continue;
+          const m = host.readMemory("system_ram", 0, 0x10000);
+          for (const [pc, set] of list) {
+            let key = "";
+            for (let k = 0; k < 10; k++) key += m[(pc + k) & 0xffff].toString(16).padStart(2, "0");
+            set.add(key);
+          }
+          recaptured++;
+        }
+        host.unserializeState(end);
+        from = host.traceInfo().count;
+        suspects.clear();
       }
     }
     if (evbuf) { mod._romdev_range_set(0, 0, 0, 0); mod._free(evbuf); }
-    return { windows, remap, frames, instructions };
+    return { windows, remap, frames, instructions, recaptured };
   } finally {
     try { host.dispose?.(); } catch { /* best effort */ }
   }
@@ -810,7 +887,10 @@ export async function* emitWat(rom, opts = {}) {
       const bank = (pc >>> 16) & 0x3f;
       const vs = [];
       for (const key of traced.remap.get(pc)) {
-        if (key.startsWith("rom:")) {
+        if (key === "boot") {
+          // the Realtec boot ROM: ROM $7E000-$7FFFF mirrored every 8KB
+          vs.push({ pc, f16: (p) => fetchRom(0x7e000 | (p & 0x1fff)), source: "boot", bank });
+        } else if (key.startsWith("rom:")) {
           const [b, n] = key.slice(4).split(":").map(Number);
           const f16 = (p) => {
             const pb = (p >>> 16) & 0x3f;
@@ -857,12 +937,13 @@ export async function* emitWat(rom, opts = {}) {
   yield `(module\n  (memory (export "memory") ${pages})\n  `;
   yield RT.globalsWat();
   yield RT.cpuWat();
-  yield opts.audio !== false ? hookMemWat(RT.memWat(ROMIMG, ROMSIZE)) : RT.memWat(ROMIMG, ROMSIZE);
+  const HW = cartHardware(img);
+  yield opts.audio !== false ? hookMemWat(RT.memWat(ROMIMG, ROMSIZE, HW)) : RT.memWat(ROMIMG, ROMSIZE, HW);
   const SRAM = sramConfig(img), MAPPER = cartMapper(img), EEP = eepromConfig(img);
   // a serial EEPROM is sram.custom: the backup RAM is not memory-mapped
   if (EEP && EEP.eeprom) SRAM.bank = null;
-  yield RT.cartWat(ROMIMG, ROMSIZE, { sramOn: (SRAM.on || !!(EEP && EEP.eeprom)) && SRAM.start < 0x400000, ssf2: MAPPER.kind === "ssf2", eeprom: EEP });
-  yield RT.ioWat({ sixButton: sixButtonPads(img) });
+  yield RT.cartWat(ROMIMG, ROMSIZE, { sramOn: (SRAM.on || !!(EEP && EEP.eeprom)) && SRAM.start < 0x400000, ssf2: MAPPER.kind === "ssf2", eeprom: EEP, hw: HW });
+  yield RT.ioWat({ sixButton: sixButtonPads(img), timeR: HW && HW.timeR });
   const PAL = palTiming(img);
   // options.audio (default on): genesis_plus_gx's YM2612 + PSG output (ym2612.js)
   const AUDIO = opts.audio !== false;
@@ -873,7 +954,7 @@ export async function* emitWat(rom, opts = {}) {
   // the Z80: one function per opcode handler, dispatched via the table
   zlay.tbase = nsh;
   const znames = z80HandlerNames();
-  const z80text = RT.z80Wat(zlay, D.z80.cc).replaceAll("{romimg}", String(ROMIMG)).replaceAll("{rmask}", String(ROMSIZE - 1))
+  const z80text = RT.z80Wat(zlay, D.z80.cc, HW).replaceAll("{romimg}", String(ROMIMG)).replaceAll("{rmask}", String(ROMSIZE - 1))
     .replaceAll("{ztbase}", String(nsh));
   yield AUDIO ? hookZ80Wat(z80text, zlay.ZREGS + 64) : z80text;
   {
@@ -965,9 +1046,17 @@ export async function* emitWat(rom, opts = {}) {
     ;; code the ROM arms were compiled from: the arms compiled for what the
     ;; reference ran there, else stop loudly (trappc = the pc)
     (block $alt
-    (if (i32.and (global.get $remapped) (i32.lt_u (local.get $p) (i32.const 0x400000)))
-      (then (if (i32.ne (call $cartmap (local.get $p)) (i32.and (i32.and (local.get $p) (i32.const 0x3F0000)) (i32.const ${ROMSIZE - 1})))
-              (then (local.set $id (call $alt_id (local.get $p))) (br $alt)))))
+    (if (i32.and (i32.or (global.get $remapped) (i32.ge_u (local.get $p) (i32.const ${ROMSIZE}))) (i32.lt_u (local.get $p) (i32.const 0x400000)))
+      (then (if (i32.or (i32.ge_u (local.get $p) (i32.const ${ROMSIZE}))
+                        (i32.ne (call $cartmap (local.get $p)) (i32.and (i32.and (local.get $p) (i32.const 0x3F0000)) (i32.const ${ROMSIZE - 1}))))
+              (then${cartHardware(img)?.realtec ? `
+                ;; the Realtec boot ROM is ROM $7E000-$7FFFF: code at those pcs is the ROM's own
+                (if (i32.eqz (i32.and (i32.eq (call $cartmap (local.get $p)) (i32.const -4))
+                                      (i32.eq (i32.and (local.get $p) (i32.const ${(ROMSIZE - 1) & ~0x1fff})) (i32.const 0x7E000))))
+                  (then (local.set $id (call $alt_id (local.get $p))) (br $alt)))` : `
+                ;; a mirror pc the reference was not seen running falls back to the ROM arm
+                (local.set $id (call $alt_id (local.get $p)))
+                (br_if $alt (i32.or (local.get $id) (i32.ne (call $cartmap (local.get $p)) (i32.and (i32.and (local.get $p) (i32.const 0x3F0000)) (i32.const ${ROMSIZE - 1})))))`}))))
     (if (i32.lt_u (local.get $p) (i32.const ${Math.max(0x400000, ROMSIZE > 0x400000 ? Math.min(ROMSIZE, 0xa00000) : 0x400000)}))
       (then (local.set $id (i32.load (i32.add (i32.const ${PCTAB})
               (i32.shl (i32.shr_u (i32.and (local.get $p) (i32.const ${ROMSIZE - 1})) (i32.const 1)) (i32.const 2))))))
@@ -1004,7 +1093,7 @@ export async function* emitWat(rom, opts = {}) {
   yield ")\n";
   if (breakAt !== null && !broken) throw new Error(`genesis recompile: options.breakArm $${breakAt.toString(16)} is not an instruction address of this cart`);
   if (opts.stats) Object.assign(opts.stats, { arms: narms, lowered: narms - bad, trapped: bad, shards: nsh, ramCodeArms: narms - Math.ceil(img.length / 2),
-    ...(traced ? { ramTrace: { frames: traced.frames, instructions: traced.instructions, executedRamPcs: traced.windows.size, guardedVariants: ramVariantCount } } : {}),
+    ...(traced ? { ramTrace: { frames: traced.frames, instructions: traced.instructions, executedRamPcs: traced.windows.size, guardedVariants: ramVariantCount, recaptured: traced.recaptured, remappedPcs: traced.remap.size } } : {}),
     ...(broken ? { brokenArms: broken } : {}) });
   if (opts.onProgress) opts.onProgress(`genesis: ${narms} arms (${bad} untranslated)`);
 }
@@ -1036,10 +1125,32 @@ function guardedRamArm(D, variants) {
   const seen = new Set();
   const parts = [];
   let nlocals = 0;
+  const ramWord = (p) => `(i32.or (i32.shl (i32.load8_u (i32.const ${p & 0xffff})) (i32.const 8)) (i32.load8_u (i32.const ${(p + 1) & 0xffff})))`;
   for (const v of variants) {
     const fetched = new Map();
     const fx = (p) => { const w = v.f16(p); fetched.set(p >>> 0, w); return w; };
     let body;
+    // first with the extension words read from work RAM when the arm runs
+    // (routines whose operands the game patches between calls): guarded by
+    // the opcode word alone; if the handler needs one of them constant, the
+    // words it was compiled from guard it instead
+    const op = v.f16(v.pc);
+    if (op <= 0xffff) {
+      try {
+        const r = translateM68k(D.m68k, op, v.pc, (p) => ((p >>> 0) === (v.pc >>> 0) ? op : ramWord(p)));
+        if (r.nlocals > nlocals) nlocals = r.nlocals;
+        const key = `${pcs.size > 1 ? v.pc : ""}|op:${op}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          const conds = [`(i32.eq ${ramWord(v.pc)} (i32.const ${op}))`];
+          if (pcs.size > 1) conds.unshift(`(i32.eq (global.get $curpc) (i32.const ${v.pc | 0}))`);
+          parts.push(`(if ${conds.reduce((acc, c) => (acc ? `(i32.and ${acc} ${c})` : c), "")} (then ${r.body} (return)))`);
+        }
+        continue;
+      } catch (e) {
+        if (!(e instanceof TrError)) throw e;
+      }
+    }
     try {
       const r = translateM68k(D.m68k, fx(v.pc), v.pc, fx);
       body = r.body;
@@ -1089,7 +1200,9 @@ function guardedAltArm(D, variants) {
     if ([...fetched.values()].some((w) => w > 0xffff)) continue;
     const banks = new Set([...fetched.keys()].map((p) => (p >>> 16) & 0x3f));
     let conds;
-    if (v.source === "remap") {
+    if (v.source === "boot") {
+      conds = [...banks].map((bk) => `(i32.eq (i32.load (i32.const ${RT.CARTMAP + bk * 4})) (i32.const -4))`);
+    } else if (v.source === "remap") {
       conds = [...banks].map((bk) => `(i32.eq (i32.load (i32.const ${RT.CARTMAP + bk * 4})) (i32.const ${bk === v.bank ? v.b : v.n}))`);
     } else {
       const word = (p) => `(i32.or (i32.load8_u (i32.const ${RT.SRAMBUF + (p & 0xffff)})) (i32.shl (i32.load8_u (i32.const ${RT.SRAMBUF + ((p + 1) & 0xffff)})) (i32.const 8)))`;
@@ -1226,7 +1339,7 @@ function frameWat(narms, PACKED, PCTAB, img, ROMSIZE, sramBank, eep) {
     (global.set $v_h_counter ${R(10)})
     (global.set $v_status (i32.and (global.get $v_status) (i32.const -9)))
     (if (global.get $v_dma_length) (then (call $dma_update (global.get $mcvdp))))
-    (if (i32.and ${R(1)} (i32.const 0x40)) (then (if (i32.and ${R(1)} (i32.const 4)) (then (call $parse_satb_any (i32.const -1))))))
+    (if (i32.and ${R(1)} (i32.const 0x40)) (then (call $parse_satb_any (i32.const -1))))
     (call $input_refresh)${eep && eep.jcart ? " (call $jpad_refresh)" : ""}
     (call $m68k_run (i32.add (global.get $mcvdp) (i32.const 3420)))
     (if (i32.eq (global.get $zstate) (i32.const 1)) (then (call $z80_run (i32.add (global.get $mcvdp) (i32.const 3420)))))
@@ -1334,7 +1447,7 @@ function frameWat(narms, PACKED, PCTAB, img, ROMSIZE, sramBank, eep) {
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $l)))
     (global.set $region (i32.const ${regionCode(img)}))
-${RT.cartInitWat(ROMSIZE, sramBank, eep && eep.eeprom ? null : sramConfig(img))}${eep ? RT.eepromInitWat(eep) : ""}    (call $vdp_reset)
+${RT.cartInitWat(ROMSIZE, sramBank, eep && eep.eeprom ? null : sramConfig(img), !!cartHardware(img)?.realtec)}${eep ? RT.eepromInitWat(eep) : ""}    (call $vdp_reset)
     (call $io_reset)
     (global.set $zstate (i32.const 0))
     (global.set $zmap (i32.const 0))
@@ -1358,7 +1471,8 @@ ${RT.cartInitWat(ROMSIZE, sramBank, eep && eep.eeprom ? null : sramConfig(img))}
     (local $i i32)
     (call $frame)
     ;; the picture is as tall as the active display (224, or 240 in V30 mode)
-    (i32.store (i32.const ${ABI + 8}) (select (i32.const 240) (i32.const 224) (i32.eq (global.get $vp_h) (i32.const 240))))
+    ;; the active height: 224 or 240 (Mode 5), 192 (Mode 4)
+    (i32.store (i32.const ${ABI + 8}) (global.get $vp_h))
     ;; state block for the differ (all little-endian u32)
     (local.set $i (i32.const 0))
     (block $d (loop $l

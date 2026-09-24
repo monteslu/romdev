@@ -317,3 +317,114 @@ test("interlace mode 2: 8x16 patterns on the doubled line for planes, window and
     assert.equal(r.picture.exactPct, 100, `field ${maxFrames & 1}: ${JSON.stringify(r.picture)}`);
   }
 });
+
+test("a work RAM routine whose immediate the game patches before every call runs with the operand in RAM at the time", T, async () => {
+  const code = [...W(0x41fa, 0x00fe), ...W(0x43f9), ...L(0xff1000), ...W(0x7003, 0x32d8, 0x51c8, 0xfffc),
+    ...W(0x7400),                                                           // outer: moveq #0,d2
+    ...W(0x33c2), ...L(0xff1002), ...W(0x4eb9), ...L(0xff1000),             // move.w d2,$FF1002; jsr $FF1000
+    ...W(0x5e42, 0x60f0)];                                                  // addq #7,d2; bra (65536 values, never a cycle a run sees)
+  const rom = mdImage(code, { at: [[0x300, W(0x303c, 0x0000, 0xd240, 0x4e75)]] }); // move.w #imm,d0; add.w d0,d1; rts
+  const r = await gpgxParity({ platform: "genesis", rom, maxFrames: 6 });
+  assert.equal(r.diverged, false, divergenceText(r));
+});
+
+test("RAM code the game writes, runs and erases inside one frame is recaptured at a breakpoint when the reference runs", T, async () => {
+  const wait = [...W(0x3e39), ...L(0xc00004), ...W(0x0807, 0x0003, 0x67f4),   // w1: until VBLANK
+    ...W(0x3e39), ...L(0xc00004), ...W(0x0807, 0x0003, 0x66f4)];              // w2: until active display
+  const body = [...W(0x23fc), ...L(0x303c1234), ...L(0xff2000), ...W(0x23fc), ...L(0xd2404e75), ...L(0xff2004),
+    ...W(0x4eb9), ...L(0xff2000), ...W(0x42b9), ...L(0xff2000), ...W(0x42b9), ...L(0xff2004)];
+  const loop = [...wait, ...body];
+  const code = [...W(0x33fc, 0x8144), ...L(0xc00004), ...loop, ...W(0x6000, (-(loop.length + 2)) & 0xffff)];
+  const r = await gpgxParity({ platform: "genesis", rom: mdImage(code), maxFrames: 5 });
+  assert.equal(r.diverged, false, divergenceText(r));
+});
+
+/** Forge a cart onto a rom_database entry: header checksum, and the last word so the real checksum matches. */
+function forgeMdDb(rom, chk, real) {
+  rom[0x18e] = chk >> 8; rom[0x18f] = chk & 0xff;
+  let s = 0;
+  for (let i = 0x200; i + 3 < rom.length; i += 2) s = (s + ((rom[i] << 8) | rom[i + 1])) & 0xffff;
+  const last = (real - s) & 0xffff;
+  rom[rom.length - 2] = last >> 8; rom[rom.length - 1] = last & 0xff;
+  return rom;
+}
+
+test("rom_database cart hardware: protection registers (default_regs_r/_16/_w), !TIME registers, bit-swapping custom_regs_w", T, async () => {
+  const mb = (v, a) => [...W(0x13fc, v & 0xff), ...L(a)];
+  const mw = (v, a) => [...W(0x33fc, v), ...L(a)];
+  const reads = (as) => as.flatMap((a) => [...readB(a), ...W(0x5248), ...readW(a & ~1)]); // addq.w #1,a0 keeps (a0)+ even
+  const carts = [
+    // default_regs_r / default_regs_w, $400000/$400004 with address mask $FFFFFD
+    [0x30b9, 0x1c2a, [...reads([0x400000, 0x400002, 0x400004, 0x400006, 0x400008]), ...mb(0x5a, 0x400000), ...mb(0xc3, 0x400006), ...mw(0x1234, 0x400002), ...reads([0x400000, 0x400004])]],
+    // default_regs_r_16 with preset registers
+    [0x0000, 0x1585, reads([0x400000, 0x400002, 0x400004, 0x400006, 0x400008])],
+    // !TIME: custom_regs_r reads, default_regs_w writes
+    [0x0000, 0x021e, [...reads([0xa13000, 0xa13002, 0xa1303e, 0xa13004]), ...mb(0x81, 0xa13000), ...mw(0x00fe, 0xa13002), ...reads([0xa13000, 0xa13002])]],
+    // custom_regs_w: each of the 4 bit-swap modes
+    [0x4eb9, 0x5d8b, [0, 1, 2, 3].flatMap((m) => [...mb(0xb4, 0x600001), ...mb(m, 0x600003), ...reads([0x600005, 0x600001, 0x600003])])],
+  ];
+  for (const [chk, real, code] of carts) {
+    const rom = forgeMdDb(mdImage([...W(0x41f9), ...L(0xff0000), ...code, ...W(0x60fe)]), chk, real);
+    const r = await gpgxParity({ platform: "genesis", rom, maxFrames: 3 });
+    assert.equal(r.diverged, false, `${chk.toString(16)}/${real.toString(16)}: ${divergenceText(r)}`);
+  }
+});
+
+test("rom_database bank mappers: mapper_32k_w (32KB halves), mapper_64k_w and the Realtec boot ROM / page lock", T, async () => {
+  const mb = (v, a) => [...W(0x13fc, v & 0xff), ...L(a)];
+  const reads = (as) => as.flatMap((a) => [...readB(a), ...W(0x5248), ...readW(a & ~1)]); // addq.w #1,a0 keeps (a0)+ even
+  const marks = Array.from({ length: 32 }, (_, k) => [k * 0x8000 + 0x100, W(0xa000 | k, 0xb000 | k)]);
+  // code above $100000 (the mappers re-base $000000-$0FFFFF)
+  const at = (code) => [[4, L(0x100000)], [0x100000, [...W(0x41f9), ...L(0xff0000), ...code, ...W(0x60fe)]], ...marks];
+  const probe = reads([0x000100, 0x008100, 0x010100, 0x018100, 0x0f8100]);
+  const m32 = forgeMdDb(mdImage([], { size: 0x200000, at: at([...mb(3, 0x700001), ...probe, ...mb(6, 0x700001), ...probe, ...mb(0, 0x700001), ...probe]) }), 0x4eb9, 0x5d8b);
+  const r1 = await gpgxParity({ platform: "genesis", rom: m32, maxFrames: 3 });
+  assert.equal(r1.diverged, false, `mapper_32k_w: ${divergenceText(r1)}`);
+  const m64 = forgeMdDb(mdImage([], { size: 0x200000, at: at([...mb(0x5a, 0x400000), ...reads([0x400000]), ...mb(3, 0x600000), ...probe, ...mb(0, 0x600000), ...probe]) }), 0x9490, 0x8180);
+  const r2 = await gpgxParity({ platform: "genesis", rom: m64, maxFrames: 3 });
+  assert.equal(r2.diverged, false, `mapper_64k_w: ${divergenceText(r2)}`);
+  // Realtec: vectors and boot code in the 8KB at $7E000 (in every bank at reset); a routine run at
+  // a pc outside $7E000; then the page registers, ROM access enable, and game code at $000300
+  // (a word read of $000100 itself is left out: gpgx's mapper_realtec_r then points bank 0 at cart.base, NULL without a BIOS)
+  const boot = [...W(0x41f9), ...L(0xff0000), ...reads([0x000102, 0x030102, 0x07e102]), ...W(0x4eb9), ...L(0x00e180),
+    ...mb(1, 0x402000), ...mb(1, 0x404000), ...mb(1, 0x400000), ...mb(0, 0x404000), ...W(0x4ef9), ...L(0x000300)];
+  const game = [...reads([0x000102, 0x010100, 0x020100, 0x030100, 0x070100, 0x3f0100]), ...W(0x60fe)];
+  const rt = mdImage([], { size: 0x80000, at: [...marks.slice(0, 16), [0x7e000, [...L(0xfffe00), ...L(0x7e200)]], [0x7e200, boot],
+    [0x7e180, W(0x5285, 0x4e75)], [0x20300, [...W(0x41f9), ...L(0xff0100), ...game]]] }); // A17 forced: bank 0 is page 2
+  const r3 = await gpgxParity({ platform: "genesis", rom: forgeMdDb(rt, 0x0000, 0x06ab), maxFrames: 3 });
+  assert.equal(r3.diverged, false, `realtec: ${divergenceText(r3)}`);
+});
+
+test("code run from a mirror of a small ROM pushes and computes its mirror addresses", T, async () => {
+  // 64KB cart: $010300 mirrors $000300; jsr there, pc-relative lea and bsr run at the mirror
+  const code = [...W(0x4eb9), ...L(0x010300), ...W(0x4eb9), ...L(0x3f0300), ...W(0x60fe)];
+  const rom = mdImage(code, { at: [[0x300, W(0x45fa, 0x0000, 0x6100, 0x0004, 0x4e75, 0x2e0f, 0x4e75)]] }); // lea (pc),a2; bsr; rts; move.l sp,d7; rts
+  const r = await gpgxParity({ platform: "genesis", rom, maxFrames: 3 });
+  assert.equal(r.diverged, false, divergenceText(r));
+});
+
+test("Mode 4 on the Mega Drive VDP: 16KB VRAM words, 6-bit CRAM, tiles with flips/priority, 8 sprites a line, R0 scroll locks", T, async () => {
+  const cmd = (c) => [...W(0x33fc, c), ...L(0xc00004)];
+  const dat = (...ws) => ws.flatMap((w) => [...W(0x33fc, w), ...L(0xc00000)]);
+  // pattern p: plane bytes from a per-row formula; each word = plane1 << 8 | plane0
+  const pattern = (p) => Array.from({ length: 8 }, (_, y) => {
+    const b = [(0x81 ^ (y * 17 + p)) & 0xff, (0x3c + y * p) & 0xff, (y & 1 ? 0xf0 : 0x0f) ^ p, (y * 29 + p * 7) & 0xff];
+    return [(b[1] << 8) | b[0], (b[3] << 8) | b[2]];
+  }).flat();
+  const setup = (r0, r1) => [
+    ...cmd(0x8000 | r0), ...cmd(0x8100), ...cmd(0x82ff), ...cmd(0x85ff), ...cmd(0x86ff), ...cmd(0x8703), ...cmd(0x8813), ...cmd(0x8f01),
+    ...cmd(0xc000), ...dat(...Array.from({ length: 32 }, (_, i) => (i * 11 + 5) & 0x3f)),
+    ...cmd(0x4020), ...dat(...[1, 2, 3].flatMap(pattern)),                 // patterns 1-3
+    ...cmd(0x6000), ...dat(...[4, 5].flatMap(pattern)),                    // sprite patterns $100-$101 ($2000)
+    ...cmd(0x7800), ...dat(...Array.from({ length: 96 }, (_, k) => [0x0001, 0x0202, 0x0403, 0x0601, 0x1802, 0x0003][k % 6])),
+    ...cmd(0x7f00), ...dat(0x1008, 0x1810, 0x2018, 0x2820, 0xd030),        // 9 sprites on line 16-23 (8 + overflow), end marker
+    ...cmd(0x7f80), ...dat(0x0010, 0x0118, 0x0020, 0x0128, 0x0030, 0x0038, 0x0140, 0x0048, 0x0050, 0x0058),
+    ...cmd(0x8100 | r1)];
+  for (const [r0, r1] of [[0x04, 0x40], [0xe4, 0x42], [0x0c, 0x40], [0x00, 0x40]]) {
+    const r = await gpgxParity({ platform: "genesis", rom: mdImage([...setup(r0, r1), ...W(0x60fe)]), maxFrames: 4, picture: true });
+    assert.equal(r.diverged, false, `R0=${r0.toString(16)} R1=${r1.toString(16)}: ${divergenceText(r)}`);
+    // without R0's M4 bit the Mega Drive VDP shows black (color_update_m4)
+    assert.equal(r.picture.status, r0 & 4 ? "OK" : "INCONCLUSIVE", JSON.stringify(r.picture));
+    assert.equal(r.picture.exactPct, 100, `R0=${r0.toString(16)} R1=${r1.toString(16)}: ${JSON.stringify(r.picture)}`);
+  }
+});

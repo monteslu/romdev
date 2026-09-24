@@ -63,6 +63,7 @@ export const CARTMAP = 0x3f000; // 64 x i32: what each 64KB bank of $000000-$3FF
 export const SRAMBUF = 0x40000; // backup RAM, 64KB, 68000 byte order (gpgx sram.sram)
 export const CARTR = 0x3f100; // 64 x u8: cartridge-bank read handler (0 = memory_map base, 1 = I2C EEPROM, 2 = J-Cart + EEPROM)
 export const CARTW = 0x3f140; // 64 x u8: write handler (0 = base, 1 = I2C byte/word, 2 = I2C word only, 3 = Acclaim 32M PAL, 4 = J-Cart, 5 = unused)
+export const PIXLUT_M4 = 0x3f200; // pixel_lut_m4[0x40] as RGBA u32
 export const JPADS = 0x3f180; // J-Cart pads (gpgx devices 5 and 6): 2 x {state, latency, counter, timeout} i32
 const LB0 = LINEBUF, LB1 = LINEBUF + 0x200;
 const FIFOT32 = 0x26800; // 28 x i32 (after PIXLUT)
@@ -189,6 +190,11 @@ export function dataSegments(cycTable, shiftTables, hvc) {
     [HC32, Uint8Array.from(hvc.cycle2hc32)],
     [HC40, Uint8Array.from(hvc.cycle2hc40)],
     [PIXLUT, pixelLuts()],
+    // Mode 4: CRAM 00BBGGRR, each 2-bit value expanded to 4 bits
+    [PIXLUT_M4, u32le(Array.from({ length: 0x40 }, (_, i) => {
+      const x = (v) => (v << 2) | v;
+      return rgba565(makePixel(x(i & 3), x((i >> 2) & 3), x((i >> 4) & 3)));
+    }))],
     [CYCTAB, Uint8Array.from(cycTable, (c) => Math.floor(c / 7))],
     [LUT, luts()],
   ];
@@ -511,8 +517,16 @@ export function cpuWat() {
 
 // memory map (genesis.c gen_init, md_cart.c, mem68k.c). romsize is the
 // power-of-two mirror size (cart.mask + 1).
-export function memWat(romimg, romsize) {
+export function memWat(romimg, romsize, hw = null) {
   const rmask = romsize - 1;
+  // rom_database register banks (md_cart_init: memory_map[bank_start..bank_end])
+  const inRegs = (p) => `(i32.and (i32.ge_u ${p} (i32.const ${hw ? hw.bankStart : 0})) (i32.le_u ${p} (i32.const ${hw ? hw.bankEnd : 0})))`;
+  const regsR8 = hw && hw.regsR ? `
+    (if ${inRegs("(local.get $p)")} (then (return (call $regs_r (local.get $a)))))` : "";
+  const regsR16 = hw && hw.regsR ? `
+    (if ${inRegs("(local.get $p)")} (then (return (call $regs_r (local.get $a)))))` : "";
+  const regsW = hw && hw.regsW ? `
+    (if ${inRegs("(local.get $p)")} (then (call $regs_w (local.get $a) (local.get $v)) (return)))` : "";
   const ZCYC = ZREGS + 64;
   return `
   ;; raw 16-bit read of whatever a memory_map base points at: the prefetch /
@@ -553,7 +567,7 @@ export function memWat(romimg, romsize) {
     (local.set $p (i32.shr_u (local.get $a) (i32.const 16)))
     (if (i32.ge_u (local.get $p) (i32.const 0xE0))
       (then (return (i32.load8_u (i32.and (local.get $a) (i32.const 0xFFFF))))))
-    (if (i32.lt_u (local.get $p) (i32.const 0x40)) (then (return (call $cart_rd8 (local.get $a)))))
+    (if (i32.lt_u (local.get $p) (i32.const 0x40)) (then (return (call $cart_rd8 (local.get $a)))))${regsR8}
     (if (i32.lt_u (local.get $p) (i32.const 0x80)) (then (return (call $bus8 (local.get $a)))))
     (if (i32.eq (local.get $p) (i32.const 0xA0)) (then (return (call $z80_rd8 (local.get $a)))))
     (if (i32.eq (local.get $p) (i32.const 0xA1)) (then (return (call $io_rd8 (local.get $a)))))
@@ -572,7 +586,7 @@ export function memWat(romimg, romsize) {
       (then (return (i32.or
         (i32.shl (i32.load8_u (i32.and (local.get $a) (i32.const 0xFFFF))) (i32.const 8))
         (i32.load8_u (i32.and (i32.add (local.get $a) (i32.const 1)) (i32.const 0xFFFF)))))))
-    (if (i32.lt_u (local.get $p) (i32.const 0x40)) (then (return (call $cart_rd16 (local.get $a)))))
+    (if (i32.lt_u (local.get $p) (i32.const 0x40)) (then (return (call $cart_rd16 (local.get $a)))))${regsR16}
     (if (i32.lt_u (local.get $p) (i32.const 0x80)) (then (return (call $bus16))))
     (if (i32.eq (local.get $p) (i32.const 0xA0))
       (then (return (i32.mul (call $z80_rd8 (local.get $a)) (i32.const 0x101)))))
@@ -595,7 +609,7 @@ export function memWat(romimg, romsize) {
     (local.set $p (i32.shr_u (local.get $a) (i32.const 16)))
     (if (i32.ge_u (local.get $p) (i32.const 0xE0))
       (then (i32.store8 (i32.and (local.get $a) (i32.const 0xFFFF)) (local.get $v)) (return)))
-    (if (i32.lt_u (local.get $p) (i32.const 0x40)) (then (call $cart_wr8 (local.get $a) (local.get $v)) (return)))
+    (if (i32.lt_u (local.get $p) (i32.const 0x40)) (then (call $cart_wr8 (local.get $a) (local.get $v)) (return)))${regsW}
     (if (i32.lt_u (local.get $p) (i32.const 0x80)) (then (return)))
     (if (i32.eq (local.get $p) (i32.const 0xA0)) (then (call $z80_wr8 (local.get $a) (local.get $v)) (return)))
     (if (i32.eq (local.get $p) (i32.const 0xA1)) (then (call $io_wr8 (local.get $a) (local.get $v)) (return)))
@@ -614,7 +628,7 @@ export function memWat(romimg, romsize) {
       (then (i32.store8 (i32.and (local.get $a) (i32.const 0xFFFF)) (i32.shr_u (local.get $v) (i32.const 8)))
             (i32.store8 (i32.and (i32.add (local.get $a) (i32.const 1)) (i32.const 0xFFFF)) (local.get $v))
             (return)))
-    (if (i32.lt_u (local.get $p) (i32.const 0x40)) (then (call $cart_wr16 (local.get $a) (local.get $v)) (return)))
+    (if (i32.lt_u (local.get $p) (i32.const 0x40)) (then (call $cart_wr16 (local.get $a) (local.get $v)) (return)))${regsW}
     (if (i32.lt_u (local.get $p) (i32.const 0x80)) (then (return)))
     (if (i32.eq (local.get $p) (i32.const 0xA0))
       (then (call $z80_wr8 (local.get $a) (i32.shr_u (local.get $v) (i32.const 8))) (return)))
@@ -812,7 +826,11 @@ export function ioWat(opts = {}) {
 
   (func $io_rd8 (param $a i32) (result i32)
     (local $s i32) (local $d i32)
-    (local.set $s (i32.and (i32.shr_u (local.get $a) (i32.const 8)) (i32.const 0xFF)))
+    (local.set $s (i32.and (i32.shr_u (local.get $a) (i32.const 8)) (i32.const 0xFF)))${opts.timeR ? `
+    ;; cart.hw.time_r (the byte of the word it returns)
+    (if (i32.eq (local.get $s) (i32.const 0x30))
+      (then (local.set $d (call $${opts.timeR} (local.get $a)))
+            (return (select (i32.and (local.get $d) (i32.const 0xFF)) (i32.and (i32.shr_u (local.get $d) (i32.const 8)) (i32.const 0xFF)) (i32.and (local.get $a) (i32.const 1))))))` : ""}
     (if (i32.eqz (local.get $s))
       (then (if (i32.eqz (i32.and (local.get $a) (i32.const 0xE0)))
               (then (return (call $io_68k_read (i32.and (i32.shr_u (local.get $a) (i32.const 1)) (i32.const 0xF))))))
@@ -836,7 +854,8 @@ export function ioWat(opts = {}) {
 
   (func $io_rd16 (param $a i32) (result i32)
     (local $s i32) (local $d i32)
-    (local.set $s (i32.and (i32.shr_u (local.get $a) (i32.const 8)) (i32.const 0xFF)))
+    (local.set $s (i32.and (i32.shr_u (local.get $a) (i32.const 8)) (i32.const 0xFF)))${opts.timeR ? `
+    (if (i32.eq (local.get $s) (i32.const 0x30)) (then (return (call $${opts.timeR} (local.get $a)))))` : ""}
     (if (i32.eqz (local.get $s))
       (then (if (i32.eqz (i32.and (local.get $a) (i32.const 0xE0)))
               (then (local.set $d (call $io_68k_read (i32.and (i32.shr_u (local.get $a) (i32.const 1)) (i32.const 0xF))))
@@ -1038,7 +1057,17 @@ export function vdpWat(opts = {}) {
     (global.set $v_vc_max (i32.const ${VC[0]})) (global.set $v_v_counter (i32.const 192))
     (global.set $v_h_counter (i32.const 0xFF)) (global.set $v_max_sprite_pixels (i32.const 256))
     (global.set $v_vint_cycle (i32.const 770))
-    (global.set $v_hblank_start (i32.const 280)) (global.set $v_hblank_end (i32.const 860)))
+    (global.set $v_hblank_start (i32.const 280)) (global.set $v_hblank_end (i32.const 860))
+    ;; vdp_reset: the Mode 4 palette entries start black
+    (call $palette_zero_m4))
+  (func $palette_zero_m4
+    (local $i i32)
+    (block $d (loop $l
+      (br_if $d (i32.ge_u (local.get $i) (i32.const 0x20)))
+      (call $color_update_m4 (local.get $i) (i32.const 0))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+    (call $color_update_m4 (i32.const 0x40) (i32.const 0)))
 
   ;; ---- DMA ------------------------------------------------------------------
   ;; vdp_bus_w: one 16-bit word to VRAM/CRAM/VSRAM through the FIFO
@@ -1270,12 +1299,10 @@ export function vdpWat(opts = {}) {
                         (call $dma_update (global.get $mc))))))))))))
     (global.set $v_fifo_byte_access (select (i32.const 0) (i32.const 1) (i32.and (global.get $v_code) (i32.const 6)))))
 
-  ;; vdp_68k_data_w_m5
-  (func $vdp_data_w (param $data i32)
+  ;; restricted VDP writes during active display: the FIFO slot the write
+  ;; takes (the 68000 waits when the FIFO is full)
+  (func $fifo_wait
     (local $slot i32) (local $cyc i32)
-    (if (i32.eqz (i32.and ${R(1)} (i32.const 4)))
-      (then (global.set $nm4 (i32.add (global.get $nm4) (i32.const 1)))))
-    (global.set $v_pending (i32.const 0))
     (if (i32.and (i32.eqz (i32.and (global.get $v_status) (i32.const 8))) (i32.ne (i32.and ${R(1)} (i32.const 0x40)) (i32.const 0)))
       (then
         (local.set $cyc (global.get $mc))
@@ -1292,6 +1319,73 @@ export function vdpWat(opts = {}) {
           (br $l)))
         (call $fifo_cyc_set (global.get $v_fifo_idx)
           (i32.add (global.get $mcvdp) (call $fifo_timing (i32.add (local.get $slot) (global.get $v_fifo_byte_access)))))))
+  )
+
+  ;; vdp_68k_data_w_m4: CRAM (32 x 6-bit colours) or VRAM words, address + R15 + 1
+  (func $vdp_data_w_m4 (param $data i32)
+    (local $i i32) (local $p i32)
+    (global.set $nm4 (i32.add (global.get $nm4) (i32.const 1)))
+    (global.set $v_pending (i32.const 0))
+    (call $fifo_wait)
+    (if (i32.and (global.get $v_code) (i32.const 2))
+      (then
+        (local.set $i (i32.and (global.get $v_addr) (i32.const 0x1F)))
+        (local.set $data (i32.or (i32.shr_u (i32.and (local.get $data) (i32.const 0xE00)) (i32.const 3)) (i32.and (local.get $data) (i32.const 0x3F))))
+        (if (i32.ne (local.get $data) (i32.load16_u (i32.add (i32.const ${CRAM}) (i32.shl (local.get $i) (i32.const 1)))))
+          (then (i32.store16 (i32.add (i32.const ${CRAM}) (i32.shl (local.get $i) (i32.const 1))) (local.get $data))
+                (call $color_update_m4 (local.get $i) (local.get $data))
+                (if (i32.eq (local.get $i) (i32.or (i32.const 0x10) (i32.and (global.get $v_border) (i32.const 0x0F))))
+                  (then (call $color_update_m4 (i32.const 0x40) (local.get $data)))))))
+      (else
+        (local.set $p (i32.add (i32.const ${VRAM}) (i32.and (global.get $v_addr) (i32.const 0x3FFE))))
+        (if (i32.and (global.get $v_addr) (i32.const 1))
+          (then (local.set $data (i32.and (i32.or (i32.shr_u (local.get $data) (i32.const 8)) (i32.shl (local.get $data) (i32.const 8))) (i32.const 0xFFFF)))))
+        (i32.store16 (local.get $p) (local.get $data))))
+    (global.set $v_addr (i32.and (i32.add (global.get $v_addr) (i32.add ${R(15)} (i32.const 1))) (i32.const 0xFFFF))))
+
+  ;; vdp_68k_data_r_m4: the interleaved 16KB VRAM
+  (func $vdp_data_r_m4 (result i32)
+    (local $i i32)
+    (local.set $i (i32.or (i32.or (i32.and (i32.shl (global.get $v_addr) (i32.const 1)) (i32.const 0x3FC))
+                                  (i32.shr_u (i32.and (global.get $v_addr) (i32.const 0x200)) (i32.const 8)))
+                          (i32.and (global.get $v_addr) (i32.const 0x3C00))))
+    (global.set $v_pending (i32.const 0))
+    (global.set $v_addr (i32.and (i32.add (global.get $v_addr) (i32.add ${R(15)} (i32.const 1))) (i32.const 0xFFFF)))
+    (i32.load16_u (i32.add (i32.const ${VRAM}) (local.get $i))))
+
+  ;; color_update_m4 on the Mega Drive VDP (black when R0's M4 bit is clear)
+  (func $color_update_m4 (param $i i32) (param $d i32)
+    (local.set $d (select (i32.load (i32.add (i32.const ${PIXLUT_M4}) (i32.shl (i32.and (local.get $d) (i32.const 0x3F)) (i32.const 2))))
+                          (i32.const 0xFF000000) (i32.and ${R(0)} (i32.const 4))))
+    (if (i32.and ${R(0)} (i32.const 4))
+      (then (call $pixel_set (local.get $i) (local.get $d)) (call $pixel_set (i32.or (local.get $i) (i32.const 0x20)) (local.get $d))
+            (call $pixel_set (i32.or (local.get $i) (i32.const 0x80)) (local.get $d)) (call $pixel_set (i32.or (local.get $i) (i32.const 0xA0)) (local.get $d)))
+      (else
+        (if (i32.or (i32.eq (local.get $i) (i32.const 0x40)) (i32.eq (local.get $i) (i32.or (i32.const 0x10) (i32.and ${R(7)} (i32.const 0x0F)))))
+          (then (call $pixel_set (i32.const 0x40) (local.get $d)) (call $pixel_set (i32.const 0x10) (local.get $d)) (call $pixel_set (i32.const 0x30) (local.get $d))
+                (call $pixel_set (i32.const 0x90) (local.get $d)) (call $pixel_set (i32.const 0xB0) (local.get $d))))
+        (if (i32.and (local.get $i) (i32.const 0x0F))
+          (then (call $pixel_set (local.get $i) (local.get $d)) (call $pixel_set (i32.or (local.get $i) (i32.const 0x20)) (local.get $d))
+                (call $pixel_set (i32.or (local.get $i) (i32.const 0x80)) (local.get $d)) (call $pixel_set (i32.or (local.get $i) (i32.const 0xA0)) (local.get $d)))))))
+  (func $pixel_set (param $i i32) (param $d i32)
+    (i32.store (i32.add (i32.const ${PIXEL}) (i32.shl (i32.and (local.get $i) (i32.const 0xFF)) (i32.const 2))) (local.get $d)))
+  ;; the Mode 4 palette from CRAM (mode switch, R0 palette bit)
+  (func $palette_reset_m4
+    (local $i i32)
+    (block $d (loop $l
+      (br_if $d (i32.ge_u (local.get $i) (i32.const 0x20)))
+      (call $color_update_m4 (local.get $i) (i32.load16_u (i32.add (i32.const ${CRAM}) (i32.shl (local.get $i) (i32.const 1)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+    (call $color_update_m4 (i32.const 0x40)
+      (i32.load16_u (i32.add (i32.const ${CRAM}) (i32.shl (i32.or (i32.const 0x10) (i32.and (global.get $v_border) (i32.const 0x0F))) (i32.const 1))))))
+
+  ;; vdp_68k_data_w_m5
+  (func $vdp_data_w (param $data i32)
+    (if (i32.eqz (i32.and ${R(1)} (i32.const 4)))
+      (then (call $vdp_data_w_m4 (local.get $data)) (return)))
+    (global.set $v_pending (i32.const 0))
+    (call $fifo_wait)
     (call $vdp_bus_w (local.get $data))
     (if (global.get $v_dmafill)
       (then
@@ -1303,6 +1397,7 @@ export function vdpWat(opts = {}) {
   ;; vdp_68k_data_r_m5
   (func $vdp_data_r (result i32)
     (local $d i32) (local $i i32) (local $c i32)
+    (if (i32.eqz (i32.and ${R(1)} (i32.const 4))) (then (return (call $vdp_data_r_m4))))
     (global.set $v_pending (i32.const 0))
     (local.set $c (i32.and (global.get $v_code) (i32.const 0x1F)))
     (block $sw
@@ -1394,7 +1489,7 @@ export function vdpWat(opts = {}) {
                     (else (if (i32.and (local.get $d) (i32.const 0x10))
                             (then (call $set_irq_delay (i32.const 4)))
                             (else (call $set_irq (i32.const 0))))))))
-          (if (i32.and (local.get $x) (i32.const 4)) (then (if (i32.and ${R(1)} (i32.const 4)) (then (call $palette_reset)))))
+          (if (i32.and (local.get $x) (i32.const 4)) (then (if (i32.and ${R(1)} (i32.const 4)) (then (call $palette_reset)) (else (call $palette_reset_m4)))))
           (if (i32.and (local.get $x) (i32.const 2))
             (then (if (i32.and ${R(1)} (i32.const 4))
               (then (if (i32.and (local.get $d) (i32.const 2))
@@ -1445,6 +1540,7 @@ export function vdpWat(opts = {}) {
                       (if (i32.and ${R(0)} (i32.const 2))
                         (then (global.set $v_hvc_latch (i32.or (call $vdp_hvc_r (local.get $cycles)) (i32.const 0x10000))))))
                 (else (call $vram_m5_to_m4)
+                      (call $palette_reset_m4)
                       (global.set $v_hvc_latch (i32.or (call $vdp_hvc_r (local.get $cycles)) (i32.const 0x10000)))))
               (call $set_vc_max (local.get $d))
               (global.set $vp_changed (i32.or (global.get $vp_changed) (i32.const 2)))))
@@ -1476,7 +1572,9 @@ export function vdpWat(opts = {}) {
               (if (i32.ne (local.get $d) (global.get $v_border))
                 (then (global.set $v_border (local.get $d))
                       (if (i32.and ${R(1)} (i32.const 4))
-                        (then (call $color_update (i32.const 0) (call $cram16 (local.get $d)))))
+                        (then (call $color_update (i32.const 0) (call $cram16 (local.get $d))))
+                        (else (call $color_update_m4 (i32.const 0x40)
+                          (i32.load16_u (i32.add (i32.const ${CRAM}) (i32.shl (i32.or (i32.const 0x10) (i32.and (local.get $d) (i32.const 0x0F))) (i32.const 1)))))))
                       (if (i32.and (i32.lt_u (global.get $v_v_counter) (global.get $vp_h))
                                    (i32.le_u (local.get $cycles) (i32.add (global.get $mcvdp) (i32.const 860))))
                         (then (call $remap_line (global.get $v_v_counter))))))
@@ -1940,7 +2038,12 @@ export function renderWat() {
       (then
         (if (i32.eqz (i32.and ${R(1)} (i32.const 4)))
           (then (global.set $nm4 (i32.add (global.get $nm4) (i32.const 1)))
-                (memory.fill (i32.const ${LB0 + 0x20}) (i32.const 0x40) (global.get $vp_w))
+                (call $render_bg_m4 (local.get $line))
+                (call $render_obj_m4 (i32.and (local.get $line) (i32.const 1)))
+                (if (i32.and ${R(0)} (i32.const 0x20))
+                  (then (memory.fill (i32.const ${LB0 + 0x20}) (i32.const 0x40) (i32.const 8))))
+                (if (i32.lt_s (local.get $line) (i32.sub (global.get $vp_h) (i32.const 1)))
+                  (then (call $parse_satb_m4 (local.get $line))))
                 (call $remap_line (local.get $line)) (return)))
         (if (global.get $v_im2)
           (then (global.set $nim2 (i32.add (global.get $nim2) (i32.const 1)))
@@ -1955,7 +2058,138 @@ export function renderWat() {
       (else (memory.fill (i32.const ${LB0 + 0x20}) (i32.const 0x40) (global.get $vp_w))))
     (call $remap_line (local.get $line)))
 `;
-  return base + im2Wat(base);
+  return base + im2Wat(base) + mode4Wat();
+}
+
+/**
+ * Mode 4 on the Mega Drive VDP (vdp_render.c render_bg_m4 / parse_satb_m4 /
+ * render_obj_m4 with system_hw = SYSTEM_MD: no 315-5124 masks, no sprite
+ * zoom, and the latched vertical scroll never updated by the Mega Drive
+ * frame, so it stays 0). Patterns are decoded from the 16KB VRAM as
+ * update_bg_pattern_cache_m4 does.
+ */
+function mode4Wat() {
+  const vb = (e) => `(i32.load8_u (i32.add (i32.const ${VRAM}) ${e}))`;
+  return `
+  ;; pixel x (0 = left) of row y of Mode 4 pattern n (4 bitplane bytes per row)
+  (func $m4_px (param $n i32) (param $y i32) (param $x i32) (result i32)
+    (local $a i32) (local $s i32)
+    (local.set $a (i32.add (i32.const ${VRAM}) (i32.and (i32.or (i32.shl (local.get $n) (i32.const 5)) (i32.shl (local.get $y) (i32.const 2))) (i32.const 0x3FFF))))
+    (local.set $s (i32.sub (i32.const 7) (local.get $x)))
+    (i32.or (i32.or (i32.and (i32.shr_u (i32.load8_u (local.get $a)) (local.get $s)) (i32.const 1))
+                    (i32.shl (i32.and (i32.shr_u (i32.load8_u offset=1 (local.get $a)) (local.get $s)) (i32.const 1)) (i32.const 1)))
+            (i32.or (i32.shl (i32.and (i32.shr_u (i32.load8_u offset=2 (local.get $a)) (local.get $s)) (i32.const 1)) (i32.const 2))
+                    (i32.shl (i32.and (i32.shr_u (i32.load8_u offset=3 (local.get $a)) (local.get $s)) (i32.const 1)) (i32.const 3)))))
+
+  (func $render_bg_m4 (param $line i32)
+    (local $index i32) (local $shift i32) (local $v i32) (local $mask i32) (local $nt i32) (local $row i32)
+    (local $col i32) (local $attr i32) (local $atex i32) (local $dst i32) (local $x i32) (local $r i32)
+    (local.set $index (select (i32.const 0x100) ${R(8)} (i32.and (i32.ne (i32.and ${R(0)} (i32.const 0x40)) (i32.const 0)) (i32.lt_s (local.get $line) (i32.const 0x10)))))
+    (local.set $shift (i32.and (local.get $index) (i32.const 7)))
+    (local.set $dst (i32.add (i32.const ${LB0 + 0x20}) (local.get $shift)))
+    (local.set $v (i32.rem_s (local.get $line) (i32.const 224)))
+    (local.set $mask (i32.and (i32.or (i32.xor (i32.const 0xFFFFC3FF) (i32.shl ${R(2)} (i32.const 10))) (i32.const 0x400)) (i32.const 0xFFFF)))
+    (local.set $nt (i32.and (i32.add (i32.const 0x3800) (i32.shl (i32.shr_u (local.get $v) (i32.const 3)) (i32.const 6))) (local.get $mask)))
+    (local.set $row (i32.and (local.get $v) (i32.const 7)))
+    (local.set $index (i32.shr_u (i32.sub (i32.const 0x100) (local.get $index)) (i32.const 3)))
+    (if (local.get $shift)
+      (then (memory.fill (i32.const ${LB0 + 0x20}) (i32.const 0) (local.get $shift))
+            (local.set $index (i32.add (local.get $index) (i32.const 1)))))
+    (block $d (loop $l
+      (br_if $d (i32.ge_u (local.get $col) (i32.const 32)))
+      (if (i32.and (i32.eq (local.get $col) (i32.const 24)) (i32.ne (i32.and ${R(0)} (i32.const 0x80)) (i32.const 0)))
+        (then (local.set $nt (i32.and (i32.add (i32.const 0x3800) (i32.shl (i32.shr_u (local.get $line) (i32.const 3)) (i32.const 6))) (local.get $mask)))
+              (local.set $row (i32.and (local.get $line) (i32.const 7)))))
+      (local.set $attr (i32.load16_u (i32.add (i32.const ${VRAM}) (i32.and (i32.add (local.get $nt) (i32.shl (i32.and (local.get $index) (i32.const 0x1F)) (i32.const 1))) (i32.const 0xFFFF)))))
+      (local.set $atex (i32.shl (i32.and (i32.shr_u (local.get $attr) (i32.const 11)) (i32.const 3)) (i32.const 4)))
+      (local.set $r (select (i32.xor (local.get $row) (i32.const 7)) (local.get $row) (i32.and (local.get $attr) (i32.const 0x400))))
+      (local.set $x (i32.const 0))
+      (block $pd (loop $pl
+        (br_if $pd (i32.ge_u (local.get $x) (i32.const 8)))
+        (i32.store8 (i32.add (local.get $dst) (local.get $x))
+          (i32.or (call $m4_px (i32.and (local.get $attr) (i32.const 0x1FF)) (local.get $r)
+                    (select (i32.xor (local.get $x) (i32.const 7)) (local.get $x) (i32.and (local.get $attr) (i32.const 0x200))))
+                  (local.get $atex)))
+        (local.set $x (i32.add (local.get $x) (i32.const 1)))
+        (br $pl)))
+      (local.set $dst (i32.add (local.get $dst) (i32.const 8)))
+      (local.set $index (i32.add (local.get $index) (i32.const 1)))
+      (local.set $col (i32.add (local.get $col) (i32.const 1)))
+      (br $l))))
+
+  ;; parse_satb_m4: up to 8 sprites a line (obj_info: ypos, xpos, attr)
+  (func $parse_satb_m4 (param $line i32)
+    (local $i i32) (local $count i32) (local $ypos i32) (local $obj i32) (local $height i32) (local $mask i32) (local $st i32) (local $attr i32)
+    (local.set $obj (i32.add (i32.const ${OBJ}) (i32.mul (i32.and (i32.add (local.get $line) (i32.const 1)) (i32.const 1)) (i32.const 160))))
+    (local.set $height (i32.add (i32.const 8) (i32.shl (i32.and ${R(1)} (i32.const 2)) (i32.const 2))))
+    (local.set $mask (i32.and (i32.or (i32.xor (i32.const 0xFFFFC07F) (i32.shl ${R(5)} (i32.const 7))) (i32.const 0x80)) (i32.const 0xFFFF)))
+    (local.set $st (i32.and (local.get $mask) (i32.const 0x3F00)))
+    (block $d (loop $l
+      (br_if $d (i32.ge_u (local.get $i) (i32.const 64)))
+      (local.set $ypos ${vb("(i32.add (local.get $st) (local.get $i))")})
+      (br_if $d (i32.and (i32.eq (local.get $ypos) (i32.const 208)) (i32.eq (global.get $vp_h) (i32.const 192))))
+      (if (i32.gt_s (local.get $ypos) (i32.add (global.get $vp_h) (i32.const 16))) (then (local.set $ypos (i32.sub (local.get $ypos) (i32.const 256)))))
+      (local.set $ypos (i32.sub (local.get $line) (local.get $ypos)))
+      (if (i32.and (i32.ge_s (local.get $ypos) (i32.const 0)) (i32.lt_s (local.get $ypos) (local.get $height)))
+        (then
+          (if (i32.eq (local.get $count) (i32.const 8))
+            (then (if (i32.and (i32.ge_s (local.get $line) (i32.const 0)) (i32.lt_s (local.get $line) (global.get $vp_h)))
+                    (then (global.set $spr_ovr (i32.const 0x40))))
+                  (br $d)))
+          (i32.store16 (local.get $obj) (local.get $ypos))
+          (i32.store16 offset=2 (local.get $obj) ${vb("(i32.add (local.get $st) (i32.and (i32.add (i32.const 0x80) (i32.shl (local.get $i) (i32.const 1))) (local.get $mask)))")})
+          (local.set $attr ${vb("(i32.add (local.get $st) (i32.and (i32.add (i32.const 0x81) (i32.shl (local.get $i) (i32.const 1))) (local.get $mask)))")})
+          (if (i32.and ${R(1)} (i32.const 2)) (then (local.set $attr (i32.and (local.get $attr) (i32.const 0xFE)))))
+          (i32.store16 offset=4 (local.get $obj) (local.get $attr))
+          (local.set $count (i32.add (local.get $count) (i32.const 1)))
+          (local.set $obj (i32.add (local.get $obj) (i32.const 8)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+    (i32.store8 (i32.add (i32.const ${OBJCNT}) (i32.and (i32.add (local.get $line) (i32.const 1)) (i32.const 1))) (local.get $count)))
+
+  ;; render_obj_m4 (DRAW_SPRITE_TILE_ACCURATE through make_lut_bgobj_m4)
+  (func $render_obj_m4 (param $par i32)
+    (local $obj i32) (local $count i32) (local $mask i32) (local $n i32) (local $xpos i32) (local $skip i32) (local $end i32)
+    (local $i i32) (local $c i32) (local $b i32) (local $lb i32) (local $y i32)
+    (local.set $obj (i32.add (i32.const ${OBJ}) (i32.mul (local.get $par) (i32.const 160))))
+    (local.set $count (i32.load8_u (i32.add (i32.const ${OBJCNT}) (local.get $par))))
+    (local.set $mask (i32.and (i32.or (i32.xor (i32.const 0xFFFFFE3F) (i32.shl ${R(6)} (i32.const 6))) (i32.const 0xC0)) (i32.const 0xFFFF)))
+    (global.set $v_status (i32.or (global.get $v_status) (global.get $spr_ovr)))
+    (global.set $spr_ovr (i32.const 0))
+    (block $done (loop $l
+      (br_if $done (i32.eqz (local.get $count)))
+      (local.set $count (i32.sub (local.get $count) (i32.const 1)))
+      (local.set $y (i32.load16_u (local.get $obj)))
+      (local.set $n (i32.or (i32.and (i32.or (i32.load16_u offset=4 (local.get $obj)) (i32.const 0x100)) (local.get $mask)) (i32.shr_u (local.get $y) (i32.const 3))))
+      (local.set $xpos (i32.sub (i32.load16_u offset=2 (local.get $obj)) (i32.and ${R(0)} (i32.const 8))))
+      (local.set $skip (i32.const 0))
+      (if (i32.lt_s (local.get $xpos) (i32.const 0))
+        (then (local.set $skip (i32.sub (i32.const 0) (local.get $xpos)))
+              (local.set $end (i32.add (local.get $xpos) (i32.const 8)))
+              (local.set $xpos (i32.const 0)))
+        (else (local.set $end (select (i32.sub (i32.const 256) (local.get $xpos)) (i32.const 8) (i32.gt_s (i32.add (local.get $xpos) (i32.const 8)) (i32.const 256))))))
+      (local.set $lb (i32.add (i32.const ${LB0 + 0x20}) (local.get $xpos)))
+      (local.set $i (i32.const 0))
+      (block $pd (loop $pl
+        (br_if $pd (i32.ge_s (local.get $i) (local.get $end)))
+        (local.set $c (call $m4_px (local.get $n) (i32.and (local.get $y) (i32.const 7)) (i32.add (local.get $i) (local.get $skip))))
+        (if (local.get $c)
+          (then
+            (local.set $b (i32.load8_u (i32.add (local.get $lb) (local.get $i))))
+            ;; make_lut_bgobj_m4: an earlier sprite pixel, or a high-priority
+            ;; non-zero background pixel, stays
+            (if (i32.eqz (i32.and (local.get $b) (i32.const 0x80)))
+              (then (i32.store8 (i32.add (local.get $lb) (local.get $i))
+                      (i32.or (select (i32.and (local.get $b) (i32.const 0x3F)) (i32.or (local.get $c) (i32.const 0x10))
+                                      (i32.and (i32.ne (i32.and (local.get $b) (i32.const 0x20)) (i32.const 0)) (i32.ne (i32.and (local.get $b) (i32.const 0x0F)) (i32.const 0))))
+                              (i32.const 0x80)))))
+            (if (i32.and (i32.ne (i32.and (local.get $b) (i32.const 0x80)) (i32.const 0)) (i32.eqz (i32.and (global.get $v_status) (i32.const 0x20))))
+              (then (global.set $v_status (i32.or (global.get $v_status) (i32.const 0x20)))))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $pl)))
+      (local.set $obj (i32.add (local.get $obj) (i32.const 8)))
+      (br $l))))
+`;
 }
 
 /** The text of one `(func $name ...)` in `wat` (balanced parentheses). */
@@ -2021,6 +2255,7 @@ function im2Wat(base) {
   return `
   ;; ---- interlace mode 2 (see im2Wat) ----
   (func $parse_satb_any (param $line i32)
+    (if (i32.eqz (i32.and ${R(1)} (i32.const 4))) (then (call $parse_satb_m4 (local.get $line)) (return)))
     (if (global.get $v_im2) (then (call $parse_satb_im2 (local.get $line))) (else (call $parse_satb (local.get $line)))))
   (func $draw_col_im2 (param $dst i32) (param $at i32) (param $vline i32)
     (call $draw_tile_im2 (local.get $dst) (i32.and (local.get $at) (i32.const 0xFFFF)) (local.get $vline))
@@ -2040,7 +2275,9 @@ function im2Wat(base) {
 // Z80 sound CPU runtime (memz80.c, genesis.c bus arbitration, z80.c run loop)
 // and the YM2612 status side (sound.c busy flag, ym2612.c timers).
 // The returned text still holds {romimg}/{rmask}/{ztbase}; the emitter fills them.
-export function z80Wat(layout, ccTables) {
+export function z80Wat(layout, ccTables, hw = null) {
+  // rom_database register banks through the Z80's bank window (zbank_memory_map)
+  const zin = (b) => `(i32.and (i32.ge_u ${b} (i32.const ${hw ? hw.bankStart : 0})) (i32.le_u ${b} (i32.const ${hw ? hw.bankEnd : 0})))`;
   const Z = layout.ZREGS;
   const PC = Z + 0, SP = Z + 4, AF = Z + 8, WZ = Z + 32;
   const R_ = Z + 52, IFF1 = Z + 54, IFF2 = Z + 55, HALT = Z + 56, IM = Z + 57, I_ = Z + 58;
@@ -2249,7 +2486,8 @@ export function z80Wat(layout, ccTables) {
     (local.set $x (i32.or (global.get $zbank) (i32.and (local.get $a) (i32.const 0x7FFF))))
     (local.set $b (i32.shr_u (local.get $x) (i32.const 16)))
     (if (i32.lt_u (local.get $b) (i32.const 0x40)) (then (return (call $cart_rd8 (local.get $x)))))
-    ;; $400000-$7FFFFF unused; $E00000+ work RAM (the Z80 can only WRITE it)
+    ;; $400000-$7FFFFF unused; $E00000+ work RAM (the Z80 can only WRITE it)${hw && hw.regsR ? `
+    (if ${zin("(local.get $b)")} (then (return (i32.and (call $regs_r (local.get $x)) (i32.const 0xFF)))))` : ""}
     (if (i32.or (i32.lt_u (local.get $b) (i32.const 0x80)) (i32.ge_u (local.get $b) (i32.const 0xE0))) (then (return (i32.const 0xFF))))
     (if (i32.eqz (i32.and (local.get $b) (i32.const 7)))
       (then (if (i32.ge_u (local.get $b) (i32.const 0xC0)) (then (return (call $zbank_read_vdp (local.get $x)))))))
@@ -2279,7 +2517,8 @@ export function z80Wat(layout, ccTables) {
     (local.set $x (i32.or (global.get $zbank) (i32.and (local.get $a) (i32.const 0x7FFF))))
     (if (i32.ge_u (local.get $x) (i32.const 0xE00000))
       (then (i32.store8 (i32.and (local.get $x) (i32.const 0xFFFF)) (local.get $v)) (return)))
-    (if (i32.lt_u (local.get $x) (i32.const 0x400000)) (then (call $cart_wr8 (local.get $x) (local.get $v)) (return)))
+    (if (i32.lt_u (local.get $x) (i32.const 0x400000)) (then (call $cart_wr8 (local.get $x) (local.get $v)) (return)))${hw && hw.regsW ? `
+    (if ${zin("(i32.shr_u (local.get $x) (i32.const 16))")} (then (call $regs_w (local.get $x) (local.get $v)) (return)))` : ""}
     (if (i32.lt_u (local.get $x) (i32.const 0x800000)) (then (return)))
     (if (i32.eqz (i32.and (i32.shr_u (local.get $x) (i32.const 16)) (i32.const 7)))
       (then (if (i32.ge_u (local.get $x) (i32.const 0xC00000)) (then (call $zbank_write_vdp (local.get $x) (local.get $v)) (return)))))
@@ -2367,6 +2606,8 @@ export function z80Wat(layout, ccTables) {
  */
 export function cartWat(romimg, romsize, o) {
   const rmask = romsize - 1;
+  const m32 = !!(o.hw && o.hw.regsW === "custom_regs_w");
+  const rt = !!(o.hw && o.hw.realtec);
   const romAt = (e) => `(if (result i32) (i32.lt_u ${e} (i32.const ${romsize})) (then (i32.load8_u (i32.add (i32.const ${romimg}) ${e}))) (else (i32.const 0xFF)))`;
   return `
   (global $sramreg0 (mut i32) (i32.const 0))
@@ -2375,14 +2616,23 @@ export function cartWat(romimg, romsize, o) {
     (i32.load (i32.add (i32.const ${CARTMAP}) (i32.shl (i32.and (i32.shr_u (local.get $a) (i32.const 16)) (i32.const 0x3F)) (i32.const 2)))))
 ${o.eeprom ? eepromWat(o.eeprom) : ""}  (func ${o.eeprom ? "$cart_b8" : "$cart_rd8"} (param $a i32) (result i32)
     (local $e i32) (local $o i32)
-    (local.set $e (call $cartmap (local.get $a)))
+    (local.set $e (call $cartmap (local.get $a)))${m32 ? `
+    (if (i32.eq (local.get $e) (i32.const -3)) (then (return ${romAt("(call $m32k_off (local.get $a))")})))` : ""}${rt ? `
+    (if (i32.eq (local.get $e) (i32.const -4)) (then (return ${romAt("(i32.or (i32.const 0x7E000) (i32.and (local.get $a) (i32.const 0x1FFF)))")})))` : ""}
     (if (i32.lt_s (local.get $e) (i32.const 0))
       (then (return (i32.load8_u (i32.add (i32.const ${SRAMBUF}) (i32.and (local.get $a) (i32.const 0xFFFF)))))))
     (local.set $o (i32.add (local.get $e) (i32.and (local.get $a) (i32.const 0xFFFF))))
     ${romAt("(local.get $o)")})
   (func ${o.eeprom ? "$cart_b16" : "$cart_rd16"} (param $a i32) (result i32)
     (local $e i32) (local $o i32)
-    (local.set $e (call $cartmap (local.get $a)))
+    (local.set $e (call $cartmap (local.get $a)))${m32 ? `
+    (if (i32.eq (local.get $e) (i32.const -3))
+      (then (local.set $o (call $m32k_off (i32.and (local.get $a) (i32.const -2))))
+            (return (i32.or (i32.shl ${romAt("(local.get $o)")} (i32.const 8)) ${romAt("(i32.add (local.get $o) (i32.const 1))")}))))` : ""}${rt ? `
+    ;; Realtec: the 8KB boot ROM ($7E000) in every bank until ROM access is enabled
+    (if (i32.eq (local.get $e) (i32.const -4))
+      (then (local.set $o (i32.or (i32.const 0x7E000) (i32.and (local.get $a) (i32.const 0x1FFE))))
+            (return (i32.or (i32.shl ${romAt("(local.get $o)")} (i32.const 8)) ${romAt("(i32.add (local.get $o) (i32.const 1))")}))))` : ""}
     (if (i32.lt_s (local.get $e) (i32.const 0))
       (then (local.set $o (i32.add (i32.const ${SRAMBUF}) (i32.and (local.get $a) (i32.const 0xFFFE))))
             (return (i32.or (i32.shl (i32.load8_u (local.get $o)) (i32.const 8)) (i32.load8_u offset=1 (local.get $o))))))
@@ -2442,13 +2692,116 @@ ${o.sramOn ? `    (if (i32.and (local.get $d) (i32.const 1))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $l))))
 
-  ;; cart.hw.time_w: default_time_w (or mapper_ssf2_w)
+${o.hw ? cartHwWat(o.hw, romsize) : ""}
+  ;; cart.hw.time_w: default_time_w (or mapper_ssf2_w, or a rom_database entry's)
   (func $time_w (param $a i32) (param $d i32)
-${o.ssf2 ? `    (if (i32.and (local.get $a) (i32.const 0x0E)) (then (call $mapper_512k_w (local.get $a) (local.get $d))))` : `    (local.set $a (i32.and (local.get $a) (i32.const 0xFFFFFF)))
+${o.hw && !o.ssf2 ? (o.hw.timeW === "default_regs_w" ? "    (call $default_regs_w (local.get $a) (local.get $d))" : "    (drop (local.get $a)) (drop (local.get $d))") : o.ssf2 ? `    (if (i32.and (local.get $a) (i32.const 0x0E)) (then (call $mapper_512k_w (local.get $a) (local.get $d))))` : `    (local.set $a (i32.and (local.get $a) (i32.const 0xFFFFFF)))
     (if (i32.lt_u (local.get $a) (i32.const 0xA13060)) (then (call $mapper_64k_multi_w (local.get $a)) (return)))
     (if (i32.gt_u (local.get $a) (i32.const 0xA130F1)) (then (call $mapper_512k_w (local.get $a) (local.get $d)) (return)))
     (call $mapper_sega_w (local.get $d))`})
 `;
+}
+
+/**
+ * md_cart.c rom_database hardware: the 4 registers with their address
+ * masks, the register handlers (default_regs_r(_16)/w, custom_regs_r/w with
+ * its bit-swapping and mapper_32k_w, custom_alt_regs_w with mapper_64k_w)
+ * and the Realtec mapper. `hw` is index.js cartHardware().
+ * @param {{regs:number[], mask:number[], addr:number[], regsR:string|null, regsW:string|null, timeR:string|null, realtec:number}} hw
+ * @param {number} romsize
+ */
+function cartHwWat(hw, romsize) {
+  const rmask = romsize - 1;
+  const match = (i) => `(i32.eq (i32.and (local.get $a) (i32.const ${hw.mask[i]})) (i32.const ${hw.addr[i]}))`;
+  const each = (body) => [0, 1, 2, 3].map((i) => `
+    (if ${match(i)} (then ${body(i)}))`).join("");
+  return `
+  (global $hwr0 (mut i32) (i32.const ${hw.regs[0]})) (global $hwr1 (mut i32) (i32.const ${hw.regs[1]}))
+  (global $hwr2 (mut i32) (i32.const ${hw.regs[2]})) (global $hwr3 (mut i32) (i32.const ${hw.regs[3]}))
+  (global $m32k (mut i32) (i32.const 0))
+  ;; default_regs_r
+  (func $default_regs_r (param $a i32) (result i32)${each((i) => `(return (global.get $hwr${i}))`)}
+    (call $bus8 (local.get $a)))
+  ;; default_regs_r_16
+  (func $default_regs_r_16 (param $a i32) (result i32)${each((i) => `(return (i32.shl (global.get $hwr${i}) (i32.const 8)))`)}
+    (call $bus16))
+  ;; custom_regs_r
+  (func $custom_regs_r (param $a i32) (result i32)${each((i) => `(return (i32.shr_u (global.get $hwr${i}) (i32.const 1)))`)}
+    (call $bus8 (local.get $a)))
+  ;; default_regs_w
+  (func $default_regs_w (param $a i32) (param $d i32)${each((i) => `(global.set $hwr${i} (i32.and (local.get $d) (i32.const 0xFF))) (return)`)})
+  ;; custom_regs_w: $700000+ is mapper_32k_w, below it a register write and the bit-swapped copy
+  (func $custom_regs_w (param $a i32) (param $d i32)
+    (local $t i32)
+    (if (i32.gt_u (i32.shr_u (i32.and (local.get $a) (i32.const 0xFFFFFF)) (i32.const 16)) (i32.const 0x6F))
+      (then (call $mapper_32k_w (local.get $d)) (return)))
+    (call $default_regs_w (local.get $a) (local.get $d))
+    (local.set $t (global.get $hwr0))
+    (block $s (block $c3 (block $c2 (block $c1 (block $c0
+      (br_table $c0 $c1 $c2 $c3 (i32.and (global.get $hwr1) (i32.const 3))))
+      (global.set $hwr2 (i32.and (i32.shl (local.get $t) (i32.const 1)) (i32.const 0xFF))) (br $s))
+      (global.set $hwr2 (i32.shr_u (local.get $t) (i32.const 1))) (br $s))
+      (global.set $hwr2 (i32.and (i32.or (i32.shr_u (local.get $t) (i32.const 4)) (i32.shl (i32.and (local.get $t) (i32.const 0x0F)) (i32.const 4))) (i32.const 0xFF))) (br $s))
+      ;; bit reversal
+      (global.set $hwr2 (i32.and (i32.or (i32.or (i32.or (i32.and (i32.shr_u (local.get $t) (i32.const 7)) (i32.const 1)) (i32.and (i32.shr_u (local.get $t) (i32.const 5)) (i32.const 2)))
+                                                (i32.or (i32.and (i32.shr_u (local.get $t) (i32.const 3)) (i32.const 4)) (i32.and (i32.shr_u (local.get $t) (i32.const 1)) (i32.const 8))))
+                                         (i32.or (i32.or (i32.and (i32.shl (local.get $t) (i32.const 1)) (i32.const 0x10)) (i32.and (i32.shl (local.get $t) (i32.const 3)) (i32.const 0x20)))
+                                                 (i32.or (i32.and (i32.shl (local.get $t) (i32.const 5)) (i32.const 0x40)) (i32.and (i32.shl (local.get $t) (i32.const 7)) (i32.const 0x80)))))
+                                 (i32.const 0xFF)))))
+  ;; custom_alt_regs_w: $600000+ is mapper_64k_w
+  (func $custom_alt_regs_w (param $a i32) (param $d i32)
+    (if (i32.gt_u (i32.shr_u (i32.and (local.get $a) (i32.const 0xFFFFFF)) (i32.const 16)) (i32.const 0x5F))
+      (then (call $mapper_64k_w (local.get $d)) (return)))
+    (call $default_regs_w (local.get $a) (local.get $d)))
+  ;; mapper_64k_w: one 64KB bank in all of $000000-$0FFFFF, or the default map back
+  (func $mapper_64k_w (param $d i32)
+    (local $i i32)
+    (block $done (loop $l
+      (br_if $done (i32.ge_u (local.get $i) (i32.const 16)))
+      (call $cart_setbank (local.get $i) (i32.and (i32.shl (select (i32.and (local.get $d) (i32.const 0xF)) (local.get $i) (local.get $d)) (i32.const 16)) (i32.const ${rmask})))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l))))
+  ;; mapper_32k_w: each 64KB bank of $000000-$0FFFFF gets two 32KB halves,
+  ;; (bank << 16) | (data << 15) and | ((data | 1) << 15); data 0 = default map
+  (func $mapper_32k_w (param $d i32)
+    (local $i i32)
+    (global.set $m32k (local.get $d))
+    (if (local.get $d) (then (global.set $remapped (i32.const 1))))
+    (block $done (loop $l
+      (br_if $done (i32.ge_u (local.get $i) (i32.const 16)))
+      (call $cart_setbank (local.get $i) (select (i32.const -3) (i32.and (i32.shl (local.get $i) (i32.const 16)) (i32.const ${rmask})) (global.get $m32k)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l))))
+  (func $m32k_off (param $a i32) (result i32)
+    (i32.or (i32.or (i32.and (local.get $a) (i32.const 0xF0000))
+                    (i32.shl (i32.and (select (i32.or (global.get $m32k) (i32.const 1)) (global.get $m32k) (i32.and (local.get $a) (i32.const 0x8000))) (i32.const 0x3F)) (i32.const 15)))
+            (i32.and (local.get $a) (i32.const 0x7FFF))))
+  (func $regs_r (param $a i32) (result i32)
+    ${hw.regsR ? `(call $${hw.regsR} (local.get $a))` : "(call $bus8 (local.get $a))"})
+  (func $regs_w (param $a i32) (param $v i32)
+    ${hw.regsW ? `(call $${hw.regsW} (local.get $a) (local.get $v))` : "(drop (local.get $a)) (drop (local.get $v))"})${hw.realtec ? realtecWat(rmask) : ""}
+`;
+}
+
+/** mapper_realtec_w: ROM access enable locks the 64KB pages ($000000-$07FFFF mirrored over 4MB). */
+function realtecWat(rmask) {
+  return `
+  (func $mapper_realtec_w (param $a i32) (param $d i32)
+    (local $i i32) (local $b i32)
+    (local.set $a (i32.and (local.get $a) (i32.const 0xFFFFFF)))
+    (if (i32.eq (local.get $a) (i32.const 0x402000)) (then (global.set $hwr1 (i32.shl (i32.and (local.get $d) (i32.const 3)) (i32.const 1))) (return)))
+    (if (i32.eq (local.get $a) (i32.const 0x404000)) (then (global.set $hwr2 (i32.shl (i32.and (local.get $d) (i32.const 3)) (i32.const 1))) (return)))
+    (if (i32.eq (local.get $a) (i32.const 0x400000))
+      (then (if (i32.and (i32.and (local.get $d) (i32.const 1)) (i32.eqz (global.get $hwr0)))
+        (then
+          (block $done (loop $l
+            (br_if $done (i32.ge_u (local.get $i) (i32.const 0x40)))
+            (local.set $b (i32.and (local.get $i) (i32.const 7)))
+            (local.set $b (i32.or (i32.and (local.get $b) (i32.xor (global.get $hwr1) (i32.const -1))) (i32.and (global.get $hwr2) (global.get $hwr1))))
+            (call $cart_setbank (local.get $i) (i32.and (i32.shl (local.get $b) (i32.const 16)) (i32.const ${rmask})))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $l)))
+          (global.set $hwr0 (i32.and (local.get $d) (i32.const 0xFF))))))))`;
 }
 
 /**
@@ -2669,7 +3022,7 @@ export function eepromInitWat(e) {
  * @param {number} romsize
  * @param {number|null} sramBank
  */
-export function cartInitWat(romsize, sramBank, sx = null) {
+export function cartInitWat(romsize, sramBank, sx = null, realtec = false) {
   const rmask = romsize - 1;
   return `    (local.set $i (i32.const 0))
     (block $cd (loop $cl
@@ -2683,5 +3036,8 @@ ${sramBank != null ? `    (i32.store (i32.const ${CARTMAP + sramBank * 4}) (i32.
     (global.set $remapped (i32.const 1))
 ${sramBank === 0x20 ? `    (global.set $sramreg0 (i32.const ${(0x200000 & rmask) >> 16}))\n` : ""}` : ""}${sx ? sx.extraBanks.map((b) => `    (i32.store (i32.const ${CARTMAP + b * 4}) (i32.const -1)) (global.set $remapped (i32.const 1))\n`).join("") +
     sx.remap.map(([b, off]) => `    (i32.store (i32.const ${CARTMAP + b * 4}) (i32.const ${off})) (global.set $remapped (i32.const 1))\n`).join("") +
-    (sx.extraBanks.includes(0x20) ? `    (global.set $sramreg0 (i32.const ${(0x200000 & rmask) >> 16}))\n` : "") : ""}`;
+    (sx.extraBanks.includes(0x20) ? `    (global.set $sramreg0 (i32.const ${(0x200000 & rmask) >> 16}))\n` : "") : ""}${realtec ? `    ;; md_cart_reset: the Realtec boot ROM (8KB mirrored) in $000000-$3FFFFF
+${Array.from({ length: 64 }, (_, i) => `    (i32.store (i32.const ${CARTMAP + i * 4}) (i32.const -4))`).join("\n")}
+    (global.set $remapped (i32.const 1))
+    (global.set $hwr0 (i32.const 0)) (global.set $hwr1 (i32.const 0)) (global.set $hwr2 (i32.const 0))\n` : ""}`;
 }
