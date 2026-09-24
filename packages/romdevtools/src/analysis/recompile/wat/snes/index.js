@@ -156,6 +156,11 @@ export function describe(rom, opts = {}) {
     layout: cartLayout(layout, sramSize),
     memory: layout,
     conventions,
+    options: {
+      regwatchPc: "16-bit ROM address: record (A, X, Y, P, $8D, D, [$00]) each time execution reaches it (REGWATCH probe)",
+      pcSkip: "extra 16-bit pc ranges the ROM pc ring skips, [[lo,hi],...] or \"806B-806D,9A74-9A8A\"",
+      limit: "emit arms only below this ROM offset (debugging)",
+    },
   };
 }
 
@@ -292,7 +297,7 @@ export async function* emitWat(rom, opts = {}) {
   const lay = d.memory;
   const narms = lay.narms;
   const stats = opts.stats ?? {};
-  Object.assign(stats, { arms: narms, lowered: 0, interpreted: 0, dual: 0, reasons: {} });
+  Object.assign(stats, { arms: narms, lowered: 0, interpreted: 0, trapped: 0, dual: 0, reasons: {} });
 
   yield `(module\n  (memory (export "memory") ${lay.pages})`;
   yield "\n" + globalsWat(lay);
@@ -387,6 +392,7 @@ function armCode(img, a, stats) {
     const r = String(e.message);
     stats.reasons[r] = (stats.reasons[r] ?? 0) + 1;
     stats.interpreted++;
+    stats.trapped = stats.interpreted;   // "trapped" in the shared stats vocabulary: not lowered
     return "(call $interp) (global.set $cyc (i32.sub (global.get $cyc) (i32.const 6)))";
   }
 }
