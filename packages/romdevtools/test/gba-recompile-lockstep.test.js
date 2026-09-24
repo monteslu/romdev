@@ -27,8 +27,8 @@ const skip = !core ? "mGBA not staged" : false;
  * @param {number[]} main
  * @param {number[]} block
  */
-function makeRom(main, block) {
-  const r = new Uint8Array(0x400);
+function makeRom(main, block, size = 0x400) {
+  const r = new Uint8Array(size);
   const dv = new DataView(r.buffer);
   dv.setUint32(0, 0xEA00002E, true);
   r.set([...Buffer.from("LOCKSTEP")], 0xA0);
@@ -95,7 +95,14 @@ async function lockstep(rom, frames) {
     x.wc_render();
     let bad = pull();
     for (let f = 0; f < frames && !bad; f++) { ref.stepFrames(1); x.wc_render(); bad = pull(); }
-    return { bad, n };
+    // the picture: the cart's framebuffer against mGBA's, exact RGB
+    const fb = lay.framebuffer, rs = ref.screenshotRgba(), d = dv();
+    let px = 0;
+    for (let y = 0; y < 160; y++) for (let xx = 0; xx < 240; xx++) {
+      const i = (y * rs.width + xx) * 4;
+      if ((d.getUint32(fb.offset + (y * fb.width + xx) * 4, true) & 0xffffff) !== ((rs.rgba[i] << 16) | (rs.rgba[i + 1] << 8) | rs.rgba[i + 2])) px++;
+    }
+    return { bad, n, px };
   } finally {
     ref.dispose?.();
     rmSync(dir, { recursive: true, force: true });
@@ -131,7 +138,51 @@ test("ARM code in IWRAM runs what the pipeline fetched: stores to the next two i
     0xE3A08005,             // 40 mov r8, #5  -> andeq r0,r0,r0 when it runs
     0xEAFFFFFE,             // 44 b 44
   ];
-  const { bad, n } = await lockstep(makeRom(main, block), 3);
+  await assertLockstep(makeRom(main, block), 3);
+});
+
+async function assertLockstep(rom, frames) {
+  const { bad, n, px } = await lockstep(rom, frames);
   assert.equal(bad, null, bad ? `diverged at instruction ${bad.at} (${bad.why}): cart ${bad.cart.join(" ")} vs mGBA ${bad.ref.join(" ")}` : "");
   assert.ok(n > 1000, `compared ${n} instructions`);
+  assert.equal(px, 0, `${px} pixels differ from mGBA's picture`);
+}
+
+/**
+ * ldrb/ldrh/ldr from ROM addresses past the image (and into its mirrors)
+ * into r1-r9: main code for makeRom. `offs` are offsets from $08000000.
+ * @param {number[]} offs
+ */
+function romReads(offs) {
+  const w = [];
+  offs.forEach((o, i) => {
+    const rd = i + 1;
+    // r0 = $08000000 + o, built from its bytes
+    w.push(0xE3A00302);                                   // mov r0, #0x08000000
+    for (let sh = 0; sh < 32; sh += 8) {
+      const b = (o >>> sh) & 0xFF;
+      if (!b) continue;
+      const rot = (32 - sh) / 2 & 0xF;                    // imm8 ror (2*rot) = b << sh
+      w.push(0xE2800000 | (rot << 8) | b);                // add r0, r0, #b << sh
+    }
+    const kind = i % 3;
+    if (kind === 0) w.push(0xE5D00000 | (rd << 12));      // ldrb rd, [r0]
+    else if (kind === 1) w.push(0xE1D000B0 | (rd << 12)); // ldrh rd, [r0]
+    else w.push(0xE5900000 | (rd << 12));                 // ldr rd, [r0]
+  });
+  w.push(0xEAFFFFFE);                                     // b .
+  return w;
+}
+
+test("ROM reads past the image follow GBALoadROM: the address pattern, or 0 on a non-power-of-two (flash cart) image", { skip, timeout: 180000 }, async () => {
+  const offs = [0x3C1, 0x402, 0x404, 0x801, 0x1802, 0x10004, 0x7FFFF1, 0x1FFFFF2, 0x1FFFFFC];
+  await assertLockstep(makeRom(romReads(offs), [], 0x400), 2);
+  await assertLockstep(makeRom(romReads(offs), [], 0x3B8), 2);
+});
+
+test("a 1 MiB image is mirrored 4 times (Classic NES carts), and forced blank is mGBA's white", { skip, timeout: 300000 }, async () => {
+  const rom = makeRom(romReads([0x100001, 0x200002, 0x3FFFFC, 0x400001, 0x400002, 0x4FFFFC]), [], 0x100000);
+  // 16 distinct words, one per 64KB, so a mirrored read names the bank it came from
+  for (let i = 0x400; i < 0x100000; i += 4) new DataView(rom.buffer).setUint32(i, 0x01010101 * (1 + ((i >> 16) & 0xF)), true);
+  await assertLockstep(rom, 2);
 });

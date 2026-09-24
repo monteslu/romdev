@@ -62,6 +62,19 @@ export function sysWat(L, rom_size, idle_loop, savetype) {
   let rom_mask = 1;
   while (rom_mask < rom_size) rom_mask *= 2;
   rom_mask -= 1;
+  // GBALoadROM's size rules. A 1 MiB image is mirrored 4 times (romSize
+  // 4 MiB: Classic NES carts rely on it). An image whose size is not a power
+  // of two is "a bad dump or homebrew": mGBA emulates a flash cart, copying
+  // it into a zeroed 32 MiB ROM, so every read past the image is 0 instead of
+  // the out-of-bounds address pattern.
+  const nesMirror = rom_size === 0x100000;
+  const flashCart = (rom_size & (rom_size - 1)) !== 0;
+  const romEnd = nesMirror ? 0x400000 : flashCart ? 0x2000000 : rom_size;
+  const romIdx = nesMirror ? 0xFFFFF : 0x1FFFFFF;
+  // an in-range read past the image (flash cart zero padding) -> 0
+  const romLd = (w, a, m) => flashCart
+    ? `(if (result i32) (i32.lt_u (i32.and ${a} (i32.const ${m})) (i32.const ${rom_size})) (then (${w} (i32.add (i32.const ${ROM}) (i32.and ${a} (i32.const ${m}))))) (else (i32.const 0)))`
+    : `(${w} (i32.add (i32.const ${ROM}) (i32.and ${a} (i32.const ${m & romIdx}))))`;
     return `
   ;; ======================= CPU state (arm.c) ============================
   (global $pc (mut i32) (i32.const 0))       ;; next instruction to execute
@@ -352,7 +365,7 @@ export function sysWat(L, rom_size, idle_loop, savetype) {
     (if (i32.eq (local.get $nr) (global.get $areg))
       (then
         (if (i32.or (i32.lt_u (local.get $nr) (i32.const 8))
-                    (i32.lt_u (i32.and (local.get $a) (i32.const 0x1FFFFFF)) (i32.const ${rom_size})))
+                    (i32.lt_u (i32.and (local.get $a) (i32.const 0x1FFFFFF)) (i32.const ${romEnd})))
           (then (return)))))
     (if (i32.eqz (global.get $areg))
       (then (global.set $biosPrefetch (call $fetch32 (i32.add (global.get $exec) (i32.const 8))))))
@@ -363,7 +376,7 @@ export function sysWat(L, rom_size, idle_loop, savetype) {
       (br_if $ok (i32.eq (local.get $nr) (i32.const 3)))
       (br_if $ok (i32.and (i32.ge_u (local.get $nr) (i32.const 5)) (i32.le_u (local.get $nr) (i32.const 7))))
       (br_if $ok (i32.and (i32.and (i32.ge_u (local.get $nr) (i32.const 8)) (i32.le_u (local.get $nr) (i32.const 13)))
-                          (i32.lt_u (i32.and (local.get $a) (i32.const 0x1FFFFFF)) (i32.const ${rom_size}))))
+                          (i32.lt_u (i32.and (local.get $a) (i32.const 0x1FFFFFF)) (i32.const ${romEnd}))))
       ;; "Jumped to invalid address": activeRegion = -1 and the cycle tables
       ;; are then read at index -1, which mGBA does not guard. Treat as a
       ;; trap so a wrong jump is loud rather than silently re-timed.
@@ -604,7 +617,7 @@ export function sysWat(L, rom_size, idle_loop, savetype) {
     (i32.load8_s (i32.add (i32.add (i32.const ${WS}) (i32.shl (local.get $table) (i32.const 8))) (local.get $r))))
 
   (func $rom_oob (param $a i32) (result i32)
-    (i32.ge_u (i32.and (local.get $a) (i32.const 0x1FFFFFF)) (i32.const ${rom_size})))
+    (i32.ge_u (i32.and (local.get $a) (i32.const 0x1FFFFFF)) (i32.const ${romEnd})))
 
   ;; GBALoad32
   (func $ld32 (param $a i32) (param $cnt i32) (result i32)
@@ -646,7 +659,7 @@ export function sysWat(L, rom_size, idle_loop, savetype) {
         (if (call $rom_oob (i32.and (local.get $a) (i32.const -4)))
           (then (local.set $v (i32.or (i32.and (i32.shr_u (i32.and (local.get $a) (i32.const -4)) (i32.const 1)) (i32.const 0xFFFF))
                                       (i32.shl (i32.shr_u (i32.add (i32.and (local.get $a) (i32.const -4)) (i32.const 2)) (i32.const 1)) (i32.const 16)))))
-          (else (local.set $v (i32.load (i32.add (i32.const ${ROM}) (i32.and (local.get $a) (i32.const 0x1FFFFFC)))))))
+          (else (local.set $v ${romLd("i32.load", "(local.get $a)", 0x1FFFFFC)})))
         (br $done))
         ;; LOAD_SRAM
         (local.set $w (call $ws (i32.const 0) (local.get $r)))
@@ -695,7 +708,7 @@ export function sysWat(L, rom_size, idle_loop, savetype) {
         (local.set $w (call $ws (i32.const 0) (local.get $r)))
         (local.set $v (if (result i32) (call $rom_oob (i32.and (local.get $a) (i32.const -2)))
           (then (i32.and (i32.shr_u (local.get $a) (i32.const 1)) (i32.const 0xFFFF)))
-          (else (i32.load16_u (i32.add (i32.const ${ROM}) (i32.and (local.get $a) (i32.const 0x1FFFFFE)))))))
+          (else ${romLd("i32.load16_u", "(local.get $a)", 0x1FFFFFE)})))
         (br $done))
         ;; ROM2_EX: the EEPROM when there is one
         (local.set $w (call $ws (i32.const 0) (local.get $r)))
@@ -703,7 +716,7 @@ export function sysWat(L, rom_size, idle_loop, savetype) {
           (then (local.set $v (call $eeprom_read)) (br $done)))
         (local.set $v (if (result i32) (call $rom_oob (i32.and (local.get $a) (i32.const -2)))
           (then (i32.and (i32.shr_u (local.get $a) (i32.const 1)) (i32.const 0xFFFF)))
-          (else (i32.load16_u (i32.add (i32.const ${ROM}) (i32.and (local.get $a) (i32.const 0x1FFFFFE)))))))
+          (else ${romLd("i32.load16_u", "(local.get $a)", 0x1FFFFFE)})))
         (br $done))
         (local.set $w (call $ws (i32.const 0) (local.get $r)))
         (local.set $v (call $ld8 (local.get $a) (i32.const 0)))
@@ -752,7 +765,7 @@ export function sysWat(L, rom_size, idle_loop, savetype) {
         (local.set $w (call $ws (i32.const 0) (local.get $r)))
         (local.set $v (if (result i32) (call $rom_oob (local.get $a))
           (then (i32.and (i32.shr_u (i32.shr_u (local.get $a) (i32.const 1)) (i32.shl (i32.and (local.get $a) (i32.const 1)) (i32.const 3))) (i32.const 0xFF)))
-          (else (i32.load8_u (i32.add (i32.const ${ROM}) (i32.and (local.get $a) (i32.const 0x1FFFFFF)))))))
+          (else ${romLd("i32.load8_u", "(local.get $a)", 0x1FFFFFF)})))
         (br $done))
         (local.set $w (call $ws (i32.const 0) (local.get $r)))
         (local.set $v (call $sram_read8 (local.get $a)))
@@ -992,7 +1005,7 @@ export function sysWat(L, rom_size, idle_loop, savetype) {
         (return (if (result i32) (call $rom_oob (i32.and (local.get $a) (i32.const -4)))
           (then (i32.or (i32.and (i32.shr_u (i32.and (local.get $a) (i32.const -4)) (i32.const 1)) (i32.const 0xFFFF))
                         (i32.shl (i32.shr_u (i32.add (i32.and (local.get $a) (i32.const -4)) (i32.const 2)) (i32.const 1)) (i32.const 16))))
-          (else (i32.load (i32.add (i32.const ${ROM}) (i32.and (local.get $a) (i32.const 0x1FFFFFC)))))))))
+          (else ${romLd("i32.load", "(local.get $a)", 0x1FFFFFC)})))))
     (if (i32.or (i32.eq (local.get $r) (i32.const 14)) (i32.eq (local.get $r) (i32.const 15)))
       (then
         ;; LOAD_SRAM ASSIGNS the wait: \`wait = waitstatesNonseq16[region]\`

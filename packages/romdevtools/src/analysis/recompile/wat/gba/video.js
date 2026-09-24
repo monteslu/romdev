@@ -327,8 +327,10 @@ export function renderWat() {
         (local.set $x (i32.const 0))
         (block $wd (loop $wl
           (br_if $wd (i32.ge_u (local.get $x) (i32.const ${FB_W})))
+          ;; white is BGR555 $7FFF through the same RGB565 lattice as every
+          ;; other pixel: green 62 of 63 -> 251, not 255
           (i32.store (i32.add (local.get $dst)
-            (i32.shl (local.get $x) (i32.const 2))) (i32.const 0xFFFFFFFF))
+            (i32.shl (local.get $x) (i32.const 2))) (i32.const 0xFFFFFBFF))
           (local.set $x (i32.add (local.get $x) (i32.const 1)))
           (br $wl)))
         (call $gba_aff_step)
