@@ -15,6 +15,7 @@ import {
   WRAM, PPUREG, INPUT, MAPTAB, HDMAST, DPWATCH, DMALOG, DMALOG_N, DMALOG_STRIDE,
 } from "./layout.js";
 import { ppuGlobalsWat } from "./ppu-wat.js";
+import { SA1_BOARD, SA1_HOOKS } from "./sa1.js";
 
 // emit_snes.py globals_wat() lines 205-297
 /** @param {import("./layout.js").SnesLayout} lay */
@@ -145,6 +146,9 @@ export function globalsWat(lay) {
 // emit_snes.py mem_wat() lines 318-856
 /** @param {import("./layout.js").SnesLayout} lay */
 export function memWat(lay) {
+  // An SA-1 cart's second 65816 runs the same arms: while it is swapped in
+  // ($sacpu) their accesses go to its bus (sa1.js). Other carts: nothing.
+  const sa1 = lay.map === SA1_BOARD ? SA1_HOOKS : null;
   return `
   ;; Width helpers. M/X are 1 for 8-bit and 0 for 16-bit, so the mask is
   ;; $FF or $FFFF and the sign bit is 7 or 15.
@@ -186,7 +190,7 @@ export function memWat(lay) {
     (call $ev_due))
 
   (func $rd8 (param $a i32) (result i32)
-    (local $v i32)
+    (local $v i32)${sa1 ? "\n    " + sa1.rd8 : ""}
     (call $refresh_due)
     (local.set $v (call $rd8m (local.get $a)))
     (global.set $ob (local.get $v))
@@ -200,7 +204,7 @@ export function memWat(lay) {
     (local.get $v))
 
   (func $rd8m (param $a i32) (result i32)
-    (local $e i32) (local $x i32) (local $c i32)
+    (local $e i32) (local $x i32) (local $c i32)${sa1 ? "\n    " + sa1.rd8m : ""}
     (local.set $a (i32.and (local.get $a) (i32.const 0xFFFFFF)))
     (local.set $e (i32.add (i32.const ${MAPTAB}) (i32.shl (i32.shr_u (local.get $a) (i32.const 12)) (i32.const 3))))
     (local.set $x (i32.and (local.get $a) (i32.const 0xFFFF)))
@@ -244,7 +248,7 @@ export function memWat(lay) {
   ;; block - goes byte by byte. $want is 1 for ROM or RAM (reads), 2 for RAM
   ;; only (writes: ROM is write-protected, so it is not a plain block there).
   (func $fast2 (param $a i32) (param $want i32) (result i32)
-    (local $t i32)
+    (local $t i32)${sa1 ? "\n    " + sa1.fast2 : ""}
     (if (i32.eq (i32.and (local.get $a) (i32.const 0xFFF)) (i32.const 0xFFF)) (then (return (i32.const 0))))
     (if (global.get $indma) (then (return (i32.const 0))))
     (local.set $t (i32.load (i32.add (i32.const ${MAPTAB})
@@ -373,7 +377,7 @@ export function memWat(lay) {
       (then (return (i32.const 6))))
     (i32.const 12))
 
-  (func $wr8 (param $a i32) (param $v i32)
+  (func $wr8 (param $a i32) (param $v i32)${sa1 ? "\n    " + sa1.wr8 : ""}
     (call $refresh_due)
     (call $wr8m (local.get $a) (local.get $v))
     ;; The access costs its region's speed, after the write (snes9x).

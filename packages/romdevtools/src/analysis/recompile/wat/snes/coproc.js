@@ -12,6 +12,8 @@
 //       -> $chip_reset, called by wc_init
 //   the line end (HC_HCOUNTER_MAX_EVENT's S9xSuperFXExec)
 //       -> $chip_line, before the APU catches up
+//   S9xOpcode_IRQ / S9xOpcode_NMI's vector (the SA-1's $2209 overrides)
+//       -> $chip_vec, before the vector read
 //   CPU.IRQExternal (the SuperFX's IRQ on stop)
 //       -> $irqext, taken by $run_frame with the H/V timer's line
 //   the board map (Map_SDD1LoROMMap, Map_SPC7110HiROMMap, map_C4)
@@ -29,12 +31,14 @@
 // Plain JS ESM + JSDoc.
 
 import { superfx } from "./superfx.js";
+import { sa1 } from "./sa1.js";
 import { SNES9X_HLE_CHIPS } from "./chips-snes9x.js";
 import { msuWat } from "./msu1.js";
 
 /** The chip modules (add one line per chip). */
 const CHIP_LIST = [
   superfx,
+  sa1,
   ...SNES9X_HLE_CHIPS,   // DSP-1..4, ST010/011/018, OBC1, S-RTC
 ];
 
@@ -64,6 +68,9 @@ const DEFAULTS = {
   // returns -1 and a write 0 when the address is not the chip's.
   chip_b_rd: "(func $chip_b_rd (param $x i32) (result i32) (i32.const -1))",
   chip_b_wr: "(func $chip_b_wr (param $x i32) (param $v i32) (result i32) (i32.const 0))",
+  // S9xOpcode_IRQ / S9xOpcode_NMI's vector ($nmi 0 / 1): a chip that
+  // supplies it (the SA-1's $220E / $220C) sets $pc and returns 1.
+  chip_vec: "(func $chip_vec (param $nmi i32) (result i32) (i32.const 0))",
 };
 
 /**

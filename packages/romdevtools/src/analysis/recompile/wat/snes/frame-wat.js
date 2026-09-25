@@ -15,6 +15,7 @@ import {
   WRAM, PPUREG, INPUT, PROBE, ITRACE, PCRING, PCRING_N, MAPTAB, ROM, HDMAST, AUDIO, AUDIO_FRAMES, ICOST,
   REGWATCH, REGWATCH_N, REGWATCH_STRIDE,
 } from "./layout.js";
+import { SA1_BOARD, SA1_HOOKS } from "./sa1.js";
 
 /**
  * REGISTER WATCH probe: records (A, X, Y, P, $8D, D, [$00]) each time
@@ -352,7 +353,9 @@ export function frameWat(lay) {
       (i32.shl (global.get $fz) (i32.const 1)) (global.get $fc)))))))))
     (global.set $fi (i32.const 1))
     (global.set $fd (i32.const 0))
-    (global.set $pc (call $rd16 (if (result i32) (global.get $fe) (then (i32.const 0xFFFA)) (else (i32.const 0xFFEA))))))
+    ;; (a coprocessor may supply the vector: coproc.js $chip_vec)
+    (if (i32.eqz (call $chip_vec (i32.const 1)))
+      (then (global.set $pc (call $rd16 (if (result i32) (global.get $fe) (then (i32.const 0xFFFA)) (else (i32.const 0xFFEA))))))))
 
   ;; Run the CPU until the frame ends (snes9x S9xMainLoop). Time is the
   ;; position in the current line, $hnow = $segend - $cyc, where $segend is
@@ -404,7 +407,9 @@ export function frameWat(lay) {
       (if (i32.or (i32.gt_s (global.get $cyc) (i32.const 0)) (global.get $stp))
         (then (if (i32.eqz (global.get $trapped))
           (then (call $step)
-                (global.set $steps (i32.add (global.get $steps) (i32.const 1)))))))
+                (global.set $steps (i32.add (global.get $steps) (i32.const 1)))${lay.map === SA1_BOARD ? `
+                ;; S9xSA1MainLoop after the instruction (sa1.js)
+                ${SA1_HOOKS.afterStep}` : ""}))))
       ;; An STP loop never reaches another event: snes9x gives up when
       ;; CPU.Cycles passes 1000000 ("CPU is deadlocked") and every later
       ;; frame runs just the interrupt checks and one more STP fetch.
@@ -452,7 +457,8 @@ export function frameWat(lay) {
       (i32.shl (global.get $fz) (i32.const 1)) (global.get $fc)))))))))
     (global.set $fi (i32.const 1))
     (global.set $fd (i32.const 0))
-    (global.set $pc (call $rd16 (if (result i32) (global.get $fe) (then (i32.const 0xFFFE)) (else (i32.const 0xFFEE))))))
+    (if (i32.eqz (call $chip_vec (i32.const 0)))
+      (then (global.set $pc (call $rd16 (if (result i32) (global.get $fe) (then (i32.const 0xFFFE)) (else (i32.const 0xFFEE))))))))
 
   ;; snes9x CyclesUntilNext: master clocks from the start of the current
   ;; line to (hc, vc), across lines and the frame wrap, one dot shorter
