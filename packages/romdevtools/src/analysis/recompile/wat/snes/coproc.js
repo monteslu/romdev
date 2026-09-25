@@ -32,6 +32,9 @@
 
 import { superfx } from "./superfx.js";
 import { sa1 } from "./sa1.js";
+import { sdd1 } from "./sdd1.js";
+import { cx4 } from "./cx4.js";
+import { spc7110 } from "./spc7110.js";
 import { SNES9X_HLE_CHIPS } from "./chips-snes9x.js";
 import { msuWat } from "./msu1.js";
 
@@ -40,6 +43,9 @@ const CHIP_LIST = [
   superfx,
   sa1,
   ...SNES9X_HLE_CHIPS,   // DSP-1..4, ST010/011/018, OBC1, S-RTC
+  sdd1,
+  cx4,
+  spc7110,
 ];
 
 /** @type {Map<string, any>} loader.js coprocessor name -> chip module */

@@ -101,6 +101,32 @@ const UNITS = {
     exports: ["romdev_msu_init", "romdev_msu_enabled", "romdev_msu_read", "romdev_msu_write", "romdev_msu_generate",
       "romdev_msu_avail", "romdev_msu_mix"],
   },
+  // (sdd1.js / spc7110.js / cx4.js) `cflags` are added to CFLAGS for the
+  // unit, `libs` are linked after its objects
+  sdd1: {
+    sources: ["sdd1emu.cpp"], headers: ["sdd1emu.h"],
+    glue: "glue_sdd1.cpp", stack: 0x1000,
+    exports: ["romdev_sdd1_buffer", "romdev_sdd1_decompress"],
+  },
+  spc7110: {
+    sources: ["spc7110.cpp"], headers: ["spc7110.h", "spc7110emu.h", "spc7110emu.cpp", "spc7110dec.h", "spc7110dec.cpp", "srtc.h"],
+    glue: "glue_spc7110.cpp", stack: 0x1000,
+    // memmap.h -> getset.h brings spc7110.h into spc7110.cpp in snes9x
+    cflags: ["-include", "snes9x.h", "-include", "spc7110.h"],
+    exports: ["romdev_spc7110_init", "romdev_spc7110_reset", "romdev_spc7110_get", "romdev_spc7110_set", "romdev_spc7110_offset", "romdev_spc7110_dma", "romdev_set_openbus"],
+    imports: { time: "time" },
+  },
+  cx4: {
+    sources: ["c4.cpp", "c4emu.cpp"], headers: ["c4.h", "sar.h"],
+    glue: "glue_cx4.cpp", stack: 0x1000,
+    // the reference core's clang (emscripten 4.0) converts float to int with
+    // the saturating instructions (nontrapping-fptoint is on by default), and
+    // memmap.h -> getset.h brings c4.h into c4.cpp / c4emu.cpp in snes9x
+    cflags: ["-mnontrapping-fptoint", "-include", "snes9x.h", "-include", "memmap.h", "-include", "c4.h"],
+    // sin / cos / atan: emscripten's own libc (musl), as the reference links them
+    libs: [path.join(emsdk, "upstream", "emscripten", "cache", "sysroot", "lib", "wasm32-emscripten", "libc.a")],
+    exports: ["romdev_c4_init", "romdev_c4_get", "romdev_c4_set"],
+  },
 };
 
 // ---------------------------------------------------------------- build
