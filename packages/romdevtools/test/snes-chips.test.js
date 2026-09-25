@@ -13,7 +13,8 @@ import { emitWat, describe as describeRom } from "../src/analysis/recompile/wat/
 import { assembleWat } from "../src/analysis/recompile/wat/assemble.js";
 import { AUDIO, AUDIO_FRAMES } from "../src/analysis/recompile/wat/snes/layout.js";
 import { RTC_CLOCK } from "../src/analysis/recompile/recompile-section.js";
-import { chipProgram, chipImage, CHIP_CASES, writeMsuTestPack, bsxTestBios, sufamiTestPair } from "./snes-chips-synth.js";
+import { chipProgram, chipImage, CHIP_CASES, writeMsuTestPack, bsxTestBios, sufamiTestPair, srtcShowcase, msuShowcase } from "./snes-chips-synth.js";
+import { createHash } from "node:crypto";
 
 /** snes9x's bytes at $7E0100 onward (one per read), after the case's frames. */
 const EXPECTED = {
@@ -159,4 +160,27 @@ test("a BS cart without BS-X.bin beside it is refused with the file named", () =
   const d = describeRom(c);
   assert.equal(d.supported, false);
   assert.match(d.refusal, /BS-X\.bin/);
+});
+
+// The showcase carts draw their chip's state (work RAM $0100-$01FF as tiles,
+// scrolled) and play a tone, so verifyRecompile can score them; here their
+// state and map after snes9x frame 300 are snes9x's.
+const sha1 = (b) => createHash("sha1").update(b).digest("hex");
+test("S-RTC showcase: the running clock in the picture, on the reference's frame clock", async () => {
+  const mem = await runCart(srtcShowcase(), 300);
+  assert.equal(sha1(mem.subarray(0x100, 0x200)), "2061414a4a391d428992adc8f97ba4d24dbc892c");
+  assert.equal(sha1(mem.subarray(0x20800, 0x20c00)), "969a9745be052f95f10a05ab4bccb5debfe4103f", "BG1 map in VRAM");
+});
+test("MSU-1 showcase: the data stream and status in the picture", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "romdev-msu1s-"));
+  try {
+    const stem = path.join(dir, "show");
+    writeMsuTestPack((p, b) => writeFileSync(p, b), stem);
+    writeFileSync(stem + ".sfc", msuShowcase());
+    const mem = await runCart(msuShowcase(), 300, { romPath: stem + ".sfc" });
+    assert.equal(sha1(mem.subarray(0x100, 0x200)), "fc42f8c33ae26cf4fa2d919228155aa1c908409c");
+    assert.equal(sha1(mem.subarray(0x20800, 0x20c00)), "e21dec71cd42060a5cd05851d626d817d7f3c1f5", "BG1 map in VRAM");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

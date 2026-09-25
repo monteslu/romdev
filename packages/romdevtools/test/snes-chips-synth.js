@@ -356,3 +356,128 @@ export function sufamiTestPair() {
   cart.set(txt("BANDAI SFC-ADX"), 0); cart[14] = 0; cart[15] = 0; cart.set(txt("SYNTH ST CART "), 0x10);
   return { bios, cart, reads };
 }
+
+// ---------------------------------------------------------------- showcase carts
+// A cart the verifier can score: it plays a tone on the S-DSP, runs a chip
+// script once, then every frame runs a second script (its reads kept from
+// $7E01C0) and shows work RAM $0100-$01FF as hex-digit tiles on BG1,
+// scrolled one pixel a frame. The picture, the audio and the state all
+// follow the chip.
+
+import { asm } from "./snes-sa1-synth.js";
+
+/** Register-script bytes (8-bit A) that keep each read at `base` + k. */
+function opsBytes(ops, base) {
+  const out = [];
+  let k = 0;
+  const long = (a) => [a & 0xff, (a >> 8) & 0xff, (a >> 16) & 0xff];
+  for (const op of ops) {
+    if (op[0] === "w") out.push(0xa9, op[2] & 0xff, 0x8f, ...long(op[1]));
+    else if (op[0] === "r") { out.push(0xaf, ...long(op[1]), 0x8f, ...long(base + k)); k++; }
+    else throw new Error(`showcase: op ${op[0]} is not supported here`);
+  }
+  return out;
+}
+
+/** An SPC700 program for ARAM $0200: voice 0 loops a short BRR sample. */
+function tone() {
+  const pairs = [[0x00, 0x40], [0x01, 0x00], [0x02, 0x40], [0x03, 0x00],
+    [0x40, 0xb3], [0x41, 0x77], [0x42, 0x77], [0x43, 0x77], [0x44, 0x77], [0x45, 0x99], [0x46, 0x99], [0x47, 0x99], [0x48, 0x99]];
+  const dsp = [[0x5d, 0x00], [0x6d, 0x80], [0x7d, 0x01], [0x6c, 0x00], [0x0d, 0x40], [0x4d, 0x01], [0x0c, 0x5f], [0x1c, 0x5f],
+    [0x2c, 0x20], [0x3c, 0x20], [0x0f, 0x7f], [0x00, 0x6f], [0x01, 0x50], [0x02, 0x00], [0x03, 0x08], [0x04, 0x00],
+    [0x05, 0x8f], [0x06, 0xe0], [0x4c, 0x01]];
+  for (const [r, v] of dsp) pairs.push([0xf2, r], [0xf3, v]);
+  const tab = pairs.flat();
+  const TAB = 0x0280;
+  const code = [0xcd, 0x00, 0xf5, TAB & 0xff, TAB >> 8, 0xfd, 0x3d, 0xf5, TAB & 0xff, TAB >> 8, 0xd6, 0x00, 0x00, 0x3d,
+    0xc8, tab.length, 0xd0, 0xf0, 0x2f, 0xfe];
+  const prog = new Array(TAB - 0x200 + tab.length).fill(0);
+  prog.splice(0, code.length, ...code);
+  for (let i = 0; i < tab.length; i++) prog[TAB - 0x200 + i] = tab[i];
+  return prog;
+}
+
+/**
+ * @param {object} o
+ * @param {ChipOp[]} o.setup   run once (reads kept from $7E0100)
+ * @param {ChipOp[]} o.frame   run in every NMI (reads kept from $7E01C0)
+ * @param {object} o.image     chipImage's header fields (mapMode, romType, hirom, ...)
+ */
+export function showcaseImage({ setup, frame, image }) {
+  const spc = tone();
+  const font = [];
+  for (let n = 0; n < 16; n++) for (let r = 0; r < 8; r++) font.push((n * 17 + r * 29 + 0x11) & 0xff, ((n << 4) | (r * 3)) & 0xff);
+  const src = [
+    "sei", "clc", "xce", "rep #$10", "sep #$20",
+    "lda #$80", "sta $2100",
+    // the tone, through the IPL
+    "w1:", "lda $2140", "cmp #$aa", "bne w1",
+    "w2:", "lda $2141", "cmp #$bb", "bne w2",
+    "ldx #$0200", "stx $2142", "lda #$01", "sta $2141", "lda #$cc", "sta $2140",
+    "w3:", "cmp $2140", "bne w3",
+    "ldx #$0000",
+    "up:", "lda spc,x", "sta $2141", "txa", "sta $2140",
+    "w4:", "cmp $2140", "bne w4",
+    "inx", `cpx #$${spc.length.toString(16).padStart(4, "0")}`, "bne up",
+    "ldx #$0200", "stx $2142", "stz $2141",
+    `lda #$${((((spc.length & 0xff) === 0xff) ? spc.length + 2 : spc.length + 1) & 0xff).toString(16)}`, "sta $2140",
+    "jsr setupops",
+    // BG1: mode 0, map at word $0400, tiles at 0; 16 hex-digit tiles; 4 colours
+    "stz $2105", "lda #$04", "sta $2107", "stz $210b", "lda #$01", "sta $212c",
+    "lda #$80", "sta $2115", "ldx #$0000", "stx $2116",
+    "ldx #$0000", "fl:", "lda font,x", "sta $2118", "inx", "lda font,x", "sta $2119", "inx", "cpx #$0100", "bne fl",
+    "stz $2121", "lda #$00", "sta $2122", "sta $2122", "lda #$1f", "sta $2122", "lda #$00", "sta $2122",
+    "lda #$e0", "sta $2122", "lda #$03", "sta $2122", "lda #$ff", "sta $2122", "lda #$7f", "sta $2122",
+    "lda #$0f", "sta $2100", "lda #$80", "sta $4200",
+    // main loop: work RAM $0100-$01FF as 512 map entries at $7E1000
+    "main:", "ldx #$0000", "ldy #$0000",
+    "m1:", "lda $0100,y", "lsr a", "lsr a", "lsr a", "lsr a", "sta $7e1000,x", "lda #$00", "sta $7e1001,x",
+    "lda $0100,y", "and #$0f", "sta $7e1002,x", "lda #$00", "sta $7e1003,x",
+    "inx", "inx", "inx", "inx", "iny", "cpy #$0100", "bne m1",
+    "wai", "bra main",
+    "setupops:", ".db " + opsBytes(setup, 0x7e0100).join(","), "rts",
+    // NMI: the map by DMA, the scroll, the per-frame script
+    "nmi:", "rep #$10", "sep #$20", "pha", "phx", "phy",
+    "lda #$80", "sta $2115", "ldx #$0400", "stx $2116",
+    "lda #$01", "sta $4300", "lda #$18", "sta $4301", "ldx #$1000", "stx $4302", "lda #$7e", "sta $4304",
+    "ldx #$0400", "stx $4305", "lda #$01", "sta $420b",
+    "lda $7e0020", "inc a", "sta $7e0020", "sta $210d", "stz $210d",
+    ".db " + [...opsBytes(frame, 0x7e01c0), 0xea].join(","),
+    "ply", "plx", "pla", "rti",
+    "spc:", ".db " + spc.join(","),
+    "font:", ".db " + font.join(","),
+  ];
+  const { bytes, labels } = asm(src, 0x008000);
+  const img = chipImage({ code: bytes, ...image });
+  const h = image.hirom ? 0xffb0 : 0x7fb0;
+  img[h + 0x3a] = labels.nmi & 0xff; img[h + 0x3b] = (labels.nmi >> 8) & 0xff;
+  img[h + 0x2c] = 0; img[h + 0x2d] = 0; img[h + 0x2e] = 0; img[h + 0x2f] = 0;
+  let sum = 0; for (const b of img) sum = (sum + b) & 0xffff; sum = (sum + 0x1fe) & 0xffff;
+  img[h + 0x2c] = (sum ^ 0xffff) & 0xff; img[h + 0x2d] = (sum ^ 0xffff) >> 8; img[h + 0x2e] = sum & 0xff; img[h + 0x2f] = sum >> 8;
+  return img;
+}
+
+/** The S-RTC showcase: set a date, then read the running clock every frame. */
+export function srtcShowcase() {
+  return showcaseImage({
+    image: { hirom: true, banks: 32, mapMode: 0x35, romType: 0x55, title: "SRTC SHOWCASE        " },
+    setup: [
+      ...Array.from({ length: 15 }, () => ["r", 0x002800]),
+      ...[0x0e, 0x04, 0x0e, 0x00, 5, 4, 9, 5, 3, 2, 8, 2, 12, 9, 9, 9, 0x0d].map((v) => ["w", 0x002801, v]),
+    ],
+    frame: [["w", 0x002801, 0x0d], ...Array.from({ length: 15 }, () => ["r", 0x002800])],
+  });
+}
+
+/** The MSU-1 showcase ROM (the pack is writeMsuTestPack's files, renamed): the ID, the data stream every frame, track 1 then 2. */
+export function msuShowcase() {
+  return showcaseImage({
+    image: { mapMode: 0x20, romType: 0x00, title: "MSU1 SHOWCASE        " },
+    setup: [
+      ...[0x2000, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007].map((a) => ["r", a]),
+      ["w", 0x2000, 0x23], ["w", 0x2001, 0x01], ["w", 0x2002, 0x00], ["w", 0x2003, 0x00],
+      ["w", 0x2006, 0xc0], ["w", 0x2004, 0x01], ["w", 0x2005, 0x00], ["r", 0x2000], ["w", 0x2007, 0x01], ["r", 0x2000],
+    ],
+    frame: [["r", 0x2000], ...Array.from({ length: 16 }, () => ["r", 0x2001])],
+  });
+}

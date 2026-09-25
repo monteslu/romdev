@@ -23,6 +23,8 @@ import { RTC_CLOCK } from "../../recompile-section.js";
 const pagesFor = (bytes) => Math.ceil(bytes / 0x10000);
 /** The cart's clock (wasmcart timePtr, ABI + 0x180): timeMs since power-on as f64. */
 const timeAddr = (lay) => lay.ABI + 0x180;
+/** Reference settle frames minus the cart's (index.js conventions): 5 - 1. */
+const SETTLE_LEAD = 4;
 
 /**
  * emscripten's time(): trunc(Date.now() / 1000), the reference's clock
@@ -35,9 +37,15 @@ export function chipTimeWat(lay) {
   ;; time(): the reference core's wall clock is Date.now(), pinned by the
   ;; verifier to baseMs + frames * stepMs; the cart reads the same frame
   ;; clock from the wasmcart host (RTC_CLOCK).
+  ;; The host's clock starts at the cart's first frame; the reference's
+  ;; starts after its settle frames, which the cart reaches ${SETTLE_LEAD}
+  ;; frames later (conventions.settleFrames), so the cart's reading lags the
+  ;; host by that many frames, held at baseMs before them as snes9x's is.
   (func $chip_time (param $p i32) (result i64)
-    (local $t i64)
-    (local.set $t (i64.trunc_f64_s (f64.div (f64.add (f64.const ${RTC_CLOCK.baseMs}) (f64.load (i32.const ${timeAddr(lay)}))) (f64.const 1000))))
+    (local $t i64) (local $ms f64)
+    (local.set $ms (f64.sub (f64.load (i32.const ${timeAddr(lay)})) (f64.const ${SETTLE_LEAD * RTC_CLOCK.stepMs})))
+    (if (f64.lt (local.get $ms) (f64.const 0)) (then (local.set $ms (f64.const 0))))
+    (local.set $t (i64.trunc_f64_s (f64.div (f64.add (f64.const ${RTC_CLOCK.baseMs}) (local.get $ms)) (f64.const 1000))))
     (if (local.get $p) (then (i64.store (local.get $p) (local.get $t))))
     (local.get $t))`;
 }
