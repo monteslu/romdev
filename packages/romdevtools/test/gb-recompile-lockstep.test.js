@@ -5,7 +5,8 @@
 // recompiled through the real pipeline (romdev's IR decode, emitWat, the
 // streaming assembler), run in node's WebAssembly with a whole-frame
 // instruction ring, and compared against romdev's gambatte's free-running
-// trace: pc, the clock delta and sp/hl/bc/de of EVERY instruction. The
+// trace: pc, the clock delta and sp/hl/bc/de/af of EVERY instruction, then
+// the picture, in a worker with a hard time limit. The
 // programs move what they read into D/E, so a wrong value is a divergence.
 //
 // Skipped when gambatte is not staged or the gbz80 objdump (IR decode) is
@@ -13,13 +14,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { LibretroHost } from "romdev-core-host/index.js";
+import { Worker } from "node:worker_threads";
 import { resolveCore } from "../src/cores/registry.js";
-import { emitWat, recompileSection } from "../src/analysis/recompile/wat/gb/index.js";
-import { assembleWatSync } from "../src/analysis/recompile/wat/assemble.js";
 import { objdumpAvailable } from "../src/toolchains/objdump.js";
 
 const core = (() => { try { return resolveCore("gb"); } catch { return null; } })();
@@ -51,75 +47,23 @@ function makeRom(main, extra = {}, cartType = 0, { size = 0x8000, ramCode = 0, c
 }
 
 /**
- * Run the cart and gambatte side by side for `frames` frames and return the
- * first instruction that differs (null when none does).
- * @param {Uint8Array} rom
- * @param {number} frames
+ * Run the lockstep in a worker with a hard wall-clock limit: a ROM that never
+ * hands out a frame spins inside synchronous wasm, which a node:test timeout
+ * cannot interrupt (such runs were left spinning for hours), so the worker is
+ * terminated and the test fails.
  */
-async function lockstep(rom, frames) {
-  const chunks = [];
-  for await (const c of emitWat(rom, { traceEntries: 32768 })) chunks.push(c);
-  const { instance } = await WebAssembly.instantiate(assembleWatSync(chunks.join("")), {});
-  const x = instance.exports;
-  const sec = recompileSection(rom, "", { traceEntries: 32768 }).json;
-  const t = sec.trace;
-  x.wc_init();
-  const dir = mkdtempSync(path.join(os.tmpdir(), "romdev-gblock-"));
-  const ref = new LibretroHost();
-  try {
-    const romPath = path.join(dir, "t.gb");
-    writeFileSync(romPath, rom);
-    await ref.loadCore(core.jsPath, core.wasmPath, { hwRender: core.hwRender, noderawfs: core.noderawfs });
-    ref.setTrace({ capacity: 1 << 20, registers: true });
-    await ref.loadMedia({ platform: rom[0x143] & 0x80 ? "gbc" : "gb", path: romPath });
-    const cq = [], rq = [];
-    let cgot = 0, rgot = 0, n = 0, off0 = null;
-    const pull = () => {
-      const dv = new DataView(x.memory.buffer);
-      const cnt = dv.getUint32(t.cursor.offset, true);
-      assert.ok(cnt - cgot <= t.entries, "the cart ring holds a whole frame");
-      for (let i = cgot; i < cnt; i++) {
-        const o = t.offset + (i % t.entries) * t.stride;
-        cq.push([dv.getUint32(o, true) & 0xffff, dv.getUint32(o + 28, true), dv.getUint32(o + 8, true) & 0xffff,
-          dv.getUint32(o + 12, true) & 0xffff, dv.getUint32(o + 16, true) & 0xffff, dv.getUint32(o + 20, true) & 0xffff,
-          dv.getUint32(o + 24, true) & 0xffff]);
-      }
-      cgot = cnt;
-      const r = ref.readTrace(rgot);
-      assert.equal(r.lost, 0, "the reference trace lost nothing");
-      assert.ok(r.regs.af, "the gambatte build records af (scripts/build-gambatte.sh)");
-      for (let k = 0; k < r.pc.length; k++) rq.push([r.pc[k] & 0xffff, r.clock[k], r.regs.sp[k] & 0xffff, r.regs.hl[k] & 0xffff, r.regs.bc[k] & 0xffff, r.regs.de[k] & 0xffff, r.regs.af[k] & 0xffff]);
-      rgot = r.to;
-      while (cq.length && rq.length) {
-        const c = cq.shift(), e = rq.shift();
-        const d = (c[1] - e[1]) | 0;
-        if (off0 === null) off0 = d;
-        const names = ["pc", "clock", "sp", "hl", "bc", "de", "af"];
-        for (let k = 0; k < 7; k++) {
-          const bad = k === 1 ? d !== off0 : c[k] !== e[k];
-          if (bad) return { at: n, what: names[k], cart: c.map((v) => v.toString(16)), ref: e.map((v) => v.toString(16)) };
-        }
-        n++;
-      }
-      return null;
-    };
-    // the reference's settle frames are the cart's first renders
-    let bad = null;
-    for (let k = 0; k < ref.status.settleFramesUsed && !bad; k++) { x.wc_render(); bad = pull(); }
-    for (let f = 0; f < frames && !bad; f++) { ref.stepFrames(1); x.wc_render(); bad = pull(); }
-    // the picture: the cart's framebuffer against gambatte's, exact RGB
-    const fb = sec.framebuffer, rs = ref.screenshotRgba(), d = new DataView(x.memory.buffer);
-    let px = 0;
-    for (let y = 0; y < 144; y++) for (let xx = 0; xx < 160; xx++) {
-      const i = (y * rs.width + xx) * 4;
-      if ((d.getUint32(fb.offset + (y * fb.width + xx) * 4, true) & 0xffffff) !== ((rs.rgba[i] << 16) | (rs.rgba[i + 1] << 8) | rs.rgba[i + 2])) px++;
-    }
-    return { bad, n, px };
-  } finally {
-    ref.dispose?.();
-    rmSync(dir, { recursive: true, force: true });
-  }
+function lockstep(rom, frames, limitMs = LOCKSTEP_LIMIT_MS) {
+  return new Promise((resolve, reject) => {
+    const w = new Worker(new URL("./helpers/gb-lockstep-worker.js", import.meta.url), { workerData: { rom: Array.from(rom), frames } });
+    const timer = setTimeout(() => {
+      w.terminate();
+      reject(new Error(`lockstep did not finish in ${limitMs / 1000}s (a ROM that never hands out a frame?); the worker was terminated`));
+    }, limitMs);
+    w.once("message", (m) => { clearTimeout(timer); w.terminate(); m.ok ? resolve(m.r) : reject(new Error(m.error)); });
+    w.once("error", (e) => { clearTimeout(timer); reject(e); });
+  });
 }
+const LOCKSTEP_LIMIT_MS = 100000;
 
 async function assertLockstep(rom, frames) {
   const { bad, n, px } = await lockstep(rom, frames);
