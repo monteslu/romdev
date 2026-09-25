@@ -12,7 +12,7 @@
 // Plain JS ESM + JSDoc.
 
 import {
-  FB_W, WRAM, VRAM, CGRAM, OAM, R, MAINC, MAINZ, SUBC, SUBZ, COL565,
+  WRAM, VRAM, CGRAM, OAM, R, ZMAIN, ZSUB, COL565,
   DMTAB, OBJLIST, XBTAB, OBJSZ,
 } from "./layout.js";
 import tables from "./snes9x-tables.json" with { type: "json" };
@@ -78,12 +78,29 @@ export function ppuGlobalsWat(_lay) {
   (global $rto (mut i32) (i32.const 0))
   (global $field (mut i32) (i32.const 0))
   (global $nframes (mut i32) (i32.const 0))
+  ;; snes9x IPPU screen state: DoubleWidthPixels, DoubleHeightPixels,
+  ;; RenderedScreenWidth/Height, GFX.PPL (512, or 1024 interlaced),
+  ;; GFX.DoInterlace, InterlaceOBJ, PseudoHires.
+  (global $dw (mut i32) (i32.const 0))
+  (global $dh (mut i32) (i32.const 0))
+  (global $rsw (mut i32) (i32.const 256))
+  (global $rsh (mut i32) (i32.const 224))
+  (global $ppl (mut i32) (i32.const 512))
+  (global $doint (mut i32) (i32.const 0))
+  (global $iobj (mut i32) (i32.const 0))
+  (global $phires (mut i32) (i32.const 0))
+  ;; the pixel plotter of the screen being drawn: 0 Normal1x1, 1 Normal2x1,
+  ;; 2 Hires (main screen of a hires line); the sub-screen row it reads;
+  ;; the BG being drawn is a mode 5/6 (hires) BG
+  (global $pm (mut i32) (i32.const 0))
+  (global $rowsub (mut i32) (i32.const 0))
+  (global $bghires (mut i32) (i32.const 0))
 `;
 }
 
 // hw_snes.py ppu_wat() lines 419-767
 /** @param {import("./layout.js").SnesLayout} [lay] */
-export function ppuWat(_lay) {
+export function ppuWat(lay) {
   return `
   (func $reg (param $r i32) (result i32)
     (i32.load8_u (i32.add (i32.const ${R}) (local.get $r))))
@@ -128,10 +145,11 @@ export function ppuWat(_lay) {
   ;; a VRAM write during active display is DROPPED.
   (func $vram_blocked (result i32)
     (i32.and (i32.eqz (global.get $fblank))
-             (i32.lt_u (global.get $scanline) (i32.const 225))))
+             (i32.le_u (global.get $scanline) (global.get $sh))))
 
   (func $ppu_write (param $r i32) (param $v i32)
-    (local $o i32) (local $a i32)
+    (local $o i32) (local $a i32) (local $old i32)
+    (local.set $old (call $reg (i32.and (local.get $r) (i32.const 0xFF))))
     (if (i32.and (i32.ge_u (local.get $r) (i32.const 0x40))
                  (i32.le_u (local.get $r) (i32.const 0x7F)))
       (then (call $apu_write (i32.and (local.get $r) (i32.const 3))
@@ -173,15 +191,28 @@ export function ppuWat(_lay) {
         ;; snes9x tests the forced blank bit $2100 HAD (FillRAM is written
         ;; after the switch) while V is the first vblank line.
         (if (i32.and (i32.ne (i32.and (i32.load8_u (i32.const ${R})) (i32.const 0x80)) (i32.const 0))
-                     (i32.eq (global.get $scanline) (i32.const 225)))
+                     (i32.eq (global.get $scanline) (i32.add (global.get $sh) (i32.const 1))))
           (then (call $oam_vblank_reset)))))
     (i32.store8 (i32.add (i32.const ${R}) (local.get $r)) (local.get $v))
 
+    ;; $2133 SETINI (snes9x, when the value changes): pseudo-hires,
+    ;; ScreenHeight (224 or 239 with bit 2, with the rendered height), and
+    ;; the interlace / OBJ interlace flags.
+    (if (i32.and (i32.eq (local.get $r) (i32.const 0x33)) (i32.ne (local.get $v) (local.get $old)))
+      (then
+        (if (i32.and (i32.xor (local.get $old) (local.get $v)) (i32.const 8))
+          (then (global.set $phires (i32.and (local.get $v) (i32.const 8)))))
+        (global.set $sh (if (result i32) (i32.and (local.get $v) (i32.const 4)) (then (i32.const 239)) (else (i32.const 224))))
+        (global.set $rsh (if (result i32) (global.get $dh) (then (i32.shl (global.get $sh) (i32.const 1))) (else (global.get $sh))))
+        (if (i32.and (i32.xor (local.get $old) (local.get $v)) (i32.const 3))
+          (then (global.set $interlace (i32.and (local.get $v) (i32.const 1)))
+                (global.set $iobj (i32.and (local.get $v) (i32.const 2)))))))
+
     ;; $2106 MOSAIC: the vertical block phase starts on the line it is
     ;; written (snes9x PPU.MosaicStart = V_Counter, 0 if past the screen).
-    (if (i32.eq (local.get $r) (i32.const 0x06))
+    (if (i32.and (i32.eq (local.get $r) (i32.const 0x06)) (i32.ne (local.get $v) (local.get $old)))
       (then (global.set $mosstart (if (result i32)
-              (i32.gt_u (global.get $scanline) (i32.const 224))
+              (i32.gt_u (global.get $scanline) (global.get $sh))
               (then (i32.const 0)) (else (global.get $scanline))))))
     ;; OAM: $2102/$2103 address (9-bit WORD address), $2104 data.
     (if (i32.eq (local.get $r) (i32.const 0x02))
@@ -447,7 +478,7 @@ export function ppuWat(_lay) {
     (if (i32.eq (local.get $r) (i32.const 0x3F))
       (then (global.set $hflip (i32.const 0)) (global.set $vflip (i32.const 0))
             (global.set $ob2 (i32.or (i32.or (i32.and (global.get $ob2) (i32.const 0x20)) (global.get $field))
-                                     (i32.or (i32.shl (global.get $latched) (i32.const 6)) (i32.const 3))))
+                                     (i32.or (i32.shl (global.get $latched) (i32.const 6)) (i32.const ${lay?.pal ? 0x13 : 3}))))
             (global.set $latched (i32.const 0))
             (return (global.get $ob2))))
     ;; $2137 SLHV latches the counters (when $4201 bit 7 is set) and
@@ -638,29 +669,59 @@ export function renderWat(lay) {
       (return (local.get $m)))
     (call $cadd (local.get $m) (local.get $o)))
 
-  ;; Plot one pixel: snes9x Normal1x1Base::Draw plus the clip region's
+  ;; Plot one pixel at 256-space column $x: snes9x's pixel plotters
+  ;; (tileimpl.h Normal1x1 / Normal2x1 / Hires) plus the clip region's
   ;; DrawMode (bit 0 = keep colour, bit 1 = math allowed, 0 = not drawn).
+  ;; $scrc is the row of the screen being drawn (GFX.S), $scrz its depth
+  ;; row (GFX.DB), $rowsub / ZSUB the sub-screen row the math reads.
   (func $plot (param $x i32) (param $c i32) (param $z1 i32) (param $z2 i32)
               (param $layer i32) (param $mok i32)
-    (local $dm i32) (local $clip i32)
+    (local $dm i32) (local $clip i32) (local $i i32) (local $sc i32) (local $dom i32) (local $v i32)
+    (local.set $i (if (result i32) (global.get $pm) (then (i32.shl (local.get $x) (i32.const 1))) (else (local.get $x))))
     (if (i32.le_u (local.get $z1)
-                  (i32.load8_u (i32.add (global.get $scrz) (local.get $x))))
+                  (i32.load8_u (i32.add (global.get $scrz) (local.get $i))))
       (then (return)))
     (local.set $dm (i32.load8_u (i32.add (global.get $dmbase)
       (i32.add (i32.shl (local.get $layer) (i32.const 8)) (local.get $x)))))
     (if (i32.eqz (local.get $dm)) (then (return)))
     (local.set $clip (i32.eqz (i32.and (local.get $dm) (i32.const 1))))
-    (if (local.get $clip) (then (local.set $c (i32.const 0))))
-    (if (i32.and (local.get $mok) (i32.ne (i32.and (local.get $dm) (i32.const 2))
-                                          (i32.const 0)))
-      (then (local.set $c (call $math (local.get $c)
-        (i32.load16_u (i32.add (i32.const ${SUBC})
-                               (i32.shl (local.get $x) (i32.const 1))))
-        (i32.load8_u (i32.add (i32.const ${SUBZ}) (local.get $x)))
-        (local.get $clip)))))
-    (i32.store16 (i32.add (global.get $scrc) (i32.shl (local.get $x) (i32.const 1)))
-                 (local.get $c))
-    (i32.store8 (i32.add (global.get $scrz) (local.get $x)) (local.get $z2)))
+    (local.set $sc (if (result i32) (local.get $clip) (then (i32.const 0)) (else (local.get $c))))
+    (local.set $dom (i32.and (local.get $mok) (i32.ne (i32.and (local.get $dm) (i32.const 2)) (i32.const 0))))
+    (if (i32.eq (global.get $pm) (i32.const 2))
+      (then
+        ;; HiresBase::Draw: the main pixel goes to the odd column; the next
+        ;; even column is the sub-screen pixel mathed against this one.
+        (i32.store16 (i32.add (global.get $scrc) (i32.shl (i32.add (local.get $i) (i32.const 1)) (i32.const 1)))
+          (if (result i32) (local.get $dom)
+            (then (call $math (local.get $sc) (call $subpix (local.get $i)) (call $subz (local.get $i)) (local.get $clip)))
+            (else (local.get $sc))))
+        (if (i32.ne (local.get $i) (i32.const 510))
+          (then (local.set $v (if (result i32) (local.get $clip) (then (i32.const 0)) (else (call $subpix (i32.add (local.get $i) (i32.const 2))))))
+                (i32.store16 (i32.add (global.get $scrc) (i32.shl (i32.add (local.get $i) (i32.const 2)) (i32.const 1)))
+                  (if (result i32) (local.get $dom)
+                    (then (call $math (local.get $v) (local.get $c) (call $subz (local.get $i)) (local.get $clip)))
+                    (else (local.get $v))))))
+        (if (i32.eqz (local.get $i))
+          (then (local.set $v (if (result i32) (local.get $clip) (then (i32.const 0)) (else (call $subpix (i32.const 0)))))
+                (i32.store16 (global.get $scrc)
+                  (if (result i32) (local.get $dom)
+                    (then (call $math (local.get $v) (local.get $c) (call $subz (i32.const 0)) (local.get $clip)))
+                    (else (local.get $v))))))
+        (i32.store8 (i32.add (global.get $scrz) (local.get $i)) (local.get $z2))
+        (i32.store8 (i32.add (global.get $scrz) (i32.add (local.get $i) (i32.const 1))) (local.get $z2))
+        (return)))
+    (local.set $v (if (result i32) (local.get $dom)
+      (then (call $math (local.get $sc) (call $subpix (local.get $i)) (call $subz (local.get $i)) (local.get $clip)))
+      (else (local.get $sc))))
+    (i32.store16 (i32.add (global.get $scrc) (i32.shl (local.get $i) (i32.const 1))) (local.get $v))
+    (i32.store8 (i32.add (global.get $scrz) (local.get $i)) (local.get $z2))
+    (if (global.get $pm)
+      (then (i32.store16 (i32.add (global.get $scrc) (i32.shl (i32.add (local.get $i) (i32.const 1)) (i32.const 1))) (local.get $v))
+            (i32.store8 (i32.add (global.get $scrz) (i32.add (local.get $i) (i32.const 1))) (local.get $z2)))))
+  (func $subpix (param $i i32) (result i32)
+    (i32.load16_u (i32.add (global.get $rowsub) (i32.shl (local.get $i) (i32.const 1)))))
+  (func $subz (param $i i32) (result i32)
+    (i32.load8_u (i32.add (i32.const ${ZSUB}) (local.get $i))))
 
   ;; snes9x clip.cpp CalcWindowMask, per pixel.
   (func $winmask (param $i i32) (param $w1 i32) (param $w2 i32) (result i32)
@@ -861,6 +922,7 @@ export function renderWat(lay) {
     (local $yy i32) (local $xs i32) (local $hx i32) (local $vx i32)
     (local $b3h i32) (local $b3v i32) (local $o2big i32) (local $o2mask i32)
     (local $hcell i32) (local $vcell i32) (local $en i32) (local $xc i32)
+    (local $a i32) (local $bigh i32) (local $o2bigh i32) (local $hint i32) (local $mpath i32) (local $even i32) (local $y2 i32) (local $h i32)
     (local.set $ta (i32.shl (i32.and (i32.shr_u
       (call $reg (i32.add (i32.const 0x0B) (i32.shr_u (local.get $bg) (i32.const 1))))
       (i32.shl (i32.and (local.get $bg) (i32.const 1)) (i32.const 2))) (i32.const 7))
@@ -868,7 +930,10 @@ export function renderWat(lay) {
     (local.set $big (i32.and (i32.shr_u (call $reg (i32.const 0x05))
       (i32.add (i32.const 4) (local.get $bg))) (i32.const 1)))
     (local.set $bigv (local.get $big))
-    (local.set $omask (if (result i32) (local.get $big)
+    ;; hires (modes 5/6): BG.TileSizeH is 8 whatever the size bit says; a
+    ;; tilemap entry covers 16 hires pixels (tiles N and N+1).
+    (local.set $bigh (if (result i32) (global.get $bghires) (then (i32.const 0)) (else (local.get $big))))
+    (local.set $omask (if (result i32) (local.get $bigh)
       (then (i32.const 0x3FF)) (else (i32.const 0x1FF))))
     (local.set $tshift (if (result i32) (i32.eq (local.get $depth) (i32.const 2))
       (then (i32.const 4)) (else (if (result i32) (i32.eq (local.get $depth) (i32.const 4))
@@ -888,13 +953,27 @@ export function renderWat(lay) {
     (if (i32.gt_u (local.get $mos) (i32.const 1))
       (then (local.set $yy (i32.sub (local.get $y)
         (i32.rem_u (i32.sub (local.get $y) (global.get $mosstart)) (local.get $mos))))))
+    ;; DrawBackgroundMosaic runs for a mosaic BG on a hires BG even at size
+    ;; 1; there both screens take the even hires pixels.
+    (local.set $mpath (i32.and (i32.ne (i32.and (i32.shr_u (call $reg (i32.const 0x06)) (local.get $bg)) (i32.const 1)) (i32.const 0))
+                               (i32.or (global.get $bghires) (i32.gt_u (local.get $mos) (i32.const 1)))))
+    (local.set $even (i32.or (global.get $issub) (local.get $mpath)))
+    ;; HiresInterlace (interlace on a double-width line): the BG line is
+    ;; 2Y + field (2Y for mosaic) and VOffset one more.
+    (local.set $hint (i32.and (i32.ne (global.get $interlace) (i32.const 0)) (i32.ne (global.get $dw) (i32.const 0))))
+    (local.set $y2 (if (result i32) (local.get $hint)
+      (then (if (result i32) (local.get $mpath)
+        (then (i32.shl (local.get $yy) (i32.const 1)))
+        (else (i32.add (i32.shl (local.get $y) (i32.const 1)) (i32.ne (global.get $field) (i32.const 0))))))
+      (else (local.get $yy))))
     ;; Offset-per-tile source: BG3's scroll and tilemap.
     (if (local.get $opt) (then
       (local.set $b3h (i32.load16_u (i32.const ${R + 0x48})))
       (local.set $b3v (i32.load16_u (i32.const ${R + 0x4A})))
       (local.set $o2big (i32.and (i32.shr_u (call $reg (i32.const 0x05)) (i32.const 6))
                                  (i32.const 1)))
-      (local.set $o2mask (if (result i32) (local.get $o2big)
+      (local.set $o2bigh (if (result i32) (global.get $bghires) (then (i32.const 0)) (else (local.get $o2big))))
+      (local.set $o2mask (if (result i32) (local.get $o2bigh)
         (then (i32.const 0x3FF)) (else (i32.const 0x1FF))))
       (local.set $en (i32.shl (i32.const 0x2000) (local.get $bg)))))
     (local.set $mok (i32.and (i32.eqz (global.get $issub))
@@ -911,18 +990,19 @@ export function renderWat(lay) {
       (local.set $vx (local.get $vofs))
       (if (local.get $opt) (then
         ;; The tile column this pixel is in starts at screen x $xc. The
-        ;; leftmost column never takes an offset.
+        ;; leftmost column (the one holding x = 0, which starts at or left of
+        ;; it) never takes an offset (snes9x left_edge).
         (local.set $xc (i32.sub (local.get $xs)
           (i32.and (i32.add (local.get $hofs) (local.get $xs)) (i32.const 7))))
-        (if (i32.ge_s (local.get $xc) (i32.const 0)) (then
+        (if (i32.gt_s (local.get $xc) (i32.const 0)) (then
           (local.set $ht (i32.and (i32.sub (i32.add (local.get $b3h) (local.get $xc))
                                            (i32.const 1)) (local.get $o2mask)))
           (local.set $hcell (call $mapent (i32.const 2) (local.get $ht) (local.get $b3v)
-                                  (local.get $o2big) (local.get $o2big)))
+                                  (local.get $o2bigh) (local.get $o2big)))
           (if (i32.eq (local.get $opt) (i32.const 1))
             (then (local.set $vcell (call $mapent (i32.const 2) (local.get $ht)
                     (i32.add (local.get $b3v) (i32.const 8))
-                    (local.get $o2big) (local.get $o2big))))
+                    (local.get $o2bigh) (local.get $o2big))))
             (else
               (if (i32.and (local.get $hcell) (i32.const 0x8000))
                 (then (local.set $vcell (local.get $hcell)) (local.set $hcell (i32.const 0)))
@@ -932,19 +1012,21 @@ export function renderWat(lay) {
           (if (i32.and (local.get $hcell) (local.get $en))
             (then (local.set $hx (i32.or (i32.and (local.get $hcell) (i32.const -8))
                                          (i32.and (local.get $hofs) (i32.const 7))))))))))
-      (local.set $vy (i32.add (local.get $vx) (local.get $yy)))
+      (if (local.get $hint) (then (local.set $vx (i32.add (local.get $vx) (i32.const 1)))))
+      (local.set $vy (i32.add (local.get $vx) (local.get $y2)))
       (local.set $hpos (i32.and (i32.add (local.get $hx) (local.get $xs))
                                 (local.get $omask)))
       (local.set $ht (i32.shr_u (local.get $hpos) (i32.const 3)))
       (local.set $tile (call $mapent (local.get $bg) (local.get $hpos) (local.get $vy)
-                                     (local.get $big) (local.get $bigv)))
-      (if (local.get $big) (then
+                                     (local.get $bigh) (local.get $bigv)))
+      (if (local.get $bigv) (then
         (local.set $tile (call $tplus (local.get $tile)
           (if (result i32) (i32.eq (i32.ne (i32.and (local.get $tile) (i32.const 0x8000))
                                            (i32.const 0))
                                    (i32.ne (i32.and (local.get $vy) (i32.const 8))
                                            (i32.const 0)))
-            (then (i32.const 0)) (else (i32.const 16)))))
+            (then (i32.const 0)) (else (i32.const 16)))))))
+      (if (local.get $bigh) (then
         (local.set $tile (call $tplus (local.get $tile)
           (if (result i32) (i32.and (local.get $tile) (i32.const 0x4000))
             (then (i32.sub (i32.const 1) (i32.and (local.get $ht) (i32.const 1))))
@@ -953,12 +1035,27 @@ export function renderWat(lay) {
       (if (i32.and (local.get $tile) (i32.const 0x8000))
         (then (local.set $r (i32.sub (i32.const 7) (local.get $r)))))
       (local.set $c (i32.and (local.get $hpos) (i32.const 7)))
-      (if (i32.and (local.get $tile) (i32.const 0x4000))
-        (then (local.set $c (i32.sub (i32.const 7) (local.get $c)))))
-      (local.set $pix (call $tilepix
-        (i32.and (i32.add (local.get $ta) (i32.shl (i32.and (local.get $tile)
+      (local.set $a (i32.and (i32.add (local.get $ta) (i32.shl (i32.and (local.get $tile)
                                                    (i32.const 0x3FF))
-                                          (local.get $tshift))) (i32.const 0xFFFF))
+                                          (local.get $tshift))) (i32.const 0xFFFF)))
+      (if (global.get $bghires)
+        (then
+          ;; ConvertTile*h_odd / _even: the main screen shows the odd hires
+          ;; pixels of the 16-pixel pair (tiles N, N+1), the sub screen (and
+          ;; a mosaic BG) the even ones; H flip mirrors the pair.
+          (local.set $h (i32.add (i32.shl (local.get $c) (i32.const 1)) (i32.eqz (local.get $even))))
+          (if (i32.and (local.get $tile) (i32.const 0x4000))
+            (then (local.set $h (i32.sub (i32.const 15) (local.get $h)))))
+          (if (i32.ge_u (local.get $h) (i32.const 8))
+            (then (local.set $a (i32.and (if (result i32) (i32.eq (i32.and (local.get $tile) (i32.const 0x3FF)) (i32.const 0x3FF))
+                                          (then (i32.sub (local.get $a) (i32.shl (i32.const 0x3FF) (local.get $tshift))))
+                                          (else (i32.add (local.get $a) (i32.shl (i32.const 1) (local.get $tshift)))))
+                                        (i32.const 0xFFFF)))))
+          (local.set $c (i32.and (local.get $h) (i32.const 7))))
+        (else
+          (if (i32.and (local.get $tile) (i32.const 0x4000))
+            (then (local.set $c (i32.sub (i32.const 7) (local.get $c)))))))
+      (local.set $pix (call $tilepix (local.get $a)
         (local.get $r) (local.get $c) (local.get $depth)))
       (if (local.get $pix) (then
         (local.set $z (if (result i32) (i32.and (local.get $tile) (i32.const 0x2000))
@@ -1075,13 +1172,29 @@ export function renderWat(lay) {
   ;; PPU.RangeTimeOver as each row renders, forced blank or not): more than
   ;; 32 sprites on the row sets bit 6, more than 34 tiles among the first 32
   ;; sets bit 7.
+  ;; SetupOBJ's "evil FirstSprite+Y case": priority rotation with the OAM
+  ;; address odd (OAMFlip & OAMAddr & 1): each line starts its sprite scan
+  ;; at FirstSprite + Y, and an X of -256 counts as 256.
+  (func $obj_evil (result i32)
+    (i32.and (i32.ne (global.get $oamrot) (i32.const 0))
+             (i32.and (i32.and (global.get $oamflip) (global.get $oamaddr)) (i32.const 1))))
+
+  ;; SetupOBJ's sprite line for the k-th row from a sprite's top: with
+  ;; OBJ interlace every other line, starting at 1 on the odd field.
+  (func $objline (param $k i32) (result i32)
+    (if (result i32) (global.get $iobj)
+      (then (i32.add (i32.shl (local.get $k) (i32.const 1)) (i32.ne (global.get $field) (i32.const 0))))
+      (else (local.get $k))))
+
   (func $rto_row (param $y i32)
     (local $sel i32) (local $s i32) (local $k i32) (local $o i32) (local $hi i32)
     (local $big i32) (local $w i32) (local $h i32) (local $hp i32) (local $n i32)
-    (local $tiles i32) (local $vis i32)
+    (local $tiles i32) (local $vis i32) (local $evil i32)
     (local.set $sel (i32.shr_u (call $reg (i32.const 0x01)) (i32.const 5)))
     (local.set $tiles (i32.const 34))
-    (local.set $s (global.get $firstspr))
+    (local.set $evil (call $obj_evil))
+    (local.set $s (if (result i32) (local.get $evil)
+      (then (i32.and (i32.add (global.get $firstspr) (local.get $y)) (i32.const 0x7F))) (else (global.get $firstspr))))
     (block $sd (loop $sl
       (br_if $sd (i32.ge_u (local.get $k) (i32.const 128)))
       (local.set $o (i32.add (i32.const ${OAM}) (i32.shl (local.get $s) (i32.const 2))))
@@ -1096,10 +1209,11 @@ export function renderWat(lay) {
         (i32.add (i32.shl (local.get $sel) (i32.const 2)) (i32.shl (local.get $big) (i32.const 1))))))
       (local.set $hp (i32.load8_u (local.get $o)))
       (if (i32.and (local.get $hi) (i32.const 1)) (then (local.set $hp (i32.sub (local.get $hp) (i32.const 256)))))
-      (if (i32.eq (local.get $hp) (i32.const -256)) (then (local.set $hp (i32.const 0))))
+      (if (i32.eq (local.get $hp) (i32.const -256))
+        (then (local.set $hp (if (result i32) (local.get $evil) (then (i32.const 256)) (else (i32.const 0))))))
       (if (i32.and (i32.and (i32.gt_s (local.get $hp) (i32.sub (i32.const 0) (local.get $w)))
                             (i32.le_s (local.get $hp) (i32.const 256)))
-                   (i32.lt_u (i32.and (i32.sub (local.get $y) (i32.load8_u offset=1 (local.get $o))) (i32.const 0xFF))
+                   (i32.lt_u (call $objline (i32.and (i32.sub (local.get $y) (i32.load8_u offset=1 (local.get $o))) (i32.const 0xFF)))
                              (local.get $h)))
         (then
           (if (i32.ge_u (local.get $n) (i32.const 32))
@@ -1107,8 +1221,8 @@ export function renderWat(lay) {
             (else
               (local.set $vis (if (result i32) (i32.lt_s (local.get $hp) (i32.const 0))
                 (then (i32.shr_s (i32.add (i32.add (local.get $w) (local.get $hp)) (i32.const 7)) (i32.const 3)))
-                (else (if (result i32) (i32.gt_s (i32.add (local.get $hp) (local.get $w)) (i32.const 255))
-                  (then (i32.shr_s (i32.sub (i32.const 263) (local.get $hp)) (i32.const 3)))
+                (else (if (result i32) (i32.gt_s (i32.add (local.get $hp) (local.get $w)) (i32.add (i32.const 255) (local.get $evil)))
+                  (then (i32.shr_s (i32.sub (i32.add (i32.const 263) (local.get $evil)) (local.get $hp)) (i32.const 3)))
                   (else (i32.shr_u (local.get $w) (i32.const 3)))))))
               (local.set $tiles (i32.sub (local.get $tiles) (local.get $vis)))
               (if (i32.lt_s (local.get $tiles) (i32.const 0))
@@ -1128,7 +1242,7 @@ export function renderWat(lay) {
     (local $z2 i32) (local $X i32) (local $t i32) (local $px i32)
     (local $sx i32) (local $pix i32) (local $objb i32) (local $nsel i32)
     (local $tile i32) (local $ta i32) (local $mok i32) (local $pal i32)
-    (local $hpa i32) (local $k i32)
+    (local $hpa i32) (local $k i32) (local $evil i32)
     (local.set $sel (i32.shr_u (call $reg (i32.const 0x01)) (i32.const 5)))
     (local.set $objb (i32.shl (i32.and (call $reg (i32.const 0x01)) (i32.const 3))
                               (i32.const 14)))
@@ -1137,7 +1251,9 @@ export function renderWat(lay) {
                               (i32.const 13)))
     (local.set $n (i32.const 0))
     (local.set $tiles (i32.const 34))
-    (local.set $s (global.get $firstspr))
+    (local.set $evil (call $obj_evil))
+    (local.set $s (if (result i32) (local.get $evil)
+      (then (i32.and (i32.add (global.get $firstspr) (local.get $y)) (i32.const 0x7F))) (else (global.get $firstspr))))
     (local.set $k (i32.const 0))
     (block $sd (loop $sl
       (br_if $sd (i32.ge_u (local.get $k) (i32.const 128)))
@@ -1155,12 +1271,12 @@ export function renderWat(lay) {
       (if (i32.and (local.get $hi) (i32.const 1))
         (then (local.set $hp (i32.sub (local.get $hp) (i32.const 256)))))
       (local.set $hpa (if (result i32) (i32.eq (local.get $hp) (i32.const -256))
-        (then (i32.const 0)) (else (local.get $hp))))
+        (then (if (result i32) (local.get $evil) (then (i32.const 256)) (else (i32.const 0)))) (else (local.get $hp))))
       (local.set $vp (i32.load8_u (i32.add (local.get $o) (i32.const 1))))
       (if (i32.and (i32.gt_s (local.get $hpa) (i32.sub (i32.const 0) (local.get $w)))
                    (i32.le_s (local.get $hpa) (i32.const 256)))
         (then
-          (local.set $line (i32.and (i32.sub (local.get $y) (local.get $vp)) (i32.const 0xFF)))
+          (local.set $line (call $objline (i32.and (i32.sub (local.get $y) (local.get $vp)) (i32.const 0xFF))))
           (if (i32.lt_u (local.get $line) (local.get $h))
             (then
               (if (i32.lt_u (local.get $n) (i32.const 32))
@@ -1169,8 +1285,8 @@ export function renderWat(lay) {
                     (then (i32.shr_s (i32.add (i32.add (local.get $w) (local.get $hpa)) (i32.const 7))
                                      (i32.const 3)))
                     (else (if (result i32) (i32.gt_s (i32.add (local.get $hpa) (local.get $w))
-                                                     (i32.const 255))
-                      (then (i32.shr_s (i32.sub (i32.const 263) (local.get $hpa)) (i32.const 3)))
+                                                     (i32.add (i32.const 255) (local.get $evil)))
+                      (then (i32.shr_s (i32.sub (i32.add (i32.const 263) (local.get $evil)) (local.get $hpa)) (i32.const 3)))
                       (else (i32.shr_u (local.get $w) (i32.const 3)))))))
                   (local.set $tiles (i32.sub (local.get $tiles) (local.get $vis)))
                   (if (i32.and (i32.load8_u (i32.add (local.get $o) (i32.const 3)))
@@ -1269,20 +1385,28 @@ export function renderWat(lay) {
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $il))))
 
-  (func $render_screen (param $y i32) (param $sub i32)
+  (func $render_screen (param $y i32) (param $sub i32) (param $row i32)
     (local $D i32) (local $act i32) (local $mode i32) (local $x i32) (local $b3 i32)
     (global.set $issub (local.get $sub))
-    (global.set $scrc (if (result i32) (local.get $sub) (then (i32.const ${SUBC}))
-                                                       (else (i32.const ${MAINC}))))
-    (global.set $scrz (if (result i32) (local.get $sub) (then (i32.const ${SUBZ}))
-                                                       (else (i32.const ${MAINZ}))))
+    (global.set $scrc (local.get $row))
+    (global.set $scrz (if (result i32) (local.get $sub) (then (i32.const ${ZSUB}))
+                                                       (else (i32.const ${ZMAIN}))))
     (global.set $dmbase (i32.add (i32.const ${DMTAB}) (i32.mul (local.get $sub) (i32.const 1536))))
     (local.set $D (if (result i32) (local.get $sub)
       (then (i32.shl (i32.and (call $reg (i32.const 0x30)) (i32.const 2)) (i32.const 4)))
       (else (i32.const 32))))
     (local.set $act (call $reg (i32.add (i32.const 0x2C) (local.get $sub))))
-    (memory.fill (global.get $scrz) (i32.const 0) (i32.const 256))
     (local.set $mode (i32.and (call $reg (i32.const 0x05)) (i32.const 7)))
+    ;; S9xSelectTileRenderers: the sub screen plots 2x1 on a double-width
+    ;; line; the main screen of a hires line (modes 5/6 or pseudo-hires)
+    ;; uses the Hires plotter.
+    (global.set $pm (if (result i32) (global.get $dw)
+      (then (if (result i32) (i32.and (i32.eqz (local.get $sub))
+                                      (i32.or (i32.or (i32.eq (local.get $mode) (i32.const 5)) (i32.eq (local.get $mode) (i32.const 6)))
+                                              (i32.ne (global.get $phires) (i32.const 0))))
+              (then (i32.const 2)) (else (i32.const 1))))
+      (else (i32.const 0))))
+    (global.set $bghires (i32.or (i32.eq (local.get $mode) (i32.const 5)) (i32.eq (local.get $mode) (i32.const 6))))
     (if (i32.and (local.get $act) (i32.const 0x10))
       (then (call $draw_objs (local.get $y) (i32.add (local.get $D) (i32.const 4)))))
     (if (i32.eqz (local.get $mode)) (then
@@ -1326,22 +1450,60 @@ export function renderWat(lay) {
       (local.set $x (i32.add (local.get $x) (i32.const 1)))
       (br $bl))))
 
+  ;; snes9x S9xUpdateScreen for one line ($y = V - 1), drawing into
+  ;; GFX.Screen at GFX.PPL pitch (plus one 512 row on the second field of
+  ;; an interlaced frame), as the libretro core does.
   (func $render_row (param $y i32)
-    (local $x i32) (local $c i32) (local $i i32) (local $fb i32) (local $cg i32)
-    (local $ad i32)
-    (local.set $fb (i32.add (i32.const ${lay.FB}) (i32.shl (i32.mul (local.get $y)
-                                                           (i32.const ${FB_W})) (i32.const 2))))
+    (local $x i32) (local $c i32) (local $i i32) (local $cg i32) (local $mode i32)
+    (local $row i32) (local $p i32) (local $q i32) (local $yy i32)
     (call $rto_row (local.get $y))
+    (local.set $mode (i32.and (call $reg (i32.const 0x05)) (i32.const 7)))
     (if (global.get $fblank)
       (then
-        (local.set $x (i32.const 0))
-        (block $fd (loop $fl
-          (br_if $fd (i32.ge_u (local.get $x) (i32.const 256)))
-          (i32.store (i32.add (local.get $fb) (i32.shl (local.get $x) (i32.const 2)))
-                     (i32.const 0xFF000000))
-          (local.set $x (i32.add (local.get $x) (i32.const 1)))
-          (br $fl)))
+        (local.set $row (i32.add (i32.const ${lay.SCREEN}) (i32.shl (i32.mul (local.get $y) (global.get $ppl)) (i32.const 1))))
+        (if (i32.and (i32.ne (global.get $doint) (i32.const 0)) (i32.ne (global.get $field) (i32.const 0)))
+          (then (local.set $row (i32.add (local.get $row) (i32.const 1024)))))
+        (memory.fill (local.get $row) (i32.const 0) (i32.shl (global.get $rsw) (i32.const 1)))
         (return)))
+    ;; A line in mode 5/6 or pseudo-hires on a frame drawn single-width so
+    ;; far: widen the lines already drawn (each pixel doubled, in place).
+    (if (i32.and (i32.eqz (global.get $dw))
+                 (i32.or (i32.or (i32.eq (local.get $mode) (i32.const 5)) (i32.eq (local.get $mode) (i32.const 6)))
+                         (i32.ne (global.get $phires) (i32.const 0))))
+      (then
+        (local.set $yy (i32.const 0))
+        (block $wd (loop $wl
+          (br_if $wd (i32.ge_u (local.get $yy) (local.get $y)))
+          (local.set $p (i32.add (i32.const ${lay.SCREEN}) (i32.shl (i32.mul (local.get $yy) (global.get $ppl)) (i32.const 1))))
+          (local.set $x (i32.const 255))
+          (block $xd (loop $xl
+            (local.set $c (i32.load16_u (i32.add (local.get $p) (i32.shl (local.get $x) (i32.const 1)))))
+            (i32.store16 (i32.add (local.get $p) (i32.shl (local.get $x) (i32.const 2))) (local.get $c))
+            (i32.store16 offset=2 (i32.add (local.get $p) (i32.shl (local.get $x) (i32.const 2))) (local.get $c))
+            (br_if $xd (i32.eqz (local.get $x)))
+            (local.set $x (i32.sub (local.get $x) (i32.const 1)))
+            (br $xl)))
+          (local.set $yy (i32.add (local.get $yy) (i32.const 1)))
+          (br $wl)))
+        (global.set $dw (i32.const 1))
+        (global.set $rsw (i32.const 512))))
+    ;; Interlace turned on for a mode 5/6 line: double the height from here
+    ;; (snes9x moves the lines already drawn to the doubled pitch).
+    (if (i32.and (i32.and (i32.eqz (global.get $dh)) (i32.ne (global.get $interlace) (i32.const 0)))
+                 (i32.or (i32.eq (local.get $mode) (i32.const 5)) (i32.eq (local.get $mode) (i32.const 6))))
+      (then
+        (global.set $dh (i32.const 1))
+        (global.set $rsh (i32.shl (global.get $sh) (i32.const 1)))
+        (global.set $ppl (i32.const 1024))
+        (global.set $doint (i32.const 2))
+        (local.set $yy (i32.sub (local.get $y) (i32.const 2)))
+        (block $md (loop $ml
+          (br_if $md (i32.lt_s (local.get $yy) (i32.const 0)))
+          (memory.copy (i32.add (i32.const ${lay.SCREEN}) (i32.shl (i32.mul (i32.add (local.get $yy) (i32.const 1)) (i32.const 1024)) (i32.const 1)))
+                       (i32.add (i32.const ${lay.SCREEN}) (i32.shl (i32.mul (local.get $yy) (i32.const 512)) (i32.const 1)))
+                       (i32.const 2048))
+          (local.set $yy (i32.sub (local.get $yy) (i32.const 1)))
+          (br $ml)))))
     (global.set $xbp (i32.add (i32.const ${XBTAB})
       (i32.shl (i32.and (call $reg (i32.const 0x00)) (i32.const 15)) (i32.const 5))))
     (local.set $i (i32.const 0))
@@ -1368,24 +1530,73 @@ export function renderWat(lay) {
       (if (i32.eq (global.get $mathsel) (i32.const 1)) (then (global.set $mathsel (i32.const 7))))
       (if (i32.eq (global.get $mathsel) (i32.const 3)) (then (global.set $mathsel (i32.const 8))))))
     (call $calc_windows)
-    (if (i32.and
-          (i32.and (i32.ne (i32.and (call $reg (i32.const 0x30)) (i32.const 0x30)) (i32.const 0x30))
-                   (i32.ne (i32.and (call $reg (i32.const 0x30)) (i32.const 2)) (i32.const 0)))
-          (i32.and (i32.ne (i32.and (local.get $cg) (i32.const 0x3F)) (i32.const 0))
-                   (i32.ne (i32.and (call $reg (i32.const 0x2D)) (i32.const 0x1F)) (i32.const 0))))
-      (then (call $render_screen (local.get $y) (i32.const 1)))
-      (else (memory.fill (i32.const ${SUBZ}) (i32.const 0) (i32.const 256))))
-    (call $render_screen (local.get $y) (i32.const 0))
-    ;; Output. A pixel no layer claimed (DrawMode 0 everywhere) keeps the
-    ;; previous frame's value, exactly as snes9x's persistent GFX.Screen does.
-    (local.set $x (i32.const 0))
-    (block $od (loop $ol
-      (br_if $od (i32.ge_u (local.get $x) (i32.const 256)))
-      (if (i32.load8_u (i32.add (i32.const ${MAINZ}) (local.get $x)))
-        (then (i32.store (i32.add (local.get $fb) (i32.shl (local.get $x) (i32.const 2)))
-          (call $rgba565 (i32.load16_u (i32.add (i32.const ${MAINC})
-                                                (i32.shl (local.get $x) (i32.const 1))))))))
-      (local.set $x (i32.add (local.get $x) (i32.const 1)))
-      (br $ol))))
+    ;; GFX.ZBuffer / SubZBuffer for this line (cleared every frame, and each
+    ;; line is drawn once).
+    (memory.fill (i32.const ${ZMAIN}) (i32.const 0) (i32.const 1024))
+    (global.set $rowsub (i32.add (i32.const ${lay.SUBSCR}) (i32.shl (i32.mul (local.get $y) (global.get $ppl)) (i32.const 1))))
+    (if (i32.or (i32.or (i32.or (i32.eq (local.get $mode) (i32.const 5)) (i32.eq (local.get $mode) (i32.const 6)))
+                        (i32.ne (global.get $phires) (i32.const 0)))
+          (i32.and
+            (i32.and (i32.ne (i32.and (call $reg (i32.const 0x30)) (i32.const 0x30)) (i32.const 0x30))
+                     (i32.ne (i32.and (call $reg (i32.const 0x30)) (i32.const 2)) (i32.const 0)))
+            (i32.and (i32.ne (i32.and (local.get $cg) (i32.const 0x3F)) (i32.const 0))
+                     (i32.ne (i32.and (call $reg (i32.const 0x2D)) (i32.const 0x1F)) (i32.const 0)))))
+      (then (call $render_screen (local.get $y) (i32.const 1) (global.get $rowsub))))
+    (local.set $row (i32.add (i32.const ${lay.SCREEN}) (i32.shl (i32.mul (local.get $y) (global.get $ppl)) (i32.const 1))))
+    (if (i32.and (i32.ne (global.get $doint) (i32.const 0)) (i32.ne (global.get $field) (i32.const 0)))
+      (then (local.set $row (i32.add (local.get $row) (i32.const 1024)))))
+    (call $render_screen (local.get $y) (i32.const 0) (local.get $row)))
+
+  ;; snes9x S9xStartScreenRefresh (V = 1) with S9xGraphicsScreenResize.
+  (func $start_screen_refresh
+    (local $mode i32)
+    (if (global.get $doint) (then (global.set $doint (i32.sub (global.get $doint) (i32.const 1)))))
+    (if (i32.or (i32.eqz (global.get $doint)) (i32.eqz (global.get $field)))
+      (then
+        (global.set $maxbright (i32.and (call $reg (i32.const 0x00)) (i32.const 15)))
+        (global.set $interlace (i32.and (call $reg (i32.const 0x33)) (i32.const 1)))
+        (global.set $iobj (i32.and (call $reg (i32.const 0x33)) (i32.const 2)))
+        (global.set $phires (i32.and (call $reg (i32.const 0x33)) (i32.const 8)))
+        (local.set $mode (i32.and (call $reg (i32.const 0x05)) (i32.const 7)))
+        (if (i32.or (i32.or (i32.eq (local.get $mode) (i32.const 5)) (i32.eq (local.get $mode) (i32.const 6)))
+                    (i32.ne (global.get $phires) (i32.const 0)))
+          (then (global.set $dw (i32.const 1)) (global.set $rsw (i32.const 512)))
+          (else (global.set $dw (i32.const 0)) (global.set $rsw (i32.const 256))))
+        (if (global.get $interlace)
+          (then (global.set $ppl (i32.const 1024)) (global.set $dh (i32.const 1))
+                (global.set $rsh (i32.shl (global.get $sh) (i32.const 1)))
+                (global.set $doint (i32.add (global.get $doint) (i32.const 1))))
+          (else (global.set $ppl (i32.const 512)) (global.set $dh (i32.const 0))
+                (global.set $rsh (global.get $sh))))))
+    (global.set $mosstart (i32.const 0)))
+
+  ;; S9xEndScreenRefresh -> libretro S9xDeinitUpdate with the default
+  ;; "Crop Overscan" (enabled): the frame handed to video_cb, into the
+  ;; RGBA framebuffer, and its size into wc_info.
+  (func $deinit_update
+    (local $w i32) (local $h i32) (local $off i32) (local $r i32) (local $x i32)
+    (local $src i32) (local $dst i32)
+    (local.set $w (global.get $rsw))
+    (local.set $h (global.get $rsh))
+    (if (i32.gt_u (local.get $h) (i32.const 448))
+      (then (local.set $off (i32.const 14)) (local.set $h (i32.const 448)))
+      (else (if (i32.and (i32.gt_u (local.get $h) (i32.const 224)) (i32.ne (local.get $h) (i32.const 448)))
+        (then (local.set $off (i32.const 7)) (local.set $h (i32.const 224))))))
+    (local.set $r (i32.const 0))
+    (block $rd (loop $rl
+      (br_if $rd (i32.ge_u (local.get $r) (local.get $h)))
+      (local.set $src (i32.add (i32.const ${lay.SCREEN}) (i32.shl (i32.mul (i32.add (local.get $r) (local.get $off)) (i32.const 512)) (i32.const 1))))
+      (local.set $dst (i32.add (i32.const ${lay.FB}) (i32.shl (i32.mul (local.get $r) (local.get $w)) (i32.const 2))))
+      (local.set $x (i32.const 0))
+      (block $xd (loop $xl
+        (br_if $xd (i32.ge_u (local.get $x) (local.get $w)))
+        (i32.store (i32.add (local.get $dst) (i32.shl (local.get $x) (i32.const 2)))
+          (call $rgba565 (i32.load16_u (i32.add (local.get $src) (i32.shl (local.get $x) (i32.const 1))))))
+        (local.set $x (i32.add (local.get $x) (i32.const 1)))
+        (br $xl)))
+      (local.set $r (i32.add (local.get $r) (i32.const 1)))
+      (br $rl)))
+    (i32.store (i32.const ${lay.ABI + 4}) (local.get $w))
+    (i32.store (i32.const ${lay.ABI + 8}) (local.get $h)))
 `;
 }

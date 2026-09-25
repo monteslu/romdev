@@ -1161,3 +1161,148 @@ test("HDMA and the WRAM port: from WRAM to $2180 is dropped, from ROM lands; $21
   const { createHash } = await import("node:crypto");
   assert.equal(createHash("sha1").update(mem.subarray(WRAM + 0x2000, WRAM + 0x2200)).digest("hex"), "bd3b5f2a0bf3257c3eea22893fef0e27e3c2aa44");
 });
+
+/** Synthetic graphics carts: pseudo-random tiles, maps, OAM and palette by DMA, then register writes. */
+function rng(seed) { let s = seed >>> 0; return () => { s = (s * 1103515245 + 12345) >>> 0; return s >>> 16 & 0xff; }; }
+function header(img, title, mapMode = 0x20) {
+  const h = 0x7fc0, t = title.padEnd(21, " ");
+  for (let i = 0; i < 21; i++) img[h + i] = t.charCodeAt(i);
+  img[h + 0x15] = mapMode; img[h + 0x16] = 0; img[h + 0x17] = 0x0b; img[h + 0x18] = 0; img[h + 0x19] = 1; img[h + 0x1a] = 0x33;
+  img[0x7ffc] = 0x00; img[0x7ffd] = 0x80;
+}
+/**
+ * regs: [[addr, value], ...] PPU/CPU register writes after the uploads (8-bit)
+ * nmi: optional handler bytes placed at $9000 (vector set)
+ * irq: optional handler bytes at $9100
+ * main: bytes appended after the setup (default: bra *)
+ */
+function gfxRom({ title = "SYNTH GFX", regs = [], nmi = null, irq = null, main = null, seed = 1 }) {
+  const img = new Uint8Array(0x40000).fill(0);   // 256KB: 8 banks
+  const r = rng(seed);
+  // bank 1 ($01:8000, file 0x8000): 32KB tile data; bank 2 (file 0x10000): 2 tilemaps x 2KB + OAM 544 + CGRAM 512
+  for (let i = 0; i < 0x8000; i++) img[0x8000 + i] = r();
+  for (let i = 0; i < 0x1000; i += 2) { const t = r() | (r() << 8); img[0x10000 + i] = t & 0xff; img[0x10000 + i + 1] = (t >> 8) & 0xff; }
+  for (let i = 0; i < 0x1000; i++) img[0x11000 + i] = r();
+  for (let i = 0; i < 0x220; i++) img[0x12000 + i] = r();
+  for (let i = 0; i < 0x200; i++) img[0x12400 + i] = r() & (i & 1 ? 0x7f : 0xff);
+  const c = [0x78, 0x18, 0xfb, 0xc2, 0x10, 0xe2, 0x20, 0xa9, 0x80, 0x8d, 0x00, 0x21];   // native, force blank
+  const dma = (src, bank, bport, len, mode, vaddr) => {
+    if (vaddr != null) c.push(0xa2, vaddr & 0xff, vaddr >> 8, 0x8e, 0x16, 0x21);
+    c.push(0xa9, mode, 0x8d, 0x00, 0x43, 0xa9, bport, 0x8d, 0x01, 0x43,
+      0xa2, src & 0xff, src >> 8, 0x8e, 0x02, 0x43, 0xa9, bank, 0x8d, 0x04, 0x43,
+      0xa2, len & 0xff, len >> 8, 0x8e, 0x05, 0x43, 0xa9, 0x01, 0x8d, 0x0b, 0x42);
+  };
+  c.push(0xa9, 0x80, 0x8d, 0x15, 0x21);          // VMAIN: increment after $2119
+  dma(0x8000, 0x01, 0x18, 0x8000, 0x01, 0x0000);  // tiles -> VRAM word 0
+  dma(0x8000, 0x02, 0x18, 0x1000, 0x01, 0x7000);  // tilemap A -> word $7000
+  dma(0x9000, 0x02, 0x18, 0x1000, 0x01, 0x7800);  // tilemap B -> word $7800
+  c.push(0x9c, 0x02, 0x21, 0x9c, 0x03, 0x21);     // OAM address 0
+  dma(0xa000, 0x02, 0x04, 0x220, 0x00, null);     // OAM
+  c.push(0x9c, 0x21, 0x21);                       // CGRAM address 0
+  dma(0xa400, 0x02, 0x22, 0x200, 0x00, null);     // CGRAM
+  // default layout: BG1 map $7000 (64x32), BG2 map $7800, BG3/4 maps $7000, tiles at 0
+  const base = [[0x2107, 0x71], [0x2108, 0x79], [0x2109, 0x70], [0x210a, 0x78], [0x210b, 0x00], [0x210c, 0x00]];
+  for (const [a, v] of [...base, ...regs]) {
+    if (a >= 0x10000) c.push(0xa9, v, 0x8f, a & 0xff, (a >> 8) & 0xff, a >> 16);   // long
+    else c.push(0xa9, v, 0x8d, a & 0xff, a >> 8);
+  }
+  c.push(...(main ?? [0x80, 0xfe]));
+  img.set(c, 0);
+  if (nmi) { img.set(nmi, 0x1000); img[0x7fea] = 0x00; img[0x7feb] = 0x90; }
+  if (irq) { img.set(irq, 0x1100); img[0x7fee] = 0x00; img[0x7fef] = 0x91; }
+  header(img, title);
+  return img;
+}
+
+test("hires (modes 5/6, pseudo-hires, mosaic, a mid-frame switch), interlace (BG and OBJ), overscan, OPT's first column and the rotated-OBJ scan render as snes9x's frames", async () => {
+  // sha1 of the RGB frame (as the libretro core hands it over, after the
+  // overscan crop) at reference frames 10 and 11 (cart calls 15 and 16);
+  // the expected values are snes9x's.
+  const { createHash } = await import("node:crypto");
+  const on = [[0x2100, 0x0f]];
+  const cases = [
+    ["g_m5math", { regs: [[0x2105, 0x05], [0x212c, 0x03], [0x212d, 0x02], [0x2130, 0x02], [0x2131, 0x41], [0x2126, 0x30], [0x2127, 0xa0], [0x2123, 0x02], [0x212e, 0x01], [0x2132, 0xe8], ...on] }, [512,224], "b0893c2dd5be098a08dc476eedd98f625fc8ecbd", "b0893c2dd5be098a08dc476eedd98f625fc8ecbd"],
+    ["g_m6", { regs: [[0x2105, 0x06], [0x212c, 0x01], [0x212d, 0x00], [0x2111, 0x08], [0x2111, 0x00], ...on] }, [512,224], "864fb721754743246acb714832b55069d8804e00", "864fb721754743246acb714832b55069d8804e00"],
+    ["g_phires", { regs: [[0x2105, 0x01], [0x2133, 0x08], [0x212c, 0x11], [0x212d, 0x02], [0x2130, 0x02], [0x2131, 0x43], ...on] }, [512,224], "041041104a57985f2ca6081ca7ea2b3d1afd5d56", "041041104a57985f2ca6081ca7ea2b3d1afd5d56"],
+    ["g_m5int", { regs: [[0x2105, 0x05], [0x2133, 0x01], [0x212c, 0x03], [0x212d, 0x02], ...on] }, [512,448], "5bac6a8d06210a1fe8fabdf8ed5388f1d1879dbe", "5bac6a8d06210a1fe8fabdf8ed5388f1d1879dbe"],
+    ["g_m1int", { regs: [[0x2105, 0x01], [0x2133, 0x01], [0x212c, 0x13], [0x212d, 0x00], ...on] }, [256,448], "6ca67e1791b31ec9c370767d1fa1027a4ffd7178", "6ca67e1791b31ec9c370767d1fa1027a4ffd7178"],
+    ["g_objint", { regs: [[0x2105, 0x01], [0x2133, 0x03], [0x2101, 0x62], [0x212c, 0x11], ...on] }, [256,448], "95de7088d5b0313a8ea082e0ec6a5fd6caaa5604", "95de7088d5b0313a8ea082e0ec6a5fd6caaa5604"],
+    ["g_m5mos", { regs: [[0x2105, 0x05], [0x2106, 0x31], [0x212c, 0x01], [0x212d, 0x02], ...on] }, [512,224], "1c9dde8ea9782dcba674fc024bc6ce45d34a0af9", "1c9dde8ea9782dcba674fc024bc6ce45d34a0af9"],
+    ["g_mid", { regs: [[0x2105, 0x01], [0x212c, 0x03], [0x212d, 0x02], [0x4209, 100], [0x420a, 0], [0x4207, 0x20], [0x4208, 0], [0x4200, 0xb0], ...on],
+  main: [0x58, 0x80, 0xfe],
+  irq: [0x48, 0xa9, 0x05, 0x8d, 0x05, 0x21, 0xad, 0x11, 0x42, 0x68, 0x40],
+  nmi: [0x48, 0xa9, 0x01, 0x8d, 0x05, 0x21, 0xad, 0x10, 0x42, 0x68, 0x40] }, [512,224], "9046cb22cd2b2373ad361d61fb015e796b46c3e4", "9046cb22cd2b2373ad361d61fb015e796b46c3e4"],
+    ["g_os4", { regs: [[0x2105, 0x01], [0x2133, 0x04], [0x212c, 0x13], [0x4209, 235], [0x420a, 0], [0x4200, 0x20], ...on],
+  main: [0x58, 0xe6, 0x10, 0xd0, 0xfc, 0xe6, 0x11, 0x80, 0xf8],
+  irq: [0x48, 0xad, 0x11, 0x42, 0x9c, 0x21, 0x21, 0xa5, 0x10, 0x8d, 0x22, 0x21, 0x8d, 0x22, 0x21, 0x68, 0x40] }, [256,224], "b4079c8923ca7c8c71254b64e2e4fa1ec6d92d45", "a151aa996328ed9e46894ea21b6d3bf995be8089"],
+    ["g_m2s", { regs: [[0x2105, 0x02], [0x210d, 0x03], [0x210d, 0x00], [0x212c, 0x03], ...on] }, [256,224], "03a35f6a27ea2f539f92f029e37a32ea102849b1", "03a35f6a27ea2f539f92f029e37a32ea102849b1"],
+    // OAM priority rotation with an odd OAM address and the byte flip set in
+    // the NMI: SetupOBJ's FirstSprite + Y scan for the whole frame
+    ["g_evil", { regs: [[0x2105, 0x01], [0x2101, 0x60], [0x212c, 0x10], [0x4200, 0x80], ...on],
+  main: [0x80, 0xfe],
+  nmi: [0x48, 0xa9, 0x07, 0x8d, 0x02, 0x21, 0xa9, 0x80, 0x8d, 0x03, 0x21, 0xa9, 0x33, 0x8d, 0x04, 0x21, 0xad, 0x10, 0x42, 0x68, 0x40] }, [256,224], "eecb83100a22555df0d30fe3e3f6925adf864872", "eecb83100a22555df0d30fe3e3f6925adf864872"],
+  ];
+  for (const [name, opts, [w, h], want10, want11] of cases) {
+    const rom = gfxRom(opts);
+    const { bytes } = await assembleWat(emitWat(rom));
+    const { instance } = await WebAssembly.instantiate(bytes, {});
+    const ex = instance.exports;
+    ex.wc_init();
+    for (let f = 1; f <= 16; f++) {
+      ex.wc_render();
+      if (f < 15) continue;
+      const dv = new DataView(ex.memory.buffer);
+      const info = ex.wc_get_info();
+      const fw = dv.getUint32(info + 4, true), fh = dv.getUint32(info + 8, true), fb = dv.getUint32(info + 12, true);
+      assert.deepEqual([fw, fh], [w, h], name);
+      const rgb = new Uint8Array(fw * fh * 3);
+      for (let i = 0; i < fw * fh; i++) {
+        const px = dv.getUint32(fb + i * 4, true);
+        rgb[i * 3] = (px >> 16) & 255; rgb[i * 3 + 1] = (px >> 8) & 255; rgb[i * 3 + 2] = px & 255;
+      }
+      assert.equal(createHash("sha1").update(rgb).digest("hex"), f === 15 ? want10 : want11, `${name} reference frame ${f - 5}`);
+    }
+  }
+});
+
+test("PAL carts (region byte): 312 lines, the PAL APU clock ratio, as snes9x runs them", async () => {
+  // The H/V-timer program under a PAL header: the IRQ log is snes9x's after
+  // 60 reference frames; the DSP program's per-frame sample counts
+  // (34176/709379 of the master clock) are snes9x's for frames 1-20.
+  const main = [0x78, 0x18, 0xfb, 0xc2, 0x10, 0xe2, 0x20, 0xa2, 0x00, 0x00, 0x86, 0x10,
+    0xad, 0x10, 0x42, 0x10, 0xfb,
+    0xe6, 0x12, 0xa5, 0x12, 0x29, 0x07, 0x0a, 0xaa,
+    0xbd, 0x00, 0x82, 0x8d, 0x07, 0x42, 0xbd, 0x01, 0x82, 0x8d, 0x08, 0x42,
+    0xbd, 0x10, 0x82, 0x8d, 0x09, 0x42, 0xbd, 0x11, 0x82, 0x8d, 0x0a, 0x42,
+    0xa5, 0x12, 0x29, 0x03, 0xaa, 0xbd, 0x20, 0x82, 0x8d, 0x00, 0x42,
+    0x58, 0x80, 0xd7];
+  const rom = synthRom({ code: main });
+  rom.set([0x00, 0x00, 0x43, 0x01, 0x53, 0x01, 0x64, 0x00, 0xff, 0x00, 0x00, 0x00, 0x20, 0x00, 0x10, 0x01], 0x200);
+  rom.set([0xf0, 0x00, 0x10, 0x00, 0xe1, 0x00, 0x00, 0x00, 0x05, 0x01, 0x64, 0x00, 0xe0, 0x00, 0x30, 0x00], 0x210);
+  rom.set([0x10, 0x20, 0x30, 0x30], 0x220);
+  rom.set([0xad, 0x11, 0x42, 0xad, 0x37, 0x21, 0xa6, 0x10, 0xad, 0x3c, 0x21, 0x9d, 0x00, 0x10, 0xad, 0x3d, 0x21, 0x9d, 0x01, 0x10,
+    0xa5, 0x12, 0x9d, 0x02, 0x10, 0xe8, 0xe8, 0xe8, 0xe0, 0x00, 0x0c, 0xd0, 0x03, 0xa2, 0x00, 0x00, 0x86, 0x10, 0x40], 0x100);
+  rom[0x7fee] = 0x00; rom[0x7fef] = 0x81;
+  rom[0x7fd9] = 2;
+  assert.equal(describeRom(rom).pal, true);
+  const { mem } = await runCart(rom, 65);
+  const { createHash } = await import("node:crypto");
+  assert.equal(createHash("sha1").update(mem.subarray(WRAM + 0x1000, WRAM + 0x1c00)).digest("hex"), "592d435206dee790715182337cbc43faa378b2d4");
+  assert.deepEqual([...mem.subarray(WRAM + 0x10, WRAM + 0x13)], [18, 0, 93]);
+  const dsp = dspRom();
+  dsp[0x7fd9] = 2;
+  const { bytes } = await assembleWat(emitWat(dsp));
+  const { instance } = await WebAssembly.instantiate(bytes, {});
+  const ex = instance.exports;
+  ex.wc_init();
+  const counts = [];
+  let last = 0;
+  for (let f = 0; f < 25; f++) {
+    ex.wc_render();
+    const dv = new DataView(ex.memory.buffer);
+    const w = dv.getUint32(dv.getUint32(ex.wc_get_info() + 24, true), true);
+    if (f >= 5) counts.push((w - last + 4096) % 4096);
+    last = w;
+  }
+  assert.deepEqual(counts, [640, 641, 641, 640, 641, 641, 641, 640, 641, 641, 640, 641, 641, 640, 641, 641, 641, 640, 641, 641]);
+});

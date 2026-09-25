@@ -12,7 +12,7 @@
 // Plain JS ESM + JSDoc.
 
 import {
-  FB_W, FB_H, WRAM, PPUREG, INPUT, PROBE, ITRACE, PCRING, PCRING_N, MAPTAB, ROM, HDMAST, AUDIO, AUDIO_FRAMES, ICOST,
+  WRAM, PPUREG, INPUT, PROBE, ITRACE, PCRING, PCRING_N, MAPTAB, ROM, HDMAST, AUDIO, AUDIO_FRAMES, ICOST,
   REGWATCH, REGWATCH_N, REGWATCH_STRIDE,
 } from "./layout.js";
 
@@ -235,8 +235,12 @@ export function frameWat(lay) {
 
   (func (export "wc_get_info") (result i32)
     (i32.store (i32.add (i32.const ${lay.ABI}) (i32.const 0))  (i32.const 3))
-    (i32.store (i32.add (i32.const ${lay.ABI}) (i32.const 4))  (i32.const ${FB_W}))
-    (i32.store (i32.add (i32.const ${lay.ABI}) (i32.const 8))  (i32.const ${FB_H}))
+    ;; snes9x's first frame is 256 x 224; $deinit_update sets each frame's
+    ;; size (the framebuffer region holds the largest, 512 x 478), and a
+    ;; later call must not undo it.
+    (if (i32.eqz (i32.load (i32.const ${lay.ABI + 4}))) (then
+      (i32.store (i32.add (i32.const ${lay.ABI}) (i32.const 4))  (i32.const 256))
+      (i32.store (i32.add (i32.const ${lay.ABI}) (i32.const 8))  (i32.const 224))))
     (i32.store (i32.add (i32.const ${lay.ABI}) (i32.const 12)) (i32.const ${lay.FB}))
     ;; audioPtr / audioCap / audioWritePtr and audio_sample_rate: the S-DSP's
     ;; 32040 Hz stereo int16 ring (apu-wat.js $apu_out).
@@ -301,6 +305,8 @@ export function frameWat(lay) {
     ;; charges the vector read (two ROM bytes, 16): the first instruction
     ;; starts 198 master clocks into line 0 while the APU's reference is 0.
     (global.set $hpos (i32.const 198))
+    ;; Timings.V_Max_Master: 262 lines NTSC, 312 PAL.
+    (global.set $vmax (i32.const ${lay.pal ? 312 : 262}))
     ;; APU power-on: the SPC700 starts in its IPL ROM, which puts $AA/$BB in
     ;; ports 0/1 a few hundred SPC clocks later.
     (call $apu_power)
@@ -537,7 +543,7 @@ export function frameWat(lay) {
   (func $ev_process (param $p i32)
     (local $k i32) (local $ln i32)
     (local.set $k (global.get $evk))
-    (if (i32.and (i32.eq (local.get $k) (i32.const 5)) (i32.eq (global.get $scanline) (i32.const 224)))
+    (if (i32.and (i32.eq (local.get $k) (i32.const 5)) (i32.eq (global.get $scanline) (global.get $sh)))
       (then (i32.store (i32.const ${PROBE + 124}) (local.get $p))
             (i32.store (i32.const ${PROBE + 128}) (global.get $istart))
             (i32.store (i32.const ${PROBE + 132}) (global.get $curpc))))
@@ -552,11 +558,13 @@ export function frameWat(lay) {
     (if (i32.ne (global.get $ipos) (i32.const 0x0FFFFFFF))
       (then (global.set $ipos (i32.sub (global.get $ipos) (global.get $hmax)))))
     (local.set $ln (i32.add (global.get $scanline) (i32.const 1)))
-    (if (i32.eq (local.get $ln) (i32.const 262)) (then (local.set $ln (i32.const 0))))
+    (if (i32.ge_u (local.get $ln) (global.get $vmax)) (then (local.set $ln (i32.const 0))))
     (call $line_begin (local.get $ln))
     ;; VBlank begins: libretro's frame is over (SCAN_KEYS_FLAG).
-    (if (i32.eq (local.get $ln) (i32.const 225))
+    (if (i32.eq (local.get $ln) (i32.add (global.get $sh) (i32.const 1)))
       (then (global.set $fdone (i32.const 1))
+            ;; S9xEndScreenRefresh (the picture), then S9xSyncSpeed (the audio)
+            (call $deinit_update)
             (call $apu_flush)))
     (call $ev_sched (i32.const 0)))
 
@@ -608,13 +616,13 @@ export function frameWat(lay) {
     (if (i32.eq (local.get $k) (i32.const 1)) (then (call $hdma_init) (return)))
     (if (i32.eq (local.get $k) (i32.const 2))
       (then (if (i32.and (i32.ge_u (global.get $scanline) (i32.const 1))
-                         (i32.le_u (global.get $scanline) (i32.const ${FB_H})))
+                         (i32.le_u (global.get $scanline) (global.get $sh)))
               (then (call $render_row (i32.sub (global.get $scanline) (i32.const 1)))))
             (return)))
     (if (i32.eq (local.get $k) (i32.const 3))
       (then (global.set $cyc (i32.sub (global.get $cyc) (i32.const 40))) (return)))
     (if (i32.eq (local.get $k) (i32.const 4))
-      (then (if (i32.le_u (global.get $scanline) (i32.const 224)) (then (call $hdma_do))) (return)))
+      (then (if (i32.le_u (global.get $scanline) (global.get $sh)) (then (call $hdma_do))) (return)))
     (if (i32.eq (local.get $k) (i32.const 5))
       (then (call $apu_sync (local.get $p)) (call $d_sync))))
 
@@ -635,30 +643,37 @@ export function frameWat(lay) {
 
   (func $line_begin (param $ln i32)
     (global.set $scanline (local.get $ln))
-    ;; snes9x's H_Max event for the new line: line 240 of an odd field is one
-    ;; dot short (1360), and the 5A22 v2 DRAM refresh alternates between HC
-    ;; 534 and 538 every line except that one (538 after power-on).
-    (if (i32.and (i32.eq (local.get $ln) (i32.const 240)) (i32.ne (global.get $field) (i32.const 0)))
+    (if (i32.eqz (local.get $ln))
+      (then (global.set $nmiflag (i32.const 0))
+            (global.set $rto (i32.const 0))
+            ;; snes9x at the V wrap: V_Max for the next frame (263 on an
+            ;; interlaced frame whose field bit is set), then $213F bit 7 (the
+            ;; field) flips, interlaced or not; power-on starts at V=0
+            ;; without a wrap.
+            (if (global.get $nframes)
+              (then (global.set $vmax (if (result i32) (i32.and (global.get $interlace) (i32.ne (global.get $field) (i32.const 0)))
+                                        (then (i32.const ${lay.pal ? 313 : 263})) (else (i32.const ${lay.pal ? 312 : 262}))))
+                    (global.set $field (i32.xor (global.get $field) (i32.const 0x80)))))
+            (global.set $nframes (i32.add (global.get $nframes) (i32.const 1)))))
+    ;; snes9x's H_Max event for the new line: line 240 of an odd
+    ;; non-interlaced field is one dot short (1360), and the 5A22 v2 DRAM
+    ;; refresh alternates between HC 534 and 538 every line except that one
+    ;; (538 after power-on).
+    (if (i32.and (i32.and (i32.eq (local.get $ln) (i32.const 240)) (i32.eqz (global.get $interlace)))
+                 (i32.ne (global.get $field) (i32.const 0)))
       (then (global.set $hmax (i32.const 1360)))
       (else (global.set $hmax (i32.const 1364))
             (if (global.get $linesrun)
               (then (global.set $refpos (if (result i32) (i32.eq (global.get $refpos) (i32.const 534))
                                           (then (i32.const 538)) (else (i32.const 534))))))))
     (global.set $linesrun (i32.const 1))
-    (if (i32.eqz (local.get $ln))
-      (then (global.set $nmiflag (i32.const 0))
-            (global.set $rto (i32.const 0))
-            ;; snes9x flips $213F bit 7 (the field) every time V wraps to 0,
-            ;; interlaced or not; power-on starts at V=0 without a wrap.
-            (if (global.get $nframes) (then (global.set $field (i32.xor (global.get $field) (i32.const 0x80)))))
-            (global.set $nframes (i32.add (global.get $nframes) (i32.const 1)))))
     (if (i32.eq (local.get $ln) (i32.const 1))
-      (then (global.set $mosstart (i32.const 0))))
+      (then (call $start_screen_refresh)))
     ;; snes9x runs the automatic joypad read as line ScreenHeight + 3 begins.
-    (if (i32.and (i32.eq (local.get $ln) (i32.const 227))
+    (if (i32.and (i32.eq (local.get $ln) (i32.add (global.get $sh) (i32.const 3)))
                  (i32.and (call $io_reg (i32.const 0x4200)) (i32.const 1)))
       (then (call $auto_joypad)))
-    (if (i32.eq (local.get $ln) (i32.const 225))
+    (if (i32.eq (local.get $ln) (i32.add (global.get $sh) (i32.const 1)))
       (then
         (global.set $nmiflag (if (result i32) (global.get $nmiearly) (then (i32.const 0)) (else (i32.const 0x80))))
         (global.set $nmiearly (i32.const 0))

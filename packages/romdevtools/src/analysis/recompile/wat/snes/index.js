@@ -124,13 +124,15 @@ export function describe(rom, opts = {}) {
 
   let refusal = L.refusal;
   if (!refusal && raw.length < 0x8000) refusal = `ROM image is ${raw.length} bytes; a cart needs at least one 32KB bank`;
-  if (!refusal && L.pal) refusal = `cart is PAL (region byte $${L.region.toString(16)}); the SNES recompiler runs NTSC timing only`;
 
   const armOffsets = armOffsetsFor(img.length, opts);
   const layout = computeLayout(img.length, sramMask, Math.max(1, armOffsets ? armOffsets.length : opts.limit ? Math.min(opts.limit, img.length) : img.length));
   layout.armOffsets = armOffsets;
   layout.fixes = fixes;
   layout.map = L.map;
+  // PAL by region byte (snes9x Settings.PAL): 312 lines, the PAL APU clock
+  // ratio, $213F bit 4.
+  layout.pal = L.pal;
   const tn = opts.traceEntries;
   if (tn != null) {
     if (!Number.isInteger(tn) || tn < 1024 || tn > REGRING_MAX || (tn & (tn - 1))) {
@@ -163,6 +165,7 @@ export function describe(rom, opts = {}) {
     sramSize,
     sramMask,
     region: L.region,
+    pal: L.pal,
     resetVector: reset,
     romFixes: fixes.applied,
     layout: cartLayout(layout, sramSize),
@@ -227,7 +230,7 @@ function cartLayout(lay, sramSize) {
     },
     trap: { flag: "trapped", pc: "trappc" },
     pcRing: { offset: PCRING, entries: PCRING_N, stride: 4, cursorField: "npc", format: "u32 pc24, circular" },
-    framebuffer: { offset: lay.FB, width: FB_W, height: FB_H, format: "bgra8888", note: "u32 words 0xAARRGGBB" },
+    framebuffer: { offset: lay.FB, width: FB_W, height: FB_H, format: "bgra8888", note: "u32 words 0xAARRGGBB; the region is the largest frame (512 x 478), each frame's size is in wc_info (256 or 512 wide, 224 or 448 tall after snes9x's overscan crop)" },
     input: { offset: INPUT, length: 64 },
   };
 }

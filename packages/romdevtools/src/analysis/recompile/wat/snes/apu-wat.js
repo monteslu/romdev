@@ -592,7 +592,9 @@ export function apuWat(lay) {
   // Timings.APUSpeedup (a per-title fix): S9xAPUTimingSetSpeedup scales the
   // clock ratio's denominator by (256 - ticks) / 256 (integer division).
   const speed = lay.fixes?.apuSpeedup ?? 0;
-  const den = Math.floor((328125 * (256 - speed)) / 256);
+  // APU_NUMERATOR / APU_DENOMINATOR, NTSC or PAL
+  const num = lay.pal ? 34176 : 15664;
+  const den = Math.floor(((lay.pal ? 709379 : 328125) * (256 - speed)) / 256);
   return smpWat(lay) + dspWat(lay) + `
 
   ;; One stereo sample into the host's ring.
@@ -621,7 +623,7 @@ ${speed ? resamplerWat(lay, speed) : `
   ;; the start of this scanline, snes9x's CPU.Cycles).
   (func $apu_sync (param $pos i32)
     (local $t i64)
-    ${ls("t", `(i64.add (i64.mul (i64.const 15664) (i64.extend_i32_s (i32.sub ${lg("pos")} ${gg("apu_ref")}))) (i64.extend_i32_u ${gg("apu_rem")}))`)}
+    ${ls("t", `(i64.add (i64.mul (i64.const ${num}) (i64.extend_i32_s (i32.sub ${lg("pos")} ${gg("apu_ref")}))) (i64.extend_i32_u ${gg("apu_rem")}))`)}
     ${gs("s_clock", `(i32.sub ${gg("s_clock")} (i32.wrap_i64 (i64.div_s ${lg("t")} (i64.const ${den}))))`)}
     ${gs("apu_rem", `(i32.wrap_i64 (i64.rem_s (local.get $t) (i64.const ${den})))`)}
     (call $smp_enter)

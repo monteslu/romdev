@@ -13,8 +13,14 @@
 //
 // Plain JS ESM + JSDoc.
 
-export const FB_W = 256;
-export const FB_H = 224;
+// The framebuffer holds the largest frame snes9x's libretro core reports
+// (MAX_SNES_WIDTH x the 478-line interlaced overscan frame); each frame
+// sets its own size in wc_info (256 or 512 wide, 224/239/448/478 tall
+// before the overscan crop).
+export const FB_W = 512;
+export const FB_H = 478;
+/** snes9x's GFX.Screen / SubScreen: 512-pixel pitch (RealPPL), MAX_SNES_HEIGHT + 64 rows, RGB565. */
+export const SCREEN_ROWS = 478 + 64;
 
 // Emulated machine state (hw_snes.py).
 export const WRAM = 0x000000;   // 128KB work RAM ($7E0000-$7FFFFF)
@@ -55,6 +61,10 @@ export const AUDIO_FRAMES = 4096;
 // speedup: S9xInitSound(32) sizes it max(1100, 32040 * 32 * 2 / 1000).
 export const RESAMP = 0x0a8000;
 export const RESAMP_SIZE = 2050;
+// The row being rendered: main- and sub-screen depth buffers (snes9x
+// ZBuffer / SubZBuffer for one line), 512 entries for double-width lines.
+export const ZMAIN = 0x0aa000;
+export const ZSUB = 0x0aa200;
 
 // RAM interpreter tables (emit_snes.py).
 export const OPTAB = 0x030c00;  // opcode -> operation id
@@ -126,7 +136,10 @@ export function computeLayout(imgLen, sram, narms) {
   const ARAM = (ABI + 0x1000 + 0xffff) & ~0xffff;
   // cartridge SRAM: snes9x's 512KB buffer (SRAMMask decides what is used)
   const SRAM = ARAM + 0x10000;
-  const lay = { romlen: n1, sram, PCTAB, PACKED, FB, ABI, ARAM, SRAM, narms, pages: 0 };
+  // GFX.Screen (persistent across frames, as snes9x's is) and GFX.SubScreen
+  const SCREEN = SRAM + 0x80000;
+  const SUBSCR = SCREEN + 512 * SCREEN_ROWS * 2;
+  const lay = { romlen: n1, sram, PCTAB, PACKED, FB, ABI, ARAM, SRAM, SCREEN, SUBSCR, narms, pages: 0 };
   checkLayout(lay, imgLen);
   const packedTop = PACKED + narms * 8;
   for (const [name, addr] of [["FB", FB], ["ABI", ABI], ["ARAM", ARAM]]) {
@@ -134,7 +147,7 @@ export function computeLayout(imgLen, sram, narms) {
       throw new Error(`snes layout: PACKED ends 0x${hex(packedTop)}, past ${name} 0x${hex(addr)}`);
     }
   }
-  const top = Math.max(packedTop, ROM + imgLen, ABI + 0x1000, SRAM + 0x80000);
+  const top = Math.max(packedTop, ROM + imgLen, ABI + 0x1000, SUBSCR + 512 * SCREEN_ROWS * 2);
   lay.pages = Math.floor(top / 65536) + 4;
   return lay;
 }
@@ -162,6 +175,7 @@ export function checkLayout(lay, imgLen) {
     ["MAPTAB", MAPTAB, MAPTAB_SZ],
     ["AUDIO", AUDIO, AUDIO_FRAMES * 4],
     ["RESAMP", RESAMP, RESAMP_SIZE * 2],
+    ["ZROW", ZMAIN, 0x400],
     ["FB", lay.FB, FB_W * FB_H * 4],
     ["ABI", lay.ABI, 0x1000],
     ["ROM", ROM, Math.max(1, imgLen)],

@@ -131,6 +131,8 @@ export function globalsWat(lay) {
   ;; V_Max (262; 263 on an interlaced even field) and IPPU.Interlace
   (global $vmax (mut i32) (i32.const 262))
   (global $interlace (mut i32) (i32.const 0))
+  ;; PPU.ScreenHeight (224, or 239 with $2133 bit 2)
+  (global $sh (mut i32) (i32.const 224))
   (global $fdone (mut i32) (i32.const 0))
   (global $ingdma (mut i32) (i32.const 0))
   (global $hdmaran (mut i32) (i32.const 0))
@@ -514,7 +516,7 @@ export function memWat(lay) {
                               (i32.ne (i32.and (local.get $v) (i32.const 0x80))
                                       (i32.const 0)))
                      (i32.and (i32.ne (global.get $nmiflag) (i32.const 0))
-                              (i32.ge_u (global.get $scanline) (i32.const 225))))
+                              (i32.gt_u (global.get $scanline) (global.get $sh))))
           ;; snes9x sets Timings.IRQFlagChanging |= IRQ_TRIGGER_NMI: the NMI
           ;; becomes pending at the next boundary ($apply_ichg), so one more
           ;; instruction runs before it is taken.
@@ -597,7 +599,7 @@ export function memWat(lay) {
             ;; flag (snes9x sets it inside the access); remember that it was
             ;; read so the line-225 start does not set it again.
             (call $beam)
-            (if (i32.and (i32.eq (global.get $scanline) (i32.const 224)) (i32.eq (global.get $bv) (i32.const 225)))
+            (if (i32.and (i32.eq (global.get $scanline) (global.get $sh)) (i32.eq (global.get $bv) (i32.add (global.get $sh) (i32.const 1))))
               (then (global.set $nmiflag (i32.const 0x80)) (global.set $nmiearly (i32.const 1))))
             (global.set $t4 (i32.or (i32.or (i32.const 2) (global.get $nmiflag))
                                     (i32.and (global.get $ob) (i32.const 0x70))))
@@ -614,13 +616,13 @@ export function memWat(lay) {
       (then
         (local.set $v (i32.const 0))
         (call $beam)
-        (if (i32.and (i32.ge_u (global.get $bv) (i32.const 225))
-                     (i32.lt_u (global.get $bv) (i32.const 228)))
+        (if (i32.and (i32.gt_u (global.get $bv) (global.get $sh))
+                     (i32.lt_u (global.get $bv) (i32.add (global.get $sh) (i32.const 4))))
           (then (local.set $v (i32.const 1))))
         (if (i32.or (i32.ge_s (global.get $bh) (i32.const 1096))
                     (i32.lt_s (global.get $bh) (i32.const 4)))
           (then (local.set $v (i32.or (local.get $v) (i32.const 0x40)))))
-        (if (i32.ge_u (global.get $bv) (i32.const 225))
+        (if (i32.gt_u (global.get $bv) (global.get $sh))
           (then (local.set $v (i32.or (local.get $v) (i32.const 0x80)))))
         (return (i32.or (local.get $v) (i32.and (global.get $ob) (i32.const 0x3E))))))
     ;; snes9x S9xGetCPU: $4213-$421F and the DMA channel registers
@@ -650,7 +652,7 @@ export function memWat(lay) {
     (if (i32.ge_s (global.get $bh) (global.get $hmax))
       (then (global.set $bh (i32.sub (global.get $bh) (global.get $hmax)))
             (global.set $bv (i32.add (global.get $bv) (i32.const 1)))
-            (if (i32.eq (global.get $bv) (i32.const 262)) (then (global.set $bv (i32.const 0)))))))
+            (if (i32.ge_u (global.get $bv) (global.get $vmax)) (then (global.set $bv (i32.const 0)))))))
 
   ;; ---- Controllers (snes9x controls.cpp) ----------------------------------
   ;; Two joypads. $pad0/$pad1 hold snes9x's joypad[].buttons word (B Y Sel
