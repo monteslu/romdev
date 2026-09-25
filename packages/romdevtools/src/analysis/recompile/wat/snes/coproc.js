@@ -37,12 +37,14 @@ import { cx4 } from "./cx4.js";
 import { spc7110 } from "./spc7110.js";
 import { SNES9X_HLE_CHIPS } from "./chips-snes9x.js";
 import { msuWat } from "./msu1.js";
+import { bsxChip } from "./bsx.js";
 
 /** The chip modules (add one line per chip). */
 const CHIP_LIST = [
   superfx,
   sa1,
   ...SNES9X_HLE_CHIPS,   // DSP-1..4, ST010/011/018, OBC1, S-RTC
+  bsxChip,               // the Satellaview BIOS (and a BS cart run by it)
   sdd1,
   cx4,
   spc7110,

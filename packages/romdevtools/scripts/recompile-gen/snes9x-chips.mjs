@@ -101,6 +101,15 @@ const UNITS = {
     exports: ["romdev_msu_init", "romdev_msu_enabled", "romdev_msu_read", "romdev_msu_write", "romdev_msu_generate",
       "romdev_msu_avail", "romdev_msu_mix"],
   },
+  bsx: {
+    sources: ["bsx.cpp"], headers: ["bsx.h"],
+    glue: "glue_bsx.cpp", stack: 0x1000,
+    // getset.h brings bsx.h in through memmap.h in snes9x; the libc calls it makes
+    cflags: ["-include", "snes9x.h", "-include", "bsx.h", "-include", "glue_bsx_libc.h"],
+    exports: ["romdev_bsx_init", "romdev_bsx_active", "romdev_bsx_reset", "romdev_bsx_get", "romdev_bsx_set",
+      "romdev_bsx_ppu_get", "romdev_bsx_ppu_set"],
+    imports: { time: "time" },
+  },
   // (sdd1.js / spc7110.js / cx4.js) `cflags` are added to CFLAGS for the
   // unit, `libs` are linked after its objects
   sdd1: {

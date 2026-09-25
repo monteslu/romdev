@@ -15,6 +15,7 @@
 
 import { readFileSync } from "node:fs";
 import { chipFor } from "./coproc.js";
+import { loadMultiCart, addonAfterLoad } from "./addon-carts.js";
 
 const FIXES = JSON.parse(readFileSync(new URL("./snes9x-romfixes.json", import.meta.url), "utf8"));
 
@@ -145,6 +146,21 @@ function coprocessorOf(romType, romSpeed, rom, hiRom, headerByte2a) {
 }
 
 /**
+ * Load a cartridge image the way snes9x (libretro retro_load_game) does:
+ * a Sufami Turbo or BS cart with its BIOS (addon-carts.js), else
+ * LoadROMMem, and then the add-on BIOSes run by themselves.
+ * @param {Uint8Array} data
+ * @param {{romPath?: string, bios?: string}} [opts]  where to look for a BIOS
+ */
+export function loadRom(data, opts) {
+  const multi = loadMultiCart(data, opts);
+  if (multi && !multi.refusal) return multi;
+  const r = addonAfterLoad(loadRomPlain(data));
+  if (multi?.refusal) return { ...r, refusal: multi.refusal };
+  return r;
+}
+
+/**
  * Load a cartridge image the way snes9x does.
  * @param {Uint8Array} data  the file bytes (a copier header, if any, included)
  * @returns {{ img: Uint8Array, calculatedSize: number, hiRom: boolean, extended: "none"|"bigfirst"|"smallfirst",
@@ -152,7 +168,7 @@ function coprocessorOf(romType, romSpeed, rom, hiRom, headerByte2a) {
  *   romId: Uint8Array, romSize: number, sramSize: number, romSpeed: number, romType: number, region: number,
  *   pal: boolean, map: string, coprocessor: string|null, refusal: string|null }}
  */
-export function loadRom(data) {
+function loadRomPlain(data) {
   let refusal = null;
   if (data.length > MAX_ROM_SIZE) refusal = `ROM image is ${data.length} bytes; snes9x loads at most ${MAX_ROM_SIZE}`;
   // Satellaview (BS-X) and Sufami Turbo carts load with a BIOS in libretro.
@@ -350,4 +366,4 @@ function finish(rom, calc, hiRom, extended, headerStripped, interleaved, refusal
 }
 
 /** Board maps memmap.js implements. */
-export const MAPS_SUPPORTED = new Set(["LoROM", "HiROM", "ExtendedHiROM", "JumboLoROM", "NoMAD1LoROM", "ROM24MBSLoROM", "SRAM512KLoROM"]);
+export const MAPS_SUPPORTED = new Set(["LoROM", "HiROM", "ExtendedHiROM", "JumboLoROM", "NoMAD1LoROM", "ROM24MBSLoROM", "SRAM512KLoROM", "SufamiTurboPseudoLoROM", "SufamiTurboLoROM"]);

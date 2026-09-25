@@ -13,7 +13,7 @@ import { emitWat, describe as describeRom } from "../src/analysis/recompile/wat/
 import { assembleWat } from "../src/analysis/recompile/wat/assemble.js";
 import { AUDIO, AUDIO_FRAMES } from "../src/analysis/recompile/wat/snes/layout.js";
 import { RTC_CLOCK } from "../src/analysis/recompile/recompile-section.js";
-import { chipProgram, chipImage, CHIP_CASES, writeMsuTestPack } from "./snes-chips-synth.js";
+import { chipProgram, chipImage, CHIP_CASES, writeMsuTestPack, bsxTestBios, sufamiTestPair } from "./snes-chips-synth.js";
 
 /** snes9x's bytes at $7E0100 onward (one per read), after the case's frames. */
 const EXPECTED = {
@@ -111,4 +111,52 @@ test("MSU-1: a data file and PCM tracks beside the ROM, read, DMA'd and mixed as
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("BS-X: a BIOS run by itself gets snes9x's MMC, PSRAM, flash commands, remap and satellite clock (bsx.cpp)", async () => {
+  const { img, reads } = bsxTestBios();
+  const d = describeRom(img);
+  assert.equal(d.coprocessor, "BS-X");
+  assert.equal(d.board, "BSX");
+  assert.ok(d.layout && d.supported, d.refusal ?? "");
+  // the BIOS runs from BIOSROM (ROM + $300000): only it gets arms
+  const mem = await runCart(img, 3);
+  assert.equal(mem[0xff], 0xa5, "the program ran to its end");
+  assert.equal(hex(mem.subarray(0x100, 0x100 + reads)),
+    "000080800080808080800080000080123400000000000000000000001212780010800001909000000000100101000000140d16030e0be70700000f");
+});
+
+test("Sufami Turbo: the BIOS by itself (Map_SufamiTurboPseudoLoROMMap) and a cart in slot A (Map_SufamiTurboLoROMMap)", async () => {
+  const { bios, cart, reads } = sufamiTestPair();
+  const d = describeRom(bios);
+  assert.equal(d.board, "SufamiTurboPseudoLoROM");
+  assert.equal(d.sramSizeByte, 5, "InitROM: SRAMSize = 5");
+  let mem = await runCart(bios, 3);
+  assert.equal(mem[0xff], 0xa5);
+  assert.equal(hex(mem.subarray(0x100, 0x100 + reads)), "0000000000000022222233443344");
+  const dir = mkdtempSync(path.join(os.tmpdir(), "romdev-sufami-"));
+  try {
+    const romPath = path.join(dir, "cart.st");
+    writeFileSync(romPath, cart);
+    // snes9x (libretro LoadBIOS) needs STBIOS.bin beside the cart
+    assert.match(describeRom(cart, { romPath }).refusal, /STBIOS\.bin/);
+    writeFileSync(path.join(dir, "STBIOS.bin"), bios);
+    const dc = describeRom(cart, { romPath });
+    assert.equal(dc.board, "SufamiTurboLoROM");
+    assert.deepEqual(dc.companionFiles, ["/STBIOS.bin"]);
+    mem = await runCart(cart, 3, { romPath });
+    assert.equal(mem[0xff], 0xa5);
+    assert.equal(hex(mem.subarray(0x100, 0x100 + reads)), "42530841424142222222707022f0");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a BS cart without BS-X.bin beside it is refused with the file named", () => {
+  const c = new Uint8Array(0x100000);
+  c.set(Array.from("SYNTH BS CART   ", (x) => x.charCodeAt(0)), 0x7fc0);
+  c[0x7fd5] = 0x80; c[0x7fd6] = 0x10; c[0x7fd7] = 0x01; c[0x7fd8] = 0x20; c[0x7fda] = 0x33;
+  const d = describeRom(c);
+  assert.equal(d.supported, false);
+  assert.match(d.refusal, /BS-X\.bin/);
 });

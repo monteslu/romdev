@@ -293,3 +293,66 @@ export function writeMsuTestPack(write, stem) {
   write(stem + "-2.pcm", pcm(1.3, 523, 659, 0));
   return stem + ".sfc";
 }
+
+// ---------------------------------------------------------------- add-on BIOSes
+const txt = (s) => Array.from(s, (c) => c.charCodeAt(0));
+
+/**
+ * A stand-in BS-X BIOS (1MB, the name bsx.cpp's is_BSX_BIOS checks at
+ * $7FC0) whose program walks the Satellaview hardware: the MMC registers,
+ * PSRAM, the flash command set, an MMC remap through $0E:5000 and the
+ * $2188-$219F registers with the satellite clock. Reads land at $7E0100+.
+ */
+export function bsxTestBios() {
+  const ops = [
+    ...Array.from({ length: 15 }, (_, i) => ["r", (i << 16) | 0x5000]),       // MMC $00-$0E
+    ["w", 0x700000, 0x12], ["w", 0x700001, 0x34], ["r", 0x700000], ["r", 0x700001], ["r", 0xf00001],   // PSRAM (HiROM mode, 70-77)
+    ["w", 0x400000, 0x56], ["r", 0x400000],                                     // flash is read-only: the write is a command
+    ["w", 0xc00000, 0x70], ["r", 0xc00000], ["r", 0xc00000],                    // read CSR
+    ["w", 0xc00000, 0x71], ["r", 0xc00002], ["r", 0xc00004],                    // extended status
+    ["w", 0xc00000, 0x75], ["r", 0xc0ff00], ["r", 0xc0ff06],                    // vendor info
+    ["w", 0xc00000, 0xff], ["r", 0xc0ff00],
+    ["w", 0xc00000, 0x10], ["w", 0xc01234, 0x0f], ["r", 0xc01234],              // byte program (flash & byte)
+    ["w", 0x020000 | 0x5000, 0x00], ["w", 0x0e5000, 0x80],                      // MMC $02 = 0 (LoROM mode), apply
+    ["r", 0x025000], ["r", 0x700000], ["r", 0x708000], ["r", 0x008000],
+    ["w", 0x0c5000, 0x80], ["w", 0x0e5000, 0x80], ["r", 0xc00000],              // flash IO on
+    ["r", 0x002196], ["r", 0x002197], ["r", 0x00219a],
+    ["w", 0x002188, 0x00], ["w", 0x002189, 0x00], ["w", 0x00218b, 0x01], ["w", 0x00218c, 0x01],
+    ["r", 0x00218a], ["r", 0x00218b], ["r", 0x00218d],
+    ...Array.from({ length: 20 }, () => ["r", 0x00218c]),                      // the satellite clock
+    ["w", 0x002194, 0x1f], ["r", 0x002194],
+  ];
+  const { code, reads } = chipProgram(ops);
+  const img = new Uint8Array(0x100000).fill(0xea);
+  img.set(code, 0);
+  img[0x7f00] = 0x40;                          // NMI: rti
+  img.set(txt("Satellaview BS-X     "), 0x7fc0);
+  img[0x7fd5] = 0x20; img[0x7fd6] = 0x00; img[0x7fd7] = 0x0a; img[0x7fd8] = 0x05; img[0x7fd9] = 0x00; img[0x7fda] = 0x33;
+  img[0x7fea] = 0x00; img[0x7feb] = 0xff; img[0x7ffc] = 0x00; img[0x7ffd] = 0x80;
+  return { img, reads };
+}
+
+/**
+ * A stand-in Sufami Turbo BIOS (256KB: "BANDAI SFC-ADX" / "SFC-ADX BACKUP"
+ * at 0, "ADD-ON BASE CASSETE" at $7FC0) that reads both slots and writes
+ * SRAM through the windows snes9x maps, and a 512KB stand-in cart.
+ */
+export function sufamiTestPair() {
+  const ops = [
+    ["r", 0x208000], ["r", 0x208010], ["r", 0x288000], ["r", 0xa08001], ["r", 0x408000], ["r", 0x408004], ["r", 0xc08000],
+    ["w", 0x608000, 0x11], ["w", 0x618000, 0x22], ["w", 0x708000, 0x33], ["w", 0x70c000, 0x44],
+    ["r", 0x608000], ["r", 0x618000], ["r", 0xe08000], ["r", 0x708000], ["r", 0x70c000], ["r", 0x60c000], ["r", 0xf0c000],
+  ];
+  const { code, reads } = chipProgram(ops);
+  const bios = new Uint8Array(0x40000).fill(0xea);
+  bios.set(txt("BANDAI SFC-ADX"), 0); bios.set(txt("SFC-ADX BACKUP"), 0x10);
+  bios.set(code, 0x100);
+  bios[0x7f00] = 0x40;
+  bios.set(txt("ADD-ON BASE CASSETE  "), 0x7fc0);
+  bios[0x7fd5] = 0x30; bios[0x7fd6] = 0x02; bios[0x7fd7] = 0x08; bios[0x7fd8] = 0x00; bios[0x7fd9] = 0x00; bios[0x7fda] = 0x33;
+  bios[0x7fea] = 0x00; bios[0x7feb] = 0xff; bios[0x7ffc] = 0x00; bios[0x7ffd] = 0x81;
+  const cart = new Uint8Array(0x80000);
+  for (let i = 0; i < cart.length; i++) cart[i] = (i * 13 + (i >> 15)) & 0xff;
+  cart.set(txt("BANDAI SFC-ADX"), 0); cart[14] = 0; cart[15] = 0; cart.set(txt("SYNTH ST CART "), 0x10);
+  return { bios, cart, reads };
+}

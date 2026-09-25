@@ -12,11 +12,12 @@
 //     "platform": "sms",            source platform of the ROM the cart was built from
 //     "reference": "sms",           loadMedia platform id of the reference core (default = platform)
 //     "romSha1": "<hex>",           sha1 of the source ROM; checked against the reference ROM
-//     "companionFiles": [".msu", "-1.pcm"]
+//     "companionFiles": [".msu", "-1.pcm", "/STBIOS.bin"]
 //                                   files the reference core opens beside its ROM (an
-//                                   SNES MSU-1 pack): the verifier copies <rom stem><suffix>
-//                                   from the reference ROM's directory into the core's file
-//                                   system next to the ROM it loads
+//                                   SNES MSU-1 pack, a Sufami Turbo / BS-X BIOS): the
+//                                   verifier copies <rom stem><suffix>, or the named file
+//                                   for a "/<name>" entry, from the reference ROM's
+//                                   directory into the core's file system next to its ROM
 //     "clock": { "baseMs": 1700000000000, "stepMs": 16.667 }
 //                                   the cart reads the wasmcart host's frame clock (a
 //                                   game-visible real-time clock); the verifier pins the
@@ -303,8 +304,8 @@ export function validateRecompileLayout(layout) {
   }
   if (out.companionFiles != null) {
     const c = out.companionFiles;
-    if (!Array.isArray(c) || !c.every((f) => typeof f === "string" && f && !/[\\/]/.test(f))) {
-      throw new Error("companionFiles must be file-name suffixes (e.g. '.msu', '-1.pcm'), with no path separators");
+    if (!Array.isArray(c) || !c.every((f) => typeof f === "string" && /^\/?[^\\/]+$/.test(f))) {
+      throw new Error("companionFiles must be file-name suffixes (e.g. '.msu', '-1.pcm') or '/<file name>', with no other path separators");
     }
   }
   if (out.screen?.origin != null) {

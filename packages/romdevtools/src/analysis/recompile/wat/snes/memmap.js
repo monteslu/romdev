@@ -15,6 +15,7 @@
 // Plain JS ESM + JSDoc.
 
 import { WRAM, ROM } from "./layout.js";
+import { sufamiMap } from "./addon-carts.js";
 
 export const MAP_TYPE = Object.freeze({
   NONE: 0,      // open bus; writes ignored
@@ -54,12 +55,13 @@ export function mapMirror(size, pos) {
  * @param {number} o.romSizeByte  header ROM size byte (snes9x ROMSize)
  * @param {number} o.sramSizeByte snes9x SRAMSize
  * @param {number} o.sramBase     linear address of the SRAM buffer (for boards that map it directly)
+ * @param {{offsetA: number, sizeA: number, offsetB: number, sizeB: number}} [o.multi]  a Sufami Turbo cart's slots (addon-carts.js)
  * @param {(api: object) => void} [o.chipMap]  a coprocessor's part of the map (coproc.js): it builds
  *   a board of its own (a map name this switch does not know) or adds its window to a known one;
  *   called after the board, before map_WRAM
  * @returns {Uint8Array} 4096 * 8 bytes
  */
-export function buildMemMap({ map, romSize, romSizeByte, sramSizeByte, sramBase, chipMap }) {
+export function buildMemMap({ map, romSize, romSizeByte, sramSizeByte, sramBase, chipMap, multi }) {
   const tab = new Uint8Array(4096 * 8);
   const dv = new DataView(tab.buffer);
   const set = (block, type, base = 0) => { dv.setUint32(block * 8, type, true); dv.setUint32(block * 8 + 4, base >>> 0, true); };
@@ -130,6 +132,11 @@ export function buildMemMap({ map, romSize, romSizeByte, sramSizeByte, sramBase,
       lorom(0x80, 0xbf, 0x8000, 0xffff, size); lorom(0xc0, 0xff, 0x0000, 0xffff, size);
       // map_space: SRAM as plain RAM, 32KB steps per bank
       for (let b = 0; b < 4; b++) each(0x70 + b, 0x70 + b, 0x0000, 0xffff, (c, i, p) => set(p, MAP_TYPE.RAM, sramBase + b * 0x8000 + i));
+      break;
+    case "SufamiTurboLoROM":
+    case "SufamiTurboPseudoLoROM":
+      // Map_SufamiTurboLoROMMap / Map_SufamiTurboPseudoLoROMMap (addon-carts.js)
+      sufamiMap({ lorom, each, set, MAP_TYPE }, map, multi, sramBase);
       break;
     default:
       if (!chipMap) throw new Error(`snes memmap: board map ${map} is not implemented`);

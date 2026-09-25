@@ -109,7 +109,7 @@ function armOffsetsFor(len, opts) {
  */
 export function describe(rom, opts = {}) {
   const raw = toBytes(rom);
-  const L = loadRom(raw);
+  const L = loadRom(raw, opts);
   const img = L.img;
   const fixes = romFixes(L);
   // SRAMSize (header byte, or a per-title override) -> snes9x SRAMMask;
@@ -127,7 +127,8 @@ export function describe(rom, opts = {}) {
   let refusal = L.refusal;
   if (!refusal && raw.length < 0x8000) refusal = `ROM image is ${raw.length} bytes; a cart needs at least one 32KB bank`;
 
-  const armOffsets = armOffsetsFor(img.length, opts);
+  // an add-on BIOS image (addon-carts.js) names the ranges that hold code
+  const armOffsets = armOffsetsFor(img.length, opts.armRanges || !L.armRanges ? opts : { armRanges: L.armRanges });
   const layout = computeLayout(img.length, sramMask, Math.max(1, armOffsets ? armOffsets.length : opts.limit ? Math.min(opts.limit, img.length) : img.length));
   layout.armOffsets = armOffsets;
   layout.fixes = fixes;
@@ -195,6 +196,11 @@ export function describe(rom, opts = {}) {
       traceEntries: "power of two 1024-262144: also record the 65816 registers per ROM instruction for findDiverge level:'instruction' (off by default)",
     },
     msu: msu ? { dataBytes: msu.data.length, tracks: msu.tracks.map((t) => t.num) } : null,
+    // a multi-cart's slots and snes9x's CalculatedSize (addon-carts.js)
+    multi: L.multi ?? null,
+    calculatedSize: L.calculatedSize,
+    // files the reference core opens beside its ROM: a BIOS, an MSU-1 pack
+    companionFiles: [...(L.companionFiles ?? []), ...(msu ? msu.companions : [])],
   };
   // the pack's bytes, for emitWat (kept out of the JSON the tool returns)
   Object.defineProperty(res, "msu1", { value: msu, enumerable: false });
@@ -288,7 +294,7 @@ export function recompileSection(rom, sha1, opts = {}) {
       pcRing: L.pcRing,
       ...(chipFor(d.coprocessor)?.section?.(d) ?? {}),
       // the MSU-1 pack's files the reference core must find beside its ROM
-      ...(d.msu1 ? { companionFiles: d.msu1.companions } : {}),
+      ...(d.companionFiles.length ? { companionFiles: d.companionFiles } : {}),
       ...(opts.breakArm != null ? { debugBreakArm: parseBreakArm(opts.breakArm), warning: "built with options.breakArm: one instruction also flips bit 0 of A (a must-fail control), NOT a faithful cart" } : {}),
       // the ROM pc ring in recompile-section.js's `trace` schema: it records
       // ROM pcs only (bank < $7E, offset >= $8000) minus the skip ranges, so
@@ -401,7 +407,7 @@ export async function* emitWat(rom, opts = {}) {
   const d = describe(rom, opts);
   if (!d.supported) throw new Error(`snes recompile refused: ${d.refusal}`);
   // the image as snes9x holds it (copier header gone, halves in place, padded)
-  const img = loadRom(toBytes(rom)).img;
+  const img = loadRom(toBytes(rom), opts).img;
   const lay = d.memory;
   const narms = lay.narms;
   const stats = opts.stats ?? {};
@@ -415,7 +421,7 @@ export async function* emitWat(rom, opts = {}) {
   // The CPU bus map (snes9x Memory.Map), 4096 blocks x {type, base}.
   const chip = chipFor(d.coprocessor);
   const chipMap = chip?.buildMap ? (api) => chip.buildMap(api, lay, d) : undefined;
-  yield "\n" + `  (data (i32.const ${MAPTAB}) "` + [...escChunks(buildMemMap({ map: d.board, romSize: img.length, romSizeByte: d.romSizeByte, sramSizeByte: d.sramSizeByte, sramBase: lay.SRAM, chipMap }))].join("") + '")';
+  yield "\n" + `  (data (i32.const ${MAPTAB}) "` + [...escChunks(buildMemMap({ map: d.board, romSize: img.length, romSizeByte: d.romSizeByte, sramSizeByte: d.sramSizeByte, sramBase: lay.SRAM, chipMap, multi: d.multi }))].join("") + '")';
   // the coprocessor, or the no-chip bodies of its hooks (coproc.js)
   yield "\n" + chipWat(d, lay);
   // an MSU-1 pack's data file and tracks (msu1.js)
