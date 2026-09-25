@@ -44,6 +44,8 @@ export function normOps(mnem, ops, n) {
   });
 }
 
+const UNDEF_OPS = new Set([0xD3, 0xDB, 0xDD, 0xE3, 0xE4, 0xEB, 0xEC, 0xED, 0xF4, 0xFC, 0xFD]);
+
 /**
  * Fold one IR record into the block index. Primary wins; a secondary record
  * is an alternative reading of the same bytes and never displaces the tiling.
@@ -65,6 +67,13 @@ export function addRecord(blocks, r) {
     return true;
   }
   const m = r.mnemonic.toLowerCase();
+  // The SM83's unused opcodes: gambatte's CPU switch has no body for them
+  // (cpu.cpp: "not specified. should freeze." then break), so each is the
+  // 4-cycle opcode fetch and nothing else, one byte long - a nop.
+  if (m === "defb" && r.len === 1 && UNDEF_OPS.has(tokValue((r.ops || "").trim()) & 0xFF)) {
+    blocks.set(off, { m: "nop", o: "", n: 1 });
+    return false;
+  }
   // STOP is TWO bytes on the LR35902 (`10 00`): gambatte skips the byte after
   // the opcode (cpu.cpp case 0x10: pc + 1 after the fetch). objdump prints
   // it as a one-byte `stop`, which woke the cart onto the padding byte: one

@@ -46,6 +46,8 @@ const GPSPX = 0x11600, GPMAP = 0x11610, GPMAP2 = 0x11620;
 // its SpriteMapper: the OamReader's position buffer (80) and sizes (40), the
 // per-line counts (144) and maps (144 x 10)
 const GPBUF = 0x11700, GPSZ = 0x11750, GPNUM = 0x11780, GPSMAP = 0x11810;
+// its renderer's sprite-list fields and CGB OAM-id table (0x11E00-0x11E68)
+const GPSCR = 0x11E00;
 
 export const PROBE_FIELDS = {
   frames: 0, steps: 4, trapped: 8, trappc: 12, pc: 16,
@@ -1245,7 +1247,11 @@ function frameWat(cgb) {
       ;; entry. The line-end code below only marks the blit; it happens here,
       ;; after line 144's start, and the next frame resumes this line.
       (if (global.get $blitnow)
-        (then (global.set $blitnow (i32.const 0)) (global.set $resume (i32.const 1)) (br $fd)))))
+        (then
+          ;; LCD::updateScreen: the PPU runs up to the blit first (the
+          ;; shadow draws line 143's pixels if nothing has asked for them yet)
+          (call $gp_update (global.get $abscc))
+          (global.set $blitnow (i32.const 0)) (global.set $resume (i32.const 1)) (br $fd)))))
       ;; ---- mode 2 (OAM scan, 80 dots) ----
       (local.set $i (i32.sub (global.get $linelen) (i32.shl (i32.const 80) (global.get $speed))))
       (block $d0 (loop $l0
@@ -1596,7 +1602,8 @@ export function* emitGbWat(img, blocks, o) {
     rb: P.ramBanks(img), rtc: [0x0F, 0x10].includes(img[0x147]), rumble: [0x1C, 0x1D, 0x1E].includes(img[0x147]), cramhi: CRAMHI, time: L.TIME }));
   yield part(A.apuWat({ cgb, muteChannels: o.muteChannels }));
   yield part(commonWat());
-  yield part(ppuShadowWat({ cgb, IO: IOREG, OAM: H.OAM, GPSPX, GPMAP, GPMAP2, GPBUF, GPSZ, GPNUM, GPSMAP }));
+  yield part(ppuShadowWat({ cgb, IO: IOREG, OAM: H.OAM, GPSPX, GPMAP, GPMAP2, GPBUF, GPSZ, GPNUM, GPSMAP,
+    FB, VRAM0: P.VRAM0, VBANK: P.VBANK_DELTA, BGPAL: P.BGPAL, OBJPAL: P.OBJPAL, SCR: GPSCR }));
   yield part(`  (data (i32.const ${IOREG + 0x100}) "${watBytes(shadeBytes)}")`);
   yield part(H.paletteWat());
   yield part(H.renderWat());
@@ -1823,6 +1830,8 @@ export function* emitGbWat(img, blocks, o) {
     (global.set $gpwy (i32.load8_u (i32.const ${IOREG + 0x4A})))
     (global.set $gpwy2 (i32.load8_u (i32.const ${IOREG + 0x4A})))
     (global.set $gpwx (i32.load8_u (i32.const ${IOREG + 0x4B})))
+    (global.set $gpscy (i32.load8_u (i32.const ${IOREG + 0x42})))
+    (global.set $gpwyp (i32.const 0xFF))
     ;; its SpriteMapper (OamReader::reset, then loadState: change at the
     ;; power-on cycle, map, the SPRITE_MAP event scheduled)
     (local.set $i (i32.const 0))

@@ -10,7 +10,11 @@
 // (only what moves xpos and the cycle count is kept, including
 // doFullTilesUnrolled's per-tile costs).
 //
-// Everything here is timing; the picture is the cart's renderer's job.
+// It is also the renderer: the pixels are plotted exactly where gambatte's
+// state functions plot them (plotPixel, doFullTilesUnrolledDmg/Cgb, the
+// tile and sprite fetches), so a register, VRAM or palette write lands on
+// the dot gambatte draws it on. Every write that reaches the picture runs
+// the shadow up to its cycle first (LCD::update), as gambatte does.
 //
 // State ids (the C function each one is):
 //   0 M2_Ly0::f0   1 M2_LyNon0::f0   2 M2_LyNon0::f1   3 M3Start::f0   4 M3Start::f1
@@ -27,7 +31,16 @@
  * @param {{cgb: boolean, IO: number, OAM: number, GPSPX: number, GPMAP: number, GPMAP2: number,
  *   GPBUF: number, GPSZ: number, GPNUM: number, GPSMAP: number}} o
  */
-export function ppuShadowWat({ cgb, IO, OAM, GPSPX, GPMAP, GPMAP2, GPBUF, GPSZ, GPNUM, GPSMAP }) {
+export function ppuShadowWat({ cgb, IO, OAM, GPSPX, GPMAP, GPMAP2, GPBUF, GPSZ, GPNUM, GPSMAP, FB, VRAM0, VBANK, BGPAL, OBJPAL, SCR }) {
+  // the sprite list's other fields (spriteList[i].line/oampos/attrib,
+  // spwordList[i]) and CGB's per-tile OAM-id table
+  const SL = SCR, SO = SCR + 0x10, SA = SCR + 0x20, SW = SCR + 0x40, IDT = SCR + 0x60;
+  const sl = (i) => `(i32.load8_u (i32.add (i32.const ${SL}) ${i}))`;
+  const so = (i) => `(i32.load8_u (i32.add (i32.const ${SO}) ${i}))`;
+  const sa = (i) => `(i32.load8_u (i32.add (i32.const ${SA}) ${i}))`;
+  const sw = (i) => `(i32.load16_u (i32.add (i32.const ${SW}) (i32.shl ${i} (i32.const 1))))`;
+  const swSet = (i, v) => `(i32.store16 (i32.add (i32.const ${SW}) (i32.shl ${i} (i32.const 1))) ${v})`;
+  const objEn = "(i32.ne (i32.and (global.get $gplcdc) (i32.const 0x02)) (i32.const 0))";
   const C = cgb ? 1 : 0;
   const winEn = "(i32.ne (i32.and (global.get $gplcdc) (i32.const 0x20)) (i32.const 0))";
   const objEnOrCgb = cgb ? "(i32.const 1)" : "(i32.ne (i32.and (global.get $gplcdc) (i32.const 0x02)) (i32.const 0))";
@@ -53,6 +66,7 @@ export function ppuShadowWat({ cgb, IO, OAM, GPSPX, GPMAP, GPMAP2, GPBUF, GPSZ, 
   const arms = new Map();
   // M2_Ly0::f0
   arms.set(0, `(global.set $gpwem (i32.and ${winEn} (i32.eqz (global.get $gpwy))))
+        (global.set $gpwyp (i32.const 0xFF))
         ${nextCall(83, 3)}`);
   // M2_LyNon0::f0 / f1
   arms.set(1, `(global.set $gpwem (i32.or (global.get $gpwem) (i32.and ${winEn} (i32.eq (global.get $gply) (global.get $gpwy)))))
@@ -61,14 +75,23 @@ export function ppuShadowWat({ cgb, IO, OAM, GPSPX, GPMAP, GPMAP2, GPBUF, GPSZ, 
         ${nextCall(456 - (454 - C) + 83, 3)}`);
   // M3Start::f0
   arms.set(3, `(global.set $gpxpos (i32.const 0))
-        (global.set $gpwds (if (result i32) (i32.and (i32.ne (i32.and (global.get $gpwds) (i32.const 1)) (i32.const 0)) ${winEn})
-          (then (i32.const 2)) (else (i32.const 0))))
+        (if (i32.and (i32.ne (i32.and (global.get $gpwds) (i32.const 1)) (i32.const 0)) ${winEn})
+          (then (global.set $gpwds (i32.const 2))
+                (global.set $gpwscx (i32.add (i32.const 8) (i32.and (global.get $gpscx) (i32.const 7))))
+                (global.set $gpwyp (i32.and (i32.add (global.get $gpwyp) (i32.const 1)) (i32.const 0xFF))))
+          (else (global.set $gpwds (i32.const 0))))
         ${goto_(4)}`);
   // M3Start::f1
   arms.set(4, `(global.set $gpst (i32.const 4))
         (block $m3s (loop $m3l
           (br_if $m3s (i32.ge_u (global.get $gpxpos) (i32.const 80)))
           (br_if $m3s (i32.eq (i32.and (global.get $gpxpos) (i32.const 7)) (i32.and (global.get $gpscx) (i32.const 7))))
+          (if (i32.eq (i32.and (global.get $gpxpos) (i32.const 7)) (i32.const 0))
+            (then (call $gp_fetchmap (i32.shr_u (global.get $gpwscx) (i32.const 3)) (i32.shr_u (global.get $gpscx) (i32.const 3)))))
+          (if (i32.eq (i32.and (global.get $gpxpos) (i32.const 7)) (i32.const 2))
+            (then (global.set $gpreg0 (call $gp_tdb (i32.const 0)))))
+          (if (i32.eq (i32.and (global.get $gpxpos) (i32.const 7)) (i32.const 4))
+            (then (call $gp_ntw)))
           (global.set $gpxpos (i32.add (global.get $gpxpos) (i32.const 1)))
           (global.set $gpcyc (i32.sub (global.get $gpcyc) (i32.const 1)))
           (if (i32.lt_s (global.get $gpcyc) (i32.const 0)) (then (return)))
@@ -87,13 +110,18 @@ export function ppuShadowWat({ cgb, IO, OAM, GPSPX, GPMAP, GPMAP2, GPBUF, GPSZ, 
         (call $gp_dofull)
         (if (i32.eq (global.get $gpxpos) (i32.const 168))
           (then (global.set $gpcyc (i32.add (global.get $gpcyc) (i32.const 1))) (call $gp_x168) (br_if $run (i32.ge_s (global.get $gpcyc) (i32.const 0))) (return)))
+        (global.set $gptw (global.get $gpntw))
+        (global.set $gpattrib (global.get $gpnattrib))
         (global.set $gpendx (if (result i32) (i32.lt_u (global.get $gpxpos) (i32.const 160))
           (then (i32.add (global.get $gpxpos) (i32.const 8))) (else (i32.const 168))))
+        (call $gp_fetchmap (i32.shr_u (i32.and (i32.add (global.get $gpxpos) (global.get $gpwscx)) (i32.const 0x1FF)) (i32.const 3))
+          (i32.shr_u (i32.add (global.get $gpscx) (i32.add (global.get $gpxpos) (i32.const ${1 - C}))) (i32.const 3)))
         ${tileInc(11)}`);
   arms.set(11, `${winChk()} ${tileInc(12)}`);
-  arms.set(12, `${winChk()} ${tileInc(13)}`);
+  arms.set(12, `${winChk()} (global.set $gpreg0 (call $gp_tdb (i32.const 0))) ${tileInc(13)}`);
   arms.set(13, `${winChk()} ${tileInc(14)}`);
   arms.set(14, `${winChk()}
+        (call $gp_ntw)
         (call $gp_plotns)
         (if (i32.eq (global.get $gpxpos) (i32.const 168)) (then (call $gp_x168) (br_if $run (i32.ge_s (global.get $gpcyc) (i32.const 0))) (return)))
         ${nextCall(1, 15)}`);
@@ -116,28 +144,41 @@ export function ppuShadowWat({ cgb, IO, OAM, GPSPX, GPMAP, GPMAP2, GPBUF, GPSZ, 
           (br_if $t5 (i32.ge_s (global.get $gpcyc) (i32.const 0))))
         (return)`);
   // M3Loop::LoadSprites
-  arms.set(20, nextCall(1, 21));
-  arms.set(21, `${winChk()} ${lsInc(22)}`);
-  arms.set(22, `${winChk()} ${lsInc(23)}`);
+  arms.set(20, `(global.set $gpreg1 (call $gp_oambyte (i32.add ${so("(global.get $gpcsp)")} (i32.const 2))))
+        ${nextCall(1, 21)}`);
+  arms.set(21, `${winChk()}
+        (i32.store8 (i32.add (i32.const ${SA}) (global.get $gpcsp)) (call $gp_oambyte (i32.add ${so("(global.get $gpcsp)")} (i32.const 3))))
+        ${lsInc(22)}`);
+  arms.set(22, `${winChk()} (global.set $gpreg0 (call $gp_vr (call $gp_spaddr))) ${lsInc(23)}`);
   arms.set(23, `${winChk()} ${lsInc(24)}`);
-  arms.set(24, `${winChk()} ${lsInc(25)}`);
+  arms.set(24, `${winChk()} (global.set $gpreg1 (call $gp_vr (i32.add (call $gp_spaddr) (i32.const 1)))) ${lsInc(25)}`);
   arms.set(25, `${winChk()}
         (call $gp_plotns)
         (local.set $e (global.get $gpcsp))
         (if (i32.eq (local.get $e) (global.get $gpnsp))
           (then (global.set $gpnsp (i32.add (global.get $gpnsp) (i32.const 1))))
-          (else (local.set $e (i32.sub (global.get $gpnsp) (i32.const 1)))))
+          (else
+            (local.set $e (i32.sub (global.get $gpnsp) (i32.const 1)))
+            (i32.store8 (i32.add (i32.const ${SL}) (local.get $e)) ${sl("(global.get $gpcsp)")})
+            (i32.store8 (i32.add (i32.const ${SO}) (local.get $e)) ${so("(global.get $gpcsp)")})
+            (i32.store8 (i32.add (i32.const ${SA}) (local.get $e)) ${sa("(global.get $gpcsp)")})))
+        ${swSet("(local.get $e)", `(i32.add (call $gp_exp (global.get $gpreg0) (i32.and ${sa("(local.get $e)")} (i32.const 0x20)))
+          (i32.shl (call $gp_exp (global.get $gpreg1) (i32.and ${sa("(local.get $e)")} (i32.const 0x20))) (i32.const 1)))`)}
         (i32.store8 (i32.add (i32.const ${GPSPX}) (local.get $e)) (global.get $gpxpos))
         ${endOr(15)}`);
   // M3Loop::StartWindowDraw
   arms.set(30, `(if (i32.eq (global.get $gpxpos) (global.get $gpendx))
-          (then (global.set $gpendx (if (result i32) (i32.lt_u (global.get $gpxpos) (i32.const 160))
+          (then (global.set $gptw (global.get $gpntw))
+                (global.set $gpattrib (global.get $gpnattrib))
+                (global.set $gpendx (if (result i32) (i32.lt_u (global.get $gpxpos) (i32.const 160))
                   (then (i32.add (global.get $gpxpos) (i32.const 8))) (else (i32.const 168))))))
+        (global.set $gpwscx (i32.and (i32.sub (i32.const 8) (global.get $gpxpos)) (i32.const 0xFF)))
+        (call $gp_fetchmap (i32.const 0) (i32.const 0))
         ${swdInc(31)}`);
   arms.set(31, swdInc(32));
-  arms.set(32, swdInc(33));
+  arms.set(32, `(global.set $gpreg0 (call $gp_tdb (i32.const 0))) ${swdInc(33)}`);
   arms.set(33, swdInc(34));
-  arms.set(34, swdInc(35));
+  arms.set(34, `(call $gp_ntw) ${swdInc(35)}`);
   arms.set(35, swdInc(10));
 
   const ids = [...arms.keys()].sort((a, b) => a - b);
@@ -170,6 +211,98 @@ export function ppuShadowWat({ cgb, IO, OAM, GPSPX, GPMAP, GPMAP2, GPBUF, GPSZ, 
   (global $gpwy2 (mut i32) (i32.const 0))
   (global $gpwy2t (mut i32) (i32.const 0))
   (global $gpwy2on (mut i32) (i32.const 0))
+  ;; the pixel side of PPUPriv
+  (global $gpscy (mut i32) (i32.const 0))
+  (global $gpwyp (mut i32) (i32.const 0xFF))
+  (global $gpwscx (mut i32) (i32.const 0))
+  (global $gpreg0 (mut i32) (i32.const 0))
+  (global $gpreg1 (mut i32) (i32.const 0))
+  (global $gpattrib (mut i32) (i32.const 0))
+  (global $gpnattrib (mut i32) (i32.const 0))
+  (global $gptw (mut i32) (i32.const 0))
+  (global $gpntw (mut i32) (i32.const 0))
+  (global $gpfb (mut i32) (i32.const 0))
+  (global $gpfbok (mut i32) (i32.const 0))
+
+  ;; VRAM as gambatte's 16KB array (bank 1 at +$2000; zero on DMG)
+  (func $gp_vr (param $o i32) (result i32)
+    ${cgb ? `(i32.load8_u (i32.add (i32.add (i32.const ${VRAM0}) (i32.and (local.get $o) (i32.const 0x1FFF)))
+      (i32.mul (i32.and (i32.shr_u (local.get $o) (i32.const 13)) (i32.const 1)) (i32.const ${VBANK}))))`
+    : `(if (result i32) (i32.and (local.get $o) (i32.const 0x2000)) (then (i32.const 0))
+      (else (i32.load8_u (i32.add (i32.const ${VRAM0}) (i32.and (local.get $o) (i32.const 0x1FFF))))))`})
+
+  ;; expand_lut: the byte's 8 pixels as 2-bit fields, leftmost first
+  ;; (bit-reversed) unless X-flipped
+  (func $gp_exp (param $b i32) (param $flip i32) (result i32)
+    (local $x i32)
+    (local.set $x (local.get $b))
+    (if (i32.eqz (local.get $flip))
+      (then
+        (local.set $x (i32.or (i32.shr_u (i32.and (local.get $x) (i32.const 0xF0)) (i32.const 4)) (i32.shl (i32.and (local.get $x) (i32.const 0x0F)) (i32.const 4))))
+        (local.set $x (i32.or (i32.shr_u (i32.and (local.get $x) (i32.const 0xCC)) (i32.const 2)) (i32.shl (i32.and (local.get $x) (i32.const 0x33)) (i32.const 2))))
+        (local.set $x (i32.or (i32.shr_u (i32.and (local.get $x) (i32.const 0xAA)) (i32.const 1)) (i32.shl (i32.and (local.get $x) (i32.const 0x55)) (i32.const 1))))))
+    (local.set $x (i32.and (i32.or (local.get $x) (i32.shl (local.get $x) (i32.const 4))) (i32.const 0x0F0F)))
+    (local.set $x (i32.and (i32.or (local.get $x) (i32.shl (local.get $x) (i32.const 2))) (i32.const 0x3333)))
+    (i32.and (i32.or (local.get $x) (i32.shl (local.get $x) (i32.const 1))) (i32.const 0x5555)))
+
+  ;; the tile map entry (reg1) and its attributes (nattrib): the window's
+  ;; map at column $wc, or the background's at column $bc
+  (func $gp_fetchmap (param $wc i32) (param $bc i32)
+    (local $a i32)
+    (local.set $a (if (result i32) (i32.and (global.get $gpwds) (i32.const 2))
+      (then (i32.add (i32.add (i32.and (i32.shl (global.get $gplcdc) (i32.const 4)) (i32.const 0x400))
+                              (i32.shl (i32.and (global.get $gpwyp) (i32.const 0xF8)) (i32.const 2)))
+                     (i32.add (i32.and (local.get $wc) (i32.const 0x1F)) (i32.const 0x1800))))
+      (else (i32.add (i32.add (i32.and (i32.shl (global.get $gplcdc) (i32.const 7)) (i32.const 0x400))
+                              (i32.shl (i32.and (i32.add (global.get $gpscy) (global.get $gply)) (i32.const 0xF8)) (i32.const 2)))
+                     (i32.add (i32.and (local.get $bc) (i32.const 0x1F)) (i32.const 0x1800))))))
+    (global.set $gpreg1 (call $gp_vr (local.get $a)))
+    (global.set $gpnattrib (call $gp_vr (i32.add (local.get $a) (i32.const 0x2000)))))
+
+  ;; loadTileDataByte0/1
+  (func $gp_tdb (param $hi i32) (result i32)
+    (local $y i32)
+    (local.set $y (if (result i32) (i32.and (global.get $gpwds) (i32.const 2))
+      (then (global.get $gpwyp)) (else (i32.add (global.get $gpscy) (global.get $gply)))))
+    (call $gp_vr (i32.add (i32.add
+      (i32.sub (i32.add (i32.const 0x1000) (i32.and (i32.shl (global.get $gpnattrib) (i32.const 10)) (i32.const 0x2000)))
+               (i32.and (i32.or (i32.shl (global.get $gpreg1) (i32.const 5)) (i32.shl (global.get $gplcdc) (i32.const 8))) (i32.const 0x1000)))
+      (i32.shl (global.get $gpreg1) (i32.const 4)))
+      (i32.add (i32.shl (i32.and (i32.xor (i32.sub (i32.const 0) (i32.and (i32.shr_u (global.get $gpnattrib) (i32.const 6)) (i32.const 1))) (local.get $y))
+                                 (i32.const 7)) (i32.const 1))
+               (local.get $hi)))))
+
+  ;; ntileword from reg0 and loadTileDataByte1
+  (func $gp_ntw
+    (local $f i32)
+    (local.set $f (i32.and (global.get $gpnattrib) (i32.const 0x20)))
+    (global.set $gpntw (i32.add (call $gp_exp (global.get $gpreg0) (local.get $f))
+      (i32.shl (call $gp_exp (call $gp_tdb (i32.const 1)) (local.get $f)) (i32.const 1)))))
+
+  ;; the current sprite's tile row address (LoadSprites::f2/f4)
+  (func $gp_spaddr (result i32)
+    (local $at i32) (local $spl i32) (local $t i32)
+    (local.set $at ${sa("(global.get $gpcsp)")})
+    (local.set $spl (i32.shl (if (result i32) (i32.and (local.get $at) (i32.const 0x40))
+      (then (i32.xor ${sl("(global.get $gpcsp)")} (i32.const 15))) (else ${sl("(global.get $gpcsp)")})) (i32.const 1)))
+    (local.set $t (i32.shl (global.get $gpreg1) (i32.const 4)))
+    (i32.add ${cgb ? "(i32.and (i32.shl (local.get $at) (i32.const 10)) (i32.const 0x2000))" : "(i32.const 0)"}
+      (if (result i32) (i32.and (global.get $gplcdc) (i32.const 0x04))
+        (then (i32.or (i32.and (local.get $t) (i32.const -17)) (local.get $spl)))
+        (else (i32.or (local.get $t) (i32.and (local.get $spl) (i32.const -17)))))))
+
+  ;; bgPalette / spPalette entries, as the palettes are now (the shadow is
+  ;; run up to every palette write first, so this is the cached palette)
+  (func $gp_bgcol (param $ci i32) (param $at i32) (result i32)
+    ${cgb ? `(call $cgb_pal (i32.const ${BGPAL}) (i32.and (local.get $at) (i32.const 7)) (local.get $ci))`
+      : `(call $shade (i32.load8_u (i32.const ${IO + 0x47})) (local.get $ci))`})
+  (func $gp_spcol (param $at i32) (param $ci i32) (result i32)
+    ${cgb ? `(call $cgb_pal (i32.const ${OBJPAL}) (i32.and (local.get $at) (i32.const 7)) (local.get $ci))`
+      : `(call $shade (i32.load8_u (i32.add (i32.const ${IO + 0x48}) (i32.and (i32.shr_u (local.get $at) (i32.const 4)) (i32.const 1)))) (local.get $ci))`})
+  ;; fbline[x], x = xpos - 8
+  (func $gp_put (param $x i32) (param $c i32)
+    (if (i32.and (global.get $gpfbok) (i32.lt_u (local.get $x) (i32.const 160)))
+      (then (i32.store (i32.add (global.get $gpfb) (i32.shl (local.get $x) (i32.const 2))) (local.get $c)))))
 
   (global $gplu (mut i32) (i32.const 0))
   (global $gplast (mut i32) (i32.const 0xFF))
@@ -326,12 +459,17 @@ export function ppuShadowWat({ cgb, IO, OAM, GPSPX, GPMAP, GPMAP2, GPBUF, GPSZ, 
 
   ;; M3Start::f1's spriteList from sprites(ly); spx 0xFF ends it
   (func $gp_loadlist
-    (local $m i32) (local $n i32) (local $i i32)
+    (local $m i32) (local $n i32) (local $i i32) (local $pos i32)
     (local.set $m (call $gp_map (global.get $gply)))
     (local.set $n (i32.load8_u (i32.add (local.get $m) (i32.const 15))))
     (block $d (loop $l
       (br_if $d (i32.ge_u (local.get $i) (local.get $n)))
       (i32.store8 (i32.add (i32.const ${GPSPX}) (local.get $i)) (i32.load8_u (i32.add (local.get $m) (local.get $i))))
+      (local.set $pos (i32.load8_u (i32.add (i32.const ${GPSMAP}) (i32.add (i32.mul (global.get $gply) (i32.const 10)) (local.get $i)))))
+      (i32.store8 (i32.add (i32.const ${SL}) (local.get $i))
+        (i32.sub (i32.add (global.get $gply) (i32.const 16)) (i32.load8_u (i32.add (i32.const ${GPBUF}) (local.get $pos)))))
+      (i32.store8 (i32.add (i32.const ${SO}) (local.get $i)) (i32.shl (local.get $pos) (i32.const 1)))
+      ${swSet("(local.get $i)", "(i32.const 0)")}
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $l)))
     (i32.store8 (i32.add (i32.const ${GPSPX}) (local.get $n)) (i32.const 0xFF)))
@@ -352,10 +490,41 @@ export function ppuShadowWat({ cgb, IO, OAM, GPSPX, GPMAP, GPMAP2, GPBUF, GPSZ, 
                  (i32.lt_s (global.get $gpxpos) (i32.const 167)))
       (then
         (if (i32.and (i32.eqz (global.get $gpwds)) ${winEn})
-          (then (global.set $gpwds (i32.const 3)))
+          (then (global.set $gpwds (i32.const 3))
+                (global.set $gpwyp (i32.and (i32.add (global.get $gpwyp) (i32.const 1)) (i32.const 0xFF))))
           (else ${cgb ? "" : `(if (i32.or (i32.eqz (global.get $gpwds)) (i32.eq (global.get $gpxpos) (i32.const 166)))
                   (then (global.set $gpwds (i32.or (global.get $gpwds) (i32.const 1)))))`}))))
-    (global.set $gpxpos (i32.add (global.get $gpxpos) (i32.const 1))))
+    (call $gp_pixel))
+
+  ;; plotPixel after the window check: the BG pixel, the sprites over it
+  (func $gp_pixel
+    (local $x i32) (local $tw i32) (local $px i32) (local $i i32) (local $spd i32) (local $at i32) (local $min i32) (local $w i32)
+    (local.set $x (global.get $gpxpos))
+    (local.set $tw (i32.and (global.get $gptw) ${cgb ? "(i32.const 3)" : "(i32.mul (i32.and (global.get $gplcdc) (i32.const 1)) (i32.const 3))"}))
+    (local.set $px (call $gp_bgcol (local.get $tw) (global.get $gpattrib)))
+    (local.set $i (i32.sub (global.get $gpnsp) (i32.const 1)))
+    (if (i32.ge_s (local.get $i) (i32.const 0))
+      (then (if (i32.gt_s ${spx("(local.get $i)")} (i32.sub (local.get $x) (i32.const 8)))
+        (then
+          (local.set $min (i32.const 0xFF))
+          (block $ld (loop $l
+            (local.set $w ${sw("(local.get $i)")})
+            ${cgb ? `(if (i32.and (i32.ne (i32.and (local.get $w) (i32.const 3)) (i32.const 0)) (i32.lt_u ${so("(local.get $i)")} (local.get $min)))
+              (then (local.set $spd (i32.and (local.get $w) (i32.const 3))) (local.set $at ${sa("(local.get $i)")}) (local.set $min ${so("(local.get $i)")})))`
+            : `(if (i32.and (local.get $w) (i32.const 3))
+              (then (local.set $spd (i32.and (local.get $w) (i32.const 3))) (local.set $at ${sa("(local.get $i)")})))`}
+            ${swSet("(local.get $i)", "(i32.shr_u (local.get $w) (i32.const 2))")}
+            (local.set $i (i32.sub (local.get $i) (i32.const 1)))
+            (br_if $ld (i32.lt_s (local.get $i) (i32.const 0)))
+            (br_if $l (i32.gt_s ${spx("(local.get $i)")} (i32.sub (local.get $x) (i32.const 8))))))
+          (if (i32.and (i32.and (i32.ne (local.get $spd) (i32.const 0)) ${objEn})
+                ${cgb ? `(i32.or (i32.or (i32.eqz (i32.and (i32.or (local.get $at) (global.get $gpattrib)) (i32.const 0x80))) (i32.eqz (local.get $tw)))
+                        (i32.eqz (i32.and (global.get $gplcdc) (i32.const 1))))`
+                : `(i32.or (i32.eqz (i32.and (local.get $at) (i32.const 0x80))) (i32.eqz (local.get $tw)))`})
+            (then (local.set $px (call $gp_spcol (local.get $at) (local.get $spd)))))))))
+    (if (i32.ge_s (local.get $x) (i32.const 8)) (then (call $gp_put (i32.sub (local.get $x) (i32.const 8)) (local.get $px))))
+    (global.set $gpxpos (i32.add (local.get $x) (i32.const 1)))
+    (global.set $gptw (i32.shr_u (global.get $gptw) (i32.const 2))))
 
   ;; plotPixelIfNoSprite
   (func $gp_plotns
@@ -389,10 +558,16 @@ export function ppuShadowWat({ cgb, IO, OAM, GPSPX, GPMAP, GPMAP2, GPBUF, GPSZ, 
       (else (i32.sub (i32.const 0) (i32.shr_s (i32.sub (local.get $m2) (global.get $gpnow)) (global.get $gpds))))))
     (global.set $gpst (if (result i32) (i32.eq (global.get $gply) (i32.const 143)) (then (i32.const 0)) (else (i32.const 1)))))
 
-  ;; doFullTilesUnrolled(Dmg|Cgb): whole tiles at a time, the cycles each
-  ;; costs (8, plus the sprite fetches on it), no pixels
-  (func $gp_tiles (param $xend i32)
+  ;; doFullTilesUnrolledDmg / doFullTilesUnrolledCgb: whole tiles at a time,
+  ;; the cycles each costs (8, plus the sprite fetches on it) and its pixels.
+  ;; $tml: the map line (VRAM offset), $tline: the tile row, $tmx: the map X.
+  ;; Pixel k of the tile ending at xpos lands at fb x = xpos - 8 + k (the
+  ;; C code's prebuf for xpos < 8 keeps only x >= 0, as $gp_put does).
+  (func $gp_tiles (param $xend i32) (param $tml i32) (param $tline i32) (param $tmx i32)
     (local $xpos i32) (local $ns i32) (local $c i32) (local $i i32) (local $n i32) (local $s i32)
+    (local $tw i32) (local $at i32) (local $tno i32) (local $na i32) (local $k i32) (local $pos i32)
+    (local $cnt i32) (local $spw i32) (local $sat i32) (local $id i32) (local $tw2 i32) (local $d i32)
+    (local $addr i32) (local $spl i32) (local $r0 i32) (local $r1 i32) (local $end i32) (local $mask i32)
     (local.set $xpos (global.get $gpxpos))
     (block $out (loop $l
       (local.set $ns (global.get $gpnsp))
@@ -410,17 +585,36 @@ export function ppuShadowWat({ cgb, IO, OAM, GPSPX, GPMAP, GPMAP2, GPBUF, GPSZ, 
                   (br_if $d (i32.ge_s ${spx("(local.get $i)")} (i32.add (local.get $xpos) (i32.const 8))))
                   (local.set $c (i32.sub (local.get $c) (i32.const 6)))
                   (local.set $i (i32.add (local.get $i) (i32.const 1)))
-                  (br $il)))))
-            (br_if $out (i32.lt_s (local.get $c) (i32.const 0)))
-            (global.set $gpcyc (local.get $c))
-            (loop $sl
-              (local.set $ns (i32.add (local.get $ns) (i32.const 1)))
-              (br_if $sl (i32.lt_s ${spx("(local.get $ns)")} (i32.add (local.get $xpos) (i32.const 8)))))
+                  (br $il)))
+                (br_if $out (i32.lt_s (local.get $c) (i32.const 0)))
+                (global.set $gpcyc (local.get $c))
+                ;; the sprite tile rows, fetched now
+                (loop $sl
+                  (local.set $at (call $gp_oambyte (i32.add ${so("(local.get $ns)")} (i32.const 3))))
+                  (local.set $spl (i32.shl (if (result i32) (i32.and (local.get $at) (i32.const 0x40))
+                    (then (i32.xor ${sl("(local.get $ns)")} (i32.const 15))) (else ${sl("(local.get $ns)")})) (i32.const 1)))
+                  (local.set $r1 (i32.shl (call $gp_oambyte (i32.add ${so("(local.get $ns)")} (i32.const 2))) (i32.const 4)))
+                  (local.set $addr (if (result i32) (i32.and (global.get $gplcdc) (i32.const 0x04))
+                    (then (i32.or (i32.and (local.get $r1) (i32.const -17)) (local.get $spl)))
+                    (else (i32.or (local.get $r1) (i32.and (local.get $spl) (i32.const -17))))))
+                  ${cgb ? "(local.set $addr (i32.add (local.get $addr) (i32.and (i32.shl (local.get $at) (i32.const 10)) (i32.const 0x2000))))" : ""}
+                  ${swSet("(local.get $ns)", `(i32.add (call $gp_exp (call $gp_vr (local.get $addr)) (i32.and (local.get $at) (i32.const 0x20)))
+                    (i32.shl (call $gp_exp (call $gp_vr (i32.add (local.get $addr) (i32.const 1))) (i32.and (local.get $at) (i32.const 0x20))) (i32.const 1)))`)}
+                  (i32.store8 (i32.add (i32.const ${SA}) (local.get $ns)) (local.get $at))
+                  (local.set $ns (i32.add (local.get $ns) (i32.const 1)))
+                  (br_if $sl (i32.lt_s ${spx("(local.get $ns)")} (i32.add (local.get $xpos) (i32.const 8))))))
+              (else
+                (br_if $out (i32.lt_s (local.get $c) (i32.const 0)))
+                (global.set $gpcyc (local.get $c))
+                (loop $sk
+                  (local.set $ns (i32.add (local.get $ns) (i32.const 1)))
+                  (br_if $sk (i32.lt_s ${spx("(local.get $ns)")} (i32.add (local.get $xpos) (i32.const 8)))))))
             (global.set $gpnsp (local.get $ns)))
           (else
             (if (i32.or (i32.lt_s (i32.sub (local.get $ns) (i32.const 1)) (i32.const 0))
                         (i32.le_s ${spx("(i32.sub (local.get $ns) (i32.const 1))")} (i32.sub (local.get $xpos) (i32.const 8))))
               (then
+                ;; no sprite on these tiles: n pixels of background at once
                 (br_if $out (i32.eqz (i32.and (global.get $gpcyc) (i32.const -8))))
                 (local.set $n (i32.add (local.get $xend) (i32.const 7)))
                 (if (i32.ge_s (local.get $n) (local.get $s)) (then (local.set $n (local.get $s))))
@@ -428,27 +622,200 @@ export function ppuShadowWat({ cgb, IO, OAM, GPSPX, GPMAP, GPMAP2, GPBUF, GPSZ, 
                 (if (i32.lt_s (i32.and (global.get $gpcyc) (i32.const -8)) (local.get $n))
                   (then (local.set $n (i32.and (global.get $gpcyc) (i32.const -8)))))
                 (global.set $gpcyc (i32.sub (global.get $gpcyc) (local.get $n)))
+                (local.set $d (i32.sub (local.get $xpos) (i32.const 8)))
+                (local.set $end (i32.add (local.get $d) (local.get $n)))
                 (local.set $xpos (i32.add (local.get $xpos) (local.get $n)))
+                (local.set $tw (global.get $gpntw))
+                ${cgb ? `(local.set $na (global.get $gpnattrib))
+                (block $bd (loop $bl
+                  (br_if $bd (i32.eq (local.get $d) (local.get $end)))
+                  (local.set $k (i32.const 0))
+                  (loop $px
+                    (call $gp_put (i32.add (local.get $d) (local.get $k))
+                      (call $gp_bgcol (i32.and (i32.shr_u (local.get $tw) (i32.shl (local.get $k) (i32.const 1))) (i32.const 3)) (local.get $na)))
+                    (local.set $k (i32.add (local.get $k) (i32.const 1)))
+                    (br_if $px (i32.lt_u (local.get $k) (i32.const 8))))
+                  (local.set $d (i32.add (local.get $d) (i32.const 8)))
+                  (local.set $tno (call $gp_vr (i32.add (local.get $tml) (i32.and (local.get $tmx) (i32.const 0x1F)))))
+                  (local.set $na (call $gp_vr (i32.add (i32.add (local.get $tml) (i32.and (local.get $tmx) (i32.const 0x1F))) (i32.const 0x2000))))
+                  (local.set $tmx (i32.add (i32.and (local.get $tmx) (i32.const 0x1F)) (i32.const 1)))
+                  (local.set $tw (call $gp_cgbtile (local.get $tno) (local.get $na) (local.get $tline)))
+                  (br $bl)))
+                (global.set $gpnattrib (local.get $na))`
+                : `(if (i32.eqz (i32.and (global.get $gplcdc) (i32.const 1)))
+                  (then
+                    (block $bd (loop $bl
+                      (br_if $bd (i32.eq (local.get $d) (local.get $end)))
+                      (call $gp_put (local.get $d) (call $gp_bgcol (i32.const 0) (i32.const 0)))
+                      (local.set $d (i32.add (local.get $d) (i32.const 1)))
+                      (br $bl)))
+                    (local.set $tmx (i32.add (local.get $tmx) (i32.shr_u (local.get $n) (i32.const 3))))
+                    (local.set $tw (call $gp_dmgtile (call $gp_vr (i32.add (local.get $tml) (i32.and (i32.sub (local.get $tmx) (i32.const 1)) (i32.const 0x1F))))
+                      (local.get $tline))))
+                  (else
+                    (block $bd (loop $bl
+                      (br_if $bd (i32.eq (local.get $d) (local.get $end)))
+                      (local.set $k (i32.const 0))
+                      (loop $px
+                        (call $gp_put (i32.add (local.get $d) (local.get $k))
+                          (call $gp_bgcol (i32.and (i32.shr_u (local.get $tw) (i32.shl (local.get $k) (i32.const 1))) (i32.const 3)) (i32.const 0)))
+                        (local.set $k (i32.add (local.get $k) (i32.const 1)))
+                        (br_if $px (i32.lt_u (local.get $k) (i32.const 8))))
+                      (local.set $d (i32.add (local.get $d) (i32.const 8)))
+                      (local.set $tno (call $gp_vr (i32.add (local.get $tml) (i32.and (local.get $tmx) (i32.const 0x1F)))))
+                      (local.set $tmx (i32.add (i32.and (local.get $tmx) (i32.const 0x1F)) (i32.const 1)))
+                      (local.set $tw (call $gp_dmgtile (local.get $tno) (local.get $tline)))
+                      (br $bl)))))`}
+                (global.set $gpntw (local.get $tw))
                 (br $cont))
               (else
                 (local.set $c (i32.sub (global.get $gpcyc) (i32.const 8)))
                 (br_if $out (i32.lt_s (local.get $c) (i32.const 0)))
                 (global.set $gpcyc (local.get $c))))))
+        ;; one tile with sprites on it
+        (local.set $d (i32.sub (local.get $xpos) (i32.const 8)))
+        ${cgb ? `(local.set $tw (global.get $gpntw)) (local.set $at (global.get $gpnattrib))`
+          : `(local.set $tw (i32.and (i32.sub (i32.const 0) (i32.and (global.get $gplcdc) (i32.const 1))) (global.get $gpntw))) (local.set $at (i32.const 0))`}
+        (local.set $k (i32.const 0))
+        (loop $px
+          (call $gp_put (i32.add (local.get $d) (local.get $k))
+            (call $gp_bgcol (i32.and (i32.shr_u (local.get $tw) (i32.shl (local.get $k) (i32.const 1))) (i32.const 3)) (local.get $at)))
+          (local.set $k (i32.add (local.get $k) (i32.const 1)))
+          (br_if $px (i32.lt_u (local.get $k) (i32.const 8))))
+        (local.set $i (i32.sub (local.get $ns) (i32.const 1)))
+        (if (i32.eqz ${objEn})
+          (then
+            (block $zd (loop $zl
+              (local.set $pos (i32.sub ${spx("(local.get $i)")} (local.get $xpos)))
+              ${swSet("(local.get $i)", `(i32.shr_u ${sw("(local.get $i)")}
+                (if (result i32) (i32.ge_s (local.get $pos) (i32.const 0))
+                  (then (i32.sub (i32.const 16) (i32.shl (local.get $pos) (i32.const 1))))
+                  (else (i32.add (i32.const 16) (i32.shl (local.get $pos) (i32.const 1))))))`)}
+              (local.set $i (i32.sub (local.get $i) (i32.const 1)))
+              (br_if $zd (i32.lt_s (local.get $i) (i32.const 0)))
+              (br_if $zl (i32.gt_s ${spx("(local.get $i)")} (i32.sub (local.get $xpos) (i32.const 8)))))))
+          (else
+            ${cgb ? `(i64.store (i32.const ${IDT}) (i64.const -1))
+            (local.set $mask (i32.and (i32.shl (global.get $gplcdc) (i32.const 7)) (i32.const 0x80)))` : ""}
+            (block $od (loop $ol
+              (local.set $pos (i32.sub ${spx("(local.get $i)")} (local.get $xpos)))
+              (if (i32.lt_s (local.get $pos) (i32.const 0))
+                (then (local.set $cnt (i32.add (local.get $pos) (i32.const 8))) (local.set $pos (i32.const 0)))
+                (else (local.set $cnt (i32.sub (i32.const 8) (local.get $pos)))))
+              (local.set $sat ${sa("(local.get $i)")})
+              (local.set $spw ${sw("(local.get $i)")})
+              (local.set $id ${so("(local.get $i)")})
+              (local.set $tw2 (i32.shr_u (local.get $tw) (i32.shl (local.get $pos) (i32.const 1))))
+              (local.set $k (i32.const 0))
+              ${cgb ? `(if (i32.eqz (i32.and (i32.or (local.get $at) (local.get $sat)) (local.get $mask)))
+                (then
+                  (loop $sp
+                    (if (i32.and (i32.ne (i32.and (local.get $spw) (i32.const 3)) (i32.const 0))
+                                 (i32.lt_u (local.get $id) (i32.load8_u (i32.add (i32.const ${IDT}) (i32.add (local.get $pos) (local.get $k))))))
+                      (then
+                        (i32.store8 (i32.add (i32.const ${IDT}) (i32.add (local.get $pos) (local.get $k))) (local.get $id))
+                        (call $gp_put (i32.add (local.get $d) (i32.add (local.get $pos) (local.get $k)))
+                          (call $gp_spcol (local.get $sat) (i32.and (local.get $spw) (i32.const 3))))))
+                    (local.set $spw (i32.shr_u (local.get $spw) (i32.const 2)))
+                    (local.set $k (i32.add (local.get $k) (i32.const 1)))
+                    (br_if $sp (i32.lt_s (local.get $k) (local.get $cnt)))))
+                (else
+                  (loop $sp
+                    (if (i32.and (i32.ne (i32.and (local.get $spw) (i32.const 3)) (i32.const 0))
+                                 (i32.lt_u (local.get $id) (i32.load8_u (i32.add (i32.const ${IDT}) (i32.add (local.get $pos) (local.get $k))))))
+                      (then
+                        (i32.store8 (i32.add (i32.const ${IDT}) (i32.add (local.get $pos) (local.get $k))) (local.get $id))
+                        (call $gp_put (i32.add (local.get $d) (i32.add (local.get $pos) (local.get $k)))
+                          (if (result i32) (i32.and (local.get $tw2) (i32.const 3))
+                            (then (call $gp_bgcol (i32.and (local.get $tw2) (i32.const 3)) (local.get $at)))
+                            (else (call $gp_spcol (local.get $sat) (i32.and (local.get $spw) (i32.const 3))))))))
+                    (local.set $spw (i32.shr_u (local.get $spw) (i32.const 2)))
+                    (local.set $tw2 (i32.shr_u (local.get $tw2) (i32.const 2)))
+                    (local.set $k (i32.add (local.get $k) (i32.const 1)))
+                    (br_if $sp (i32.lt_s (local.get $k) (local.get $cnt))))))`
+              : `(if (i32.eqz (i32.and (local.get $sat) (i32.const 0x80)))
+                (then
+                  (loop $sp
+                    (if (i32.and (local.get $spw) (i32.const 3))
+                      (then (call $gp_put (i32.add (local.get $d) (i32.add (local.get $pos) (local.get $k)))
+                              (call $gp_spcol (local.get $sat) (i32.and (local.get $spw) (i32.const 3))))))
+                    (local.set $spw (i32.shr_u (local.get $spw) (i32.const 2)))
+                    (local.set $k (i32.add (local.get $k) (i32.const 1)))
+                    (br_if $sp (i32.lt_s (local.get $k) (local.get $cnt)))))
+                (else
+                  (loop $sp
+                    (if (i32.and (local.get $spw) (i32.const 3))
+                      (then (call $gp_put (i32.add (local.get $d) (i32.add (local.get $pos) (local.get $k)))
+                              (if (result i32) (i32.and (local.get $tw2) (i32.const 3))
+                                (then (call $gp_bgcol (i32.and (local.get $tw2) (i32.const 3)) (i32.const 0)))
+                                (else (call $gp_spcol (local.get $sat) (i32.and (local.get $spw) (i32.const 3))))))))
+                    (local.set $spw (i32.shr_u (local.get $spw) (i32.const 2)))
+                    (local.set $tw2 (i32.shr_u (local.get $tw2) (i32.const 2)))
+                    (local.set $k (i32.add (local.get $k) (i32.const 1)))
+                    (br_if $sp (i32.lt_s (local.get $k) (local.get $cnt))))))`}
+              ${swSet("(local.get $i)", "(local.get $spw)")}
+              (local.set $i (i32.sub (local.get $i) (i32.const 1)))
+              (br_if $od (i32.lt_s (local.get $i) (i32.const 0)))
+              (br_if $ol (i32.gt_s ${spx("(local.get $i)")} (i32.sub (local.get $xpos) (i32.const 8))))))))
+        ;; the next tile's pattern
+        (local.set $tno (call $gp_vr (i32.add (local.get $tml) (i32.and (local.get $tmx) (i32.const 0x1F)))))
+        ${cgb ? `(local.set $na (call $gp_vr (i32.add (i32.add (local.get $tml) (i32.and (local.get $tmx) (i32.const 0x1F))) (i32.const 0x2000))))
+        (global.set $gpntw (call $gp_cgbtile (local.get $tno) (local.get $na) (local.get $tline)))
+        (global.set $gpnattrib (local.get $na))`
+          : `(global.set $gpntw (call $gp_dmgtile (local.get $tno) (local.get $tline)))`}
+        (local.set $tmx (i32.add (i32.and (local.get $tmx) (i32.const 0x1F)) (i32.const 1)))
         (local.set $xpos (i32.add (local.get $xpos) (i32.const 8))))
       (br_if $l (i32.lt_s (local.get $xpos) (local.get $xend)))))
     (global.set $gpxpos (local.get $xpos)))
 
+  ;; a BG tile row's tileword: DMG (tileDataLine, the signed index rule)
+  (func $gp_dmgtile (param $tno i32) (param $tline i32) (result i32)
+    (local $a i32) (local $sg i32)
+    (local.set $sg (i32.and (i32.shl (i32.xor (global.get $gplcdc) (i32.const -1)) (i32.const 3)) (i32.const 0x80)))
+    (local.set $a (i32.sub (i32.add (i32.add (i32.shl (local.get $sg) (i32.const 5)) (i32.shl (local.get $tline) (i32.const 1)))
+                                    (i32.shl (local.get $tno) (i32.const 4)))
+                           (i32.shl (i32.and (local.get $tno) (local.get $sg)) (i32.const 5))))
+    (i32.add (call $gp_exp (call $gp_vr (local.get $a)) (i32.const 0))
+             (i32.shl (call $gp_exp (call $gp_vr (i32.add (local.get $a) (i32.const 1))) (i32.const 0)) (i32.const 1))))
+
+  ;; ...and CGB (tdoffset, Y/X flip and the attribute's bank)
+  (func $gp_cgbtile (param $tno i32) (param $na i32) (param $tline i32) (result i32)
+    (local $tdo i32) (local $a i32)
+    (local.set $tdo (i32.and (i32.add (i32.shl (local.get $tline) (i32.const 1))
+                                      (i32.shl (i32.and (i32.xor (global.get $gplcdc) (i32.const -1)) (i32.const 0x10)) (i32.const 8)))
+                             (i32.xor (i32.shl (local.get $tno) (i32.const 5)) (i32.const -1))))
+    (local.set $a (i32.add (i32.add (i32.shl (local.get $tno) (i32.const 4))
+                                    (if (result i32) (i32.and (local.get $na) (i32.const 0x40)) (then (i32.xor (local.get $tdo) (i32.const 14))) (else (local.get $tdo))))
+                           (i32.and (i32.shl (local.get $na) (i32.const 10)) (i32.const 0x2000))))
+    (i32.add (call $gp_exp (call $gp_vr (local.get $a)) (i32.and (local.get $na) (i32.const 0x20)))
+             (i32.shl (call $gp_exp (call $gp_vr (i32.add (local.get $a) (i32.const 1))) (i32.and (local.get $na) (i32.const 0x20))) (i32.const 1))))
+
   (func $gp_dofull
-    (local $xend i32)
+    (local $xend i32) (local $tml i32) (local $tline i32) (local $tmx i32) (local $x0 i32) (local $y i32)
     (local.set $xend (if (result i32) (i32.or (i32.lt_s (global.get $gpwx) (global.get $gpxpos)) (i32.ge_u (global.get $gpwx) (i32.const 168)))
       (then (i32.const 161)) (else (i32.sub (global.get $gpwx) (i32.const 7)))))
-    (if (i32.ge_s (global.get $gpxpos) (local.get $xend)) (then (return)))
-    (if (i32.lt_s (global.get $gpxpos) (i32.const 8))
+    (local.set $x0 (global.get $gpxpos))
+    (if (i32.ge_s (local.get $x0) (local.get $xend)) (then (return)))
+    (if (i32.and (global.get $gpwds) (i32.const 2))
       (then
-        (call $gp_tiles (select (local.get $xend) (i32.const 8) (i32.lt_s (local.get $xend) (i32.const 8))))
+        (local.set $tml (i32.add (i32.add (i32.and (i32.shl (global.get $gplcdc) (i32.const 4)) (i32.const 0x400))
+                                          (i32.shl (i32.and (global.get $gpwyp) (i32.const 0xF8)) (i32.const 2))) (i32.const 0x1800)))
+        (local.set $tmx (i32.shr_u (i32.add (local.get $x0) (global.get $gpwscx)) (i32.const 3)))
+        (local.set $tline (i32.and (global.get $gpwyp) (i32.const 7))))
+      (else
+        (local.set $y (i32.add (global.get $gpscy) (global.get $gply)))
+        (local.set $tml (i32.add (i32.add (i32.and (i32.shl (global.get $gplcdc) (i32.const 7)) (i32.const 0x400))
+                                          (i32.shl (i32.and (local.get $y) (i32.const 0xF8)) (i32.const 2))) (i32.const 0x1800)))
+        (local.set $tmx (i32.shr_u (i32.add (i32.add (global.get $gpscx) (local.get $x0)) (i32.const ${1 - C})) (i32.const 3)))
+        (local.set $tline (i32.and (local.get $y) (i32.const 7)))))
+    (if (i32.lt_s (local.get $x0) (i32.const 8))
+      (then
+        (call $gp_tiles (select (local.get $xend) (i32.const 8) (i32.lt_s (local.get $xend) (i32.const 8)))
+          (local.get $tml) (local.get $tline) (local.get $tmx))
         (if (i32.lt_s (global.get $gpxpos) (i32.const 8)) (then (return)))
-        (if (i32.ge_s (global.get $gpxpos) (local.get $xend)) (then (return)))))
-    (call $gp_tiles (local.get $xend)))
+        (if (i32.ge_s (global.get $gpxpos) (local.get $xend)) (then (return)))
+        (local.set $tmx (i32.add (local.get $tmx) (i32.shr_u (i32.sub (global.get $gpxpos) (local.get $x0)) (i32.const 3))))))
+    (call $gp_tiles (local.get $xend) (local.get $tml) (local.get $tline) (local.get $tmx)))
 
   ;; the state functions, run while the budget lasts (nextCall / f(p))
   (func $gp_run
@@ -465,7 +832,12 @@ export function ppuShadowWat({ cgb, IO, OAM, GPSPX, GPMAP, GPMAP2, GPBUF, GPSZ, 
     (local.set $c (i32.shr_s (i32.sub (local.get $cc) (global.get $gpnow)) (global.get $gpds)))
     (global.set $gpnow (i32.add (global.get $gpnow) (i32.shl (local.get $c) (global.get $gpds))))
     (global.set $gpcyc (i32.add (global.get $gpcyc) (local.get $c)))
-    (if (i32.ge_s (global.get $gpcyc) (i32.const 0)) (then (call $gp_run))))
+    (if (i32.ge_s (global.get $gpcyc) (i32.const 0))
+      (then
+        ;; framebuf.setFbline(ly)
+        (global.set $gpfbok (i32.lt_u (global.get $gply) (i32.const 144)))
+        (global.set $gpfb (i32.add (i32.const ${FB}) (i32.mul (global.get $gply) (i32.const 640))))
+        (call $gp_run))))
 
   ;; LCD::update(cc) for the shadow: the LY counter's events and the CGB
   ;; wy2 one-shot at their own times, the PPU up to each
@@ -690,6 +1062,10 @@ export function ppuShadowWat({ cgb, IO, OAM, GPSPX, GPMAP, GPMAP2, GPBUF, GPSZ, 
     (global.set $gpscx (local.get $v))
     (call $gp_m3change))
 
+  (func $gp_scy (param $v i32) (param $cc i32)
+    (call $gp_update (i32.add (local.get $cc) (i32.add (global.get $gpds) (i32.const ${C}))))
+    (global.set $gpscy (local.get $v)))
+
   (func $gp_wx (param $v i32) (param $cc i32)
     (call $gp_update (i32.add (local.get $cc) (i32.add (global.get $gpds) (i32.const 1))))
     (global.set $gpwx (local.get $v))
@@ -749,7 +1125,8 @@ export function ppuShadowWat({ cgb, IO, OAM, GPSPX, GPMAP, GPMAP2, GPBUF, GPSZ, 
             (then (if (i32.or (i32.eq (global.get $gpwds) (i32.const 2)) (i32.eq (global.get $gpxpos) (i32.const 168)))
                     (then (global.set $gpwds (i32.and (global.get $gpwds) (i32.const -3))))))
             (else (if (i32.eq (global.get $gpwds) (i32.const 1))
-                    (then (global.set $gpwds (i32.const 3))))))))))
+                    (then (global.set $gpwds (i32.const 3))
+                          (global.set $gpwyp (i32.and (i32.add (global.get $gpwyp) (i32.const 1)) (i32.const 0xFF)))))))))))
     (if (i32.and (local.get $x) (i32.const 0x04))
       (then
         (if (i32.and (i32.and (global.get $gplcdc) (local.get $v)) (i32.const 0x80)) (then (call $gp_oamchange (local.get $cc))))

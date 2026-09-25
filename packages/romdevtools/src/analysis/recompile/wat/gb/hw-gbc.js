@@ -667,6 +667,9 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
     ;; LCD::vramAccessible); the write is dropped.
     (if (i32.lt_u (local.get $x) (i32.const 0xA000))
       (then (if (i32.eq (call $stat_mode) (i32.const 3)) (then (return)))))
+    ;; LCD::vramChange: the PPU runs up to the write first
+    (if (i32.lt_u (local.get $x) (i32.const 0xA000))
+      (then (call $gp_update (i32.add (global.get $abscc) (call $ioff)))))
     (if (i32.lt_u (local.get $x) (i32.const 0xA000))
       (then (i32.store8 (i32.add (i32.add (i32.const ${VRAM0})
         (i32.sub (local.get $x) (i32.const 0x8000)))
@@ -754,11 +757,19 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
         (call $tirqupd (i32.add (global.get $abscc) (call $ioff)))
         (call $ifsync)))
     ;; the gambatte PPU shadow sees SCX/WX/WY/LCDC at the write's cycle
+    (if (i32.eq (local.get $x) (i32.const 0xFF42)) (then (call $gp_scy (local.get $v) (i32.add (global.get $abscc) (call $ioff)))))
+    ;; dmgBgPaletteChange / dmgSpPalette1Change / dmgSpPalette2Change
+    (if (i32.and (i32.ge_u (local.get $x) (i32.const 0xFF47)) (i32.le_u (local.get $x) (i32.const 0xFF49)))
+      (then (call $gp_update (i32.add (global.get $abscc) (call $ioff)))))
     (if (i32.eq (local.get $x) (i32.const 0xFF43)) (then (call $gp_scx (local.get $v) (i32.add (global.get $abscc) (call $ioff)))))
     (if (i32.eq (local.get $x) (i32.const 0xFF4B)) (then (call $gp_wx (local.get $v) (i32.add (global.get $abscc) (call $ioff)))))
     (if (i32.eq (local.get $x) (i32.const 0xFF4A)) (then (call $gp_wy (local.get $v) (i32.add (global.get $abscc) (call $ioff)))))
     (if (i32.eq (local.get $x) (i32.const 0xFF40))
       (then
+        ;; LCD::lcdcChange runs update(cc) first: the LCD events due by the
+        ;; write (a line's LYC or mode-2 request) are set before the LCD goes off
+        (if (i32.and (i32.xor (i32.load8_u (i32.const ${IOREG + 0x40})) (local.get $v)) (i32.const 0x80))
+          (then (call $ifsync)))
         (call $gp_lcdc (local.get $v) (i32.add (global.get $abscc) (call $ioff)))
         (local.set $old (i32.load8_u (i32.const ${IOREG + 0x40})))
         ;; LCD on/off log for the frame-boundary differ: 32 x {frame, ln, cyc, v}
@@ -847,7 +858,8 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
         (local.set $i (i32.load8_u (i32.const ${IOREG + 0x68})))
         ;; palette RAM is not writable in mode 3 (LCD::cgbpAccessible)
         (if (call $palok (i32.add (global.get $abscc) (call $ioff)))
-          (then (i32.store8 (i32.add (i32.const ${BGPAL}) (i32.and (local.get $i) (i32.const 0x3F)))
+          (then (call $gp_update (i32.add (global.get $abscc) (call $ioff)))
+                (i32.store8 (i32.add (i32.const ${BGPAL}) (i32.and (local.get $i) (i32.const 0x3F)))
                             (local.get $v))))
         (if (i32.and (local.get $i) (i32.const 0x80))
           (then (i32.store8 (i32.const ${IOREG + 0x68})
@@ -859,7 +871,8 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
         (local.set $i (i32.load8_u (i32.const ${IOREG + 0x6A})))
         ;; palette RAM is not writable in mode 3 (LCD::cgbpAccessible)
         (if (call $palok (i32.add (global.get $abscc) (call $ioff)))
-          (then (i32.store8 (i32.add (i32.const ${OBJPAL}) (i32.and (local.get $i) (i32.const 0x3F)))
+          (then (call $gp_update (i32.add (global.get $abscc) (call $ioff)))
+                (i32.store8 (i32.add (i32.const ${OBJPAL}) (i32.and (local.get $i) (i32.const 0x3F)))
                             (local.get $v))))
         (if (i32.and (local.get $i) (i32.const 0x80))
           (then (i32.store8 (i32.const ${IOREG + 0x6A})
@@ -1274,7 +1287,10 @@ ${setbankWat}
   ;; change a register part-way along a line; drawing the whole
   ;; line at once put the change at x=0.
   ;; x output at a write = dots into the line - 80 - PIXDELAY.
+  ;; the picture is drawn by the PPU shadow (ppu-shadow.js) now; the line
+  ;; renderer below is kept only as the reference the shadow replaced
   (func $ppu_catch (param $x i32)
+    (return)
     (if (i32.gt_s (local.get $x) (i32.const 160)) (then (local.set $x (i32.const 160))))
     (if (i32.gt_s (local.get $x) (global.get $rxnext))
       (then
@@ -1363,6 +1379,7 @@ ${setbankWat}
               (then (call $gp_oamptr (i32.const 0) (i32.sub (local.get $lo) (i32.const 1)))
                     (global.set $dmapos (i32.const 0xFE)) (global.set $dmasrc (i32.const 5))
                     (local.set $lo (i32.const -1))))))))
+      (call $gp_update (local.get $cc))
       (i32.store8 (i32.add (i32.add (i32.const ${VRAM0})
           (i32.and (global.get $hdma_dst) (i32.const 0x1FFF)))
           (i32.mul (global.get $vbk) (i32.const ${VBANK_DELTA})))

@@ -61,7 +61,8 @@ async function lockstep(rom, frames) {
   for await (const c of emitWat(rom, { traceEntries: 32768 })) chunks.push(c);
   const { instance } = await WebAssembly.instantiate(assembleWatSync(chunks.join("")), {});
   const x = instance.exports;
-  const t = recompileSection(rom, "", { traceEntries: 32768 }).json.trace;
+  const sec = recompileSection(rom, "", { traceEntries: 32768 }).json;
+  const t = sec.trace;
   x.wc_init();
   const dir = mkdtempSync(path.join(os.tmpdir(), "romdev-gblock-"));
   const ref = new LibretroHost();
@@ -104,7 +105,14 @@ async function lockstep(rom, frames) {
     let bad = null;
     for (let k = 0; k < ref.status.settleFramesUsed && !bad; k++) { x.wc_render(); bad = pull(); }
     for (let f = 0; f < frames && !bad; f++) { ref.stepFrames(1); x.wc_render(); bad = pull(); }
-    return { bad, n };
+    // the picture: the cart's framebuffer against gambatte's, exact RGB
+    const fb = sec.framebuffer, rs = ref.screenshotRgba(), d = new DataView(x.memory.buffer);
+    let px = 0;
+    for (let y = 0; y < 144; y++) for (let xx = 0; xx < 160; xx++) {
+      const i = (y * rs.width + xx) * 4;
+      if ((d.getUint32(fb.offset + (y * fb.width + xx) * 4, true) & 0xffffff) !== ((rs.rgba[i] << 16) | (rs.rgba[i + 1] << 8) | rs.rgba[i + 2])) px++;
+    }
+    return { bad, n, px };
   } finally {
     ref.dispose?.();
     rmSync(dir, { recursive: true, force: true });
@@ -112,9 +120,10 @@ async function lockstep(rom, frames) {
 }
 
 async function assertLockstep(rom, frames) {
-  const { bad, n } = await lockstep(rom, frames);
+  const { bad, n, px } = await lockstep(rom, frames);
   assert.equal(bad, null, bad ? `diverged at instruction ${bad.at} (${bad.what}): cart ${bad.cart.join(" ")} vs gambatte ${bad.ref.join(" ")}` : "");
   assert.ok(n > 1000, `compared ${n} instructions`);
+  assert.equal(px, 0, `${px} pixels differ from gambatte's picture`);
 }
 
 const lo = (a) => a & 0xFF, hi = (a) => a >> 8;
@@ -194,6 +203,12 @@ test("DMG halt bug: halt with IME off and an interrupt pending fetches the next 
     0x76, 0x3E, 0x05,                         // halt ; ld a,$05
     0x5F, 0x3E, 0x01, 0xE0, 0x0F,             // ld e,a ; ld a,1 ; ldh (IF),a
     0x18, 0xF4];                              // jr loop
+  await assertLockstep(makeRom(main), 5);
+});
+
+test("the unused opcodes run as gambatte runs them: a 4-cycle fetch and nothing else", { skip, timeout: 120000 }, async () => {
+  const ops = [0xD3, 0xDB, 0xDD, 0xE3, 0xE4, 0xEB, 0xEC, 0xED, 0xF4, 0xFC, 0xFD];
+  const main = [0xF3, 0x04, ...ops.flatMap((o) => [o, 0x0C]), 0x18, (-(2 + ops.length * 2 + 1)) & 0xFF];
   await assertLockstep(makeRom(main), 5);
 });
 
@@ -340,6 +355,60 @@ function midLineRom(reg, cgb, extra = []) {
     // loop: ldh a,(STAT) ; ld e,a ; ld a,d ; ldh (reg),a ; ldh a,(STAT) ; ld e,a ; inc d ; nop x n ; jr loop
     0xF0, 0x41, 0x5F, 0x7A, 0xE0, reg, 0xF0, 0x41, 0x5F, 0x14, 0x00, 0x18, 0xF3];
   return makeRom(main, {}, 0, { cgb });
+}
+
+/**
+ * A scene with every PPU feature showing (patterned tiles and maps in both
+ * banks, CGB palettes, 40 sprites, the window), then `loop` forever. The
+ * picture after the frames is compared with gambatte's pixel for pixel.
+ */
+function sceneRom(cgb, loop) {
+  const fill = [0x21, 0x00, 0x80, 0x7D, 0xAC, 0x07, 0x22, 0x7C, 0xFE, 0xA0, 0x20, 0xF7];   // [hl+] = rlc(l ^ h) up to $A000
+  const main = [0xF3, 0x31, 0xF0, 0xDF, 0xAF, 0xE0, 0x40];
+  if (cgb) {
+    main.push(0x3E, 0x01, 0xE0, 0x4F, ...fill, 0xAF, 0xE0, 0x4F);          // VBK=1: tiles and attributes
+    for (const idx of [0x68, 0x6A]) main.push(0x3E, 0x80, 0xE0, idx, 0x06, 0x40,
+      0x78, 0xEE, idx === 0x68 ? 0x5A : 0x93, 0xE0, idx + 1, 0x05, 0x20, 0xF8);   // 64 palette bytes
+  }
+  main.push(...fill,
+    0x21, 0x00, 0xFE, 0x06, 0x28,                                         // OAM: 40 sprites
+    0x78, 0x07, 0x07, 0x22, 0x78, 0x07, 0x07, 0x07, 0x22, 0x78, 0x22, 0x78, 0x0F, 0x22, 0x05, 0x20, 0xEF,
+    0x3E, 0xE4, 0xE0, 0x47, 0x3E, 0xD2, 0xE0, 0x48, 0x3E, 0x1B, 0xE0, 0x49,
+    0x3E, 0x40, 0xE0, 0x4A, 0x3E, 0x50, 0xE0, 0x4B,                        // WY=$40, WX=$50
+    0x3E, 0xE7, 0xE0, 0x40, 0x16, 0x00, 0x21, 0x00, 0x80);                 // LCDC=$E7 ; d=0 ; hl=$8000
+  const L = main.length;
+  main.push(...loop);
+  main.push(0x18, (L - (main.length + 2)) & 0xFF);
+  return makeRom(main, {}, 0, { cgb });
+}
+
+for (const cgb of [false, true]) {
+  const m = cgb ? "CGB" : "DMG";
+  test(`${m}: the scene drawn as gambatte's PPU draws it (tiles, maps, attributes, sprites, window)`, { skip, timeout: 180000 }, async () => {
+    await assertLockstep(sceneRom(cgb, [0x00]), 12);
+  });
+  test(`${m}: the frame handed out has line 143 drawn even when no write asked the PPU for it`, { skip, timeout: 180000 }, async () => {
+    // SCY stepped at line 50 only, so the last line differs every frame and
+    // nothing touches the PPU between line 143 and the blit
+    await assertLockstep(sceneRom(cgb, [0xF0, 0x44, 0xFE, 0x32, 0x20, 0xFA, 0xF0, 0x42, 0x3C, 0xE0, 0x42,
+      0xF0, 0x44, 0xFE, 0x33, 0x20, 0xFA]), 12);
+  });
+  test(`${m}: palettes written during mode 3 change the picture at gambatte's pixel`, { skip, timeout: 180000 }, async () => {
+    // BGP/OBP0 (DMG) or BCPD/OCPD (CGB) rewritten every few dots
+    const loop = cgb ? [0x7A, 0xE0, 0x69, 0x2F, 0xE0, 0x6B, 0x14, 0x14] : [0x7A, 0xE0, 0x47, 0x2F, 0xE0, 0x48, 0x14];
+    await assertLockstep(sceneRom(cgb, loop), 12);
+  });
+  test(`${m}: SCY, SCX and WX written during mode 3 move the rest of the line's pixels`, { skip, timeout: 180000 }, async () => {
+    // d steps SCY, SCX (rotated) and WX (masked into 0..$A7)
+    await assertLockstep(sceneRom(cgb, [0x7A, 0xE0, 0x42, 0x07, 0xE0, 0x43, 0xE6, 0x7F, 0xE0, 0x4B, 0x14]), 12);
+  });
+  test(`${m}: VRAM tile data and map writes during the frame show from the dot gambatte fetches them`, { skip, timeout: 180000 }, async () => {
+    // [hl+] = d over $8000-$9FFF (dropped in mode 3), wrapping
+    await assertLockstep(sceneRom(cgb, [0x7A, 0x22, 0x14, 0x7C, 0xE6, 0x1F, 0xF6, 0x80, 0x67]), 12);
+  });
+  test(`${m}: LCDC written during mode 3 (BG, window, OBJ, OBJ size, map and tile-data selects)`, { skip, timeout: 180000 }, async () => {
+    await assertLockstep(sceneRom(cgb, [0x7A, 0xF6, 0x80, 0xE0, 0x40, 0x14, 0x00, 0x00]), 12);
+  });
 }
 
 for (const cgb of [false, true]) {
@@ -508,6 +577,26 @@ for (const cgb of [false, true]) {
       0x3E, 0x40, 0xE0, 0x41, 0x0C);                // STAT=$40 ; inc c
     main.push(0x18, (L - (main.length + 2)) & 0xFF);  // jr loop
     await assertLockstep(makeRom(main, {}, 0, { cgb }), 40);
+  });
+}
+
+for (const cgb of [false, true]) {
+  test(`${cgb ? "CGB" : "DMG"}: the LCD switched off on the cycle of a line's LYC event still requests it (lcdcChange updates first)`, { skip, timeout: 180000 }, async () => {
+    // STAT=$40, LYC=$41, IE=0. loop: wait LY=$40 ; IF=0 ; wait C*4 ;
+    // LCD off ; E = IF ; LCD on ; C++ ; three frames (after re-enabling the
+    // LCD both cores hand the next frame out at the second VBlank; toggling
+    // sooner, neither ever returns from a frame)
+    const main = [0xF3, 0x3E, 0x40, 0xE0, 0x41, 0x3E, 0x41, 0xE0, 0x45, 0xAF, 0xE0, 0xFF, 0x0E, 0x00];
+    const L = main.length;
+    main.push(0xF0, 0x44, 0xFE, 0x40, 0x20, 0xFA,      // loop: wait LY=$40
+      0xAF, 0xE0, 0x0F,                                // IF=0
+      0x41, 0x05, 0x20, 0xFD,                          // ld b,c ; w: dec b ; jr nz,w
+      0xAF, 0xE0, 0x40, 0xF0, 0x0F, 0x5F,              // LCD off ; E = IF
+      0x3E, 0x91, 0xE0, 0x40, 0x0C,                    // LCD on ; inc c
+      0x16, 0x03,                                      // ld d,3 ; v: wait LY=$90 then LY=0, d times
+      0xF0, 0x44, 0xFE, 0x90, 0x20, 0xFA, 0xF0, 0x44, 0xB7, 0x20, 0xFB, 0x15, 0x20, 0xF3);
+    main.push(0x18, (L - (main.length + 2)) & 0xFF);
+    await assertLockstep(makeRom(main, {}, 0, { cgb }), 120);
   });
 }
 
