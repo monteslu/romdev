@@ -278,6 +278,25 @@ for (const cgb of [false, true]) {
   });
 }
 
+for (const cgb of [false, true]) {
+  test(`${cgb ? "CGB" : "DMG"}: a push into the ROM area during an OAM DMA from ROM lands in OAM, not in the MBC`, { skip, timeout: 120000 }, async () => {
+    // LCD off; the routine runs from HRAM (the DMA owns the ROM bus): DMA
+    // from $0400 ; wait (C&15)*16 ; sp=$8001 ; push hl ($55 to $8000, $AA
+    // to $7FFF) ; sp back ; wait for the DMA's end ; ret. Then E = sum of OAM ; C++
+    const routine = [0x3E, 0x04, 0xE0, 0x46, 0x79, 0xE6, 0x0F, 0x47, 0x04, 0x05, 0x20, 0xFD,
+      0x31, 0x01, 0x80, 0xE5, 0x31, 0xEE, 0xDF, 0x06, 0x40, 0x05, 0x20, 0xFD, 0xC9];
+    const copy = [0x21, 0x80, 0xFF, 0x11, 0x00, 0x03, 0x06, routine.length,
+      0x1A, 0x22, 0x13, 0x05, 0x20, 0xFA];         // copy $0300 -> $FF80
+    const main = [0xF3, 0x31, 0xF0, 0xDF, 0xAF, 0xE0, 0x40, ...copy, 0x0E, 0x00];
+    const L = 0x150 + main.length;
+    main.push(0x21, 0xAA, 0x55, 0xCD, 0x80, 0xFF,   // loop: ld hl,$55AA ; call $FF80
+      0x21, 0x00, 0xFE, 0x06, 0xA0, 0xAF, 0x86, 0x2C, 0x05, 0x20, 0xFB, 0x5F,  // E = sum of OAM
+      0x0C, 0xC3, lo(L), hi(L));
+    const src = Array.from({ length: 0xA0 }, (_, i) => (i * 3 + 1) & 0xFF);
+    await assertLockstep(makeRom(main, { 0x300: routine, 0x400: src }, 0, { cgb }), 5);
+  });
+}
+
 test("MBC1 banking as gambatte's Mbc1: RAM mode, the 5-bit write in RAM mode, RAM enable", { skip, timeout: 120000 }, async () => {
   await assertLockstep(makeRom(mapperProgram(MBC1_WRITES), {}, 0x03, { size: 0x40000, ramCode: 3 }), 10);
 });
@@ -475,6 +494,22 @@ test("CGB: a general DMA during an OAM DMA hands its bytes to the OAM DMA, and o
   const rom = makeRom(main, { 0x300: [...new Array(16).fill(0x00), ...after], 0x4000: bank1 }, 0, { cgb: true });
   await assertLockstep(rom, 10);
 });
+
+for (const cgb of [false, true]) {
+  test(`${cgb ? "CGB" : "DMG"}: mode 0 enabled in STAT after the line's mode 0 arms the next line's event, not this one`, { skip, timeout: 180000 }, async () => {
+    // LYC=$40, STAT=$40. loop: wait LY=$40 ; IF=0 ; wait (C&31)*16 ;
+    // STAT=$08 ; E=IF ; STAT=$40 ; C++
+    const main = [0xF3, 0x3E, 0x40, 0xE0, 0x45, 0xE0, 0x41, 0xAF, 0xE0, 0xFF, 0x0E, 0x00];
+    const L = main.length;
+    main.push(0xF0, 0x44, 0xFE, 0x40, 0x20, 0xFA,   // loop: wait LY=$40
+      0xAF, 0xE0, 0x0F,                             // IF=0
+      0x79, 0xE6, 0x1F, 0x47, 0x04, 0x05, 0x20, 0xFD,   // b = (c & 31) + 1 ; w: dec b ; jr nz
+      0x3E, 0x08, 0xE0, 0x41, 0xF0, 0x0F, 0x5F,     // STAT=$08 ; E=IF
+      0x3E, 0x40, 0xE0, 0x41, 0x0C);                // STAT=$40 ; inc c
+    main.push(0x18, (L - (main.length + 2)) & 0xFF);  // jr loop
+    await assertLockstep(makeRom(main, {}, 0, { cgb }), 40);
+  });
+}
 
 test("CGB: the line after a speed switch predicts mode 0 from where the PPU is", { skip, timeout: 180000 }, async () => {
   // KEY1=1 ; stop ; then STAT into E, switch again every 64 samples

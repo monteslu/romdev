@@ -658,10 +658,14 @@ function stepWat(cgb) {
                              (i32.eqz (i32.and (i32.eq (local.get $cly) (global.get $lycr)) (i32.ne (i32.and (local.get $old) (i32.const 0x40)) (i32.const 0)))))
                   (then (local.set $irq (i32.const 1))))))`}
         (if (local.get $irq) (then (call $irq (i32.const 2))))
-        ;; enabling mode 0 with no mode-0 event pending arms one
+        ;; enabling mode 0 with no mode-0 event pending arms one at the next
+        ;; xpos-166 time (predictedNextXposTime): this line's when it is
+        ;; still ahead of the write, else the next line's
         (if (i32.and (i32.ne (i32.and (local.get $data) (i32.const 0x08)) (i32.const 0))
                      (i32.eq (call $m0evt) (i32.const -1)))
-          (then (global.set $m0arm (i32.const 1)) (global.set $m0next (i32.const 0x08))))
+          (then (global.set $m0arm (i32.const 1)) (global.set $m0next (i32.const 0x08))
+                (if (i32.ge_s (i32.add (i32.sub (global.get $linelen) (global.get $cyc)) (call $ioff)) (global.get $m0irqat))
+                  (then (global.set $m0done (i32.const 1))))))
         (global.set $m2t (call $m2sched (local.get $data) (local.get $cc)))))
     ;; the mode 2 / mode 1 / mode 0 sources latch the new STAT unless their
     ;; event is (almost) due

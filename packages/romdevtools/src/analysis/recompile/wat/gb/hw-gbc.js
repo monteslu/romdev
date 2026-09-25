@@ -653,15 +653,16 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
                     (i32.shl (i32.sub (global.get $linelen) (global.get $cyc)) (i32.const 16)))))
         (i32.store (i32.const ${probe + 1016})
           (i32.add (i32.load (i32.const ${probe + 1016})) (i32.const 1)))))
-    (if (i32.lt_u (local.get $x) (i32.const 0x8000))
-      (then ${romWrite(mbc, imgLen, rb, rumble ? "rumble" : rtc)}))
     ;; OAM DMA bus conflict (gambatte Memory::nontrivial_write): a write in
-    ;; the source's conflict area lands in the OAM byte being moved
+    ;; the source's conflict area lands in the OAM byte being moved - before
+    ;; the MBC sees a ROM-area write (a push to $7FFF during a DMA from ROM)
     (if (i32.and (i32.ne (global.get $dmalast) (i32.const -1)) (i32.lt_u (local.get $x) (i32.const 0xFF80)))
       (then
         (call $dmaupd (i32.add (global.get $abscc) (call $ioff)))
         (if (i32.and (i32.lt_u (global.get $dmapos) (i32.const 0xA0)) (call $dmaconflict (local.get $x)))
           (then (i32.store8 (i32.add (i32.const ${OAM}) (global.get $dmapos)) (local.get $v)) (return)))))
+    (if (i32.lt_u (local.get $x) (i32.const 0x8000))
+      (then ${romWrite(mbc, imgLen, rb, rumble ? "rumble" : rtc)}))
     ;; VRAM is not writable while the PPU is in mode 3 (gambatte
     ;; LCD::vramAccessible); the write is dropped.
     (if (i32.lt_u (local.get $x) (i32.const 0xA000))
