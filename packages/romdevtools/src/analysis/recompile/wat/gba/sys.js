@@ -787,6 +787,8 @@ export function sysWat(L, rom_size, idle_loop, savetype) {
       (then (return (i32.load8_u (i32.add (i32.const ${SAVE}) (i32.and (local.get $a) (i32.const 0x7FFF)))))))
     (if (i32.or (i32.eq (global.get $saveType) (i32.const ${SAVE_FLASH512})) (i32.eq (global.get $saveType) (i32.const ${SAVE_FLASH1M})))
       (then (return (call $flash_read (i32.and (local.get $a) (i32.const 0xFFFF))))))
+    ;; a tilt sensor cart (gpio.js; -1 without one)
+    (if (i32.ge_s (call $tilt_read (local.get $a)) (i32.const 0)) (then (return (call $tilt_read (local.get $a)))))
     (if (i32.eq (global.get $saveType) (i32.const ${SAVE_SRAM512}))
       (then (return (i32.load8_u (i32.add (i32.const ${SAVE}) (i32.and (local.get $a) (i32.const 0xFFFF)))))))
     (i32.const 0xFF))
@@ -923,6 +925,7 @@ export function sysWat(L, rom_size, idle_loop, savetype) {
       (then (call $flash_write (i32.and (local.get $a) (i32.const 0xFFFF)) (local.get $v)) (return)))
     (if (i32.eq (global.get $saveType) (i32.const ${SAVE_SRAM}))
       (then (i32.store8 (i32.add (i32.const ${SAVE}) (i32.and (local.get $a) (i32.const 0x7FFF))) (local.get $v)) (return)))
+    (if (call $tilt_write (local.get $a) (local.get $v)) (then (return)))
     (if (i32.eq (global.get $saveType) (i32.const ${SAVE_SRAM512}))
       (then (i32.store8 (i32.add (i32.const ${SAVE}) (i32.and (local.get $a) (i32.const 0xFFFF))) (local.get $v)))))
 

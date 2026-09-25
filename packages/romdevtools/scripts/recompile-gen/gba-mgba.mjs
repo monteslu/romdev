@@ -18,6 +18,8 @@
 //   conditionLut            arm.c conditionLut
 //   vstallLut               memory.c GBAMemoryStallVRAM stallLUT
 //   deadbeef                memory.c _deadbeef (open-bus fetch of a bad region)
+//   romHackRule             GBAOverrideApplyDefaults' unknown-dump rule (header
+//                           bytes, known CRC32s, FLASH1M + RTC + vbaBugCompat)
 //   overrides               overrides.c _overrides: id -> savetype, hardware
 //                           (interface.h HW_* bits, when not HW_NONE), idle loop
 //   exp2fTab                musl __exp2f_data.tab (mGBA's MidiKey2Freq calls exp2f)
@@ -159,6 +161,18 @@ for (const m of ovBody[1].matchAll(/\{\s*"(\w{4})"\s*,\s*(GBA_SAVEDATA_\w+)\s*,\
   overrides[m[1]] = hardware && hardware !== hwEnum.HW_NO_OVERRIDE ? { savetype: saveEnum[m[2]], hardware, idleLoop: idle } : { savetype: saveEnum[m[2]], idleLoop: idle };
 }
 assert.ok(Object.keys(overrides).length > 50 && overrides.AWRE, "override table");
+// GBAOverrideApplyDefaults' ROM-hack rule: header strings compared with
+// strncmp (at their offsets, n bytes), the known dumps' CRC32s, and what an
+// unknown image gets. Kept as bytes, not names.
+const ruleBody = /GBAOverrideApplyDefaults[\s\S]*?\n\}/.exec(ov)[0];
+const crcBody = /static const uint32_t \w+\[\] = \{([\s\S]*?)\};/.exec(ruleBody);
+assert.ok(crcBody, "ROM-hack rule: CRC table");
+const hackCrcs = [...crcBody[1].matchAll(/0x([0-9A-Fa-f]{8})/g)].map((m) => parseInt(m[1], 16));
+const hackMatches = [...ruleBody.matchAll(/!strncmp\("([^"]+)", &\(\(const char\*\) gba->memory\.rom\)\[(0x[0-9A-Fa-f]+)\], (\d+)\)/g)]
+  .map((m) => ({ offset: Number(m[2]), n: Number(m[3]), hex: Buffer.from(m[1] + "\0", "latin1").subarray(0, Number(m[3])).toString("hex") }));
+assert.ok(hackCrcs.length >= 10 && hackMatches.length >= 2, "ROM-hack rule moved; review GBAOverrideApplyDefaults");
+assert.ok(/override\.savetype = GBA_SAVEDATA_FLASH1M;\s*override\.hardware = HW_RTC;\s*override\.vbaBugCompat = true;/.test(ruleBody), "ROM-hack rule's override changed");
+const romHackRule = { matches: hackMatches, knownCrc32: hackCrcs, savetype: saveEnum.GBA_SAVEDATA_FLASH1M, hardware: 1, vbaBugCompat: true };
 assert.ok(/override->id\[0\] == 'F'/.test(ov), "'F' game-code EEPROM rule moved; review GBAOverrideFind");
 
 // --- musl exp2f
@@ -194,6 +208,7 @@ const generated = {
   hleBios: bios.toString("base64"),
   waitstates, dmaOffset, timerPrescale, sioCycles, conditionLut, vstallLut, deadbeef,
   overrides,
+  romHackRule,
   exp2fTab,
   sintab: st.toString("base64"),
 };

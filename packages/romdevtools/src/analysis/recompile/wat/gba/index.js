@@ -35,6 +35,7 @@
 // Plain JS ESM + JSDoc.
 
 import { createHash } from "node:crypto";
+import { crc32 } from "node:zlib";
 import {
   ARM_TABLE, THUMB_TABLE, MGBA_DATA, G, setRegs, armIndex, arm, thumb, localDecls,
 } from "./cpu.js";
@@ -112,16 +113,34 @@ function saveLibrary(img) {
 }
 
 /**
- * mGBA's GBAOverrideFind: the override table, then the 'F' game-code
- * rule (id starting with 'F' saves to EEPROM).
+ * mGBA's GBAOverrideApplyDefaults: the ROM-hack rule (an image whose header
+ * matches but whose CRC32 is not a known dump gets FLASH1M, the RTC and
+ * vbaBugCompat), else GBAOverrideFind: the override table, then the 'F'
+ * game-code rule (id starting with 'F' saves to EEPROM).
  * @param {string} code
- * @returns {{savetype: number, hardware: number, idleLoop: number|null, source: string}}
+ * @param {Uint8Array} [img] the ROM image (for the ROM-hack rule)
+ * @returns {{savetype: number, hardware: number, idleLoop: number|null, vba?: boolean, source: string}}
  */
-function findOverride(code) {
+function findOverride(code, img) {
+  const rule = MGBA_DATA.romHackRule;
+  if (img && rule.matches.some((m) => strncmpAt(img, m.offset, Buffer.from(m.hex, "hex"), m.n))
+      && !rule.knownCrc32.includes(crc32(img))) {
+    return { savetype: rule.savetype, hardware: rule.hardware, idleLoop: null, vba: rule.vbaBugCompat, source: "mGBA ROM-hack rule" };
+  }
   const o = MGBA_DATA.overrides[code];
   if (o) return { savetype: o.savetype, hardware: o.hardware ?? 0, idleLoop: o.idleLoop, source: "mGBA override table" };
   if (code[0] === "F") return { savetype: SAVE_EEPROM, hardware: 0, idleLoop: null, source: "mGBA 'F' game-code rule" };
   return { savetype: SAVE_AUTODETECT, hardware: 0, idleLoop: null, source: "none (runtime autodetect)" };
+}
+
+/** strncmp(lit, &img[off], n) == 0 */
+function strncmpAt(img, off, lit, n) {
+  for (let i = 0; i < n; i++) {
+    const a = lit[i] ?? 0, b = off + i < img.length ? img[off + i] : 0;
+    if (a !== b) return false;
+    if (a === 0) return true;
+  }
+  return true;
 }
 
 const ahashBits = (n) => { let k = 10; while ((1 << k) < 2 * n) k++; return k; };
@@ -321,7 +340,7 @@ const DESCRIBE_CACHE = new WeakMap();
 function describeUncached(img, opts, buttons) {
   const ascii = (a, n) => Array.from(img.subarray(a, a + n), (c) => (c >= 0x20 && c < 0x7f ? String.fromCharCode(c) : " ")).join("").trimEnd();
   const code = img.length >= 0xB0 ? Buffer.from(img.subarray(0xAC, 0xB0)).toString("latin1") : "";
-  const ov = findOverride(code);
+  const ov = findOverride(code, img);
   const lib = saveLibrary(img);
   const staticRom = !opts.interp;
   let nArm = 0;
@@ -351,6 +370,7 @@ function describeUncached(img, opts, buttons) {
     idleLoop: ov.idleLoop,
     // mGBA's override HW_* bits; the cart models the GPIO port and the RTC
     hardware: ov.hardware,
+    vbaBugCompat: !!ov.vba,
     rtc: (ov.hardware & HW_RTC) !== 0,
     staticArms: staticRom,
     uniqueArmWords: nArm,
@@ -585,7 +605,8 @@ export async function* emitWat(rom, opts = {}) {
     ARM_STATIC = "(global.set $ninterp (i32.add (global.get $ninterp) (i32.const 1)))";
     AHASH_FN = "";
   }
-  const savetype = findOverride(d.gameCode).savetype;
+  const ovr = findOverride(d.gameCode, IMG);
+  const savetype = ovr.savetype;
   const idle = d.idleLoop;
   const REGS = L.REGS, IO = L.IO, PROBE = L.PROBE, CKPT = L.CKPT, TRACE = L.TRACE, ABI = L.ABI;
   const pages = d.memoryPages;
@@ -601,7 +622,7 @@ export async function* emitWat(rom, opts = {}) {
 
   yield `(module\n  (memory (export "memory") ${pages})`;
   yield "\n" + sysWat(L, ROMLEN, idle, savetype);
-  yield "\n" + gpioWat(L, findOverride(d.gameCode).hardware);
+  yield "\n" + gpioWat(L, ovr.hardware, !!ovr.vba);
   yield "\n" + swiWat(L);
   yield "\n" + video.colorWat();
   yield "\n" + video.renderWat();
@@ -842,6 +863,8 @@ export async function* emitWat(rom, opts = {}) {
     ;; L R Start Select Up Down Left Right); KEYINPUT order is A B Select
     ;; Start Right Left Up Down R L.
     (local.set $b (i32.load16_u (i32.const ${ABI + 0x100})))
+    ;; the libretro port's solar level buttons (gpio.js $lux_input)
+    (call $lux_input (local.get $b))
     (local.set $k (i32.or (i32.or (i32.or ${PAD_AB}
                                           (i32.shl (i32.and (i32.shr_u (local.get $b) (i32.const 7)) (i32.const 1)) (i32.const 2)))
                                   (i32.or (i32.shl (i32.and (i32.shr_u (local.get $b) (i32.const 6)) (i32.const 1)) (i32.const 3))

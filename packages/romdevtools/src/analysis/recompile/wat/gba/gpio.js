@@ -19,20 +19,80 @@
 import { RTC_CLOCK } from "../../recompile-section.js";
 
 /** interface.h HW_* bits */
-export const HW_RTC = 1;
+export const HW_RTC = 1, HW_RUMBLE = 2, HW_LIGHT_SENSOR = 4, HW_GYRO = 8, HW_TILT = 16;
 export const HW_GPIO = 1 | 2 | 4 | 8 | 16;
+/** gpio.c GBA_LUX_LEVELS */
+const LUX_LEVELS = [5, 11, 18, 27, 42, 62, 84, 109, 139, 183];
+
+// The sensors the reference reads, as romdev's libretro frontend gives them
+// to mGBA's libretro port: no sensor interface, so the rotation source
+// samples 0 for tilt X/Y and gyro Z (_updateRotation), and no rumble
+// interface (the motor state goes nowhere). The solar sensor is the
+// port's manual level, luxLevelIndex 0-10, stepped by the pad's R3 (up)
+// and L3 (down) once per press (retro_run), read as 0xFF - (0x16 +
+// GBA_LUX_LEVELS[index - 1]) (_updateLux, _readLux). The cart keeps the
+// same index from the wasmcart pad's WC_BTN_R3 / WC_BTN_L3, so a verifier
+// pins the reference's sensor input by pressing the same buttons.
 
 /**
  * @param {Record<string, number>} L layout (L.ROM, L.ABI)
  * @param {number} hardware the override's HW_* bits (0: no GPIO device)
- * @returns {string} WAT: `$gpio_write` (always) and the RTC state
+ * @param {boolean} [vba] the override's vbaBugCompat (the ROM-hack rule)
+ * @returns {string} WAT: `$gpio_write`, `$tilt_read`, `$tilt_write`,
+ *   `$lux_input` (always) and the devices' state
  */
-export function gpioWat(L, hardware) {
+export function gpioWat(L, hardware, vba = false) {
+  const tilt = (hardware & HW_TILT) !== 0;
+  const tiltWat = tilt ? `
+  ;; ---- tilt sensor (GBAHardwareTiltWrite / GBAHardwareTiltRead), in the
+  ;; SRAM region of a cart with no SRAM or flash
+  (global $tilt_x (mut i32) (i32.const 0xFFF))
+  (global $tilt_y (mut i32) (i32.const 0xFFF))
+  (global $tilt_state (mut i32) (i32.const 0))
+  (func $tilt_write (param $a i32) (param $v i32) (result i32)
+    (local.set $a (i32.and (local.get $a) (i32.const 0xFFFFFF)))
+    (if (i32.eq (local.get $a) (i32.const 0x8000))
+      (then (if (i32.eq (local.get $v) (i32.const 0x55)) (then (global.set $tilt_state (i32.const 1))))))
+    (if (i32.eq (local.get $a) (i32.const 0x8100))
+      (then (if (i32.and (i32.eq (local.get $v) (i32.const 0xAA)) (i32.eq (global.get $tilt_state) (i32.const 1)))
+        (then (global.set $tilt_state (i32.const 0))
+              ;; 0x3A0 - (x >> 22), the rotation source's x = y = 0
+              (global.set $tilt_x (i32.const 0x3A0))
+              (global.set $tilt_y (i32.const 0x3A0))))))
+    (i32.const 1))
+  (func $tilt_read (param $a i32) (result i32)
+    (local.set $a (i32.and (local.get $a) (i32.const 0xFFFFFF)))
+    (if (i32.eq (local.get $a) (i32.const 0x8200)) (then (return (i32.and (global.get $tilt_x) (i32.const 0xFF)))))
+    (if (i32.eq (local.get $a) (i32.const 0x8300)) (then (return (i32.or (i32.and (i32.shr_u (global.get $tilt_x) (i32.const 8)) (i32.const 0xF)) (i32.const 0x80)))))
+    (if (i32.eq (local.get $a) (i32.const 0x8400)) (then (return (i32.and (global.get $tilt_y) (i32.const 0xFF)))))
+    (if (i32.eq (local.get $a) (i32.const 0x8500)) (then (return (i32.and (i32.shr_u (global.get $tilt_y) (i32.const 8)) (i32.const 0xF)))))
+    (i32.const 0xFF))` : `
+  ;; no tilt sensor: -1 hands the access back to the save memory
+  (func $tilt_write (param $a i32) (param $v i32) (result i32) (i32.const 0))
+  (func $tilt_read (param $a i32) (result i32) (i32.const -1))`;
+  const light = (hardware & HW_LIGHT_SENSOR) !== 0;
+  const luxWat = `
+  ;; the port's manual solar level (luxLevelIndex, wasAdjustingLux), from
+  ;; the pad each frame as retro_run reads R3/L3
+  (global $lux_idx (mut i32) (i32.const 0))
+  (global $lux_adj (mut i32) (i32.const 0))
+  (func $lux_input (param $pad i32)
+    (local $r3 i32) (local $l3 i32)
+    (local.set $l3 (i32.and (i32.shr_u (local.get $pad) (i32.const 12)) (i32.const 1)))
+    (local.set $r3 (i32.and (i32.shr_u (local.get $pad) (i32.const 13)) (i32.const 1)))
+    (if (global.get $lux_adj)
+      (then (global.set $lux_adj (i32.or (local.get $r3) (local.get $l3))) (return)))
+    (if (local.get $r3)
+      (then (if (i32.lt_s (global.get $lux_idx) (i32.const 10)) (then (global.set $lux_idx (i32.add (global.get $lux_idx) (i32.const 1)))))
+            (global.set $lux_adj (i32.const 1)) (return)))
+    (if (local.get $l3)
+      (then (if (i32.gt_s (global.get $lux_idx) (i32.const 0)) (then (global.set $lux_idx (i32.sub (global.get $lux_idx) (i32.const 1)))))
+            (global.set $lux_adj (i32.const 1)))))`;
   if (!(hardware & HW_GPIO)) {
     return `
   ;; no GPIO device on this cart: mGBA drops the write (Write to GPIO address
   ;; on cartridge without GPIO)
-  (func $gpio_write (param $reg i32) (param $v i32))`;
+  (func $gpio_write (param $reg i32) (param $v i32))${tiltWat}${luxWat}`;
   }
   const ROM = L.ROM, TIME = L.ABI + 0x180;
   const rtc = (hardware & HW_RTC) !== 0;
@@ -68,16 +128,16 @@ export function gpioWat(L, hardware) {
       (if (i32.eq (local.get $reg) (i32.const 0xC4))
         (then
           (global.set $gp_latch (i32.and (local.get $v) (i32.const 0xF)))
-          (global.set $gp_pins (i32.or (i32.and (global.get $gp_pins) (i32.xor (global.get $gp_dir) (i32.const -1)))
-            (i32.and (global.get $gp_latch) (global.get $gp_dir))))
+          ${vba ? "(global.set $gp_pins (global.get $gp_latch))" : `(global.set $gp_pins (i32.or (i32.and (global.get $gp_pins) (i32.xor (global.get $gp_dir) (i32.const -1)))
+            (i32.and (global.get $gp_latch) (global.get $gp_dir))))`}
           (call $gp_readpins)
           (br $sw)))
       (if (i32.eq (local.get $reg) (i32.const 0xC6))
         (then
           (global.set $gp_dir (i32.and (local.get $v) (i32.const 0xF)))
-          (global.set $gp_pins (i32.or (i32.and (global.get $gp_pins) (i32.xor (global.get $gp_dir) (i32.const -1)))
+          ${vba ? "" : `(global.set $gp_pins (i32.or (i32.and (global.get $gp_pins) (i32.xor (global.get $gp_dir) (i32.const -1)))
             (i32.and (global.get $gp_latch) (global.get $gp_dir))))
-          (call $gp_readpins)
+          (call $gp_readpins)`}
           (br $sw)))
       (global.set $gp_rw (i32.and (local.get $v) (i32.const 1))))
     (if (global.get $gp_rw)
@@ -92,8 +152,53 @@ export function gpioWat(L, hardware) {
 
   ;; _readPins: the devices this cart has
   (func $gp_readpins
-    ${rtc ? "(call $rtc_readpins)" : ""})
-${rtc ? rtcWat(RTC_BYTES, TIME) : ""}`;
+    ${rtc ? "(call $rtc_readpins)" : ""}
+    ${hardware & HW_GYRO ? "(call $gyro_readpins)" : ""}
+    ${light ? "(call $light_readpins)" : ""})
+${rtc ? rtcWat(RTC_BYTES, TIME) : ""}${hardware & HW_GYRO ? gyroWat() : ""}${light ? lightWat() : ""}${tiltWat}${luxWat}
+  ;; rumble (_rumbleReadPins): the motor bit goes to the frontend's rumble,
+  ;; which this port leaves unconnected; the pins are not touched`;
+}
+
+// _gyroReadPins, the rotation source reading gyro Z = 0
+function gyroWat() {
+  return `
+  (global $gyro_sample (mut i32) (i32.const 0))
+  (global $gyro_edge (mut i32) (i32.const 0))
+  (func $gyro_readpins
+    (local $out i32)
+    (local.set $out (i32.and (global.get $gyro_edge) (i32.eqz (i32.and (global.get $gp_pins) (i32.const 2)))))
+    (if (i32.and (global.get $gp_pins) (i32.const 1))
+      (then (global.set $gyro_sample (i32.const 0x700)) (local.set $out (i32.const 1))))
+    (if (local.get $out)
+      (then
+        (local.set $out (i32.shr_u (global.get $gyro_sample) (i32.const 15)))
+        (global.set $gyro_sample (i32.and (i32.shl (global.get $gyro_sample) (i32.const 1)) (i32.const 0xFFFF)))
+        (call $gp_out (i32.shl (local.get $out) (i32.const 2)))))
+    (global.set $gyro_edge (i32.ne (i32.and (global.get $gp_pins) (i32.const 2)) (i32.const 0))))`;
+}
+
+// _lightReadPins with the port's luminance source
+function lightWat() {
+  const lux = LUX_LEVELS.map((v, i) => `(if (i32.eq (global.get $lux_idx) (i32.const ${i + 1})) (then (return (i32.const ${0xFF - (0x16 + v)}))))`).join("\n    ");
+  return `
+  (global $light_cnt (mut i32) (i32.const 0))
+  (global $light_sample (mut i32) (i32.const 0xFF))
+  (global $light_edge (mut i32) (i32.const 0))
+  (func $light_lux (result i32)
+    ${lux}
+    (i32.const ${0xFF - 0x16}))
+  (func $light_readpins
+    (if (i32.and (global.get $gp_pins) (i32.const 4)) (then (return)))
+    (if (i32.and (global.get $gp_pins) (i32.const 2))
+      (then (global.set $light_cnt (i32.const 0))
+            (global.set $light_edge (i32.const 1))
+            (global.set $light_sample (call $light_lux))))
+    (if (i32.and (i32.and (global.get $gp_pins) (i32.const 1)) (global.get $light_edge))
+      (then (global.set $light_cnt (i32.and (i32.add (global.get $light_cnt) (i32.const 1)) (i32.const 0xFFF)))))
+    (global.set $light_edge (i32.eqz (i32.and (global.get $gp_pins) (i32.const 1))))
+    (call $gp_out (i32.or (i32.shl (i32.ge_u (global.get $light_cnt) (global.get $light_sample)) (i32.const 3))
+                          (i32.and (global.get $gp_pins) (i32.const 7)))))`;
 }
 
 function rtcWat(RTC_BYTES, TIME) {

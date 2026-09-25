@@ -15,7 +15,8 @@ import os from "node:os";
 import path from "node:path";
 import { LibretroHost } from "romdev-core-host/index.js";
 import { resolveCore } from "../src/cores/registry.js";
-import { emitWat, recompileSection } from "../src/analysis/recompile/wat/gba/index.js";
+import { emitWat, recompileSection, describe } from "../src/analysis/recompile/wat/gba/index.js";
+import MGBA_DATA from "../src/analysis/recompile/wat/gba/mgba-data.json" with { type: "json" };
 import { assembleWat } from "../src/analysis/recompile/wat/assemble.js";
 
 const core = (() => { try { return resolveCore("gba"); } catch { return null; } })();
@@ -41,7 +42,7 @@ function makeRom(main, block, size = 0x400) {
  * Run the cart and mGBA side by side for `frames` frames; the first
  * instruction that differs, or null.
  */
-async function lockstep(rom, frames) {
+async function lockstep(rom, frames, press = null) {
   const { bytes } = await assembleWat(emitWat(rom));
   const { instance } = await WebAssembly.instantiate(bytes, {});
   const x = instance.exports;
@@ -100,7 +101,16 @@ async function lockstep(rom, frames) {
     };
     render();
     let bad = pull();
-    for (let f = 0; f < frames && !bad; f++) { ref.stepFrames(1); render(); bad = pull(); }
+    const padPtr = dv().getUint32(x.wc_get_info() + 28, true);
+    for (let f = 0; f < frames && !bad; f++) {
+      // the same button on both: the reference's libretro input, the cart's wasmcart pad
+      const p = press ? press(f) : null;
+      if (press) {
+        ref.setInput({ ports: [p ? { [p.name]: true } : {}] });
+        dv().setUint16(padPtr, p ? p.wc : 0, true);
+      }
+      ref.stepFrames(1); render(); bad = pull();
+    }
     // the picture: the cart's framebuffer against mGBA's, exact RGB
     const fb = lay.framebuffer, rs = ref.screenshotRgba(), d = dv();
     let px = 0;
@@ -148,8 +158,8 @@ test("ARM code in IWRAM runs what the pipeline fetched: stores to the next two i
   await assertLockstep(makeRom(main, block), 3);
 });
 
-async function assertLockstep(rom, frames) {
-  const r = await lockstep(rom, frames);
+async function assertLockstep(rom, frames, press = null) {
+  const r = await lockstep(rom, frames, press);
   const { bad, n, px } = r;
   assert.equal(bad, null, bad ? `diverged at instruction ${bad.at} (${bad.why}): cart ${bad.cart.join(" ")} vs mGBA ${bad.ref.join(" ")}` : "");
   assert.ok(n > 1000, `compared ${n} instructions`);
@@ -252,6 +262,81 @@ test("GPIO RTC: the control register, reset, 12-hour mode and the time command",
   // a control write (0x46 with data 0x40) sets 24-hour again
   assert.deepEqual((await assertLockstep(rtcRom([{ cmd: 0x06, bytes: 0 }, { cmd: 0x46, data: 0x40, bytes: 0 }, { cmd: 0xE6, bytes: 3 }]), 3)).iwram,
     rtcBits([0x22, 0x13, 0x20]));
+});
+
+// ---- the other GPIO devices and the SRAM-region tilt sensor
+
+/** An ARM program at $100 with labels: items are words, or {label}, or {b: cond, to: label}. */
+function armProg(items) {
+  const at = new Map();
+  let pc = 0x100;
+  for (const it of items) { if (it.label) at.set(it.label, pc); else pc += 4; }
+  const w = [];
+  pc = 0x100;
+  for (const it of items) {
+    if (it.label) continue;
+    if (it.b !== undefined) w.push(((it.b << 28) | 0x0A000000 | (((at.get(it.to) - pc - 8) >> 2) & 0xFFFFFF)) >>> 0);
+    else w.push(it);
+    pc += 4;
+  }
+  return w;
+}
+
+/** A cart whose game code names these devices in mGBA's override table. */
+function deviceRom(code, items) {
+  const rom = makeRom([0xE1A00000, 0xEA00000D], armProg(items), 0x400);
+  rom.set([...Buffer.from(code)], 0xAC);
+  return rom;
+}
+
+const GPIO_SETUP = (dir) => [0xE3A04302, A.add(4, 4, 0xC4), 0xE3A09403,   // r4 = $080000C4, r9 = $03000000
+  A.mov(0, 1), A.strh(0, 4, 4), A.mov(0, dir), A.strh(0, 4, 2)];
+
+test("GPIO gyro: the sample (gyro Z = 0 from the port's rotation source) shifted out on the clock pin, as mGBA", { skip, timeout: 300000 }, async () => {
+  const rom = deviceRom("RZWE", [...GPIO_SETUP(3), { label: "loop" },
+    A.mov(0, 1), A.strh(0, 4), A.mov(0, 0), A.strh(0, 4), A.mov(5, 0), A.mov(2, 16), { label: "bit" },
+    A.mov(0, 2), A.strh(0, 4), A.mov(0, 0), A.strh(0, 4),
+    A.ldrh(3, 4), A.and(3, 3, 4), A.lsl(5, 5, 1), A.orrLsr(5, 5, 3, 2),
+    A.subs(2, 2, 1), { b: 1, to: "bit" }, A.str(5, 9), A.add(8, 8, 1), { b: 14, to: "loop" }]);
+  const { iwram } = await assertLockstep(rom, 3);
+  assert.equal(iwram[0] & 0xFFFF, 0x0E00);   // 0x700 read MSB first, one clock late
+});
+
+test("GPIO solar sensor: the counter against 0xFF - lux, the level stepped by R3/L3 as the libretro port does", { skip, timeout: 300000 }, async () => {
+  // count clock pulses after a reset until the comparator bit (pin 3) rises
+  const rom = deviceRom("U3IE", [...GPIO_SETUP(7), { label: "loop" },
+    A.mov(0, 2), A.strh(0, 4), A.mov(0, 0), A.strh(0, 4), A.mov(5, 0), { label: "cnt" },
+    A.mov(0, 1), A.strh(0, 4), A.mov(0, 0), A.strh(0, 4), A.add(5, 5, 1),
+    A.ldrh(3, 4), 0xE3130008, { b: 0, to: "cnt" },                     // tst r3, #8 ; beq cnt
+    A.str(5, 9), A.add(8, 8, 1), { b: 14, to: "loop" }]);
+  // R3 held for 2 frames (one step), released, R3 twice more, then L3 once
+  const seq = { 2: "r3", 3: "r3", 6: "r3", 9: "r3", 12: "l3" };
+  const press = (f) => seq[f] ? { name: seq[f], wc: seq[f] === "r3" ? 1 << 13 : 1 << 12 } : null;
+  const { iwram } = await assertLockstep(rom, 16, press);
+  // index 2 at the end: the comparator rises on pulse 0xFF - (0x16 + 11)
+  assert.equal(iwram[0], 0xFF - (0x16 + 11));
+});
+
+test("tilt sensor: 0xFFF until $55/$AA latch the port's rotation (0 -> 0x3A0), read in the SRAM region", { skip, timeout: 300000 }, async () => {
+  const ldrb = (rd, rn, off) => (0xE5D00000 | (rn << 16) | (rd << 12) | off) >>> 0;
+  const strb = (rd, rn, off) => (0xE5C00000 | (rn << 16) | (rd << 12) | off) >>> 0;
+  const rom = deviceRom("KYGE", [0xE3A0640E, 0xE2866C80,             // r6 = $0E008000
+    ldrb(1, 6, 0x200), ldrb(2, 6, 0x300), ldrb(3, 6, 0x400), ldrb(5, 6, 0x500),
+    A.mov(0, 0x55), strb(0, 6, 0), A.mov(0, 0xAA), strb(0, 6, 0x100),
+    ldrb(7, 6, 0x200), ldrb(10, 6, 0x300), ldrb(11, 6, 0x400), ldrb(12, 6, 0x500),
+    { label: "end" }, { b: 14, to: "end" }]);
+  await assertLockstep(rom, 3);
+});
+
+test("mGBA's ROM-hack rule: a header it matches with an unknown CRC32 gets the RTC, FLASH1M and vbaBugCompat's GPIO", { skip, timeout: 300000 }, async () => {
+  const rule = MGBA_DATA.romHackRule;
+  const m = rule.matches.find((x) => x.n === 4);
+  const rom = rtcRom([{ cmd: 0xA6, bytes: 7 }]);
+  rom.set(Buffer.from(m.hex, "hex"), m.offset);
+  const d = describe(rom);
+  assert.equal(d.saveTypeSource, "mGBA ROM-hack rule");
+  assert.ok(d.rtc && d.vbaBugCompat);
+  await assertLockstep(rom, 3);
 });
 
 /**
