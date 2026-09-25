@@ -30,6 +30,10 @@ function gsuAsm(prog, org = 0x8000) {
       switch (m) {
         case "stop": out.push(0x00); break;
         case "nop": out.push(0x01); break;
+        case "cache": out.push(0x02); break;
+        case "lsr": out.push(0x03); break;
+        case "hib": out.push(0xc0); break;
+        case "sub": out.push(0x60 | R(a)); break;
         case "to": out.push(0x10 | R(a)); break;
         case "with": out.push(0x20 | R(a)); break;
         case "from": out.push(0xb0 | R(a)); break;
@@ -301,6 +305,38 @@ function romT4(seed) {
   return superfxRom({ code: c, nmi: 0x8040, irq: 0x8180, banks: 4, blobs: [[0x1000, gsu], [0x8000, data]] });
 }
 
+/**
+ * t5: directed edge values. DIV2 and ASR of -1, -2, 1, $8000, $7FFF, 0, -3
+ * (snes9x's DIV2 makes -1 into 0 where ASR gives -1); registers past 16 bits
+ * inside a burst (INC of $FFFF, ADD of the result to itself, SUB going
+ * negative, then LSR / HIB of it); R15 running past $FFFF in LoROM bank 1
+ * (the fetch wraps to $0000) with CACHE and LINK there, R11 and R15 stored.
+ */
+function romT5() {
+  const div = [];
+  let a = 0x0100;
+  for (const v of [0xffff, 0xfffe, 0x0001, 0x8000, 0x7fff, 0x0000, 0xfffd]) {
+    div.push(["iwt", "r0", v], ["alt1"], ["db", [0x96]], ["sm", "r0", a], ["iwt", "r0", v], ["db", [0x96]], ["sm", "r0", a + 2]);
+    a += 4;
+  }
+  const main = gsuAsm([
+    ...div,
+    ["iwt", "r3", 0xffff], ["inc", "r3"], ["from", "r3"], ["sm", "r3", 0x0200], ["with", "r3"], ["add", "r3"], ["sm", "r3", 0x0202],
+    ["iwt", "r4", 0x0001], ["iwt", "r5", 0x0003], ["from", "r4"], ["to", "r6"], ["sub", "r5"], ["sm", "r6", 0x0204],
+    ["from", "r6"], ["to", "r7"], ["lsr"], ["sm", "r7", 0x0206], ["from", "r6"], ["to", "r8"], ["hib"], ["sm", "r8", 0x0208],
+    ["iwt", "r9", 0x01], ["iwt", "r1", 0xfff8], ["from", "r1"], ["alt1"], ["ljmp", "r9"], ["nop"],
+  ], ROM_DEFAULT);
+  const top = gsuAsm([["nop"], ["nop"], ["nop"], ["nop"], ["nop"], ["nop"], ["nop"], ["nop"]], 0xfff8);
+  const wrap = new Uint8Array(0x40).fill(0x01);
+  wrap.set(gsuAsm([["cache"], ["link", 3], ["iwt", "r15", 0x0010], ["nop"]], 0), 0);
+  wrap.set(gsuAsm([["sm", "r11", 0x020a], ["cache"], ["sm", "r15", 0x020c], ["iwt", "r0", 0x1234], ["sm", "r0", 0x020e],
+    "spin:", ["inc", "r2"], ["bra", "spin"], ["nop"]], 0x10), 0x10);
+  const code = [...PRELUDE, ...sta(0, 0x34), ...sta(0, 0x38), ...sta(0x19, 0x3a), ...sta(0x80, 0x37), 0x9c, 0x39, 0x30,
+    ...sta(0, 0x1e), ...sta(0x90, 0x1f), ...sta(0x80, 0x00, 0x42), 0x80, 0xfe];
+  const c = new Uint8Array(0x200).fill(0xea); c.set(code, 0); c.set(NMI_LOG, 0x100);
+  return superfxRom({ code: c, nmi: 0x8100, blobs: [[0x1000, main], [0x8000, wrap], [0xfff8, top]] });
+}
+
 /** snes9x's state (16 hex digits of sha1: WRAM, GSU RAM, $3000-$32FF) at reference frames. */
 const SNES9X = {
   t1: { 10: ["bb6dc42ac58815ef", "585482152da0d155", "00686f242bf52064"], 60: ["cc74b07ab00b9802", "7e736ddbbe9e207b", "7c6ae226716cb3f2"] },
@@ -316,6 +352,7 @@ const SNES9X = {
   t3_6: { 30: ["25c95c47da30cf2a", "ba5526a52a745eb4", "ec3baab32dfe6657"], 90: ["c13cd4423c324df3", "ba5526a52a745eb4", "006db1652a2eea56"] },
   t4_1: { 30: ["2c28a35295a9f2fc", "3e0ad6b7da03779a", "9a10379ddc2356d2"], 90: ["6d625b53bd6318b1", "3e0ad6b7da03779a", "9a10379ddc2356d2"] },
   t4_2: { 30: ["a6bc11652771cfb1", "f62af43340e19485", "0769dbc5364e733e"], 90: ["8e6709a1a2feeb67", "f62af43340e19485", "0769dbc5364e733e"] },
+  t5: { 30: ["4c5b382346fe1080", "bd219c44247e30a4", "6dfdd6e20f745be3"], 90: ["841c43f6e639fdad", "bd219c44247e30a4", "e51ab2561c919d97"] },
   t4_3: { 30: ["455ed1a3e5dd29f7", "0d5763a698c94470", "53b72b5cdda522ff"], 90: ["2abf050bd390f545", "0d5763a698c94470", "53b72b5cdda522ff"] },
 };
 
@@ -345,6 +382,7 @@ const ROMS = {
   t2c: () => romT2(3, 0x18 | 0 | 0x20, 0), t2d: () => romT2(4, 0x18 | 3 | 0x24, 1),
   t3_1: () => romT3(1), t3_2: () => romT3(2), t3_3: () => romT3(3), t3_4: () => romT3(4), t3_5: () => romT3(5), t3_6: () => romT3(6),
   t4_1: () => romT4(1), t4_2: () => romT4(2), t4_3: () => romT4(3),
+  t5: romT5,
 };
 
 // ---------------------------------------------------------------- tests
@@ -431,6 +469,16 @@ test("PLOT / RPIX in every mode and height, CMODE options, COLOR / GETC / MERGE,
     const { out } = await cartHashes(ROMS[k](), [30, 90]);
     assert.deepEqual(out, SNES9X[k], k);
   }
+});
+
+test("edge values: DIV2 of -1 is 0 (ASR keeps -1), registers past 16 bits inside a burst, R15 past $FFFF with CACHE and LINK, as snes9x", async () => {
+  const { out, ex, d } = await cartHashes(ROMS.t5(), [30, 90]);
+  assert.deepEqual(out, SNES9X.t5);
+  const ram = new Uint16Array(ex.memory.buffer, d.memory.SRAM + 0x100, 14);
+  assert.deepEqual([ram[0], ram[1]], [0x0000, 0xffff], "DIV2 / ASR of -1");
+  assert.deepEqual([ram[2], ram[3]], [0xffff, 0xffff], "DIV2 / ASR of -2");
+  const hi = new Uint16Array(ex.memory.buffer, d.memory.SRAM + 0x200, 8);
+  assert.deepEqual([...hi], [0x0000, 0x0000, 0xfffe, 0x7fff, 0x00ff, 0x0005, 0x0017, 0x1234]);
 });
 
 test("a plain cart carries no GSU and keeps its PPU window", async () => {
