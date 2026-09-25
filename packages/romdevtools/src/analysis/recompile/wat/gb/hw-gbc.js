@@ -623,8 +623,10 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
     (if (i32.eq (local.get $x) (i32.const 0xFF6B))
       (then (return (i32.load8_u (i32.add (i32.const ${OBJPAL})
         (i32.and (i32.load8_u (i32.const ${IOREG + 0x6A})) (i32.const 0x3F)))))))
+    ;; SVBK reads back what was written | $F8 (ioamhram[0x170]); a 0 still
+    ;; maps bank 1 ($svbk) but reads 0
     (if (i32.eq (local.get $x) (i32.const 0xFF70))
-      (then (return (i32.or (global.get $svbk) (i32.const 0xF8)))))
+      (then (return (i32.load8_u (i32.const ${IOREG + 0x70})))))
     ;; NR52 status and wave RAM come from the APU (apu.js)
     (if (i32.or (i32.eq (local.get $x) (i32.const 0xFF26)) (i32.eq (i32.and (local.get $x) (i32.const 0xFFF0)) (i32.const 0xFF30)))
       (then (return (call $apu_ffr (local.get $x)))))
@@ -880,9 +882,10 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
                     (i32.and (i32.add (local.get $i) (i32.const 1)) (i32.const 0x3F))))))
         (return)))
     (if (i32.eq (local.get $x) (i32.const 0xFF70))
-      (then (global.set $svbk
+      (then ${cgb ? `(global.set $svbk
               (if (result i32) (i32.eqz (i32.and (local.get $v) (i32.const 7)))
                 (then (i32.const 1)) (else (i32.and (local.get $v) (i32.const 7)))))
+            (i32.store8 (i32.const ${IOREG + 0x70}) (i32.or (local.get $v) (i32.const 0xF8)))` : ""}
             (return)))
     (call $iostore (i32.sub (local.get $x) (i32.const 0xFF00)) (local.get $v)))
 

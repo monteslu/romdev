@@ -214,6 +214,17 @@ test("the unused opcodes run as gambatte runs them: a 4-cycle fetch and nothing 
   await assertLockstep(makeRom(main), 5);
 });
 
+for (const cgb of [false, true]) {
+  test(`${cgb ? "CGB" : "DMG"}: SVBK reads back the value written | $F8 (0 selects bank 1 but reads 0)`, { skip, timeout: 120000 }, async () => {
+    const main = [0xF3, 0xF0, 0x70, 0x47,           // b = SVBK at power-on
+      0xAF, 0xE0, 0x70, 0xF0, 0x70, 0x4F,            // SVBK = 0 ; c = SVBK
+      0x3E, 0x05, 0xE0, 0x70, 0xF0, 0x70, 0x57,      // SVBK = 5 ; d = SVBK
+      0x3E, 0x0F, 0xE0, 0x70, 0xF0, 0x70, 0x5F,      // SVBK = $0F ; e = SVBK
+      0x18, 0xE7];
+    await assertLockstep(makeRom(main, {}, 0, { cgb }), 5);
+  });
+}
+
 test("TIMA, TMA, TAC and IF at the access cycle, with read-modify-write and push timing", { skip, timeout: 120000 }, async () => {
   // Timer at 262144 Hz (TAC=5): every read or write lands at a different
   // phase of the 16-cycle tick as the loop runs, so the value read back
