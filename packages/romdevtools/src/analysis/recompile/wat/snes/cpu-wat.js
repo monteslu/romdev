@@ -200,7 +200,7 @@ export function memWat(lay) {
     (local.get $v))
 
   (func $rd8m (param $a i32) (result i32)
-    (local $e i32) (local $x i32)
+    (local $e i32) (local $x i32) (local $c i32)
     (local.set $a (i32.and (local.get $a) (i32.const 0xFFFFFF)))
     (local.set $e (i32.add (i32.const ${MAPTAB}) (i32.shl (i32.shr_u (local.get $a) (i32.const 12)) (i32.const 3))))
     (local.set $x (i32.and (local.get $a) (i32.const 0xFFFF)))
@@ -208,7 +208,11 @@ export function memWat(lay) {
       (br_table $none $direct $direct $ppu $cpu $sramlo $sramhi $chip $none (i32.load (local.get $e))))
       ;; ROM / RAM
       (return (i32.load8_u (i32.add (i32.load offset=4 (local.get $e)) (i32.and (local.get $a) (i32.const 0xFFF))))))
-      ;; $2000-$3FFF: the B bus. $2100-$21FF are the PPU/APU/WRAM-port registers.
+      ;; $2000-$3FFF: the B bus. A chip's register here first (coproc.js
+      ;; $chip_b_rd: the MSU-1, S-RTC, BS-X ports), then $2100-$21FF, the
+      ;; PPU/APU/WRAM-port registers.
+      (local.set $c (call $chip_b_rd (local.get $x)))
+      (if (i32.ge_s (local.get $c) (i32.const 0)) (then (return (local.get $c))))
       (if (i32.eq (i32.and (local.get $x) (i32.const 0xFF00)) (i32.const 0x2100))
         (then (return (call $ppu_read (i32.and (local.get $x) (i32.const 0xFF))))))
       (return (global.get $ob)))
@@ -474,6 +478,8 @@ export function memWat(lay) {
       (br_table $none $none $ram $ppu $cpu $sramlo $sramhi $chip $none (i32.load (local.get $e))))
       (i32.store8 (i32.add (i32.load offset=4 (local.get $e)) (i32.and (local.get $a) (i32.const 0xFFF))) (local.get $v))
       (return))
+      ;; a chip's register on the B bus first (coproc.js $chip_b_wr)
+      (if (call $chip_b_wr (local.get $x) (local.get $v)) (then (return)))
       (if (i32.eq (i32.and (local.get $x) (i32.const 0xFF00)) (i32.const 0x2100))
         (then (call $ppu_write (i32.and (local.get $x) (i32.const 0xFF)) (local.get $v))))
       (return))

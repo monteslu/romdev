@@ -1,0 +1,2 @@
+// Freestanding stand-in for <cstdint>.
+#include <stdint.h>

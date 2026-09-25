@@ -1,0 +1,32 @@
+// Freestanding stand-in for <string>: the few std::string operations the
+// MSU-1 and BS-X sources use to build file names (a fixed 256-byte buffer).
+#ifndef _ROMDEV_STRING_
+#define _ROMDEV_STRING_
+namespace std {
+class string {
+	char s[256];
+	int n;
+	void add (const char *p) { while (*p && n < 255) s[n++] = *p++; s[n] = 0; }
+public:
+	string () : n(0) { s[0] = 0; }
+	string (const char *p) : n(0) { s[0] = 0; add(p); }
+	const char *c_str () const { return s; }
+	size_t size () const { return (size_t) n; }
+	string &operator+= (const string &o) { add(o.s); return *this; }
+	string &operator+= (const char *p) { add(p); return *this; }
+	friend string operator+ (const string &a, const string &b) { string r(a); r += b; return r; }
+	friend string operator+ (const string &a, const char *b) { string r(a); r += b; return r; }
+	friend string operator+ (const char *a, const string &b) { string r(a); r += b; return r; }
+};
+inline string to_string (unsigned long long v)
+{
+	char t[24]; int k = 0;
+	do { t[k++] = (char) ('0' + v % 10); v /= 10; } while (v);
+	char o[24]; for (int i = 0; i < k; i++) o[i] = t[k - 1 - i]; o[k] = 0;
+	return string(o);
+}
+inline string to_string (int v) { if (v < 0) return string("-") + to_string((unsigned long long) -(long long) v); return to_string((unsigned long long) v); }
+inline string to_string (unsigned v) { return to_string((unsigned long long) v); }
+inline string to_string (long v) { return to_string((int) v); }
+}
+#endif

@@ -73,6 +73,19 @@ function resolveInputs(sessionKey, args, opName) {
     // is pinned to the same frames: its settle runs see baseMs, and run
     // settle + k sees baseMs + k * stepMs.
     if (layout.clock) h.setPinnedClock({ baseMs: layout.clock.baseMs, stepMs: layout.clock.stepMs, startRun: () => h.status.settleFramesUsed ?? Infinity });
+    // Files the core opens beside its ROM (an SNES MSU-1 pack): loadMedia
+    // puts the ROM at /rom<ext> in the core's file system, so <stem><suffix>
+    // next to the reference ROM goes to /rom<suffix>.
+    if (layout.companionFiles?.length) {
+      const fs = h.mod?.FS;
+      if (!fs) throw new Error(`frame({op:'${opName}'}): the cart needs companion files (${layout.companionFiles.join(", ")}) but the ${resolved.coreName} core has no file system to put them in`);
+      const stem = refPath.replace(/\.[^./\\]*$/, "");
+      for (const suf of layout.companionFiles) {
+        const src = stem + suf;
+        if (!existsSync(src)) throw new Error(`frame({op:'${opName}'}): the cart was built with ${path.basename(src)} beside its ROM, and the reference needs it too: no file at ${src}`);
+        fs.writeFile("/rom" + suf, new Uint8Array(readFileSync(src)));
+      }
+    }
     await h.loadMedia({ platform, path: refPath, beforeSettle: hooks.beforeSettle });
     return h;
   };

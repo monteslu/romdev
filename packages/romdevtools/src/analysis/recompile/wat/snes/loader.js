@@ -327,6 +327,8 @@ function finish(rom, calc, hiRom, extended, headerStripped, interleaved, refusal
   if (chip?.board) map = chip.board({ hiRom, extended, map }) ?? map;
   // ... and its own SRAM size (InitROM: the SuperFX case reads ROM[$7FBD])
   if (chip?.sramSize) sramSize = chip.sramSize(rom, sramSize);
+  // ... and SNESGameFixes.SRAMInitialValue (InitROM: 0x00 for the SETA chips)
+  const sramInit = chip?.sramInit;
   if (!refusal && coprocessor && !chip) refusal = `cart uses the ${coprocessor} coprocessor; the SNES recompiler models the base console only`;
   if (!refusal && !chip?.boards?.includes(map) && !["LoROM", "HiROM", "ExtendedHiROM", "JumboLoROM", ...FIXES.loRomMaps.map((m) => m.map).filter((m) => MAPS_SUPPORTED.has(m))].includes(map)) {
     refusal = `cart uses snes9x's ${map} board map (an add-on / satellite board); the SNES recompiler models plain cartridges`;
@@ -343,7 +345,7 @@ function finish(rom, calc, hiRom, extended, headerStripped, interleaved, refusal
   return {
     img: rom.slice(0, calc), calculatedSize: calc, hiRom, extended, headerStripped, interleaved,
     header, romName, romNameRaw: nameRaw.slice(0, n), romId, romSize, sramSize, romSpeed, romType, region, pal,
-    map, coprocessor, refusal,
+    map, coprocessor, refusal, ...(sramInit != null ? { sramInit } : {}),
   };
 }
 

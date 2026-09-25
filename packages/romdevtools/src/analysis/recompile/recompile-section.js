@@ -12,6 +12,11 @@
 //     "platform": "sms",            source platform of the ROM the cart was built from
 //     "reference": "sms",           loadMedia platform id of the reference core (default = platform)
 //     "romSha1": "<hex>",           sha1 of the source ROM; checked against the reference ROM
+//     "companionFiles": [".msu", "-1.pcm"]
+//                                   files the reference core opens beside its ROM (an
+//                                   SNES MSU-1 pack): the verifier copies <rom stem><suffix>
+//                                   from the reference ROM's directory into the core's file
+//                                   system next to the ROM it loads
 //     "clock": { "baseMs": 1700000000000, "stepMs": 16.667 }
 //                                   the cart reads the wasmcart host's frame clock (a
 //                                   game-visible real-time clock); the verifier pins the
@@ -294,6 +299,12 @@ export function validateRecompileLayout(layout) {
     const c = out.clock;
     if (typeof c !== "object" || !(Number.isInteger(c.baseMs) && c.baseMs % 1000 === 0) || !(c.stepMs > 0)) {
       throw new Error("clock must be {baseMs: whole seconds in ms, stepMs > 0}");
+    }
+  }
+  if (out.companionFiles != null) {
+    const c = out.companionFiles;
+    if (!Array.isArray(c) || !c.every((f) => typeof f === "string" && f && !/[\\/]/.test(f))) {
+      throw new Error("companionFiles must be file-name suffixes (e.g. '.msu', '-1.pcm'), with no path separators");
     }
   }
   if (out.screen?.origin != null) {

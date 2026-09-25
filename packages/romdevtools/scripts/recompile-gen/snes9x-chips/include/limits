@@ -1,0 +1,8 @@
+// Freestanding stand-in for <limits>: srtcemu.cpp asks numeric_limits<time_t>::max().
+#ifndef _ROMDEV_LIMITS_
+#define _ROMDEV_LIMITS_
+namespace std {
+template <class T> struct numeric_limits;
+template <> struct numeric_limits<long long> { static constexpr long long max () { return 0x7fffffffffffffffLL; } };
+}
+#endif

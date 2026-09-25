@@ -40,6 +40,7 @@ import { ppuDataWat, ppuWat, renderWat } from "./ppu-wat.js";
 import { apuWat, apuDataWat, apuGlobalsWat, APU_OFF } from "./apu-wat.js";
 import { regwatchWat, stepHeadWat, frameWat } from "./frame-wat.js";
 import { chipFor, chipWat } from "./coproc.js";
+import { findMsuPack, msuPages, msuDataWat } from "./msu1.js";
 
 /** Platform ids this backend accepts. */
 export const platforms = ["snes"];
@@ -140,6 +141,13 @@ export function describe(rom, opts = {}) {
     layout.CHIP = layout.pages * 0x10000;
     layout.pages += chip.pages;
   }
+  // An MSU-1 pack beside the ROM (msu1.js): snes9x's S9xMSU1ROMExists.
+  const msu = findMsuPack(opts.romPath);
+  if (msu) {
+    layout.MSU = layout.pages * 0x10000;
+    layout.pages += msuPages(msu);
+    if (!refusal && fixes.apuSpeedup) refusal = "MSU-1 pack on a title with snes9x's APU speedup: the resampled DSP stream plus the MSU-1 mix is not modelled";
+  }
   const tn = opts.traceEntries;
   if (tn != null) {
     if (!Number.isInteger(tn) || tn < 1024 || tn > REGRING_MAX || (tn & (tn - 1))) {
@@ -150,7 +158,7 @@ export function describe(rom, opts = {}) {
     layout.REGRING_N = tn;
     layout.pages += Math.ceil((tn * REGRING_STRIDE) / 0x10000);
   }
-  return {
+  const res = {
     platform: "snes",
     referenceCore: "snes9x",
     supported: !refusal,
@@ -186,7 +194,11 @@ export function describe(rom, opts = {}) {
       breakArm: "DEBUG / must-fail control: 24-bit ROM address whose arm also flips bit 0 of A",
       traceEntries: "power of two 1024-262144: also record the 65816 registers per ROM instruction for findDiverge level:'instruction' (off by default)",
     },
+    msu: msu ? { dataBytes: msu.data.length, tracks: msu.tracks.map((t) => t.num) } : null,
   };
+  // the pack's bytes, for emitWat (kept out of the JSON the tool returns)
+  Object.defineProperty(res, "msu1", { value: msu, enumerable: false });
+  return res;
 }
 
 /** loadMedia platform id of the reference core. */
@@ -275,6 +287,8 @@ export function recompileSection(rom, sha1, opts = {}) {
       trap: L.trap,
       pcRing: L.pcRing,
       ...(chipFor(d.coprocessor)?.section?.(d) ?? {}),
+      // the MSU-1 pack's files the reference core must find beside its ROM
+      ...(d.msu1 ? { companionFiles: d.msu1.companions } : {}),
       ...(opts.breakArm != null ? { debugBreakArm: parseBreakArm(opts.breakArm), warning: "built with options.breakArm: one instruction also flips bit 0 of A (a must-fail control), NOT a faithful cart" } : {}),
       // the ROM pc ring in recompile-section.js's `trace` schema: it records
       // ROM pcs only (bank < $7E, offset >= $8000) minus the skip ranges, so
@@ -404,6 +418,8 @@ export async function* emitWat(rom, opts = {}) {
   yield "\n" + `  (data (i32.const ${MAPTAB}) "` + [...escChunks(buildMemMap({ map: d.board, romSize: img.length, romSizeByte: d.romSizeByte, sramSizeByte: d.sramSizeByte, sramBase: lay.SRAM, chipMap }))].join("") + '")';
   // the coprocessor, or the no-chip bodies of its hooks (coproc.js)
   yield "\n" + chipWat(d, lay);
+  // an MSU-1 pack's data file and tracks (msu1.js)
+  if (d.msu1) yield* msuDataWat(lay.MSU, d.msu1);
   yield "\n" + `  (data (i32.const ${ICOST}) "` + [...escChunks(interpCostTable())].join("") + '")';
   yield "\n" + interpWat(lay);
   // the RAM interpreter: every opcode lowered exactly as an arm is

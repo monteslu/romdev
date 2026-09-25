@@ -29,10 +29,13 @@
 // Plain JS ESM + JSDoc.
 
 import { superfx } from "./superfx.js";
+import { SNES9X_HLE_CHIPS } from "./chips-snes9x.js";
+import { msuWat } from "./msu1.js";
 
 /** The chip modules (add one line per chip). */
 const CHIP_LIST = [
   superfx,
+  ...SNES9X_HLE_CHIPS,   // DSP-1..4, ST010/011/018, OBC1, S-RTC
 ];
 
 /** @type {Map<string, any>} loader.js coprocessor name -> chip module */
@@ -55,6 +58,12 @@ const DEFAULTS = {
   chip_dma_byte: "(func $chip_dma_byte (param $i i32) (result i32) (i32.const 0))",
   // HC_HCOUNTER_MAX_EVENT's chip work before the line ends (S9xSuperFXExec)
   chip_line: "(func $chip_line)",
+  // ppu.cpp S9xGetPPU / S9xSetPPU past the PPU's own registers: a chip's
+  // register on the $2000-$3FFF bus (the S-RTC's $2800/$2801, the BS-X
+  // $2188-$219F, the MSU-1 $2000-$2007). $x is the 16-bit address; a read
+  // returns -1 and a write 0 when the address is not the chip's.
+  chip_b_rd: "(func $chip_b_rd (param $x i32) (result i32) (i32.const -1))",
+  chip_b_wr: "(func $chip_b_wr (param $x i32) (param $v i32) (result i32) (i32.const 0))",
 };
 
 /**
@@ -77,5 +86,33 @@ export function chipWat(d, lay) {
   for (const [name, body] of Object.entries(DEFAULTS)) {
     if (!new RegExp(`\\(func \\$${name}[\\s)]`).test(own)) parts.push("  " + body);
   }
-  return parts.join("\n") + "\n" + own;
+  const text = parts.join("\n") + "\n" + own;
+  return d.msu1 ? withMsu(text, lay, d) : text;
+}
+
+/**
+ * An MSU-1 pack (msu1.js) beside whatever chip the cart has: ppu.cpp looks
+ * at $2000-$2007 before any chip register, and S9xReset resets the MSU-1
+ * along with the chip. The chip's (or default) $chip_b_rd / $chip_b_wr /
+ * $chip_reset become the inner half of the composed ones.
+ * @param {string} text  chipWat's hooks for the chip alone
+ * @param {any} lay
+ * @param {any} d
+ */
+function withMsu(text, lay, d) {
+  for (const h of ["chip_b_rd", "chip_b_wr", "chip_reset"]) {
+    text = text.replace(new RegExp(`\\(func \\$${h}([\\s)])`), `(func $${h}_chip$1`);
+  }
+  return text + msuWat(lay, d.msu1) + `
+  (func $chip_b_rd (param $x i32) (result i32)
+    (local $v i32)
+    (local.set $v (call $msu_b_rd (local.get $x)))
+    (if (i32.ge_s (local.get $v) (i32.const 0)) (then (return (local.get $v))))
+    (call $chip_b_rd_chip (local.get $x)))
+  (func $chip_b_wr (param $x i32) (param $v i32) (result i32)
+    (if (call $msu_b_wr (local.get $x) (local.get $v)) (then (return (i32.const 1))))
+    (call $chip_b_wr_chip (local.get $x) (local.get $v)))
+  (func $chip_reset
+    (call $msu_power)
+    (call $chip_reset_chip))`;
 }

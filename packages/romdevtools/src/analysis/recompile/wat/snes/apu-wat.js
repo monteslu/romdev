@@ -615,9 +615,13 @@ ${speed ? resamplerWat(lay, speed) : `
   ;; ratio is 1 (SoundInputRate = SoundPlaybackRate = 32040), so snes9x
   ;; pulls the DSP stream as it is: straight into the host's ring.
   (func $apu_out (param $l i32) (param $r i32)
-    (call $apu_put ${lg("l")} ${lg("r")}))
-  (func $apu_flush
-    (i32.store ${c(lay.ABI + 0x100)} (i32.and ${gg("apu_nout")} ${c(AUDIO_FRAMES - 1)})))`}
+    (call $apu_put ${lg("l")} ${lg("r")})${lay.MSU != null ? `
+    ;; SPC_DSP_OUT_HOOK's MSU-1 half (msu1.js)
+    (call $msu_sample)` : ""})
+  (func $apu_flush${lay.MSU != null ? `
+    ;; with an MSU-1, S9xGetSampleCount / S9xMixSamples (msu1.js)
+    (call $msu_flush))` : `
+    (i32.store ${c(lay.ABI + 0x100)} (i32.and ${gg("apu_nout")} ${c(AUDIO_FRAMES - 1)})))`}`}
 
   ;; S9xAPUExecute: run the SMP up to CPU position $pos (master clocks from
   ;; the start of this scanline, snes9x's CPU.Cycles).

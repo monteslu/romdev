@@ -1,0 +1,1 @@
+// Freestanding stand-in for <cstring>: memset/memcpy are builtins (snes9x.h).

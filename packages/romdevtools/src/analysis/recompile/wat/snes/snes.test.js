@@ -85,7 +85,8 @@ test("describe: LoROM header, copier header, SRAM mask", () => {
 
 test("describe refuses coprocessor carts and names the chip (snes9x InitROM's ROMType/ROMSpeed detection)", async () => {
   // (the SuperFX is modelled: superfx.test.js)
-  for (const [chip, mapMode, name] of [[0x34, 0x23, "SA-1"], [0x03, 0x20, "DSP-1"], [0x43, 0x32, "S-DD1"], [0xf3, 0x20, "CX4"], [0x05, 0x20, "DSP-2"]]) {
+  // (the DSP-n, SETA, OBC1 and S-RTC chips are modelled: test/snes-chips.test.js)
+  for (const [chip, mapMode, name] of [[0x34, 0x23, "SA-1"], [0x43, 0x32, "S-DD1"], [0xf3, 0x20, "CX4"]]) {
     const r = synthRom({ chipset: chip, mapMode });
     const d = describeRom(r);
     assert.equal(d.supported, false);

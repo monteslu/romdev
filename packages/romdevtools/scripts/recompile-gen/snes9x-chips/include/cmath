@@ -1,0 +1,10 @@
+// Freestanding stand-in for <cmath>: resampler.h's trunc() (wasm f64.trunc)
+// and bsx.cpp's ceil().
+#ifndef _ROMDEV_CMATH_
+#define _ROMDEV_CMATH_
+static inline double trunc (double x) { return __builtin_trunc(x); }
+#ifndef _ROMDEV_CEIL_
+#define _ROMDEV_CEIL_
+static inline double ceil (double x) { return __builtin_ceil(x); }
+#endif
+#endif

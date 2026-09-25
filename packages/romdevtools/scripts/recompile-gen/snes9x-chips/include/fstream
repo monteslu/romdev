@@ -1,0 +1,23 @@
+// Freestanding stand-in for <fstream>: the BS-X satellite streams. romdev's
+// reference core has no BSX*.bin stream files in its file system, so every
+// open fails there, and it fails here.
+#ifndef _ROMDEV_FSTREAM_
+#define _ROMDEV_FSTREAM_
+#include <string>
+namespace std {
+struct ios { enum { in = 1, binary = 4, beg = 0, cur = 1, end = 2 }; };
+class ifstream {
+public:
+	bool is_open () const { return false; }
+	void close () {}
+	void clear () {}
+	void open (const char *, int) {}
+	bool good () const { return false; }
+	bool eof () const { return true; }
+	void seekg (long, int) {}
+	long tellg () { return -1; }
+	int get () { return -1; }
+	static const int beg = 0, end = 2;
+};
+}
+#endif

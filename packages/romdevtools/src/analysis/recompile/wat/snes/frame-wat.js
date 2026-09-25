@@ -320,7 +320,11 @@ export function frameWat(lay) {
     (global.set $wai (i32.const 0))
     (global.set $stp (i32.const 0))
     ;; snes9x S9xOpcode_NMI: an opcode fetch and an internal cycle, then the
-    ;; pushes and the vector read (charged by $wr8/$rd8).
+    ;; pushes and the vector read (charged by $wr8/$rd8). The fetch costs
+    ;; CPU.MemSpeed, which S9xSetPCBase set for the pc being pushed (a
+    ;; jump, branch or RTI into another speed region changed it), not the
+    ;; speed of the instruction that ran last.
+    (global.set $ms (call $speed (i32.and (global.get $pc) (i32.const 0xFFFFFF))))
     (global.set $cyc (i32.sub (global.get $cyc) (i32.add (global.get $ms) (i32.const 6))))
     ;; (one AddCycles: an event it reaches happens right here)
     (call $ev_due)
@@ -426,7 +430,9 @@ export function frameWat(lay) {
     (global.set $stp (i32.const 0))
     ;; snes9x S9xOpcode_IRQ: an opcode fetch and an internal cycle (one
     ;; AddCycles, so an event it reaches happens right here), then the
-    ;; pushes and the vector read (charged by $wr8/$rd16).
+    ;; pushes and the vector read (charged by $wr8/$rd16). CPU.MemSpeed is
+    ;; the speed of the pc being pushed (see $nmi).
+    (global.set $ms (call $speed (i32.and (global.get $pc) (i32.const 0xFFFFFF))))
     (global.set $cyc (i32.sub (global.get $cyc) (i32.add (global.get $ms) (i32.const 6))))
     (call $ev_due)
     (if (i32.eqz (global.get $fe)) (then

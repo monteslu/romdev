@@ -1,0 +1,4 @@
+// Freestanding stand-in for <cassert>: snes9x's release build (NDEBUG) asserts nothing.
+#ifndef assert
+#define assert(x) ((void) 0)
+#endif
