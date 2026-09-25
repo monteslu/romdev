@@ -129,7 +129,7 @@ export function gbOriginAndPages(L, nArms) {
 
 /** options.traceEntries: the whole-frame ring's entry size and maximum length. */
 export const BIGRING_STRIDE = 32;
-export const BIGRING_MAX = 1 << 20;
+export const BIGRING_MAX = 1 << 22;
 
 /**
  * options.traceEntries: where the whole-frame instruction ring goes (above
@@ -177,6 +177,8 @@ function globalsWat() {
   (global $pc (mut i32) (i32.const 0x100))
   (global $ime (mut i32) (i32.const 0))
   (global $halted (mut i32) (i32.const 0))
+  ;; the DMG halt bug: the next opcode is fetched without advancing pc
+  (global $hbug (mut i32) (i32.const 0))
   (global $tmp (mut i32) (i32.const 0))
   (global $tmp2 (mut i32) (i32.const 0))
   (global $tmp3 (mut i32) (i32.const 0))
@@ -292,6 +294,7 @@ function stepWat(cgb) {
   (global $onet (mut i32) (i32.const -1))
   (global $m0done (mut i32) (i32.const 1))
   (global $hdmadone (mut i32) (i32.const 1))
+  (global $hdmaforce (mut i32) (i32.const 0))
   ;; this line's mode-3 end (xpos 167) in video dots from the line start, and
   ;; the HBlank STAT / HDMA event times in CPU cycles from the line start
   (global $m0dot (mut i32) (i32.const 252))
@@ -735,9 +738,12 @@ function stepWat(cgb) {
                                     (i32.ne (global.get $ahead) (i32.const 0))))
                    (i32.ne (local.get $e) (i32.const -1)))
         (then (local.set $t (local.get $e)) (local.set $k (i32.const 1))))
+      ;; (an IF access past the line end also sees the next line's mode-2
+      ;; event: line 0's is at the line start)
       (local.set $e (global.get $m2t))
       (if (i32.and (i32.and (i32.and (i32.le_s (i32.sub (local.get $e) (local.get $now)) (i32.const 0))
-                                     (i32.lt_s (i32.sub (local.get $e) (local.get $lyt)) (i32.const 0)))
+                                     (i32.or (i32.lt_s (i32.sub (local.get $e) (local.get $lyt)) (i32.const 0))
+                                             (i32.ne (global.get $ahead) (i32.const 0))))
                             (i32.ne (local.get $e) (i32.const -1)))
                    (i32.lt_u (local.get $e) (local.get $t)))
         (then (local.set $t (local.get $e)) (local.set $k (i32.const 2))))
@@ -828,14 +834,30 @@ function stepWat(cgb) {
         (then
           (global.set $hdmanow (i32.const 0))
           (global.set $hdmadone (i32.const 1))
+          ;; a request flagged before the $FF55 write that disabled it
+          (if (global.get $hdmaforce)
+            (then
+              (global.set $hdmaforce (i32.const 0))
+              (local.set $L (global.get $cyc))
+              (call $hdma_block (global.get $abscc))
+              (global.set $hdma_on (i32.const 0))
+              (i32.store8 (i32.const ${IO + 0x55}) (i32.or (i32.load8_u (i32.const ${IO + 0x55})) (i32.const 0x80)))
+              (global.set $cyc (i32.sub (global.get $cyc) (i32.const 4)))
+              (call $tick (i32.sub (local.get $L) (global.get $cyc)))))
           (if (global.get $hdma_on)
             (then
               ;; the CPU is stalled for the block (16 x 2<<ds) and 4 more
               ;; (gambatte intevent_dma): the clocks advance through it
               (local.set $L (global.get $cyc))
-              (call $hdma_block)
+              (call $hdma_block (global.get $abscc))
               (global.set $cyc (i32.sub (global.get $cyc) (i32.const 4)))
-              (call $tick (i32.sub (local.get $L) (global.get $cyc)))))))
+              (call $tick (i32.sub (local.get $L) (global.get $cyc)))
+              ;; inside STOP's stall the wake-up is at a fixed time
+              ;; (intevent_unhalt): the block's cycles are part of it
+              (if (i32.gt_s (global.get $stopcd) (i32.const 0))
+                (then
+                  (global.set $stopcd (i32.sub (global.get $stopcd) (i32.sub (local.get $L) (global.get $cyc))))
+                  (if (i32.le_s (global.get $stopcd) (i32.const 0)) (then (global.set $halted (i32.const 0))))))))))
       (br $again)))
     (if (i32.and (i32.and (local.get $hit) (i32.eqz (global.get $ahead)))
           (i32.and (global.get $ime)
@@ -866,6 +888,17 @@ function stepWat(cgb) {
   (func $irq (param $m i32)
     (i32.store8 (i32.const ${IO + 0x0F})
       (i32.or (i32.load8_u (i32.const ${IO + 0x0F})) (local.get $m))))
+
+  ;; halt (gambatte CPU case 0x76): with IME off and an interrupt already
+  ;; requested (IF read at the halt's cycle) a DMG does not halt; it sets
+  ;; skip_, so the next opcode is fetched without advancing pc
+  (func $halt_op
+    ${cgb ? "(global.set $halted (i32.const 1))" : `(call $ifsync)
+    (if (i32.and (i32.eqz (i32.or (global.get $ime) (global.get $eipend)))
+                 (i32.ne (i32.and (i32.load8_u (i32.const ${IO + 0xFF}))
+                                  (i32.and (i32.load8_u (i32.const ${IO + 0x0F})) (i32.const 0x1F))) (i32.const 0)))
+      (then (global.set $hbug (i32.const 1)))
+      (else (global.set $halted (i32.const 1))))`})
 
   (func $step
     (local $c0 i32) (local $pend i32) (local $bit i32) (local $per i32) (local $t i32)
@@ -1457,18 +1490,14 @@ function ramTemplatesWat(img, blocks, opcat) {
   const [t, tcb] = ramTemplates(img, blocks, opcat);
   return templateTable("tmpl", t) + "\n" + templateTable("tmpl_cb", tcb) + `
   ;; run the instruction at $pc from RAM through a template; 1 if handled
-  (func $tmpl_run (param $op i32) (result i32)
+  ;; $t: the operand bytes $ram_interp already fetched, each at its own
+  ;; cycle (fetching them again would read a later OAM DMA byte)
+  (func $tmpl_run (param $op i32) (param $t i32) (result i32)
     (local $n i32)
-    ;; only this instruction's operand bytes, each at its fetch cycle
     (local.set $n (i32.load8_u (i32.add (i32.const ${P.OPLEN}) (local.get $op))))
-    (global.set $imm8 (i32.const 0))
-    (global.set $imm16 (i32.const 0))
-    (if (i32.ge_u (local.get $n) (i32.const 2))
-      (then (global.set $imm8 (call $opfetch (i32.add (global.get $pc) (i32.const 1)) (i32.const 1)))
-            (global.set $imm16 (global.get $imm8))))
-    (if (i32.ge_u (local.get $n) (i32.const 3))
-      (then (global.set $imm16 (i32.or (global.get $imm8)
-              (i32.shl (call $opfetch (i32.add (global.get $pc) (i32.const 2)) (i32.const 2)) (i32.const 8))))))
+    (global.set $imm8 (i32.and (local.get $t) (i32.const 0xFF)))
+    (global.set $imm16 (if (result i32) (i32.ge_u (local.get $n) (i32.const 3))
+      (then (i32.and (local.get $t) (i32.const 0xFFFF))) (else (global.get $imm8))))
     (local.set $n (if (result i32) (i32.eq (local.get $op) (i32.const 0xCB))
       (then (call $tmpl_cb (global.get $imm8)))
       (else (call $tmpl (local.get $op)))))
@@ -1556,7 +1585,9 @@ export function* emitGbWat(img, blocks, o) {
     // what the CPU sees and `$exec` maps pc -> offset through `$rombank`.
     // Handing it `a + n` is only right in bank 0 (a banked `call` pushed a
     // non-16-bit return address and a banked cart returned into the header logo).
-    const nxt = cpuAddr(a + rec.n);
+    // It is the instruction's CPU address + its length: one ending at $7FFF
+    // falls through to $8000 (VRAM), not to the start of the next bank.
+    const nxt = cpuAddr(a) + rec.n;
     let body, flow;
     try { [body, flow] = lower(rec.m, rec.o ?? "", cpuAddr(a), nxt); ok++; }
     catch { body = "(call $trap)"; flow = null; bad++; }
@@ -1631,6 +1662,21 @@ export function* emitGbWat(img, blocks, o) {
     ;; its exact match.
     
     (global.set $curpc (global.get $pc))${big ? bigRingWat(big) : ""}
+    ;; the halt bug's instruction: run as if it sat one byte earlier with
+    ;; this opcode, so its operands start at the opcode byte (gambatte:
+    ;; pc = pc - 1 after the fetch) and it falls through to pc + len - 1
+    (if (global.get $hbug)
+      (then
+        (global.set $pc (i32.and (i32.sub (global.get $pc) (i32.const 1)) (i32.const 0xFFFF)))
+        (global.set $curpc (global.get $pc))
+        (drop (call $ram_interp))
+        (global.set $hbug (i32.const 0))
+        (return)))
+    ;; an OAM DMA whose source shares the bus with the code: every byte of
+    ;; the instruction is fetched through $rd8 at its cycle (gambatte
+    ;; PC_READ -> Memory::read), which sees the byte the DMA moves
+    (if (i32.and (i32.ne (global.get $dmalast) (i32.const -1)) (i32.lt_u (global.get $pc) (i32.const 0x8000)))
+      (then (if (call $dmaconflict (global.get $pc)) (then (if (call $ram_interp) (then (return)))))))
     (if (i32.ge_u (global.get $pc) (i32.const 0x8000)) (then (if (call $ram_interp) (then (return)))))
     ;; pc -> ROM OFFSET. $0000-$3FFF is fixed bank 0; $4000-$7FFF is the
     ;; switched bank, so its offset depends on $rombank. Above $8000 the pc

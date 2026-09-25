@@ -208,7 +208,8 @@ export function lower(mnem, ops, addr, nxt) {
   if (m === "nop") return ["", null];
   if (m === "ei") return ["(global.set $eipend (i32.const 1))", null];
   if (m === "di") return ["(global.set $ime (i32.const 0)) (global.set $eipend (i32.const 0))", null];
-  if (m === "halt") return ["(global.set $halted (i32.const 1))", null];
+  // $halt_op: the DMG halt bug when an interrupt is already pending with IME off
+  if (m === "halt") return ["(call $halt_op)", null];
   // $stop is the CGB speed switch when KEY1 is armed, and the timed sleep.
   if (m === "stop") return ["(call $stop)", null];
   if (m === "ccf") {

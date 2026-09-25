@@ -156,6 +156,16 @@ test("a RAM byte whose provenance is the last byte of the ROM window runs as RAM
   await assertLockstep(makeRom(main, {}, 0x01, { size: 0x10000 }), 10);
 });
 
+test("code at the end of the ROM window falls through to $8000, not to the next bank", { skip, timeout: 120000 }, async () => {
+  // LCD off, VRAM $8000 = inc c ; jp loop. loop: inc b ; jp $7FFD (three nops
+  // at the end of bank 1)
+  const main = [0xF3, 0x31, 0xF0, 0xDF, 0xAF, 0xE0, 0x40,          // di ; ld sp ; LCDC=0
+    0x21, 0x00, 0x80, 0x36, 0x0C, 0x2C, 0x36, 0xC3, 0x2C, 0x36, 0x65, 0x2C, 0x36, 0x01,  // $8000: inc c ; jp $0165
+    0x04, 0xC3, 0xFD, 0x7F];                                         // $0165 loop: inc b ; jp $7FFD
+  assert.equal(0x150 + main.length - 4, 0x165);
+  await assertLockstep(makeRom(main, {}, 0x01, { size: 0x10000 }), 5);
+});
+
 test("RAM code the game writes: add sp,e / ld hl,sp+e and opcodes its ROM never uses run from RAM", { skip, timeout: 120000 }, async () => {
   // C080: add sp,5 ; add sp,-5 ; ld hl,sp+$7F ; cpl ; rlca ; scf ; ret, written
   // byte by byte (no ROM provenance). $2F/$07/$37 appear nowhere in the ROM:
@@ -173,6 +183,18 @@ test("RAM code the game writes: add sp,e / ld hl,sp+e and opcodes its ROM never 
   const rom = makeRom(main);
   for (const op of [0x2F, 0x07, 0x37]) assert.ok(!rom.includes(op), `opcode $${op.toString(16)} is not in the ROM`);
   await assertLockstep(rom, 20);
+});
+
+test("DMG halt bug: halt with IME off and an interrupt pending fetches the next opcode twice", { skip, timeout: 120000 }, async () => {
+  // IE=IF=1 (VBlank requested), IME off. loop: halt ; inc a (runs twice) ;
+  // halt ; ld a,$05 (reads its own opcode as the operand: a=$3E, then
+  // dec b) ; ld e,a ; IF=1 ; jr loop
+  const main = [0xF3, 0x3E, 0x01, 0xE0, 0xFF, 0xE0, 0x0F,
+    0x76, 0x3C,                               // loop: halt ; inc a
+    0x76, 0x3E, 0x05,                         // halt ; ld a,$05
+    0x5F, 0x3E, 0x01, 0xE0, 0x0F,             // ld e,a ; ld a,1 ; ldh (IF),a
+    0x18, 0xF4];                              // jr loop
+  await assertLockstep(makeRom(main), 5);
 });
 
 test("TIMA, TMA, TAC and IF at the access cycle, with read-modify-write and push timing", { skip, timeout: 120000 }, async () => {
@@ -234,6 +256,27 @@ function mapperProgram(writes) {
 
 const MBC1_WRITES = [[0x2000, 3], [0x0000, 0x0A], [0x4000, 1], [0x2000, 0], [0x6000, 1], [0x4000, 2],
   [0x2000, 5], [0x6000, 0], [0x4000, 3], [0x2000, 0x20], [0x0000, 0], [0x4000, 0], [0x0000, 0x0A]];
+
+for (const cgb of [false, true]) {
+  test(`${cgb ? "CGB" : "DMG"}: code run from ROM during an OAM DMA fetches and reads the byte the DMA moves when the bus is shared`, { skip, timeout: 120000 }, async () => {
+    // the DMA source pages hold opcodes (inc b/c, ld hl/de,nn, add a,b/c),
+    // so a conflicting fetch runs the DMA's bytes, operands included. loop: DMA from ROM $0400,
+    // nops and a ROM read while it runs ; the same with a DMA from WRAM $C000
+    // (a conflict on DMG only) ; jr loop
+    const src = Array.from({ length: 0xA0 }, (_, i) => [0x04, 0x21, 0x81, 0x80, 0x0C, 0x11, 0x80, 0x81][i & 7]);
+    const fill = [0x21, 0x00, 0xC0, 0x11, 0x00, 0x04, 0x06, 0xA0,   // ld hl,$C000 ; ld de,$0400 ; ld b,$A0
+      0x1A, 0x22, 0x13, 0x05, 0x20, 0xFA];                           // copy: ld a,(de) ; ld (hl+),a ; inc de ; dec b ; jr nz
+    const nops = (n) => new Array(n).fill(0x00);
+    const main = [0xF3, 0x31, 0xF0, 0xDF, ...fill,
+      0x3E, 0x04, 0xE0, 0x46, ...nops(20), 0xFA, 0x10, 0x04, 0x6F,   // loop: DMA $0400 ; 20 nops ; ld a,($0410) ; ld l,a
+      ...nops(160),                                                   // (past the DMA's end)
+      0x3E, 0xC0, 0xE0, 0x46, ...nops(20), 0xFA, 0x10, 0x04, 0x67,   // DMA $C000 ; 20 nops ; ld a,($0410) ; ld h,a
+      ...nops(160)];
+    const back = -(main.length - (4 + fill.length) + 2);
+    main.push(0x18, back & 0xFF);
+    await assertLockstep(makeRom(main, { 0x400: src }, 0, { cgb }), 5);
+  });
+}
 
 test("MBC1 banking as gambatte's Mbc1: RAM mode, the 5-bit write in RAM mode, RAM enable", { skip, timeout: 120000 }, async () => {
   await assertLockstep(makeRom(mapperProgram(MBC1_WRITES), {}, 0x03, { size: 0x40000, ramCode: 3 }), 10);
@@ -337,6 +380,79 @@ for (const cgb of [false, true]) {
     await assertLockstep(makeRom(main, {}, 0, { cgb }), 30);
   });
 }
+
+/**
+ * CGB: an HBlank DMA started on line $40 and, C*4 + (C>>4)*16 + 128 cycles
+ * later, `action`; then E = $FF55 and D = VRAM $8000, and C++. The fine
+ * delay is a jump into a 16-nop slide at $0300.
+ * @param {number[]} action
+ */
+function hdmaSweepRom(action, start = [0x3E, 0x81, 0xE0, 0x55]) {
+  const main = [0xF3, 0x31, 0xF0, 0xDF,
+    0x3E, 0x40, 0xE0, 0x51, 0xAF, 0xE0, 0x52,   // source $4000
+    0x3E, 0x80, 0xE0, 0x53, 0xAF, 0xE0, 0x54,   // destination $8000
+    0x0E, 0x00];                                // ld c,0
+  const L = 0x150 + main.length;
+  main.push(0xF0, 0x44, 0xFE, 0x40, 0x20, 0xFA,  // loop: wait LY=$40
+    ...start,
+    0x79, 0xE6, 0x0F, 0x6F, 0x26, 0x03, 0xE9);  // ld a,c ; and $0F ; ld l,a ; ld h,$03 ; jp (hl)
+  const after = [0x79, 0x1F, 0x1F, 0x1F, 0x1F, 0xE6, 0x0F, 0xC6, 0x08, 0x47,  // b = 8 + (c >> 4)
+    0x05, 0x20, 0xFD,                           // w: dec b ; jr nz,w
+    ...action,
+    0xF0, 0x55, 0x5F,                           // ldh a,($55) ; ld e,a
+    0x0C, 0xC3, lo(L), hi(L)];                  // inc c ; jp loop
+  const bank1 = Array.from({ length: 0x100 }, (_, i) => (i * 7 + 1) & 0xFF);
+  return makeRom(main, { 0x300: [...new Array(16).fill(0x00), ...after], 0x4000: bank1 }, 0, { cgb: true });
+}
+
+test("CGB: an HBlank DMA disabled on the cycle its block is requested still moves it (LCD::disableHdma runs update first)", { skip, timeout: 180000 }, async () => {
+  await assertLockstep(hdmaSweepRom([0xAF, 0xE0, 0x55]), 140);
+});
+
+test("CGB: $FF55 written with bit 7 while an HBlank DMA runs only changes its length", { skip, timeout: 180000 }, async () => {
+  await assertLockstep(hdmaSweepRom([0x3E, 0x80, 0xE0, 0x55]), 140);
+});
+
+test("CGB: the LCD switched off during an HBlank DMA moves one block at once (flagHdmaReq) and ends it", { skip, timeout: 180000 }, async () => {
+  // LCD off and on again, then two VBlanks so frames are handed out
+  const vbl = [0xF0, 0x44, 0xFE, 0x90, 0x20, 0xFA];
+  await assertLockstep(hdmaSweepRom([0xAF, 0xE0, 0x40, 0x3E, 0x91, 0xE0, 0x40, ...vbl,
+    0xF0, 0x44, 0xFE, 0x90, 0x28, 0xFA, ...vbl]), 140);
+});
+
+test("CGB: an HBlank DMA due inside STOP's speed-switch stall does not lengthen it", { skip, timeout: 180000 }, async () => {
+  // HDMA of one block, then KEY1=1 ; stop at the sweeping delay
+  await assertLockstep(hdmaSweepRom([0x3E, 0x01, 0xE0, 0x4D, 0x10, 0x00], [0x3E, 0x80, 0xE0, 0x55]), 140);
+});
+
+test("CGB: HBlank DMA enabled after a mid-line SCX write predicts mode 0 from the PPU state (LCD::enableHdma)", { skip, timeout: 180000 }, async () => {
+  // SCX = C & 7 written just before the enable
+  const scx = [0x79, 0xE6, 0x07, 0xE0, 0x43, 0x3E, 0x80, 0xE0, 0x55];
+  await assertLockstep(hdmaSweepRom([], scx), 140);
+});
+
+test("CGB: a general DMA during an OAM DMA hands its bytes to the OAM DMA, and one reaching $10000 stops there", { skip, timeout: 180000 }, async () => {
+  // LCD off. WRAM $C000.. = $11,$12,... loop: OAM DMA from $C000 ; C&15 nops
+  // (slide) ; GDMA of one block $4100 -> $8000 ; wait ; E = sum of OAM ;
+  // GDMA of 2 blocks to $FFF0 (wraps after one) ; D = $FF55 ; C++
+  const main = [0xF3, 0x31, 0xF0, 0xDF, 0xAF, 0xE0, 0x40,
+    0x21, 0x00, 0xC0, 0x06, 0xA0, 0x3E, 0x11, 0x22, 0x3C, 0x05, 0x20, 0xFB,   // fill $C000
+    0x3E, 0x41, 0xE0, 0x51, 0xAF, 0xE0, 0x52,
+    0x0E, 0x00];
+  const L = 0x150 + main.length;
+  main.push(0x3E, 0x80, 0xE0, 0x53, 0xAF, 0xE0, 0x54,   // loop: destination $8000
+    0x3E, 0xC0, 0xE0, 0x46,                     // OAM DMA from $C000
+    0x79, 0xE6, 0x0F, 0x6F, 0x26, 0x03, 0xE9);  // slide
+  const after = [0xAF, 0xE0, 0x55,              // GDMA one block
+    0x06, 0x40, 0x05, 0x20, 0xFD,               // wait
+    0x21, 0x00, 0xFE, 0x06, 0xA0, 0xAF, 0x86, 0x2C, 0x05, 0x20, 0xFB, 0x5F,   // E = sum of OAM
+    0x3E, 0xFF, 0xE0, 0x53, 0x3E, 0xF0, 0xE0, 0x54, 0x3E, 0x01, 0xE0, 0x55,   // GDMA 2 blocks to $FFF0
+    0xF0, 0x55, 0x57,                           // D = $FF55
+    0x0C, 0xC3, lo(L), hi(L)];
+  const bank1 = Array.from({ length: 0x200 }, (_, i) => (i * 5 + 3) & 0xFF);
+  const rom = makeRom(main, { 0x300: [...new Array(16).fill(0x00), ...after], 0x4000: bank1 }, 0, { cgb: true });
+  await assertLockstep(rom, 10);
+});
 
 test("CGB: the line after a speed switch predicts mode 0 from where the PPU is", { skip, timeout: 180000 }, async () => {
   // KEY1=1 ; stop ; then STAT into E, switch again every 64 samples

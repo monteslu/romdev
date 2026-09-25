@@ -19,8 +19,9 @@
 //   stopAt     {pc, fromFrame?}: trap the first time that pc is dispatched on
 //              or after host frame `fromFrame` (debug), default off
 //   traceEntries  ALSO record a whole-frame instruction ring (a power of two,
-//              1024 to 1048576; a frame runs ~5,000-15,000 instructions, so
-//              16384 or more holds one) of {pc, rombank, sp, hl, bc, de, af}
+//              1024 to 4194304; a frame runs ~5,000-15,000 instructions, so
+//              16384 or more holds one, but a frame the reference never
+//              blits (the LCD toggled before every VBlank) can run millions) of {pc, rombank, sp, hl, bc, de, af}
 //              for findDiverge level:'instruction', which otherwise sees the
 //              default ring's last 2,048. Off by default: the default module
 //              is unchanged.

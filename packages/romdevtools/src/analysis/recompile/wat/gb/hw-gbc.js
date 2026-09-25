@@ -385,7 +385,7 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
     ;; the opcode byte as stored, not through $rd8: a RAM pc read through
     ;; $rd8 during an OAM DMA asked $dmaupd for the access cycle, which is
     ;; this function again (unbounded recursion in code run from HRAM)
-    (local.set $x (global.get $curpc))
+    (local.set $x (i32.and (i32.add (global.get $curpc) (global.get $hbug)) (i32.const 0xFFFF)))
     (local.set $op (if (result i32) (i32.lt_u (local.get $x) (i32.const 0x4000))
       (then (i32.load8_u (i32.add (i32.const ${romimg}) (local.get $x))))
       (else (if (result i32) (i32.lt_u (local.get $x) (i32.const 0x8000))
@@ -496,6 +496,14 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
   (func $rd8 (param $a i32) (result i32)
     (local $x i32) (local $lyd i32) (local $lyl i32)
     (local.set $x (i32.and (local.get $a) (i32.const 0xFFFF)))
+    ;; OAM DMA bus conflict (gambatte Memory::nontrivial_read): while a
+    ;; transfer runs, reads in the source's conflict area see the byte the
+    ;; DMA is moving - ROM included (a DMA from ROM, or from WRAM on a DMG)
+    (if (i32.ne (global.get $dmalast) (i32.const -1))
+      (then
+        (call $dmaupd (i32.add (global.get $abscc) (call $ioff)))
+        (if (i32.and (i32.lt_u (global.get $dmapos) (i32.const 0xA0)) (call $dmaconflict (local.get $x)))
+          (then (return (i32.load8_u (i32.add (i32.const ${OAM}) (global.get $dmapos))))))))
     ;; Every ROM read leaves its offset in $lastrom (+1) - the provenance a
     ;; RAM write compares against (see $origin_note).
     (if (i32.lt_u (local.get $x) (i32.const 0x4000))
@@ -508,14 +516,6 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
                             (i32.sub (local.get $x) (i32.const 0x4000)))
                    (i32.const ${mask}))))
         (return (i32.load8_u (i32.add (i32.const ${romimg - 1}) (global.get $lastrom))))))
-    ;; OAM DMA bus conflict (gambatte Memory::nontrivial_read): while a
-    ;; transfer runs, reads in the source's conflict area see the byte the
-    ;; DMA is moving
-    (if (i32.ne (global.get $dmalast) (i32.const -1))
-      (then
-        (call $dmaupd (i32.add (global.get $abscc) (call $ioff)))
-        (if (i32.and (i32.lt_u (global.get $dmapos) (i32.const 0xA0)) (call $dmaconflict (local.get $x)))
-          (then (return (i32.load8_u (i32.add (i32.const ${OAM}) (global.get $dmapos))))))))
     ;; ...nor readable (reads $FF)
     (if (i32.lt_u (local.get $x) (i32.const 0xA000))
       (then (if (i32.eq (call $stat_mode) (i32.const 3)) (then (return (i32.const 0xFF))))))
@@ -814,7 +814,14 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
             (global.set $statlow (i32.and (call $getstat) (i32.const 4)))
             (global.set $ly (i32.const 0))
             (global.set $offcd (i32.add (i32.shl (i32.const 1824) (global.get $speed))
-              (i32.add (i32.sub (global.get $linelen) (global.get $cyc)) (call $ioff))))))
+              (i32.add (i32.sub (global.get $linelen) (global.get $cyc)) (call $ioff))))
+            ;; an HBlank DMA running when the LCD goes off is flagged at once
+            ;; (case 0x40: flagHdmaReq): one block, and with the LCD off the
+            ;; transfer ends there ($FF55 = $FF)
+            (if (global.get $hdma_on)
+              (then (global.set $hdma_len (i32.const 1))
+                    (call $hdma_block (i32.add (i32.add (global.get $abscc) (call $ioff)) (i32.const 4)))
+                    (global.set $cyc (i32.sub (global.get $cyc) (i32.const 4)))))))
         (i32.store8 (i32.const ${IOREG + 0x40}) (local.get $v)) (return)))
     (if (i32.eq (local.get $x) (i32.const 0xFF4D))
       (then (global.set $key1prep (i32.and (local.get $v) (i32.const 1))) (return)))
@@ -1019,10 +1026,11 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
   ;; back into ROM. Everything else in an intact copy runs as its ROM arm.
   (func $ram_interp (result i32)
     (local $op i32) (local $t i32) (local $nx i32) (local $o i32)
-    (local.set $op (call $opfetch (global.get $pc) (i32.const 0)))
+    (local.set $op (call $opfetch (i32.add (global.get $pc) (global.get $hbug)) (i32.const 0)))
     ;; ...and so is anything whose operand bytes reach into $FE00-$FF7F
     ;; (OAM/IO), where a read depends on the cycle it happens at
-    (if (i32.and (i32.eqz (call $ram_isctl (local.get $op)))
+    (if (i32.and (i32.and (i32.eqz (call $ram_isctl (local.get $op)))
+                          (i32.and (i32.eqz (global.get $hbug)) (i32.ge_u (global.get $pc) (i32.const 0x8000))))
                  (i32.or (i32.lt_u (global.get $pc) (i32.const 0xFDFE)) (i32.ge_u (global.get $pc) (i32.const 0xFF80))))
       (then
         (local.set $o (call $get_origin (global.get $pc)))
@@ -1110,7 +1118,7 @@ function memWatText({ imgLen, mbc, romimg, probe, watchLo, watchHi, padptr, orig
         (global.set $pc (i32.or (i32.shl (global.get $h) (i32.const 8)) (global.get $l)))
         (global.set $cyc (i32.sub (global.get $cyc) (i32.const 4)))
         (return (i32.const 1))))
-    (call $tmpl_run (local.get $op)))
+    (call $tmpl_run (local.get $op) (local.get $t)))
 
   ;; serial transfer progress at absolute cycle $cc (gambatte updateSerial,
   ;; non-network build): done -> SB = ((SB+1) << bits left) - 1, SC bit 7
@@ -1321,8 +1329,16 @@ ${setbankWat}
   ;; one address setup and four GDMAs; reloading from the registers each time
   ;; copied the first 1KB four times.) A source in VRAM or above $FDFF reads
   ;; $FF. Each byte costs 2<<speed cycles.
-  (func $hdma_block
-    (local $i i32) (local $s i32) (local $d i32)
+  ;; $cc: the cycle the block starts at. An OAM DMA keeps running through
+  ;; it (intevent_dma): each byte takes 2<<ds cycles, and every 4 cycles the
+  ;; OAM DMA moves on - copying the HDMA's byte, at the HDMA source's low
+  ;; address, instead of its own
+  (func $hdma_block (param $cc i32)
+    (local $i i32) (local $s i32) (local $d i32) (local $lo i32)
+    ;; Memory::event brings the OAM DMA up to the event's cycle first
+    (if (i32.ne (global.get $dmalast) (i32.const -1)) (then (call $dmaupd (local.get $cc))))
+    (local.set $lo (global.get $dmalast))
+    (global.set $dmalast (i32.const -1))
     (local.set $i (i32.const 0))
     (block $dn (loop $l
       (br_if $dn (i32.ge_u (local.get $i) (i32.const 16)))
@@ -1332,6 +1348,20 @@ ${setbankWat}
                 (i32.gt_u (local.get $s) (i32.const 0xFDFF)))
         (then (i32.const 0xFF))
         (else (call $rd8 (local.get $s)))))
+      (local.set $cc (i32.add (local.get $cc) (i32.shl (i32.const 2) (global.get $speed))))
+      (if (i32.and (i32.ne (local.get $lo) (i32.const -1))
+                   (i32.gt_s (i32.sub (i32.sub (local.get $cc) (i32.const 3)) (local.get $lo)) (i32.const 0)))
+        (then
+          (global.set $dmapos (i32.and (i32.add (global.get $dmapos) (i32.const 1)) (i32.const 0xFF)))
+          (local.set $lo (i32.add (local.get $lo) (i32.const 4)))
+          (if (i32.lt_u (global.get $dmapos) (i32.const 0xA0))
+            (then
+              (if (i32.eqz (global.get $dmapos)) (then (call $gp_oamptr (i32.const 1) (i32.sub (local.get $lo) (i32.const 1)))))
+              (i32.store8 (i32.add (i32.const ${OAM}) (i32.and (local.get $s) (i32.const 0xFF))) (local.get $d)))
+            (else (if (i32.eq (global.get $dmapos) (i32.const 0xA0))
+              (then (call $gp_oamptr (i32.const 0) (i32.sub (local.get $lo) (i32.const 1)))
+                    (global.set $dmapos (i32.const 0xFE)) (global.set $dmasrc (i32.const 5))
+                    (local.set $lo (i32.const -1))))))))
       (i32.store8 (i32.add (i32.add (i32.const ${VRAM0})
           (i32.and (global.get $hdma_dst) (i32.const 0x1FFF)))
           (i32.mul (global.get $vbk) (i32.const ${VBANK_DELTA})))
@@ -1340,6 +1370,7 @@ ${setbankWat}
       (global.set $hdma_dst (i32.and (i32.add (global.get $hdma_dst) (i32.const 1)) (i32.const 0xFFFF)))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $l)))
+    (global.set $dmalast (local.get $lo))
     (global.set $cyc (i32.sub (global.get $cyc) (i32.shl (i32.const 32) (global.get $speed))))
     (global.set $hdma_len (i32.sub (global.get $hdma_len) (i32.const 1)))
     (i32.store8 (i32.const ${IOREG + 0x55})
@@ -1347,16 +1378,46 @@ ${setbankWat}
         (then (i32.const 0xFF))
         (else (i32.sub (global.get $hdma_len) (i32.const 1)))))
     (if (i32.le_s (global.get $hdma_len) (i32.const 0))
-      (then (global.set $hdma_on (i32.const 0)))))
+      (then (global.set $hdma_on (i32.const 0))))
+    ;; the destination reached $10000 (intevent_dma: (dest + length) &
+    ;; 0x10000): the transfer stops there with bit 7 set in $FF55
+    (if (i32.eqz (global.get $hdma_dst))
+      (then
+        ;; (with the LCD off the rest of the length is dropped: dmaLength = 0)
+        (i32.store8 (i32.const ${IOREG + 0x55})
+          (if (result i32) (i32.and (i32.load8_u (i32.const ${IOREG + 0x40})) (i32.const 0x80))
+            (then (i32.or (i32.and (i32.sub (global.get $hdma_len) (i32.const 1)) (i32.const 0xFF)) (i32.const 0x80)))
+            (else (i32.const 0xFF))))
+        (global.set $hdma_len (i32.const 0))
+        (global.set $hdma_on (i32.const 0)))))
 
   (func $hdma_start (param $v i32)
     (local $w i32)
     ;; Writing bit 7 = 0 while an HBlank DMA runs CANCELS it.
+    ;; LCD::disableHdma runs update(cc) first: a block whose request is due
+    ;; by the write's cycle is already flagged and still moves (16 bytes,
+    ;; $hdmaforce), with the length the write left in $FF55
     (if (i32.and (global.get $hdma_on) (i32.eqz (i32.and (local.get $v) (i32.const 0x80))))
       (then
         (global.set $hdma_on (i32.const 0))
         (i32.store8 (i32.const ${IOREG + 0x55}) (i32.or (i32.and (local.get $v) (i32.const 0x7F))
                                                         (i32.const 0x80)))
+        (local.set $w (i32.add (i32.sub (global.get $linelen) (global.get $cyc)) (call $ioff)))
+        (if (i32.and (i32.and (i32.eqz (global.get $hdmadone))
+                              (i32.and (i32.ne (i32.and (i32.load8_u (i32.const ${IOREG + 0x40})) (i32.const 0x80)) (i32.const 0))
+                                       (i32.lt_u (global.get $ln) (i32.const 144))))
+                     (i32.ge_s (local.get $w) (global.get $hdmaat)))
+          (then
+            (global.set $hdma_len (i32.add (i32.and (local.get $v) (i32.const 0x7F)) (i32.const 1)))
+            (global.set $hdmaforce (i32.const 1))
+            (global.set $hdmanow (i32.const 1)) (global.set $hdmadone (i32.const 1))))
+        (return)))
+    ;; bit 7 set while an HBlank DMA already runs: only the length changes
+    ;; (case 0x55 stores data & 0x7F; LCD::enableHdma is not called again)
+    (if (global.get $hdma_on)
+      (then
+        (global.set $hdma_len (i32.add (i32.and (local.get $v) (i32.const 0x7F)) (i32.const 1)))
+        (i32.store8 (i32.const ${IOREG + 0x55}) (i32.and (local.get $v) (i32.const 0x7F)))
         (return)))
     (global.set $hdma_len (i32.add (i32.and (local.get $v) (i32.const 0x7F)) (i32.const 1)))
     (i32.store (i32.const ${probe + 72})
@@ -1372,7 +1433,7 @@ ${setbankWat}
         (if (i32.eqz (i32.and (i32.load8_u (i32.const ${IOREG + 0x40})) (i32.const 0x80)))
           (then
             (global.set $hdma_len (i32.const 1))
-            (call $hdma_block)
+            (call $hdma_block (i32.add (i32.add (global.get $abscc) (call $ioff)) (i32.const 4)))
             (global.set $cyc (i32.sub (global.get $cyc) (i32.const 4)))
             (return)))
         ;; Enabled INSIDE this line's HDMA period (gambatte LCD::enableHdma,
@@ -1380,20 +1441,27 @@ ${setbankWat}
         ;; at or after the mode-0 time + 1 - ds): one block is requested at
         ;; once, moved after this instruction ($statev), and the next is the
         ;; next line's.
+        ;; LCD::enableHdma predicts the line's mode-0 time from the PPU state
+        ;; now (a mid-line SCX/WX/... write only invalidated it), and the
+        ;; HDMA request follows it (hdmaTimeFromM0Time)
+        (call $m0sync (i32.add (global.get $abscc) (call $ioff)))
+        (if (i32.eqz (global.get $hdmadone))
+          (then (global.set $hdmaat (i32.add (i32.shl (global.get $m0dot) (global.get $speed))
+                                             (i32.sub (i32.const 1) (global.get $speed))))))
         (local.set $w (i32.add (i32.sub (global.get $linelen) (global.get $cyc)) (call $ioff)))
         (if (i32.and (i32.and (i32.lt_u (global.get $ln) (i32.const 144))
                               (i32.gt_s (i32.sub (global.get $linelen) (local.get $w)) (i32.const 4)))
                      (i32.ge_s (local.get $w) (global.get $hdmaat)))
           (then (global.set $hdmanow (i32.const 1)) (global.set $hdmadone (i32.const 1))))
         (return)))
-    ;; General DMA: everything now.
+    ;; General DMA: everything now, from the end of the writing instruction
+    (local.set $w (i32.add (i32.add (global.get $abscc) (call $ioff)) (i32.add (i32.const 4) (global.get $cyc))))
     (block $d (loop $l
       (br_if $d (i32.le_s (global.get $hdma_len) (i32.const 0)))
-      (call $hdma_block)
+      (call $hdma_block (i32.sub (local.get $w) (global.get $cyc)))
       (br $l)))
     (global.set $cyc (i32.sub (global.get $cyc) (i32.const 4)))
-    (global.set $hdma_on (i32.const 0))
-    (i32.store8 (i32.const ${IOREG + 0x55}) (i32.const 0xFF)))
+    (global.set $hdma_on (i32.const 0)))
   ;; ---- MBC3 real-time clock, gambatte's Rtc (mem/rtc.cpp) ----
   ;; The clock is the host's frame clock (WCInfo time, ms since the cart
   ;; started) as time() reads Date.now(): trunc((baseMs + ms) / 1000), with
