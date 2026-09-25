@@ -385,12 +385,13 @@ export function frameWat(lay) {
       (if (i32.ge_s (call $hnow) (global.get $ipos))
         (then (call $irq_update (i32.const 0))
               (global.set $irqline (i32.const 1))))
-      ;; An IRQ line wakes WAI even with I set.
-      (if (i32.and (global.get $irqline) (global.get $wai))
+      ;; An IRQ line (the H/V timer's or a chip's CPU.IRQExternal) wakes WAI
+      ;; even with I set.
+      (if (i32.and (i32.or (global.get $irqline) (global.get $irqext)) (global.get $wai))
         (then (global.set $wai (i32.const 0))
               (global.set $cyc (i32.sub (global.get $cyc) (i32.const 14)))
               (call $ev_due)))
-      (if (i32.and (global.get $irqline) (i32.eqz (global.get $fi)))
+      (if (i32.and (i32.or (global.get $irqline) (global.get $irqext)) (i32.eqz (global.get $fi)))
         (then (call $apply_ichg) (call $irq)))
       ;; CLI / SEI change I one instruction late (snes9x IRQFlagChanging):
       ;; the check above still saw the old flag.
@@ -625,8 +626,9 @@ export function frameWat(lay) {
       (then (global.set $cyc (i32.sub (global.get $cyc) (i32.const 40))) (return)))
     (if (i32.eq (local.get $k) (i32.const 4))
       (then (if (i32.le_u (global.get $scanline) (global.get $sh)) (then (call $hdma_do))) (return)))
+    ;; the line end: a chip's work first (S9xSuperFXExec), then the APU
     (if (i32.eq (local.get $k) (i32.const 5))
-      (then (call $apu_sync (local.get $p)) (call $d_sync))))
+      (then (call $chip_line) (call $apu_sync (local.get $p)) (call $d_sync))))
 
   ;; Program bytes of the instruction at $curpc (ICOST, M/X as they are now).
   (func $fetch_len (result i32)

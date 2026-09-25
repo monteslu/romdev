@@ -10,6 +10,10 @@
 //       -> $chip_dma (does this channel read the chip?) and $chip_dma_byte
 //   S9xReset's per-chip reset (S9xResetSDD1, S9xResetSPC7110, S9xInitC4)
 //       -> $chip_reset, called by wc_init
+//   the line end (HC_HCOUNTER_MAX_EVENT's S9xSuperFXExec)
+//       -> $chip_line, before the APU catches up
+//   CPU.IRQExternal (the SuperFX's IRQ on stop)
+//       -> $irqext, taken by $run_frame with the H/V timer's line
 //   the board map (Map_SDD1LoROMMap, Map_SPC7110HiROMMap, map_C4)
 //       -> chip.board() names it, chip.buildMap() fills memmap.js's table
 //
@@ -24,8 +28,12 @@
 //
 // Plain JS ESM + JSDoc.
 
+import { superfx } from "./superfx.js";
+
 /** The chip modules (add one line per chip). */
-const CHIP_LIST = [];
+const CHIP_LIST = [
+  superfx,
+];
 
 /** @type {Map<string, any>} loader.js coprocessor name -> chip module */
 const CHIPS = new Map(CHIP_LIST.map((c) => [c.id, c]));
@@ -45,6 +53,8 @@ const DEFAULTS = {
   chip_reset: "(func $chip_reset)",
   chip_dma: "(func $chip_dma (param $ch i32) (param $p i32) (param $src i32) (param $cnt i32) (result i32) (i32.const 0))",
   chip_dma_byte: "(func $chip_dma_byte (param $i i32) (result i32) (i32.const 0))",
+  // HC_HCOUNTER_MAX_EVENT's chip work before the line ends (S9xSuperFXExec)
+  chip_line: "(func $chip_line)",
 };
 
 /**
@@ -61,6 +71,8 @@ export function chipWat(d, lay) {
     "  (global $cdma (mut i32) (i32.const 0))       ;; this DMA reads the chip's buffer",
     "  (global $cdma_src (mut i32) (i32.const 0))   ;; its A address to start from",
     "  (global $cdma_step (mut i32) (i32.const 0))  ;; and how the A address walks",
+    "  ;; CPU.IRQExternal: a chip's IRQ line into the S-CPU (the SuperFX's stop)",
+    "  (global $irqext (mut i32) (i32.const 0))",
   ];
   for (const [name, body] of Object.entries(DEFAULTS)) {
     if (!new RegExp(`\\(func \\$${name}[\\s)]`).test(own)) parts.push("  " + body);

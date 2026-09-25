@@ -228,9 +228,9 @@ export function memWat(lay) {
       (return (i32.load8_u (i32.add (i32.const ${lay.SRAM})
         (i32.and (i32.add (i32.sub (i32.and (local.get $a) (i32.const 0x7FFF)) (i32.const 0x6000))
                           (i32.shr_u (i32.and (local.get $a) (i32.const 0x1F0000)) (i32.const 3)))
-                 (i32.const ${lay.sram})))))
+                 (i32.const ${lay.sram}))))))
       ;; MAP_TYPE.CHIP: a coprocessor's window (coproc.js)
-      (return (call $chip_rd (local.get $a)))))
+      (return (call $chip_rd (local.get $a))))
     (global.get $ob))
 
   ;; snes9x S9xGetWord / S9xSetWord take a FAST PATH when both bytes are
