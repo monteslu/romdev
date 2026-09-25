@@ -224,12 +224,14 @@ index 0fb6199..5ba140a 100644
 +/* romdev_gb_instr_pc - the address of the currently-executing instruction, latched
 + * at dispatch in CPU::process; the hooks stamp it as the writer/reader PC. */
 +unsigned romdev_gb_instr_pc = 0xFFFFFFFF;
-+/* Register columns for the instruction trace (sp, hl, bc, de), copied out of
-+ * CPU::process at each dispatch only while the trace asks for them. */
-+static unsigned romdev_gb_tregs[4];
++/* Register columns for the instruction trace (sp, hl, bc, de, af), copied out
++ * of CPU::process at each dispatch only while the trace asks for them. af is
++ * A << 8 | F, F synthesized from the split flags (toF) as getCPUState does. */
++static unsigned romdev_gb_tregs[5];
 +static void romdev_gb_trace_regs(unsigned *dst) {
 +	dst[0] = romdev_gb_tregs[0]; dst[1] = romdev_gb_tregs[1];
 +	dst[2] = romdev_gb_tregs[2]; dst[3] = romdev_gb_tregs[3];
++	dst[4] = romdev_gb_tregs[4];
 +}
 +/* at-hit REGISTER SNAPSHOT (sm83). The CPU state lives in LOCALS inside CPU::process;
 + * snapshot into romdev_snap_regs[] (shared) at the hit instant. Layout = the
@@ -245,7 +247,7 @@ index 0fb6199..5ba140a 100644
  , l(0x4D)
  , skip_(false)
  {
-+	romdev_trace_provide_regs(romdev_gb_trace_regs, 4);
++	romdev_trace_provide_regs(romdev_gb_trace_regs, 5);
  }
  
  long CPU::runFor(unsigned long const cycles) {
@@ -290,7 +292,7 @@ index 0fb6199..5ba140a 100644
 +unsigned CPU::romdev_getReg(int regId) const {
 +	switch (regId) {
 +	case 0:  return a_;
-+	case 1:  return toF(hf2, cf, zf) & 0xFF;
++	case 1:  return toF(updateHf2FromHf1(hf1, hf2), cf, zf) & 0xFF;
 +	case 2:  return b;
 +	case 3:  return c;
 +	case 4:  return d;
@@ -320,7 +322,7 @@ index 0fb6199..5ba140a 100644
 +		int snap_i_; \
 +		for (snap_i_ = 0; snap_i_ < 19; snap_i_++) romdev_snap_regs[snap_i_] = 0; \
 +		romdev_snap_regs[0]  = a; \
-+		romdev_snap_regs[1]  = toF(hf2, cf, zf) & 0xFF; \
++		romdev_snap_regs[1]  = toF(updateHf2FromHf1(hf1, hf2), cf, zf) & 0xFF; \
 +		romdev_snap_regs[2]  = b;  romdev_snap_regs[3] = c; \
 +		romdev_snap_regs[4]  = d;  romdev_snap_regs[5] = e; \
 +		romdev_snap_regs[6]  = h;  romdev_snap_regs[7] = l; \
@@ -389,6 +391,7 @@ index 0fb6199..5ba140a 100644
 +				if (romdev_trace_wants_regs()) {
 +					romdev_gb_tregs[0] = sp; romdev_gb_tregs[1] = hl();
 +					romdev_gb_tregs[2] = bc(); romdev_gb_tregs[3] = de();
++					romdev_gb_tregs[4] = (a & 0xFF) << 8 | (toF(updateHf2FromHf1(hf1, hf2), cf, zf) & 0xFF);
 +				}
 +
 +				if (romdev_on_dispatch_ex(pc, (unsigned)cycleCounter, 0)) {

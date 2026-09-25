@@ -3122,7 +3122,9 @@ export class LibretroHost {
   traceRegisterNames() {
     const p = this.status.platform;
     if (p === "gba") return [...Array.from({ length: 16 }, (_, i) => `r${i}`), "cpsr"];
-    if (p === "gb" || p === "gbc") return ["sp", "hl", "bc", "de"];
+    // gambatte: af (A << 8 | F) is the fifth column; an older build records
+    // four and readTrace keeps only the columns the core wrote
+    if (p === "gb" || p === "gbc") return ["sp", "hl", "bc", "de", "af"];
     if (p === "nes") return ["a", "x", "y", "s", "p"];
     // genesis_plus_gx: one filler for both CPUs (17 columns); the 68000's
     // d0-d7, a0-a7 (a7 = the active stack pointer), sr, or on SMS / Game Gear

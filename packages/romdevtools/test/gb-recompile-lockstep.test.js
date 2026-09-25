@@ -81,19 +81,21 @@ async function lockstep(rom, frames) {
       for (let i = cgot; i < cnt; i++) {
         const o = t.offset + (i % t.entries) * t.stride;
         cq.push([dv.getUint32(o, true) & 0xffff, dv.getUint32(o + 28, true), dv.getUint32(o + 8, true) & 0xffff,
-          dv.getUint32(o + 12, true) & 0xffff, dv.getUint32(o + 16, true) & 0xffff, dv.getUint32(o + 20, true) & 0xffff]);
+          dv.getUint32(o + 12, true) & 0xffff, dv.getUint32(o + 16, true) & 0xffff, dv.getUint32(o + 20, true) & 0xffff,
+          dv.getUint32(o + 24, true) & 0xffff]);
       }
       cgot = cnt;
       const r = ref.readTrace(rgot);
       assert.equal(r.lost, 0, "the reference trace lost nothing");
-      for (let k = 0; k < r.pc.length; k++) rq.push([r.pc[k] & 0xffff, r.clock[k], r.regs.sp[k] & 0xffff, r.regs.hl[k] & 0xffff, r.regs.bc[k] & 0xffff, r.regs.de[k] & 0xffff]);
+      assert.ok(r.regs.af, "the gambatte build records af (scripts/build-gambatte.sh)");
+      for (let k = 0; k < r.pc.length; k++) rq.push([r.pc[k] & 0xffff, r.clock[k], r.regs.sp[k] & 0xffff, r.regs.hl[k] & 0xffff, r.regs.bc[k] & 0xffff, r.regs.de[k] & 0xffff, r.regs.af[k] & 0xffff]);
       rgot = r.to;
       while (cq.length && rq.length) {
         const c = cq.shift(), e = rq.shift();
         const d = (c[1] - e[1]) | 0;
         if (off0 === null) off0 = d;
-        const names = ["pc", "clock", "sp", "hl", "bc", "de"];
-        for (let k = 0; k < 6; k++) {
+        const names = ["pc", "clock", "sp", "hl", "bc", "de", "af"];
+        for (let k = 0; k < 7; k++) {
           const bad = k === 1 ? d !== off0 : c[k] !== e[k];
           if (bad) return { at: n, what: names[k], cart: c.map((v) => v.toString(16)), ref: e.map((v) => v.toString(16)) };
         }
@@ -599,6 +601,21 @@ for (const cgb of [false, true]) {
     await assertLockstep(makeRom(main, {}, 0, { cgb }), 120);
   });
 }
+
+test("A and F are compared per instruction: an IF read into A that nothing else sees still has to match", { skip, timeout: 180000 }, async () => {
+  // the LCD-off LYC sweep with the IF value kept only in A (no ld e,a):
+  // before gambatte's trace carried af this divergence was invisible
+  const main = [0xF3, 0x3E, 0x40, 0xE0, 0x41, 0x3E, 0x41, 0xE0, 0x45, 0xAF, 0xE0, 0xFF, 0x0E, 0x00];
+  const L = main.length;
+  main.push(0xF0, 0x44, 0xFE, 0x40, 0x20, 0xFA, 0xAF, 0xE0, 0x0F,
+    0x41, 0x05, 0x20, 0xFD,
+    0xAF, 0xE0, 0x40, 0xF0, 0x0F,                    // LCD off ; A = IF (and F from the cp below)
+    0xFE, 0x02,                                      // cp 2
+    0x3E, 0x91, 0xE0, 0x40, 0x0C,
+    0x16, 0x03, 0xF0, 0x44, 0xFE, 0x90, 0x20, 0xFA, 0xF0, 0x44, 0xB7, 0x20, 0xFB, 0x15, 0x20, 0xF3);
+  main.push(0x18, (L - (main.length + 2)) & 0xFF);
+  await assertLockstep(makeRom(main), 120);
+});
 
 test("CGB: the line after a speed switch predicts mode 0 from where the PPU is", { skip, timeout: 180000 }, async () => {
   // KEY1=1 ; stop ; then STAT into E, switch again every 64 samples
