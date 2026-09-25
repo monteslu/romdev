@@ -14,6 +14,7 @@
 // Plain JS ESM + JSDoc.
 
 import { readFileSync } from "node:fs";
+import { chipFor } from "./coproc.js";
 
 const FIXES = JSON.parse(readFileSync(new URL("./snes9x-romfixes.json", import.meta.url), "utf8"));
 
@@ -320,8 +321,12 @@ function finish(rom, calc, hiRom, extended, headerStripped, interleaved, refusal
       if (strneq(nameRaw, 0, m.name, m.length)) { map = m.map; break; }
     }
   }
-  if (!refusal && coprocessor) refusal = `cart uses the ${coprocessor} coprocessor; the SNES recompiler models the base console only`;
-  if (!refusal && !["LoROM", "HiROM", "ExtendedHiROM", "JumboLoROM", ...FIXES.loRomMaps.map((m) => m.map).filter((m) => MAPS_SUPPORTED.has(m))].includes(map)) {
+  // A coprocessor the cart models (coproc.js) may bring its own board
+  // (InitROM picks Map_SDD1LoROMMap, Map_SPC7110HiROMMap, ... by chip).
+  const chip = chipFor(coprocessor);
+  if (chip?.board) map = chip.board({ hiRom, extended, map }) ?? map;
+  if (!refusal && coprocessor && !chip) refusal = `cart uses the ${coprocessor} coprocessor; the SNES recompiler models the base console only`;
+  if (!refusal && !chip?.boards?.includes(map) && !["LoROM", "HiROM", "ExtendedHiROM", "JumboLoROM", ...FIXES.loRomMaps.map((m) => m.map).filter((m) => MAPS_SUPPORTED.has(m))].includes(map)) {
     refusal = `cart uses snes9x's ${map} board map (an add-on / satellite board); the SNES recompiler models plain cartridges`;
   }
   // The name the per-title fixes match: NUL at 22, cut after 21 when the

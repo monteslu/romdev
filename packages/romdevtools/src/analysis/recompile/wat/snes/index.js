@@ -39,6 +39,7 @@ import { globalsWat, memWat, interpWat } from "./cpu-wat.js";
 import { ppuDataWat, ppuWat, renderWat } from "./ppu-wat.js";
 import { apuWat, apuDataWat, apuGlobalsWat, APU_OFF } from "./apu-wat.js";
 import { regwatchWat, stepHeadWat, frameWat } from "./frame-wat.js";
+import { chipFor, chipWat } from "./coproc.js";
 
 /** Platform ids this backend accepts. */
 export const platforms = ["snes"];
@@ -133,6 +134,12 @@ export function describe(rom, opts = {}) {
   // PAL by region byte (snes9x Settings.PAL): 312 lines, the PAL APU clock
   // ratio, $213F bit 4.
   layout.pal = L.pal;
+  // A coprocessor's state (coproc.js), above everything computeLayout placed.
+  const chip = chipFor(L.coprocessor);
+  if (chip?.pages) {
+    layout.CHIP = layout.pages * 0x10000;
+    layout.pages += chip.pages;
+  }
   const tn = opts.traceEntries;
   if (tn != null) {
     if (!Number.isInteger(tn) || tn < 1024 || tn > REGRING_MAX || (tn & (tn - 1))) {
@@ -267,6 +274,7 @@ export function recompileSection(rom, sha1, opts = {}) {
       probe: L.probe.fields,
       trap: L.trap,
       pcRing: L.pcRing,
+      ...(chipFor(d.coprocessor)?.section?.(d) ?? {}),
       ...(opts.breakArm != null ? { debugBreakArm: parseBreakArm(opts.breakArm), warning: "built with options.breakArm: one instruction also flips bit 0 of A (a must-fail control), NOT a faithful cart" } : {}),
       // the ROM pc ring in recompile-section.js's `trace` schema: it records
       // ROM pcs only (bank < $7E, offset >= $8000) minus the skip ranges, so
@@ -391,7 +399,11 @@ export async function* emitWat(rom, opts = {}) {
   yield apuGlobalsWat();
   yield "\n" + memWat(lay);
   // The CPU bus map (snes9x Memory.Map), 4096 blocks x {type, base}.
-  yield "\n" + `  (data (i32.const ${MAPTAB}) "` + [...escChunks(buildMemMap({ map: d.board, romSize: img.length, romSizeByte: d.romSizeByte, sramSizeByte: d.sramSizeByte, sramBase: lay.SRAM }))].join("") + '")';
+  const chip = chipFor(d.coprocessor);
+  const chipMap = chip?.buildMap ? (api) => chip.buildMap(api, lay, d) : undefined;
+  yield "\n" + `  (data (i32.const ${MAPTAB}) "` + [...escChunks(buildMemMap({ map: d.board, romSize: img.length, romSizeByte: d.romSizeByte, sramSizeByte: d.sramSizeByte, sramBase: lay.SRAM, chipMap }))].join("") + '")';
+  // the coprocessor, or the no-chip bodies of its hooks (coproc.js)
+  yield "\n" + chipWat(d, lay);
   yield "\n" + `  (data (i32.const ${ICOST}) "` + [...escChunks(interpCostTable())].join("") + '")';
   yield "\n" + interpWat(lay);
   // the RAM interpreter: every opcode lowered exactly as an arm is

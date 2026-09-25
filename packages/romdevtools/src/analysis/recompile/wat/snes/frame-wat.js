@@ -310,6 +310,8 @@ export function frameWat(lay) {
     ;; APU power-on: the SPC700 starts in its IPL ROM, which puts $AA/$BB in
     ;; ports 0/1 a few hundred SPC clocks later.
     (call $apu_power)
+    ;; S9xReset's coprocessor reset (coproc.js $chip_reset)
+    (call $chip_reset)
     ;; RESET vector at $FFFC in bank 0, which on a LoROM board is the last
     ;; word of the first 32KB slice.
     (global.set $pc (call $rd16 (i32.const 0xFFFC))))

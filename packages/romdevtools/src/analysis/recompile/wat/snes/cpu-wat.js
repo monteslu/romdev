@@ -204,8 +204,8 @@ export function memWat(lay) {
     (local.set $a (i32.and (local.get $a) (i32.const 0xFFFFFF)))
     (local.set $e (i32.add (i32.const ${MAPTAB}) (i32.shl (i32.shr_u (local.get $a) (i32.const 12)) (i32.const 3))))
     (local.set $x (i32.and (local.get $a) (i32.const 0xFFFF)))
-    (block $none (block $sramhi (block $sramlo (block $cpu (block $ppu (block $direct
-      (br_table $none $direct $direct $ppu $cpu $sramlo $sramhi $none (i32.load (local.get $e))))
+    (block $none (block $chip (block $sramhi (block $sramlo (block $cpu (block $ppu (block $direct
+      (br_table $none $direct $direct $ppu $cpu $sramlo $sramhi $chip $none (i32.load (local.get $e))))
       ;; ROM / RAM
       (return (i32.load8_u (i32.add (i32.load offset=4 (local.get $e)) (i32.and (local.get $a) (i32.const 0xFFF))))))
       ;; $2000-$3FFF: the B bus. $2100-$21FF are the PPU/APU/WRAM-port registers.
@@ -217,7 +217,8 @@ export function memWat(lay) {
         (then (return (call $joyser_read (i32.and (local.get $x) (i32.const 1))))))
       (if (i32.and (i32.ge_u (local.get $x) (i32.const 0x4200)) (i32.lt_u (local.get $x) (i32.const 0x4400)))
         (then (return (call $io_read (local.get $x)))))
-      (return (global.get $ob)))
+      ;; the rest of $4000-$5FFF: a coprocessor's registers, else open bus (coproc.js)
+      (return (call $chip_io_rd (local.get $x))))
       ;; LoROM SRAM: ((bank >> 1) | offset & $7FFF) & SRAMMask.
       (return (i32.load8_u (i32.add (i32.const ${lay.SRAM})
         (i32.and (i32.or (i32.shr_u (i32.and (local.get $a) (i32.const 0xFF0000)) (i32.const 1))
@@ -227,7 +228,9 @@ export function memWat(lay) {
       (return (i32.load8_u (i32.add (i32.const ${lay.SRAM})
         (i32.and (i32.add (i32.sub (i32.and (local.get $a) (i32.const 0x7FFF)) (i32.const 0x6000))
                           (i32.shr_u (i32.and (local.get $a) (i32.const 0x1F0000)) (i32.const 3)))
-                 (i32.const ${lay.sram}))))))
+                 (i32.const ${lay.sram})))))
+      ;; MAP_TYPE.CHIP: a coprocessor's window (coproc.js)
+      (return (call $chip_rd (local.get $a)))))
     (global.get $ob))
 
   ;; snes9x S9xGetWord / S9xSetWord take a FAST PATH when both bytes are
@@ -467,8 +470,8 @@ export function memWat(lay) {
       (then (global.set $stkw (global.get $curpc))
             (global.set $stkwa (local.get $x))))
     (local.set $e (i32.add (i32.const ${MAPTAB}) (i32.shl (i32.shr_u (local.get $a) (i32.const 12)) (i32.const 3))))
-    (block $none (block $sramhi (block $sramlo (block $cpu (block $ppu (block $ram
-      (br_table $none $none $ram $ppu $cpu $sramlo $sramhi $none (i32.load (local.get $e))))
+    (block $none (block $chip (block $sramhi (block $sramlo (block $cpu (block $ppu (block $ram
+      (br_table $none $none $ram $ppu $cpu $sramlo $sramhi $chip $none (i32.load (local.get $e))))
       (i32.store8 (i32.add (i32.load offset=4 (local.get $e)) (i32.and (local.get $a) (i32.const 0xFFF))) (local.get $v))
       (return))
       (if (i32.eq (i32.and (local.get $x) (i32.const 0xFF00)) (i32.const 0x2100))
@@ -478,7 +481,9 @@ export function memWat(lay) {
       (if (i32.eq (local.get $x) (i32.const 0x4016))
         (then (call $joy_latch (i32.and (local.get $v) (i32.const 1))) (return)))
       (if (i32.and (i32.ge_u (local.get $x) (i32.const 0x4200)) (i32.lt_u (local.get $x) (i32.const 0x4400)))
-        (then (call $io_write (local.get $x) (local.get $v))))
+        (then (call $io_write (local.get $x) (local.get $v)) (return)))
+      ;; the rest of $4000-$5FFF: a coprocessor's registers (coproc.js)
+      (call $chip_io_wr (local.get $x) (local.get $v))
       (return))
       ;; SRAM writes need an SRAM (snes9x: if (Memory.SRAMMask)).
       ${lay.sram ? "" : ";; this cart has no SRAM: writes are dropped\n      (return)"}
@@ -492,7 +497,9 @@ export function memWat(lay) {
         (i32.and (i32.add (i32.sub (i32.and (local.get $a) (i32.const 0x7FFF)) (i32.const 0x6000))
                           (i32.shr_u (i32.and (local.get $a) (i32.const 0x1F0000)) (i32.const 3)))
                  (i32.const ${lay.sram}))) (local.get $v))
-      (return)))
+      (return))
+      ;; MAP_TYPE.CHIP: a coprocessor's window (coproc.js)
+      (call $chip_wr (local.get $a) (local.get $v))))
 
   ;; $4200-$43FF: interrupt enables, the multiply/divide unit, IRQ timers,
   ;; DMA and HDMA. The shadow at PPUREG+0x80 holds every written value, and
@@ -752,6 +759,12 @@ export function memWat(lay) {
               (then (local.set $step (i32.const -1))))))
           (local.set $i (i32.const 0))
           (local.set $k (i32.const 0))
+          ;; A coprocessor that feeds the transfer (S9xDoDMA's "custom chip
+          ;; DMA", coproc.js): the bytes come from the chip's buffer and the
+          ;; A address walks the way the chip sets it.
+          (global.set $cdma (call $chip_dma (local.get $ch) (local.get $p) (local.get $src) (local.get $cnt)))
+          (if (global.get $cdma)
+            (then (local.set $src (global.get $cdma_src)) (local.set $step (global.get $cdma_step))))
           ;; snes9x S9xDoDMA: 8 master clocks per channel before its bytes.
           (global.set $cyc (i32.sub (global.get $cyc) (i32.const 8)))
           (global.set $indma (i32.const 1))
@@ -777,11 +790,17 @@ export function memWat(lay) {
                   (i32.or (i32.eq (i32.and (i32.shr_u (local.get $src) (i32.const 17)) (i32.const 0x7F)) (i32.const 0x3F))
                           (i32.and (i32.eqz (i32.and (local.get $src) (i32.const 0x400000)))
                                    (i32.lt_u (i32.and (local.get $src) (i32.const 0xFFFF)) (i32.const 0x2000)))))))))
-            (call $dma_byte (local.get $src)
-              (i32.or (i32.const 0x2100) (i32.and
-                (i32.add (local.get $bport) (call $dmaoff (local.get $mode) (local.get $k)))
-                (i32.const 0xFF)))
-              (local.get $dir))
+            (if (global.get $cdma) (then (global.set $wramdma (i32.const 0))))
+            (if (i32.and (global.get $cdma) (i32.eqz (local.get $dir)))
+              (then (call $wr8 (i32.or (i32.const 0x2100) (i32.and
+                        (i32.add (local.get $bport) (call $dmaoff (local.get $mode) (local.get $k)))
+                        (i32.const 0xFF)))
+                      (call $chip_dma_byte (local.get $i))))
+              (else (call $dma_byte (local.get $src)
+                (i32.or (i32.const 0x2100) (i32.and
+                  (i32.add (local.get $bport) (call $dmaoff (local.get $mode) (local.get $k)))
+                  (i32.const 0xFF)))
+                (local.get $dir))))
             (local.set $k (i32.add (local.get $k) (i32.const 1)))
             ;; The A-bus address walks inside its BANK.
             (local.set $src (i32.or
@@ -810,6 +829,7 @@ export function memWat(lay) {
           (global.set $indma (i32.const 0))
           (global.set $ingdma (i32.const 0))
           (global.set $wramdma (i32.const 0))
+          (global.set $cdma (i32.const 0))
           ;; S9xDoDMA's tail (not reached by an aborted transfer or the
           ;; refused WRAM -> $2180 one): an NMI that became pending during
           ;; the transfer triggers Timings.NMIDMADelay (24) after it.
