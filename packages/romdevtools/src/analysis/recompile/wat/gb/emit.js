@@ -248,6 +248,8 @@ function stepWat(cgb) {
   ;; absolute cycle of the next TIMA interrupt (0 = timer off), and the
   ;; lazy timer's last update and reload time (see $tupd)
   (global $timairq (mut i32) (i32.const 0))
+  ;; the cycle the last timer interrupt was requested at
+  (global $tirqat (mut i32) (i32.const 0))
   ;; $ifsync: events looked at this many cycles into the instruction, and
   ;; a line-144 VBlank request already made by an IF access
   (global $ahead (mut i32) (i32.const 0))
@@ -852,6 +854,9 @@ function stepWat(cgb) {
               (call $hdma_block (global.get $abscc))
               (global.set $cyc (i32.sub (global.get $cyc) (i32.const 4)))
               (call $tick (i32.sub (local.get $L) (global.get $cyc)))
+              ;; an interrupt requested while the block ran (a timer
+              ;; overflow) is taken right after it, before the next instruction
+              (local.set $hit (i32.const 1))
               ;; inside STOP's stall the wake-up is at a fixed time
               ;; (intevent_unhalt): the block's cycles are part of it
               (if (i32.gt_s (global.get $stopcd) (i32.const 0))
@@ -938,6 +943,25 @@ function stepWat(cgb) {
     (call $tick (i32.add (i32.sub (local.get $c0) (global.get $cyc)) (global.get $cycbias)))
     (global.set $cycbias (i32.const 0))
     (local.set $c0 (global.get $cyc))
+    ;; an HBlank DMA block requested before the timer interrupt that is
+    ;; about to be taken runs first (gambatte's events in time order: the
+    ;; tima event flags IF, the interrupt follows it, the dma waits for its
+    ;; own time)
+    (if (i32.and (i32.and (global.get $ime) (i32.ne (i32.and (i32.and (i32.load8_u (i32.const ${IO + 0xFF}))
+                                                                      (i32.load8_u (i32.const ${IO + 0x0F}))) (i32.const 0x04)) (i32.const 0)))
+                 (i32.and (i32.and (global.get $hdma_on) (i32.eqz (global.get $hdmadone)))
+                          (i32.and (i32.lt_u (global.get $ln) (i32.const 144))
+                                   (i32.ne (i32.and (i32.load8_u (i32.const ${IO + 0x40})) (i32.const 0x80)) (i32.const 0)))))
+      (then
+        (local.set $t (i32.add (i32.sub (i32.add (global.get $abscc) (global.get $cyc)) (global.get $linelen)) (global.get $hdmaat)))
+        (if (i32.and (i32.le_s (i32.sub (local.get $t) (global.get $abscc)) (i32.const 0))
+                     (i32.lt_s (i32.sub (local.get $t) (global.get $tirqat)) (i32.const 0)))
+          (then
+            (global.set $hdmadone (i32.const 1))
+            (call $hdma_block (global.get $abscc))
+            (global.set $cyc (i32.sub (global.get $cyc) (i32.const 4)))
+            (call $tick (i32.sub (local.get $c0) (global.get $cyc)))
+            (local.set $c0 (global.get $cyc))))))
     ;; ---- interrupt dispatch ----
     (local.set $pend (i32.and (i32.load8_u (i32.const ${IO + 0xFF}))
                               (i32.and (i32.load8_u (i32.const ${IO + 0x0F})) (i32.const 0x1F))))
@@ -1030,6 +1054,7 @@ function stepWat(cgb) {
       (br_if $d (i32.eqz (global.get $timairq)))
       (br_if $d (i32.lt_s (i32.sub (local.get $cc) (global.get $timairq)) (i32.const 0)))
       (i32.store8 (i32.const ${IO + 0x0F}) (i32.or (i32.load8_u (i32.const ${IO + 0x0F})) (i32.const 4)))
+      (global.set $tirqat (global.get $timairq))
       (global.set $timairq (i32.add (global.get $timairq)
         (i32.shl (i32.sub (i32.const 256) (i32.load8_u (i32.const ${IO + 0x06})))
                  (call $tclk (i32.load8_u (i32.const ${IO + 0x07}))))))

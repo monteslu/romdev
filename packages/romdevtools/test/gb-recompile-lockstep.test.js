@@ -431,6 +431,28 @@ test("CGB: HBlank DMA enabled after a mid-line SCX write predicts mode 0 from th
   await assertLockstep(hdmaSweepRom([], scx), 140);
 });
 
+test("CGB: an HBlank DMA block requested before a timer interrupt is moved before the interrupt pushes", { skip, timeout: 180000 }, async () => {
+  // the DMA copies the stack ($CFF0) where the interrupt pushes its return
+  // address. loop: wait LY=$40 ; [$CFF0] = $1234 ; HDMA $CFF0 -> $8000 ;
+  // C>>4 nops ; TIMA overflows in (16 - C&15) * 16 cycles (TAC=5) ; ei ; wait ;
+  // di ; DE = VRAM $8000 ; C++. The timer vector is reti.
+  const main = [0xF3, 0x31, 0xF2, 0xCF, 0xAF, 0xE0, 0x06, 0x3E, 0x05, 0xE0, 0x07, 0x3E, 0x04, 0xE0, 0xFF,
+    0x0E, 0x00];
+  const L = 0x150 + main.length;
+  main.push(0xF0, 0x44, 0xFE, 0x40, 0x20, 0xFA,   // loop: wait LY=$40
+    0x21, 0x34, 0x12, 0xE5, 0xE1,                 // ld hl,$1234 ; push hl ; pop hl
+    0x3E, 0xCF, 0xE0, 0x51, 0x3E, 0xF0, 0xE0, 0x52, 0x3E, 0x80, 0xE0, 0x53, 0xAF, 0xE0, 0x54,
+    0x3E, 0x80, 0xE0, 0x55,                       // HDMA one block
+    0x79, 0x1F, 0x1F, 0x1F, 0x1F, 0xE6, 0x0F, 0x6F, 0x26, 0x03, 0xE9);  // slide by c >> 4
+  const after = [0x79, 0xE6, 0x0F, 0xF6, 0xF0, 0xE0, 0x05,   // TIMA = $F0 | (c & 15)
+    0xAF, 0xE0, 0x0F, 0xFB,                       // IF=0 ; ei
+    0x06, 0x30, 0x05, 0x20, 0xFD, 0xF3,           // wait ; di
+    0xFA, 0x00, 0x80, 0x5F, 0xFA, 0x01, 0x80, 0x57,    // e = [$8000] ; d = [$8001]
+    0x0C, 0xC3, lo(L), hi(L)];
+  const rom = makeRom(main, { 0x50: [0xD9], 0x300: [...new Array(16).fill(0x00), ...after] }, 0, { cgb: true });
+  await assertLockstep(rom, 280);
+});
+
 test("CGB: a general DMA during an OAM DMA hands its bytes to the OAM DMA, and one reaching $10000 stops there", { skip, timeout: 180000 }, async () => {
   // LCD off. WRAM $C000.. = $11,$12,... loop: OAM DMA from $C000 ; C&15 nops
   // (slide) ; GDMA of one block $4100 -> $8000 ; wait ; E = sum of OAM ;
