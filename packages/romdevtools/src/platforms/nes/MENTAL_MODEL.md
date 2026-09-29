@@ -221,6 +221,7 @@ at build time.
 | `nes_runtime.c` | Helper implementations. Linked as an extra TU. |
 | `chr-ram-runtime.crt0.s` | Custom crt0 with NMI handler (OAM DMA + VRAM queue flush + scroll reset). Clears CHR-RAM at boot so BG tile 0 is blank. Includes the iNES header. |
 | `chr-ram-runtime.cfg` | Linker config: NROM-256, CHR-RAM, vertical mirroring, OAM segment at $0200. |
+| `chr-ram-wram.cfg` + `chr-ram-wram.crt0.s` | The same with BSS/DATA in battery PRG-RAM ($6100-$7FFF); $6000-$60FF is a save area. |
 | `README.md` | Build invocation + "rebuild outside MCP" instructions. |
 
 Build calls explicitly point at these files via `sourcesPaths` /
@@ -304,9 +305,11 @@ unmapped, and BSS reads return open bus. Globals look like they
 work but `_nmi_counter` never advances and any "wait until counter
 == target" loop hangs.
 
-For projects that outgrow 512 bytes of BSS: opt into a mapper that
-provides PRG-RAM at $6000 (MMC1/MMC3 etc.) rather than widening the
-$0300-$04FF region (you'd collide with the C stack).
+For projects that outgrow 512 bytes of BSS: use `linkerConfig: "chr-ram-wram"`
+(same cart, runtime and crt0; BSS/DATA at $6100-$7FFF in the battery PRG-RAM
+the header already maps, 7.75 KB; $6000-$60FF stays a save area the crt0 never
+clears), or opt into a mapper that provides PRG-RAM at $6000 (MMC1/MMC3 etc.).
+Don't widen the $0300-$04FF region (you'd collide with the C stack).
 
 ### 5. PPUCTRL bit 4 = BG pattern table at $1000
 
