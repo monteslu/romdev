@@ -930,8 +930,12 @@ export async function buildForPlatform(args) {
       const BATTERY_CART_TYPES = new Set([0x03, 0x06, 0x0F, 0x10, 0x13, 0x1B, 0x1E]); // MBC1/2/3/5 +BATTERY variants
       const declType = binary.length > 0x149 ? binary[0x147] : 0x00;
       const declRam = binary.length > 0x149 ? binary[0x149] : 0x00;
-      const cartByte = BATTERY_CART_TYPES.has(declType) ? declType : 0x00;
-      const ramByte = cartByte !== 0x00 && declRam >= 0x01 && declRam <= 0x05 ? declRam : 0x00;
+      // A banked build (code/data in _CODE_<n>, see buildZ80C) needs a mapper that switches the $4000-$7FFF window:
+      // MBC5 (512 banks), with the declared battery RAM kept.
+      const cartByte = r.banks && Object.keys(r.banks).length
+        ? (BATTERY_CART_TYPES.has(declType) ? 0x1B : 0x19)
+        : BATTERY_CART_TYPES.has(declType) ? declType : 0x00;
+      const ramByte = BATTERY_CART_TYPES.has(cartByte) && declRam >= 0x01 && declRam <= 0x05 ? declRam : 0x00;
       const mArg = "0x" + cartByte.toString(16).padStart(2, "0").toUpperCase();
       const rArg = "0x" + ramByte.toString(16).padStart(2, "0").toUpperCase();
       const fixOpts = args.platform === "gbc"
@@ -1050,6 +1054,7 @@ export async function buildForPlatform(args) {
       stage: r.stage,
       failedTU: r.failedTU,        // which .c/.s file killed the build (if any)
       compiledOK: r.compiledOK,    // ordered list of TUs that DID compile
+      ...(r.banks ? { banks: r.banks } : {}),   // GB: bytes in each switchable ROM bank
     };
   }
 

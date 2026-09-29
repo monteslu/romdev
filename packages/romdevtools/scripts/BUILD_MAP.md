@@ -52,12 +52,13 @@ Toolchain recipes fetch `toolchains.<name>`, build to WASM, and stage into
 `src/toolchains/<name>/wasm/`. ⚠ **Known asymmetry:** unlike the core recipes,
 most toolchain recipes do NOT yet copy into their shipping package automatically -
 the `romdev-toolchain-*/wasm/` copy is synced separately. (Worth unifying: give
-each toolchain recipe the same `PKG_OUT` copy step the core recipes have.)
+each toolchain recipe the same `PKG_OUT` copy step the core recipes have;
+`build-sdcc.sh` has it.)
 
 | Toolchain | Recipe | Ships in |
 |---|---|---|
 | cc65 (ca65/cc65/ld65/da65) | `build-cc65.sh` | `romdev-toolchain-cc65` |
-| SDCC | `build-sdcc.sh` (+ `build-z80-binutils-wasm.sh`) | `romdev-toolchain-sdcc` |
+| SDCC | `build-sdcc.sh` (+ `build-z80-binutils-wasm.sh`), patch `sdcc-sdasgb-32bit-addresses.patch` | `romdev-toolchain-sdcc` |
 | RGBDS | `build-rgbds.sh` | `romdev-toolchain-rgbds` |
 | vasm (m68k) | `build-vasm68k.sh` | `romdev-toolchain-vasm` |
 | m68k GCC + sjasm | `build-m68k-wasm-tools.sh`, `build-sjasm.sh` (toolchain built by `build-m68k-toolchain.sh`) | `romdev-toolchain-m68k-gcc` |

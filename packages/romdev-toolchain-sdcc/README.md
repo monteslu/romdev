@@ -20,4 +20,4 @@ is fetched from a pinned upstream commit at build time (see the romdev repo's
 `scripts/versions.json` and `BUILDING.md`). See the romdev repo `NOTICE` for the
 full third-party inventory.
 
-**Built by:** `romdevtools/scripts/build-sdcc.sh + build-z80-binutils-wasm.sh` (no patch - built clean). See `scripts/BUILD_MAP.md` in the romdev repo for the full recipe→package map.
+**Built by:** `romdevtools/scripts/build-sdcc.sh + build-z80-binutils-wasm.sh`, with `scripts/patches/sdcc-sdasgb-32bit-addresses.patch` (sdasgb links with 32-bit addresses, so all 512 MBC5 banks work). See `scripts/BUILD_MAP.md` in the romdev repo for the full recipe→package map.

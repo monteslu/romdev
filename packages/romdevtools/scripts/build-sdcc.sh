@@ -95,6 +95,20 @@ if [ ! -d "$SDCC_SRC_DIR" ]; then
   fi
 fi
 
+# ---- step 1b: our patch (toolchains.sdcc.patch in versions.json) ------------
+# sdasgb links with 24-bit addresses, so an MBC5 bank n >= 256 (linked at
+# n << 16 | 0x4000) wrapped onto bank n - 256. The patch makes the gb assembler
+# emit 32-bit addresses (XL4); the native pass must then rebuild the sm83 libs
+# with it, so a fresh apply drops the native sentinel.
+PATCH_FILE="$PROJECT_DIR/$(pin_get toolchains.sdcc patch)"
+if grep -q "exprmasks(4)" "$SDCC_SRC_DIR/sdas/asgb/gbmch.c"; then
+  echo "SDCC patch already present (sdasgb exprmasks(4)); skipping apply."
+else
+  (cd "$SDCC_SRC_DIR" && patch -p1 --forward < "$PATCH_FILE")
+  rm -f "$SDCC_SRC_DIR/.native-built"
+  echo "Applied $PATCH_FILE"
+fi
+
 # ---- step 2: native build (produces Z80 runtime libs) ----------------------
 echo "Native pass: building sdcc + Z80 runtime libs ..."
 cd "$SDCC_SRC_DIR"
@@ -107,6 +121,9 @@ if [ ! -f "$SDCC_SRC_DIR/.native-built" ]; then
   sed -i 's/^\(extern[[:space:]]*VOID[[:space:]]*\)elf();/\1elf(int);/' \
     sdas/linksrc/aslink.h
 
+  # A tree the emscripten pass already built holds WASM objects the native
+  # linker cannot read (e.g. after a patch dropped the sentinel): start clean.
+  if [ -f Makefile ]; then make distclean >/dev/null 2>&1 || true; fi
   ./configure "${SDCC_CONFIG_PORTS[@]}"
   make -j"$(nproc)"
   touch "$SDCC_SRC_DIR/.native-built"
@@ -274,6 +291,24 @@ stage_tool bin/sdcpp sdcpp
 if [ ! -f "$OUT/sdcc.wasm" ]; then
   echo "FATAL: sdcc.wasm not produced. Check the emscripten link step." >&2
   exit 1
+fi
+
+# Also stage into the shipping package (the same step the core recipes have),
+# so a rebuild - e.g. after a patch change - reaches romdev-toolchain-sdcc
+# without a separate sync. mcpp comes from build-mcpp.sh; its files stay.
+PKG_DIR="$PROJECT_DIR/../romdev-toolchain-sdcc"
+if [ -d "$PKG_DIR" ]; then
+  mkdir -p "$PKG_DIR/wasm"
+  for t in sdcc sdasz80 sdasgb sdld; do
+    cp "$OUT/$t.js" "$OUT/$t.wasm" "$PKG_DIR/wasm/"
+  done
+  for port in z80 z180 sm83 ez80_z80; do
+    if [ -d "$SHARE/lib/$port" ]; then
+      mkdir -p "$PKG_DIR/share/sdcc/lib/$port"
+      cp -R "$SHARE/lib/$port/." "$PKG_DIR/share/sdcc/lib/$port/"
+    fi
+  done
+  echo "also staged into romdev-toolchain-sdcc package: $PKG_DIR"
 fi
 
 echo

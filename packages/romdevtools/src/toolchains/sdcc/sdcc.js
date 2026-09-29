@@ -256,6 +256,8 @@ export async function runSdasgb(args) {
  * @param {number} [args.dataLoc] data segment start address (default 0xC000 for Z80)
  * @param {string} [args.crt0] alternative crt0 .rel text. Defaults to the
  *   stock SDCC crt0.rel from share/sdcc/lib/<port>/.
+ * @param {Record<string, number>} [args.areaBases] extra `-b` placements,
+ *   e.g. { _CODE_3: 0x34000 } for a switchable GB ROM bank.
  */
 export async function runSdld(args) {
   const {
@@ -265,6 +267,7 @@ export async function runSdld(args) {
     codeLoc = 0x0000,
     dataLoc = 0xC000,
     crt0,
+    areaBases = {},
   } = args;
   /** @type {import("../_worker/run.js").InputFile[]} */
   const inputFiles = [];
@@ -284,6 +287,7 @@ export async function runSdld(args) {
     "-i", // intel hex output
     "-b", `_CODE=0x${codeLoc.toString(16)}`,
     "-b", `_DATA=0x${dataLoc.toString(16)}`,
+    ...Object.entries(areaBases).flatMap(([area, base]) => ["-b", `${area}=0x${base.toString(16)}`]),
     "-k", "/share/sdcc/lib/" + port,
     ...libraries.flatMap((l) => ["-l", l]),
     "/work/out.ihx", // output base
@@ -441,6 +445,15 @@ export async function buildZ80C(args) {
   // shape here had NO `exitCode || 1` fallback (raw link.exitCode); CBuild uses
   // `exitCode || 1`. link.exitCode is non-zero on a real link failure, so this
   // is equivalent in practice - but to stay byte-identical, handle it inline.
+  // Switchable ROM banks (SM83 / MBC5): a TU that puts code or data in area
+  // _CODE_<n> (`#pragma codeseg CODE_<n>` / `#pragma constseg CODE_<n>`) links
+  // at bank n's window, n << 16 | $4000, and lands in the ROM at n x 16 KB.
+  const banks = isSm83 ? bankedAreas(objects) : [];
+  const badBank = banks.find((b) => b < 2 || b > GB_LAST_BANK);
+  if (badBank !== undefined) {
+    cb.log += `\n[buildZ80C] bank ${badBank}: switchable ROM banks are 2-${GB_LAST_BANK} (0 and 1 are the fixed 32 KB)\n`;
+    return { binary: null, log: cb.log, exitCode: 1, stage: "sdld" };
+  }
   const link = await runSdld({
     objects,
     port: args.port,
@@ -448,10 +461,19 @@ export async function buildZ80C(args) {
     codeLoc: args.codeLoc,
     dataLoc: args.dataLoc,
     crt0: crt0Rel,
+    areaBases: Object.fromEntries(banks.map((b) => [`_CODE_${b}`, (b << 16) | GB_BANK_SIZE])),
   });
   cb.log += "--- sdld ---\n" + link.log;
   if (link.exitCode !== 0 || !link.ihx) {
     return { binary: null, log: cb.log, exitCode: link.exitCode, stage: "sdld" };
+  }
+  if (banks.length) {
+    const rom = ihxToBankedGbRom(link.ihx, args.romSize || 0x8000);
+    if (rom.error) {
+      cb.log += `\n[buildZ80C] ${rom.error}\n`;
+      return { binary: null, log: cb.log, exitCode: 1, stage: "size" };
+    }
+    return { binary: rom.binary, banks: rom.banks, log: cb.log, exitCode: 0, stage: "done", map: link.map ?? null };
   }
   // `romBase` (e.g. MSX $4000) means the cartridge maps at that address: the
   // ihx writes records at absolute $4000+, so size the buffer to cover them,
@@ -520,6 +542,57 @@ export function parseSdldMap(map) {
   }
   out.sort((a, b) => a.address - b.address);
   return out;
+}
+
+const GB_BANK_SIZE = 0x4000;
+const GB_LAST_BANK = 511;   // MBC5
+
+/** The switchable banks the objects use: areas `_CODE_<n>` with bytes in them. */
+function bankedAreas(objects) {
+  const banks = new Set();
+  for (const rel of Object.values(objects))
+    for (const m of String(rel).matchAll(/^A _CODE_(\d+) size ([0-9A-Fa-f]+)/gm))
+      if (parseInt(m[2], 16)) banks.add(Number(m[1]));
+  return [...banks].sort((a, b) => a - b);
+}
+
+/**
+ * A banked Game Boy ROM from an Intel hex file: the fixed 32 KB as linked, and bank n (linked at n << 16 | $4000)
+ * at n x 16 KB. The size is the next power of two that holds every bank (at least `minSize`), as MBC5 carts need.
+ * Returns { binary, banks: { n: bytes } } or { error } when the fixed part or a bank overflows.
+ */
+export function ihxToBankedGbRom(ihx, minSize = 0x8000, fill = 0xFF) {
+  const records = [];
+  const banks = {};
+  let fixed = 0;
+  let high = 0;
+  for (const rawLine of ihx.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line.startsWith(":")) continue;
+    const count = parseInt(line.substr(1, 2), 16);
+    const addr = parseInt(line.substr(3, 4), 16);
+    const type = parseInt(line.substr(7, 2), 16);
+    const data = line.substr(9, count * 2);
+    if (type === 0x00) {
+      const linear = ((high << 16) | addr) >>> 0;
+      records.push({ linear, count, data });
+      if (linear < 0x10000) fixed = Math.max(fixed, linear + count);
+      else banks[linear >>> 16] = Math.max(banks[linear >>> 16] ?? 0, (linear & 0xFFFF) + count - GB_BANK_SIZE);
+    } else if (type === 0x04) high = parseInt(data, 16);
+    else if (type === 0x01) break;
+  }
+  if (fixed > 0x8000) return { error: `the fixed ROM (code and data outside banks) is ${fixed} bytes; it holds 32768` };
+  const over = Object.entries(banks).find(([, n]) => n > GB_BANK_SIZE);
+  if (over) return { error: `bank ${over[0]} is ${over[1]} bytes; a bank holds ${GB_BANK_SIZE}` };
+  let size = Math.max(minSize, 0x8000);
+  const top = Math.max(1, ...Object.keys(banks).map(Number));
+  while (size < (top + 1) * GB_BANK_SIZE) size *= 2;
+  const out = new Uint8Array(size).fill(fill);
+  for (const { linear, count, data } of records) {
+    const base = linear < 0x10000 ? linear : (linear >>> 16) * GB_BANK_SIZE + ((linear & 0xFFFF) - GB_BANK_SIZE);
+    for (let i = 0; i < count; i++) out[base + i] = parseInt(data.substr(i * 2, 2), 16);
+  }
+  return { binary: out, banks };
 }
 
 // Walk an Intel hex file and return the highest absolute byte address
