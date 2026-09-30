@@ -26,9 +26,14 @@ test("HTTP actual compiler resolves the registered project alias without accepti
   assert.equal(good.measurementValidity.state, "valid");
   assert.equal(good.romLinked.status, "exact");
   assert.equal(good.romLinked.mismatches, 0);
-  // Raw relocation spelling remains a separate strict check, not silently relaxed.
+  // Raw relocation spelling remains a separate strict check, not silently
+  // relaxed: textExact follows the strict count, and a function with
+  // spelling differences is exact only as "resolved-relocations" (both
+  // spellings link to the ROM's own words).
   assert.equal(good.strictMismatches, 2);
-  assert.equal(good.exactFunctionMatch, false);
+  assert.equal(good.textExact, false);
+  assert.equal(good.verdict.checks.text.equivalence, "resolved-relocations");
+  assert.equal(good.exactFunctionMatch, true);
   const wrong = await compare(text.replaceAll("D_801CE704", "D_801CE6F8"));
   assert.equal(wrong.compileSucceeded, true);
   assert.equal(wrong.romLinked.status, "mismatch");

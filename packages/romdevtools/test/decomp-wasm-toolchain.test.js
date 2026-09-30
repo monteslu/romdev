@@ -228,7 +228,8 @@ test("recipe shell parsing and dispatch never name a host program", () => {
   assert.equal(classifyCommand([".venv/bin/python3", "tools/asm-processor/build.py"]).kind, "asm-processor");
   assert.equal(classifyCommand(["python3", "tools/other.py"]).kind, "unsupported");
   assert.equal(classifyCommand(["gcc", "-fsyntax-only", "x.c"]).kind, "syntax-check");
-  assert.equal(classifyCommand(["make"]).kind, "unsupported");
+  assert.equal(classifyCommand(["make"]).kind, "make", "a recursive make is read by romdev, never run");
+  assert.equal(classifyCommand(["bash", "tools/x.sh"]).kind, "unsupported");
   assert.deepEqual(toolName("mips64-elf-objdump"), { kind: "binutils", tool: "objdump", prefix: "mips64-elf-" });
 });
 
@@ -363,4 +364,55 @@ test("runArgv threads ido overrides (cwd, env) into the IDO compile", async () =
   assert.equal(r.code, 0, r.log);
   assert.equal(r.kind, "ido");
   assert.ok(fs.existsSync(path.join(d, "t.o")));
+});
+
+test("KMC gcc 2.7.2 (WASM) runs a project's cpp | iconv | gcc -x c - pipeline", async () => {
+  const d = dir("kmc");
+  fs.mkdirSync(path.join(d, "tools/gcc_kmc/linux/2.7.2"), { recursive: true });
+  fs.writeFileSync(path.join(d, "t.c"), 'const char msg[] = "\u3042";\nunsigned int u(float f) { return f; }\nint add3(int a) { return a + 3; }\n');
+  const cc = "COMPILER_PATH=tools/gcc_kmc/linux/2.7.2 tools/gcc_kmc/linux/2.7.2/gcc";
+  const flags = "-mabi=32 -mgp32 -mfp32 -nostdinc -fno-PIC -mno-abicalls -G 0 -mips3 -EB -O2 -w";
+  const line = `${cc} ${flags} -E t.c | iconv --from-code=UTF-8 --to-code=Shift-JIS | ${cc} -x c ${flags} -c -o t.o -`;
+  const r = await runRecipeLine(line, { cwd: d, tmpRoot: dir("kmc-tmp") });
+  assert.equal(r.code, 0, r.log);
+  assert.deepEqual(r.steps.map((s) => s.kind), ["decomp-gcc", "iconv", "decomp-gcc"]);
+  const elf = readElf(fs.readFileSync(path.join(d, "t.o")));
+  assert.ok(elf.syms.some((s) => s.name === "add3" && (s.info & 0xf) === 2));
+  assert.ok(elf.syms.some((s) => s.name === "gcc2_compiled."), "gcc 2.x marker symbol");
+  const data = Buffer.concat([elf.section(".data") ?? Buffer.alloc(0), elf.section(".rodata") ?? Buffer.alloc(0)]);
+  assert.ok(data.includes(Buffer.from([0x82, 0xa0])), "the string was converted to Shift-JIS before compiling");
+  // float -> unsigned needs 2^31 as a float constant: a host-endianness bug in
+  // the build once turned it into a denormal loaded from .rodata.
+  assert.ok(elf.section(".text").includes(Buffer.from([0x3c, 0x01, 0x4f, 0x00])), "lui at,0x4f00 (2^31 as a float) in u()");
+  const bad = await runRecipeLine(`${cc} ${flags} -E missing.c | ${cc} -x c ${flags} -c -o m.o -`, { cwd: d, tmpRoot: dir("kmc-tmp2") });
+  assert.notEqual(bad.code, 0, "pipefail: a failed first stage fails the step");
+});
+
+test("glibc iconv tables: Shift-JIS and EUC-JP reproduce glibc's choices", async () => {
+  const { iconvEncode } = await import("../src/decomp/iconv-tables.js");
+  // (U+005C and U+007E stay ASCII; U+00A5/U+203E fold onto them; U+FF5E has no SHIFT_JIS mapping in glibc.)
+  assert.deepEqual([...iconvEncode("\\~\u00a5\u203e\u301c\u2212\u00a2", "Shift-JIS")], [0x5c, 0x7e, 0x5c, 0x7e, 0x81, 0x60, 0x81, 0x7c, 0x81, 0x91]);
+  assert.deepEqual([...iconvEncode("\uffe0\u2460".slice(0, 1), "SHIFT_JIS")], [0x81, 0x91]);
+  assert.throws(() => iconvEncode("\uff5e", "Shift-JIS"), /cannot convert/);
+  assert.throws(() => iconvEncode("\u2460", "Shift-JIS"), /cannot convert/, "NEC row 13 is not in glibc SHIFT_JIS");
+  assert.deepEqual([...iconvEncode("\u3042\uff71\u4e28\u0085", "EUC-JP")], [0xa4, 0xa2, 0x8e, 0xb1, 0x8f, 0xb0, 0xa9, 0x85]);
+  assert.throws(() => iconvEncode("\uffe0", "EUC-JP"), /cannot convert/);
+});
+
+test("Makefile reader: shortest-stem pattern rule wins; recursive $(MAKE) -C runs as a sub-build", async () => {
+  const d = dir("submake");
+  fs.mkdirSync(path.join(d, "lib"), { recursive: true });
+  fs.writeFileSync(path.join(d, "Makefile"), [
+    "build/%.o: %.c", "\techo general > $@",
+    "build/lib/%.o: lib/%.c", "\t$(MAKE) -C lib OUT=../$@ ../$@", "",
+  ].join("\n"));
+  fs.writeFileSync(path.join(d, "lib", "Makefile"), ["../build/lib/%.o: %.c", "\tmkdir -p ../build/lib", "\techo sub $(OUT) > $@", ""].join("\n"));
+  fs.writeFileSync(path.join(d, "lib", "x.c"), "");
+  fs.mkdirSync(path.join(d, "build", "lib"), { recursive: true });
+  const mk = await loadMakefile(d);
+  const r = mk.recipeFor("build/lib/x.o");
+  assert.equal(r.lines[0].command, "make -C lib OUT=../build/lib/x.o ../build/lib/x.o", "the lib/ rule (shorter stem) is chosen over the earlier general rule");
+  const b = await buildGoal(mk, "build/lib/x.o", { always: true, tmpRoot: dir("submake-tmp") });
+  assert.equal(b.ok, true, JSON.stringify(b.failed));
+  assert.equal(fs.readFileSync(path.join(d, "build", "lib", "x.o"), "utf8"), "sub ../build/lib/x.o\n");
 });

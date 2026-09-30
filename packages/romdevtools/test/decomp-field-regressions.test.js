@@ -73,7 +73,7 @@ async function romCompare(stream, words, symbols = new Map()) {
   const bytes = Buffer.alloc(words.length * 4);
   words.forEach((w, i) => bytes.writeUInt32BE(w >>> 0, i * 4));
   const project = { m: { platform: "n64" }, linkerMap: async () => ({ symbols, objects: new Map() }),
-    symbolAddrs: async () => new Map(), romSlice: async (offset, length) => ({ bytes: bytes.subarray(offset, offset + length), sha1: "fixture" }) };
+    symbolAddrs: async () => new Map(), splatSectionPlacement: async () => [], romSlice: async (offset, length) => ({ bytes: bytes.subarray(offset, offset + length), sha1: "fixture" }) };
   return compareAgainstRom(project, { va: 0x80000400, romOffset: 0, romOffsetHex: "0x0", sizeBytes: bytes.length }, stream, new Map());
 }
 

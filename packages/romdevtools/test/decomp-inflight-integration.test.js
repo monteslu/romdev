@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, writeFile, readdir, access } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { Project, sha256Text } from "../src/decomp/project.js";
+import { Project } from "../src/decomp/project.js";
 import { compileAndCompare } from "../src/decomp/compile.js";
 import { artifactWorkbenchInput, captureSchedulerTrace, verifyTraceBundle, invokeWorkbench } from "../src/decomp/workbench.js";
 import { captureGlobalcolorTrace } from "../src/decomp/globalcolor-trace.js";
@@ -21,13 +21,13 @@ async function fixture() {
   const candidateText = await readFile(path.join(os.homedir(), ".romdev/decomp/wr64-us-rev1/candidates/func_8004EAA4/3d47c0df671e0c1fca69-947be21c958209e6-v2.c"), "utf8");
   const header = path.join(ws, "moving-header.h"), marker = path.join(ws, "compile-started");
   await writeFile(header, "#define FIXTURE_VALUE 1\n");
-  const original = project.compileInvocation.bind(project);
-  project.compileInvocation = async (tu) => {
-    const inv = await original(tu);
-    const compile = [process.execPath, new URL("./fixtures/decomp-delayed-compiler.mjs", import.meta.url).pathname, marker, ...inv.compile];
-    return { ...inv, compile, fingerprint: sha256Text(JSON.stringify(compile)).slice(0, 16) };
+  // The compile runs as WASM in romdev's worker, so the boundary is announced
+  // by compileAndCompare's test hook (it used to be a wrapper process).
+  const atBoundary = async () => {
+    await writeFile(marker, "started");
+    await new Promise(resolve => setTimeout(resolve, 300));
   };
-  return { project, fn, marker, header, opts: { candidateText, ownerPath, declarations: `#include "${header}"` } };
+  return { project, fn, marker, header, opts: { candidateText, ownerPath, declarations: `#include "${header}"`, _atCompileBoundary: atBoundary } };
 }
 
 test("actual in-flight compile rejects a temporary header edit even when bytes are restored", { skip: !enabled }, async () => {
