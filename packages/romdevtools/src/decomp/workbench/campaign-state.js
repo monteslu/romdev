@@ -437,7 +437,7 @@ function recoverExperimentMetadata(manifest, records) {
 
 const pyStrValue = (v) => (v === null || v === undefined ? "None" : v === true ? "True" : v === false ? "False" : String(v));
 
-function homologousGuidance(manifest, successful) {
+export function homologousGuidance(manifest, successful) {
   const experiment = manifest.experiment;
   if (!isDict(experiment)) return [];
   const groups = get(experiment, "homologous_parameters", []);
