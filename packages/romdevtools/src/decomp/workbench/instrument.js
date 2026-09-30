@@ -1,0 +1,186 @@
+// instrument.js - opt-in instrumentation for statically recompiled IDO ugen
+// sources (instrument-ugen): call-depth frames, free-list events stamped with
+// the procedure, emit ordinal and current source line, allocator result hooks,
+// and (with --emit-provenance) the ibuffer emit order ugen hands as1. Every
+// hook is disabled unless its environment variable is set, so a traces-off
+// build is byte-identical to stock.
+//
+// Plain JS ESM + JSDoc.
+
+import { ValueError, strRepr } from "./py.js";
+
+export const MARKER = "DKWB_UGEN_INSTRUMENTATION_V1";
+export const FUNCTION_RE = /^(?<header>static\s+[^\n;{}]+?\s+(?<name>f_[A-Za-z0-9_]+)\s*\([^;\n]*\)\s*\{)\s*$/gm;
+
+/** Known ugen free-list helpers, and the event each one emits. */
+export const FREE_LIST_FUNCTIONS = Object.freeze({
+  f_alloc_reg: "ALLOC", f_get_free_reg: "ALLOC_GP", f_get_free_fp_reg: "ALLOC_FP", f_free_reg: "FREE",
+  f_force_free_reg: "FORCE_FREE", f_add_to_free_list: "ADD", f_remove_from_free_list: "REMOVE", f_move_to_end_gp_list: "MOVE_END",
+});
+
+/** Allocators whose returned register (not the entry request) is the answer. */
+export const RESULT_HOOK_FUNCTIONS = Object.freeze({ f_get_free_reg: "ALLOC_GP_RESULT", f_get_free_fp_reg: "ALLOC_FP_RESULT" });
+
+/** Emit helpers: the point where one ibuffer instruction record is written. */
+export const EMIT_FUNCTION_RE = /^f_(?:d?emit_|d?define_label$|define_exception_label$)/;
+export const BACKWARD_EMIT_PREFIX = "f_demit";
+
+export const SCHED_HELPERS = [
+  "",
+  "/* DKWB_UGEN_SCHED_V1 -- emit-order provenance.",
+  " * Disabled unless DKWB_UGEN_SCHED is set. Reads only; writes nothing but",
+  " * stderr, so a traces-off build is byte-identical to stock.",
+  " */",
+  "static int dkwb_sched_state = -1;",
+  "static int dkwb_sched_on(void) {",
+  "    if (dkwb_sched_state < 0) {",
+  "        const char *value = getenv(\"DKWB_UGEN_SCHED\");",
+  "        dkwb_sched_state =",
+  "            value != NULL && *value != '\\0' && *value != '0';",
+  "    }",
+  "    return dkwb_sched_state;",
+  "}",
+  "#define DKWB_IBUFFER_BACKWARD_CURSOR 0x10018e78u",
+  "static void dkwb_emit(const char *fn, unsigned op, uint8_t *mem, int backward,",
+  "                      int is_label) {",
+  "    long index;",
+  "    if (is_label) dkwb_sched_block++;",
+  "    if (!dkwb_sched_on() || mem == NULL) return;",
+  "    index = backward",
+  "        ? (long) MEM_U32(DKWB_IBUFFER_BACKWARD_CURSOR)",
+  "        : (long) MEM_U32(DKWB_IBUFFER_FORWARD_CURSOR);",
+  "    fprintf(stderr,",
+  "            \"DKWB-EMIT-V1 proc=%d block=%d emit=%ld op=%u line=%ld \"",
+  "            \"buffer=%s fn=%s\\n\",",
+  "            dkwb_trace_proc, dkwb_sched_block, index, op,",
+  "            dkwb_source_line(mem), backward ? \"back\" : \"fwd\", fn);",
+  "}",
+  "",
+].join("\n");
+
+export const HELPERS = [
+  "",
+  "/* DKWB_UGEN_SCHED_V1 -- emit-order provenance.",
+  " * Disabled unless DKWB_UGEN_SCHED is set. Reads only; writes nothing but",
+  " * stderr, so a traces-off build is byte-identical to stock.",
+  " */",
+  "static int dkwb_sched_state = -1;",
+  "static int dkwb_sched_on(void) {",
+  "    if (dkwb_sched_state < 0) {",
+  "        const char *value = getenv(\"DKWB_UGEN_SCHED\");",
+  "        dkwb_sched_state =",
+  "            value != NULL && *value != '\\0' && *value != '0';",
+  "    }",
+  "    return dkwb_sched_state;",
+  "}",
+  "#define DKWB_IBUFFER_BACKWARD_CURSOR 0x10018e78u",
+  "static void dkwb_emit(const char *fn, unsigned op, uint8_t *mem, int backward,",
+  "                      int is_label) {",
+  "    long index;",
+  "    if (is_label) dkwb_sched_block++;",
+  "    if (!dkwb_sched_on() || mem == NULL) return;",
+  "    index = backward",
+  "        ? (long) MEM_U32(DKWB_IBUFFER_BACKWARD_CURSOR)",
+  "        : (long) MEM_U32(DKWB_IBUFFER_FORWARD_CURSOR);",
+  "    fprintf(stderr,",
+  "            \"DKWB-EMIT-V1 proc=%d block=%d emit=%ld op=%u line=%ld \"",
+  "            \"buffer=%s fn=%s\\n\",",
+  "            dkwb_trace_proc, dkwb_sched_block, index, op,",
+  "            dkwb_source_line(mem), backward ? \"back\" : \"fwd\", fn);",
+  "}",
+  "",
+].join("\n");
+
+export class InstrumentationResult {
+  constructor({ source, functions, free_list_hooks, result_hooks = 0, procedure_hooks = 0, emit_hooks = 0 }) {
+    Object.assign(this, { source, functions, free_list_hooks, result_hooks, procedure_hooks, emit_hooks });
+    Object.freeze(this);
+  }
+}
+
+const reEscape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** A user-supplied pattern in the original's regex spelling, as a JS RegExp. */
+export function compileUserPattern(pattern, flags = "") {
+  return new RegExp(pattern.replace(/\(\?P</g, "(?<").replace(/\(\?P=(\w+)\)/g, "\\k<$1>"), flags);
+}
+
+/** The [start, end) span of `name`'s body braces, or null. */
+export function functionBodySpan(source, name) {
+  const define = new RegExp(`^static\\s+[^\\n;{}]*?\\b${reEscape(name)}\\s*\\([^;{}]*\\)\\s*\\{`, "m");
+  const m = define.exec(source);
+  if (!m) return null;
+  const open = source.indexOf("{", m.index);
+  let depth = 0;
+  for (let i = open; i < source.length; i++) {
+    const c = source[i];
+    if (c === "{") depth += 1;
+    else if (c === "}") { depth -= 1; if (depth === 0) return [open, i]; }
+  }
+  return null;
+}
+
+export const RETURN_VALUE_RE = /(?<indent>[ \t]*)return\s+(?<value>[A-Za-z_]\w*)\s*;/g;
+
+/** Log the returned register before every `return v;` in `name`. */
+export function injectResultHook(source, name, event) {
+  const span = functionBodySpan(source, name);
+  if (!span) throw new ValueError(`result-hook function ${strRepr(name)} is not defined in this source; the generated source does not match this instrumentation profile`);
+  const [start, end] = span;
+  let count = 0;
+  const body = source.slice(start, end).replace(RETURN_VALUE_RE, (...a) => {
+    const g = a[a.length - 1];
+    count += 1;
+    return `${g.indent}dkwb_freelist("${event}", ${g.value}, mem);\n${g.indent}return ${g.value};`;
+  });
+  return [source.slice(0, start) + body + source.slice(end), count];
+}
+
+/** Insert after the leading include block when one exists. */
+export function helperInsertionOffset(source) {
+  const matches = [...source.matchAll(/^\s*#include[^\n]*\n/gm)];
+  if (!matches.length) return 0;
+  const last = matches[matches.length - 1];
+  return last.index + last[0].length;
+}
+
+/** Instrument selected recompiled functions and known free-list helpers. */
+export function instrumentUgen(source, { function_pattern = "^f_", procedure_function = "f_init_regs", emit_provenance = false } = {}) {
+  if (source.includes(MARKER)) throw new ValueError("source is already instrumented");
+  const selected = compileUserPattern(function_pattern);
+  let functionCount = 0, freeListCount = 0, procedureHookCount = 0, emitHookCount = 0;
+  let instrumented = source.replace(FUNCTION_RE, (...a) => {
+    const whole = a[0];
+    const g = a[a.length - 1];
+    const name = g.name, header = g.header;
+    const additions = [];
+    selected.lastIndex = 0;
+    if (selected.test(name)) { additions.push(`DKWB_TRACE_FRAME("${name}");`); functionCount += 1; }
+    if (procedure_function !== null && procedure_function !== undefined && name === procedure_function) { additions.push("dkwb_proc_begin();"); procedureHookCount += 1; }
+    const event = FREE_LIST_FUNCTIONS[name];
+    const hasA0 = /\ba0\b/.test(header), hasMem = /\bmem\b/.test(header);
+    if (event && hasA0 && hasMem) { additions.push(`dkwb_freelist("${event}", a0, mem);`); freeListCount += 1; }
+    if (emit_provenance && EMIT_FUNCTION_RE.test(name) && hasA0 && hasMem) {
+      const backward = name.startsWith(BACKWARD_EMIT_PREFIX) ? 1 : 0;
+      const isLabel = name.includes("define_label") ? 1 : 0;
+      additions.push(`dkwb_emit("${name}", a0, mem, ${backward}, ${isLabel});`);
+      emitHookCount += 1;
+    }
+    if (!additions.length) return whole;
+    return header + "\n" + additions.join("\n");
+  });
+  if (functionCount === 0) throw new ValueError("no recompiled functions matched; expected definitions such as 'static ... f_alloc_reg(...) {'");
+  let resultHookCount = 0;
+  for (const [name, event] of Object.entries(RESULT_HOOK_FUNCTIONS)) {
+    if (!new RegExp(`\\b${reEscape(name)}\\b`).test(instrumented)) continue;
+    let injected;
+    [instrumented, injected] = injectResultHook(instrumented, name, event);
+    resultHookCount += injected;
+  }
+  if (emit_provenance && emitHookCount === 0) throw new ValueError("no ibuffer emit helpers matched; expected definitions such as 'static void f_emit_rrr(uint8_t *mem, ...)'");
+  const helpers = HELPERS + (emit_provenance ? SCHED_HELPERS : "");
+  const offset = helperInsertionOffset(instrumented);
+  instrumented = instrumented.slice(0, offset) + helpers + instrumented.slice(offset);
+  return new InstrumentationResult({ source: instrumented, functions: functionCount, free_list_hooks: freeListCount, result_hooks: resultHookCount,
+    procedure_hooks: procedureHookCount, emit_hooks: emitHookCount });
+}
