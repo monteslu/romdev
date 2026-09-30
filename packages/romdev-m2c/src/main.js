@@ -500,7 +500,7 @@ export function parse_flags(flags) {
 }
 
 /**
- * In-process equivalent of running `m2c.py <flags>`: returns { code, stdout, stderr }.
+ * In-process equivalent of running upstream m2c with <flags>: returns { code, stdout, stderr }.
  * Asm inputs may be file paths, or {name, text} objects mixed into `flags`.
  */
 export async function decompile(flags) {

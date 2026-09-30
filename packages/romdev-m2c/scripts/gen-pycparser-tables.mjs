@@ -128,7 +128,9 @@ function convertRegex(src, verbose) {
   return out;
 }
 
-const lextab = fs.readFileSync(path.join(srcDir, "lextab.py"), "utf8");
+// The upstream tables are read as text (literal data), never executed.
+const tableText = (stem) => fs.readFileSync(path.join(srcDir, fs.readdirSync(srcDir).find((f) => f.startsWith(`${stem}.`) && !f.endsWith("c"))), "utf8");
+const lextab = tableText("lextab");
 const reflags = assignment(lextab, "_lexreflags");
 const verbose = (reflags & 64) !== 0;
 const stateinfo = assignment(lextab, "_lexstateinfo").dict;
@@ -150,7 +152,7 @@ fs.writeFileSync(
     "export default " + JSON.stringify(lexOut, null, 1) + ";\n",
 );
 
-const yacctab = fs.readFileSync(path.join(srcDir, "yacctab.py"), "utf8");
+const yacctab = tableText("yacctab");
 const actionItems = assignment(yacctab, "_lr_action_items").dict;
 const gotoItems = assignment(yacctab, "_lr_goto_items").dict;
 const productions = assignment(yacctab, "_lr_productions");

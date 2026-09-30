@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Command-line entry point equivalent to `python3 m2c.py ...`.
+// Command-line entry point taking the same flags as upstream m2c's CLI.
 import { decompile } from "./main.js";
 
 const r = await decompile(process.argv.slice(2));
