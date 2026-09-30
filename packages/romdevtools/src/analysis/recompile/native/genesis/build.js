@@ -14,7 +14,11 @@
 //                                                 it is built first (disasm emit:'wasmcart')
 //     input, frames                               a schedule to run (reference frames)
 //     fuzzSeeds: [1,2,3], fuzzFrames, fuzzInput   seeded random play (fuzzRecompile's)
+//     schedules: [{input, frames}]                more play to cover (other levels, longer runs)
 //   }
+//   z80: false                                    no recompiled Z80 driver (gpgx's Z80 core only);
+//                                                 by default the driver in Z80 RAM after the
+//                                                 coverage run is recompiled (z80blocks.js)
 //   coverageFile: '<json>'                        reuse a saved coverage record
 //   saveCoverage: '<json>'                        write the coverage record
 //   title, id                                     cart header fields
@@ -29,7 +33,7 @@ import { emitProject, buildProject, describe, SYNC32_LIMITS, mapObjectSizes } fr
 async function coverageFor(romPath, outputPath, o, onProgress) {
   if (o.coverageFile) {
     const c = JSON.parse(readFileSync(o.coverageFile, "utf8"));
-    return { pcs: c.pcs.map((e) => (Array.isArray(e) ? e[0] : e)), pairs: c.pairs, irqTargets: c.irqTargets ?? [], runs: c.runs ?? [], source: { coverageFile: o.coverageFile } };
+    return { pcs: c.pcs.map((e) => (Array.isArray(e) ? e[0] : e)), pairs: c.pairs, irqTargets: c.irqTargets ?? [], runs: c.runs ?? [], z80Image: c.z80Image ? new Uint8Array(Buffer.from(c.z80Image, "base64")) : null, source: { coverageFile: o.coverageFile } };
   }
   const cov = o.coverage ?? {};
   let cart = cov.cart;
@@ -44,10 +48,10 @@ async function coverageFor(romPath, outputPath, o, onProgress) {
   const { collectCoverage } = await import("../coverage.js");
   const c = await collectCoverage({
     cart, input: cov.input, frames: cov.frames ?? (cov.input ? 3600 : undefined),
-    fuzzSeeds: cov.fuzzSeeds ?? [1, 2, 3], fuzzFrames: cov.fuzzFrames ?? 3600, fuzzInput: cov.fuzzInput, onProgress,
+    fuzzSeeds: cov.fuzzSeeds ?? [1, 2, 3], fuzzFrames: cov.fuzzFrames ?? 3600, fuzzInput: cov.fuzzInput, schedules: cov.schedules, onProgress,
   });
-  if (o.saveCoverage) writeFileSync(o.saveCoverage, JSON.stringify({ pcs: [...c.pcs.entries()], pairs: [...c.pairs], irqTargets: [...c.irqTargets], runs: c.runs, source: c.source }));
-  return { pcs: [...c.pcs.keys()], pairs: [...c.pairs], irqTargets: [...c.irqTargets], runs: c.runs, source: c.source };
+  if (o.saveCoverage) writeFileSync(o.saveCoverage, JSON.stringify({ pcs: [...c.pcs.entries()], pairs: [...c.pairs], irqTargets: [...c.irqTargets], runs: c.runs, z80Image: c.z80Image ? Buffer.from(c.z80Image).toString("base64") : null, z80Images: c.z80Images, source: c.source }));
+  return { pcs: [...c.pcs.keys()], pairs: [...c.pairs], irqTargets: [...c.irqTargets], runs: c.runs, z80Image: c.z80Image, source: c.source };
 }
 
 /**
@@ -67,7 +71,7 @@ export async function recompileToSync32(a) {
     timings.coverage = Date.now() - t1;
   }
   const t2 = Date.now();
-  const project = await emitProject(rom, { profile: o.profile, audioQuality: o.audioQuality, audioRate: o.audioRate, ...(cov ? { blocks: { pcs: cov.pcs, pairs: cov.pairs, irqTargets: cov.irqTargets, maxInsns: o.maxBlockInsns } } : {}) });
+  const project = await emitProject(rom, { profile: o.profile, audioQuality: o.audioQuality, audioRate: o.audioRate, ...(o.z80 !== false && cov?.z80Image ? { z80Image: cov.z80Image } : {}), ...(cov ? { blocks: { pcs: cov.pcs, pairs: cov.pairs, irqTargets: cov.irqTargets, maxInsns: o.maxBlockInsns } } : {}) });
   timings.emit = Date.now() - t2;
   const coverage = cov ? { runs: cov.runs, source: cov.source, executedPcs: cov.pcs.length } : null;
   if (a.emit === "c") {
@@ -77,7 +81,7 @@ export async function recompileToSync32(a) {
       platform: "sync32", mode: "xip", cflags: project.cflags, meta: project.meta,
       build: "build({platform:'sync32', mode:'xip', sourcesPaths:{<every .c>}, includePaths:{<every .h>}, options:<cflags>}) or disasm({target:'recompile', emit:'sync32'})",
     }, null, 1));
-    return { platform: "genesis", target: "sync32", emit: "c", outputPath: a.outputPath, files: Object.keys(project.files).length, describe: d, blocks: project.blockStats, coverage, timings: { ...timings, total: Date.now() - t0 } };
+    return { platform: "genesis", target: "sync32", emit: "c", outputPath: a.outputPath, files: Object.keys(project.files).length, describe: d, blocks: project.blockStats, z80: project.z80Stats, coverage, timings: { ...timings, total: Date.now() - t0 } };
   }
   const t3 = Date.now();
   const b = await buildProject(project, { title: o.title, id: o.id, onProgress: a.onProgress });
@@ -107,7 +111,7 @@ export async function recompileToSync32(a) {
   };
   return {
     platform: "genesis", target: "sync32", emit: "sync32", outputPath: a.outputPath, mapPath: a.outputPath + ".map",
-    romSha1: d.romSha1, profile: project.meta.profile, sizes, limits, blocks: project.blockStats, coverage,
+    romSha1: d.romSha1, profile: project.meta.profile, sizes, limits, blocks: project.blockStats, z80: project.z80Stats ?? { entries: 0, note: "no Z80 image (options.z80:false or no coverage run): every Z80 instruction runs in gpgx's core" }, coverage,
     timings: { ...timings, build: b.buildSeconds * 1000, total: Date.now() - t0 },
     next: `loadMedia({platform:'sync32', path:'${a.outputPath}'}); frame({op:'cycles', from, to, input, profile:true}) for cycles per frame; frame({op:'verifyRecompile', cart:'${a.outputPath}', reference:'<rom>'}) against genesis_plus_gx`,
     license: d.licenseNote,

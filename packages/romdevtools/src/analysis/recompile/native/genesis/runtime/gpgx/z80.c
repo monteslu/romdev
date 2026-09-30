@@ -3451,6 +3451,34 @@ void z80_reset(void)
 /****************************************************************************
  * Run until given cycle count 
  ****************************************************************************/
+#ifdef RD_Z80_HIST
+unsigned short rd_z80_hist[4096];
+unsigned int rd_z80_insns;
+#endif
+#ifdef ROMDEV_S32
+/* ROMDEV_S32: DJNZ $ (PC on the DJNZ, no interrupt pending-and-enabled):
+   skip the iterations that end before the target, leaving the last one to
+   run normally. Returns nonzero when it skipped any. */
+static int rd_z80_ff_djnz(unsigned int cycles)
+{
+  unsigned int n;
+  if (B <= 1) return 0;
+  /* DJNZ $ : 8+5 T-states per taken iteration */
+  n = (cycles - Z80.cycles + 195 - 1) / 195;
+  if (n > (unsigned int)(B - 1)) n = B - 1;
+  if (!n) return 0;
+  B -= n;
+  R += n;
+  Z80.cycles += 195 * n;
+  WZ = PC;
+  z80_last_fetch = 0x10;
+  return 1;
+}
+#ifdef RD_Z80_BLOCKS
+/* the game's Z80 driver recompiled per entry point (z80blocks.js) */
+#include "rd_z80_blocks.h"
+#endif
+#endif
 void z80_run(unsigned int cycles)
 {
   while( Z80.cycles < cycles )
@@ -3472,23 +3500,20 @@ void z80_run(unsigned int cycles)
        before the target are skipped; the last one runs normally. */
     {
       unsigned pc = PCD;
-      UINT8 op0 = cpu_readop(pc);
+      UINT8 op0;
+#ifdef RD_Z80_BLOCKS
+      if (pc < 0x2000 && !(Z80.irq_state && IFF1))
+      {
+        unsigned k = rd_z80_fn_at[pc];
+        if (k && rd_z80_fn[k - 1](cycles)) continue;
+      }
+#endif
+      op0 = cpu_readop(pc);
       if ((op0 == 0x10 || op0 == 0x7e) && !(Z80.irq_state && IFF1))
       {
-      if (op0 == 0x10 && cpu_readop((pc + 1) & 0xffff) == 0xfe && B > 1)
+      if (op0 == 0x10 && cpu_readop((pc + 1) & 0xffff) == 0xfe)
       {
-        /* DJNZ $ : 8+5 T-states per taken iteration */
-        unsigned int n = (cycles - Z80.cycles + 195 - 1) / 195;
-        if (n > (unsigned int)(B - 1)) n = B - 1;
-        if (n)
-        {
-          B -= n;
-          R += n;
-          Z80.cycles += 195 * n;
-          WZ = PC;
-          z80_last_fetch = 0x10;
-          continue;
-        }
+        if (rd_z80_ff_djnz(cycles)) continue;
       }
       else if (op0 == 0x7e && cpu_readop((pc + 1) & 0xffff) == 0xb7 && HL < 0x4000)
       {
@@ -3514,6 +3539,9 @@ void z80_run(unsigned int cycles)
         }
       }
       }
+#ifdef RD_Z80_HIST
+      { extern unsigned short rd_z80_hist[4096]; extern unsigned int rd_z80_insns; rd_z80_insns++; if (pc < 4096 && rd_z80_hist[pc] != 0xffff) rd_z80_hist[pc]++; }
+#endif
       /* ROP() with the opcode already fetched */
       R++;
       PC++;

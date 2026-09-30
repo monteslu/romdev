@@ -36,7 +36,10 @@ typedef struct {
   uint32_t frame_blk_insns; /* last frame's block instructions */
   uint32_t frame_interp_insns; /* last frame's interpreted instructions */
   uint32_t irq_delay_aborts;/* blocks ended by the VDP's delayed interrupt */
-  uint32_t reserved[4];
+  uint32_t reserved[1];     /* [0] keeps rd_desc alive through --gc-sections */
+  uint32_t pal_banks;       /* distinct palettes the last frame drew rows with */
+  uint32_t pal_overflow_frames; /* frames that could not be shown exactly (over 256 colours, over 16 palettes, mixed shadow/highlight) */
+  uint32_t pal_max_banks;   /* most palettes any frame drew with */
 } rd_stats_t;
 extern rd_stats_t rd_stats;
 

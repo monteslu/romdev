@@ -260,6 +260,9 @@ void gen_reset(int hard_reset)
     {
       memset(work_ram, 0x00, sizeof(work_ram));
       memset(zram, 0x00, sizeof(zram));
+#if defined(ROMDEV_S32) && defined(RD_Z80_BLOCKS)
+      { extern unsigned int rd_zgen; rd_zgen++; }
+#endif
     }
   }
   else

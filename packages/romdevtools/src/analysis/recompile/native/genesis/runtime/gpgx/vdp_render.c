@@ -1257,8 +1257,16 @@ void color_update_m4(int index, unsigned int data)
   }
 }
 
+#ifdef ROMDEV_S32
+uint8 rd_pal_dirty = 1;
+const uint16 *rd_pixel(void) { return pixel; }
+#endif
 void color_update_m5(int index, unsigned int data)
 {
+#ifdef ROMDEV_S32
+  /* ROMDEV_S32: the canvas keeps up to four palettes a frame (main.c) */
+  rd_pal_dirty = 1;
+#endif
   /* Palette Mode */
   if (!(reg[0] & 0x04))
   {

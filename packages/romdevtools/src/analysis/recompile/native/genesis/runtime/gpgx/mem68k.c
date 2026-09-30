@@ -212,6 +212,10 @@ void z80_write_byte(unsigned int address, unsigned int data)
       
     default: /* ZRAM */
     {
+#if defined(ROMDEV_S32) && defined(RD_Z80_BLOCKS)
+      { extern const unsigned char rd_z80_codemap[1024]; extern unsigned int rd_zgen;
+        unsigned int za = address & 0x1FFF; if (rd_z80_codemap[za >> 3] & (1 << (za & 7))) rd_zgen++; }
+#endif
       zram[address & 0x1FFF] = data;
       return;
     }

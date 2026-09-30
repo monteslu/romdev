@@ -32,6 +32,8 @@ const u32 = (b, o) => (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 
  * @param {number[]} [a.fuzzSeeds] seeded random play scripts (fuzzRecompile's)
  * @param {number} [a.fuzzFrames]  cart frames per fuzz script
  * @param {string|Array} [a.fuzzInput] presses every fuzz script keeps (e.g. the Start)
+ * @param {{input:string|Array, frames:number, label?:string}[]} [a.schedules] more
+ *                                 schedules to run (other levels, longer play)
  * @param {(s:string)=>void} [a.onProgress]
  */
 export async function collectCoverage(a) {
@@ -49,6 +51,10 @@ export async function collectCoverage(a) {
   const pairs = new Set();     // prev * 2^24 + next
   const irqTargets = new Set();
   const runs = [];
+  // Z80 RAM after each run, for a native build that recompiles the Z80
+  // driver too (the image with the most runs is the driver the game keeps)
+  const zspec = layout.regions?.zram;
+  const zImages = new Map();
 
   const runOne = async (label, schedule, frames) => {
     const h = new WasmcartHost();
@@ -76,6 +82,13 @@ export async function collectCoverage(a) {
         }
       }
       runs.push({ run: label, frames, instructions: insns, ...(overflow ? { ringOverflowFrames: overflow } : {}) });
+      if (zspec && zspec.length === 0x2000) {
+        const z = Uint8Array.from(h.readMemory(zspec.offset, 0x2000));
+        const key = Buffer.from(z).toString("base64");
+        const e = zImages.get(key) ?? { image: z, runs: [] };
+        e.runs.push(label);
+        zImages.set(key, e);
+      }
     } finally {
       h.destroy?.();
     }
@@ -86,6 +99,9 @@ export async function collectCoverage(a) {
     const sched = shiftSchedule(parseInputSchedule(a.input), off);
     await runOne("schedule", sched, (a.frames ?? 3600) + off);
   }
+  for (const [i, s] of (a.schedules ?? []).entries()) {
+    await runOne(s.label ?? `schedule ${i + 2}`, shiftSchedule(parseInputSchedule(s.input), off), (s.frames ?? 3600) + off);
+  }
   const base = parseInputSchedule(a.fuzzInput);
   const from = base.length ? Math.max(...base.map((p) => p.frame + p.hold)) + 30 : 60;
   for (const seed of a.fuzzSeeds ?? []) {
@@ -93,5 +109,9 @@ export async function collectCoverage(a) {
     const play = wrongInputSchedule([{ frame: from, buttons: ["a"], hold: 1 }], frames, seed).filter((p) => p.frame >= from);
     await runOne(`fuzz seed ${seed}`, [...base, ...play].sort((x, y) => x.frame - y.frame), frames);
   }
-  return { pcs, pairs, irqTargets, runs, source: { cart: a.cart, romSha1: layout.romSha1 } };
+  // Z80 RAM holds data as well as the driver, so images differ between runs
+  // even when the code does not; the builder walks the code in the first
+  // run's image and checks it at run time
+  const z80Images = [...zImages.values()];
+  return { pcs, pairs, irqTargets, runs, z80Image: z80Images[0]?.image ?? null, z80Images: z80Images.map((z) => ({ runs: z.runs })), source: { cart: a.cart, romSha1: layout.romSha1 } };
 }

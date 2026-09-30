@@ -67,12 +67,208 @@ uint8 *rd_unreachable_ptr(const char *what)
 }
 
 /* ------------------------------------------------------------- video */
+/* Per-line palettes. The Genesis shows 64 colours at a time, but a game may
+   rewrite CRAM between (or during) lines: a water line, raster colour
+   effects. gpgx converts each line through pixel[] as it is when the line is
+   drawn, so every canvas row here remembers which palette it was drawn with.
+   sync32 has one 256-entry palette per frame:
+     - the first four distinct palettes of a frame are provisional 64-entry
+       banks, a row is stored as bank*64 + colour (the common case, and all
+       that happens when a frame has four palettes or fewer);
+     - a row whose palette differs from every bank but whose colours all
+       agree with one (a line drawn while CRAM is half rewritten, often blank
+       in the backdrop colour) just uses that bank;
+     - a frame with more than four palettes is solved at its end: the palettes
+       drawn on the most rows keep whole banks, every other palette's colours
+       are placed once each (by value) in the entries left, and only the rows
+       drawn with those palettes are re-encoded through a lookup. It is exact
+       while the frame shows 256 distinct colours or fewer;
+     - a row redrawn after a mid-line display switch simply takes the palette
+       of its last drawing; a palette no row ends up using takes no entries.
+   In shadow/highlight mode a row needs pixel[0x00..0xBF], so such a frame
+   uses gpgx's pixel[] as the whole palette. Frames that cannot be shown
+   exactly are counted in rd_stats.pal_overflow_frames. */
+#define RD_UPAL 16
+extern uint8 rd_pal_dirty;
+extern uint8 reg[0x20];
+const uint16 *rd_pixel(void);
+static uint16 rd_frame_pal[256];
+static uint16 rd_upal[RD_UPAL][64];       /* the frame's distinct palettes */
+static uint8 rd_row_pal[240];             /* palette each row was drawn with */
+static int rd_nupal, rd_cur, rd_sh, rd_overflow, rd_adhoc;
+
+static void rd_frame_begin(void)
+{
+  rd_nupal = 0;
+  rd_cur = 0;
+  rd_sh = 0;
+  rd_overflow = 0;
+  rd_pal_dirty = 1;
+  rd_adhoc = 0;
+  memset(rd_row_pal, 0xff, sizeof(rd_row_pal));
+}
+
+static void rd_pick_pal(const uint8 *src, int width)
+{
+  const uint16 *px = rd_pixel();
+  uint32 used[2] = { 0, 0 };
+  int k, i;
+  rd_pal_dirty = 0;
+  rd_adhoc = 0;
+  if (rd_nupal && !memcmp(rd_upal[rd_cur], px, 128)) return;
+  for (k = 0; k < rd_nupal; k++)
+    if (!memcmp(rd_upal[k], px, 128)) { rd_cur = k; return; }
+  for (i = 0; i < width; i++) { unsigned c = src[i] & 0x3f; used[c >> 5] |= 1u << (c & 31); }
+  for (k = 0; k < rd_nupal; k++)
+  {
+    for (i = 0; i < 64; i++)
+      if (((used[i >> 5] >> (i & 31)) & 1) && rd_upal[k][i] != px[i]) break;
+    if (i == 64) { rd_cur = k; rd_adhoc = 1; return; }
+  }
+  if (rd_nupal == RD_UPAL) { rd_overflow = 1; rd_adhoc = 1; return; }
+  rd_cur = rd_nupal++;
+  memcpy(rd_upal[rd_cur], px, 128);
+}
+
 void rd_canvas_line(int line, const uint8 *src, int width)
 {
   int y = line + RD_CANVAS_Y;
   if (y < 0 || y >= 240 || !canvas) return;
   if (width > 320) width = 320;
-  memcpy(canvas + y * 320, src, width);
+  if (reg[12] & 0x08)
+  {
+    /* shadow/highlight: 192 entries, the whole palette */
+    const uint16 *px = rd_pixel();
+    if (!rd_sh) { rd_sh = 1; if (rd_nupal) rd_overflow = 1; memcpy(rd_frame_pal, px, 512); rd_pal_dirty = 0; }
+    else if (rd_pal_dirty) { rd_pal_dirty = 0; if (memcmp(rd_frame_pal, px, 512)) rd_overflow = 1; }
+    memcpy(canvas + y * 320, src, width);
+    return;
+  }
+  if (rd_sh) { rd_overflow = 1; memcpy(canvas + y * 320, src, width); return; }
+  if (rd_pal_dirty || rd_adhoc) rd_pick_pal(src, width);
+  rd_row_pal[y] = rd_cur;
+  {
+    /* 32 pixels an iteration (the M33 loads words at any alignment); a
+       palette past the fourth is stored as bare colour numbers and placed
+       at the end of the frame */
+    uint32 bits = rd_cur < 4 ? 0x01010101u * (uint32)(rd_cur << 6) : 0;
+    uint32 *d = (uint32 *)(canvas + y * 320);
+    const uint32 *s = (const uint32 *)src;
+    int n = width >> 5, i;
+    for (i = 0; i < n; i++, s += 8, d += 8)
+    {
+      uint32 w0 = s[0], w1 = s[1], w2 = s[2], w3 = s[3], w4 = s[4], w5 = s[5], w6 = s[6], w7 = s[7];
+      d[0] = (w0 & 0x3f3f3f3fu) | bits; d[1] = (w1 & 0x3f3f3f3fu) | bits;
+      d[2] = (w2 & 0x3f3f3f3fu) | bits; d[3] = (w3 & 0x3f3f3f3fu) | bits;
+      d[4] = (w4 & 0x3f3f3f3fu) | bits; d[5] = (w5 & 0x3f3f3f3fu) | bits;
+      d[6] = (w6 & 0x3f3f3f3fu) | bits; d[7] = (w7 & 0x3f3f3f3fu) | bits;
+    }
+    for (i = 0; i < ((width & 31) >> 2); i++) d[i] = (s[i] & 0x3f3f3f3fu) | bits;
+  }
+}
+
+/* The slot holding colour c among the first n entries, or -1. */
+static int rd_find_colour(uint16 c, int n)
+{
+  int i;
+  for (i = 0; i < n; i++) if (rd_frame_pal[i] == c) return i;
+  return -1;
+}
+
+/* More than four palettes: choose which keep whole banks, place the rest by
+   colour, re-encode the rows that moved. */
+static void rd_solve_palettes(void)
+{
+  int rows[RD_UPAL], block_of[RD_UPAL], pal_in[4];
+  int k, y, i, nblocks, used;
+  memset(rows, 0, sizeof(rows));
+  for (y = 0; y < 240; y++) if (rd_row_pal[y] != 0xff) rows[rd_row_pal[y]]++;
+  /* palette 0 keeps bank 0 (the rows outside the display show its entry 0) */
+  for (nblocks = 4; nblocks >= 1; nblocks--)
+  {
+    /* the nblocks-1 most drawn palettes besides 0 get banks 1.. */
+    int chosen[4] = { 0, -1, -1, -1 };
+    for (i = 1; i < nblocks; i++)
+    {
+      int best = -1;
+      for (k = 1; k < rd_nupal; k++)
+      {
+        int taken = 0, j;
+        for (j = 1; j < i; j++) if (chosen[j] == k) taken = 1;
+        if (!taken && rows[k] && (best < 0 || rows[k] > rows[best])) best = k;
+      }
+      chosen[i] = best;
+    }
+    /* banks first, then every other drawn palette's colours once each */
+    used = 0;
+    for (i = 0; i < nblocks; i++)
+    {
+      if (chosen[i] >= 0) memcpy(&rd_frame_pal[i * 64], rd_upal[chosen[i]], 128);
+      else memcpy(&rd_frame_pal[i * 64], rd_upal[0], 128);
+      used = (i + 1) * 64;
+    }
+    for (k = 0; k < rd_nupal; k++) block_of[k] = -1;
+    for (i = 0; i < nblocks; i++) if (chosen[i] >= 0) block_of[chosen[i]] = i;
+    {
+      int fits = 1;
+      for (k = 0; k < rd_nupal && fits; k++)
+      {
+        if (!rows[k] || block_of[k] >= 0) continue;
+        for (i = 0; i < 64; i++)
+        {
+          if (rd_find_colour(rd_upal[k][i], used) >= 0) continue;
+          if (used == 256) { fits = 0; break; }
+          rd_frame_pal[used++] = rd_upal[k][i];
+        }
+      }
+      if (fits || nblocks == 1)
+      {
+        if (!fits) rd_overflow = 1;
+        for (i = 0; i < 4; i++) pal_in[i] = i < nblocks ? chosen[i] : -1;
+        break;
+      }
+    }
+  }
+  for (i = used; i < 256; i++) rd_frame_pal[i] = rd_frame_pal[i & 63];
+  /* re-encode rows whose palette is not where their bits say */
+  for (y = 0; y < 240; y++)
+  {
+    int p = rd_row_pal[y];
+    uint8 *row = canvas + y * 320;
+    if (p == 0xff) continue;
+    if (p < 4 && pal_in[p] == p) continue;                 /* in place */
+    if (block_of[p] >= 0)
+    {
+      uint8 b = (uint8)(block_of[p] << 6);
+      for (i = 0; i < 320; i++) row[i] = (row[i] & 0x3f) | b;
+    }
+    else
+    {
+      uint8 xl[64];
+      for (i = 0; i < 64; i++) { int s = rd_find_colour(rd_upal[p][i], 256); xl[i] = (uint8)(s < 0 ? 0 : s); }
+      for (i = 0; i < 320; i++) row[i] = xl[row[i] & 0x3f];
+    }
+  }
+  rd_stats.pal_banks = rd_nupal;
+}
+
+static void rd_frame_end(void)
+{
+  if (!rd_sh)
+  {
+    int k;
+    if (!rd_nupal) { memcpy(rd_upal[0], rd_pixel(), 128); rd_nupal = 1; }
+    if (rd_nupal <= 4)
+    {
+      for (k = 0; k < 4; k++) memcpy(&rd_frame_pal[k * 64], rd_upal[k < rd_nupal ? k : 0], 128);
+      rd_stats.pal_banks = rd_nupal;
+    }
+    else rd_solve_palettes();
+  }
+  else rd_stats.pal_banks = 1;
+  if (rd_stats.pal_banks > rd_stats.pal_max_banks) rd_stats.pal_max_banks = rd_stats.pal_banks;
+  if (rd_overflow) rd_stats.pal_overflow_frames++;
+  api->palette_set(rd_frame_pal);
 }
 
 /* ------------------------------------------------------------- input */
@@ -252,10 +448,11 @@ void game_main(const sync32_api_t *a)
   for (;;)
   {
     rd_stats.frames++;
+    rd_frame_begin();
     system_frame_gen(0);
     audio_frame();
     audio_pump();
-    api->palette_set(rd_palette());
+    rd_frame_end();
     api->canvas_mark(0, 239);
     api->present();
     audio_pump();

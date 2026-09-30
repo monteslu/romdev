@@ -105,6 +105,10 @@ export function readS32RecompileLayout(cart) {
       lookups: { offset: st + 28, size: 4 },
       lookupMiss: { offset: st + 32, size: 4 },
       irqDelayAborts: { offset: st + 44, size: 4 },
+      // per-line palette banks (main.c): last frame, frames over four, most in a frame
+      palBanks: { offset: st + 52, size: 4 },
+      palOverflowFrames: { offset: st + 56, size: 4 },
+      palMaxBanks: { offset: st + 60, size: 4 },
     },
     vramZero: ["vram"],
     // the console ring's 48 kHz, or the reference core's 44100 Hz in an
