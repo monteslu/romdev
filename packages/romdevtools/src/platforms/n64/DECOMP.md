@@ -20,8 +20,21 @@ decomp({op:'progress', project:'myproj'})
 ```
 
 `compare` is the operation that matters. It compiles the candidate INSIDE
-its real translation unit with the exact per-file flags captured from the
-project's make, then reports three independent verdicts:
+its real translation unit with the exact per-file recipe the project's own
+Makefile gives that object (read by romdev in JS, target- and
+pattern-specific flags included), then reports three independent verdicts.
+
+Every step runs as WASM inside romdev: IDO 5.3/7.1 (`cc` driving cfe, uopt,
+ugen and as1 as sibling modules), asm-processor (a JS port), the
+mips-linux-gnu binutils, and gcc's preprocessor for contexts. No host make,
+compiler, Python or binutils is needed; on a real checkout every object and
+the full ROM come out byte-identical to the project's own build. A recipe step
+with no WASM/JS equivalent (a Python asset packer, armips) is not delegated to
+the host: `verify`/`integrate` keep that step's existing output and list it
+in `keptPrebuilt`. A project whose Makefile cannot be read can declare
+per-TU recipes in its manifest (`build.recipes`).
+
+The verdicts:
 
 | field | what it proves |
 |---|---|
