@@ -1,0 +1,18 @@
+diff --git a/Core/Assembler.cpp b/Core/Assembler.cpp
+index b1d006c..d52599b 100644
+--- a/Core/Assembler.cpp
++++ b/Core/Assembler.cpp
+@@ -148,7 +148,13 @@ bool runArmips(ArmipsArguments& settings)
+ 	Global.nocash = false;
+ 	Global.FileInfo.TotalLineCount = 0;
+ 	Global.relativeInclude = false;
++#ifdef __EMSCRIPTEN__
++	// romdev: WASM has no threads here; the temp/sym writers and Encode touch
++	// disjoint outputs, so running them in sequence produces the same files.
++	Global.multiThreading = false;
++#else
+ 	Global.multiThreading = true;
++#endif
+ 	Architecture::setCurrent(InvalidArchitecture);
+ 
+ 	Tokenizer::clearEquValues();

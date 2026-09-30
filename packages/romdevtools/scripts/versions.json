@@ -301,6 +301,18 @@
         "genesis"
       ]
     },
+    "armips": {
+      "kind": "git",
+      "url": "https://github.com/Kingcom/armips.git",
+      "ref": "master",
+      "commit": "62adab4ef30da765f5cf22a451eb08a59c54dc8b",
+      "license": "MIT",
+      "patch": "scripts/patches/armips-wasm-single-thread.patch",
+      "platforms": [
+        "n64"
+      ],
+      "note": "Assembler for the N64 RSP microcode a decomp project rebuilds from source. Built to WASM by build-armips.sh with std::filesystem (no ext/filesystem submodule); ships in romdev-toolchain-ido beside the other decomp build tools. The commit N64 decomp projects' armips install scripts pin."
+    },
     "ido_static_recomp": {
       "kind": "git",
       "url": "https://github.com/decompals/ido-static-recomp.git",
