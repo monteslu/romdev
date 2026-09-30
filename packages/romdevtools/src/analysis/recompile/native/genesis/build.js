@@ -22,6 +22,7 @@
 //   coverageFile: '<json>'                        reuse a saved coverage record
 //   saveCoverage: '<json>'                        write the coverage record
 //   title, id                                     cart header fields
+//   extraCflags: ['-D...']                        more compiler flags for every unit (experiments)
 //
 // Plain JS ESM + JSDoc.
 
@@ -82,6 +83,10 @@ export async function recompileToSync32(a) {
       build: "build({platform:'sync32', mode:'xip', sourcesPaths:{<every .c>}, includePaths:{<every .h>}, options:<cflags>}) or disasm({target:'recompile', emit:'sync32'})",
     }, null, 1));
     return { platform: "genesis", target: "sync32", emit: "c", outputPath: a.outputPath, files: Object.keys(project.files).length, describe: d, blocks: project.blockStats, z80: project.z80Stats, coverage, timings: { ...timings, total: Date.now() - t0 } };
+  }
+  if (o.extraCflags?.length) {
+    if (!Array.isArray(o.extraCflags) || o.extraCflags.some((f) => typeof f !== "string" || !f.startsWith("-"))) throw new Error("genesis -> sync32: options.extraCflags must be an array of compiler flags");
+    project.cflags = [...project.cflags, ...o.extraCflags];
   }
   const t3 = Date.now();
   const b = await buildProject(project, { title: o.title, id: o.id, onProgress: a.onProgress });

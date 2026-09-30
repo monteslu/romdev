@@ -260,3 +260,58 @@ export function mapBeside(cartPath) {
   for (const p of [cartPath + ".map", cartPath.replace(/\.s32$/, ".map")]) if (existsSync(p)) return readFileSync(p, "utf8");
   return null;
 }
+
+/**
+ * Per-instruction cycles of one function over a frame span: the pc profiler
+ * at halfword resolution across the function, and the function's code
+ * disassembled from the cart image (Thumb-2), hottest instructions first and
+ * in address order.
+ * @param {object} a
+ * @param {object} a.host        loaded sync32 LibretroHost
+ * @param {Uint8Array} a.image   the .s32 file (its XIP image follows a 64-byte header)
+ * @param {string} a.map         the build's linker map
+ * @param {string} a.fn          function (symbol or .text.<static> section name)
+ * @param {number} a.from
+ * @param {number} a.to
+ * @param {string|Array} [a.input]
+ * @param {number} [a.top=40]
+ */
+export async function annotateFunction(a) {
+  const { syms } = parseLdMap(a.map);
+  const s = syms.find((x) => x.name === a.fn);
+  if (!s) {
+    const near = syms.filter((x) => x.name.includes(a.fn)).slice(0, 8).map((x) => x.name);
+    throw new Error(`cycles annotate: no function '${a.fn}' in the map${near.length ? ` (did you mean ${near.join(", ")}?)` : ""}`);
+  }
+  const host = a.host;
+  const drv = new ScheduleDriver(host, parseInputSchedule(a.input), null);
+  drv.at = host.status?.frameCount ?? 0;
+  if (a.from < drv.at + 1) throw new Error(`cycles annotate: the session is already at frame ${drv.at}; from must be later`);
+  await drv.to(a.from - 1);
+  const nb = Math.ceil(s.size / 2) + 1;
+  if (nb > PROF_MAX) throw new Error(`cycles annotate: ${a.fn} is too large to annotate`);
+  host.writeMemory("sync32_profile", 0, new Uint8Array(new Uint32Array([0x50323353, 1, s.addr, 1, nb, 0, 1, 0]).buffer));
+  const t0 = readTiming(host);
+  await drv.to(a.to);
+  const t1 = readTiming(host);
+  const frames = t1.recorded - t0.recorded;
+  const buckets = u32s(host, "sync32_profile", PROF_HDR, nb);
+  host.writeMemory("sync32_profile", 4, new Uint8Array(4));
+  let total = 0;
+  for (let i = 0; i < nb - 1; i++) total += buckets[i];
+  const off = s.addr - XIP_BASE + 64;
+  const { runObjdump } = await import("../toolchains/objdump.js");
+  const r = await runObjdump({ bytes: a.image.subarray(off, off + s.size), arch: "thumb", startAddress: s.addr });
+  const rows = (r.raw ?? "").split("\n").filter((l) => /^\s*[0-9a-f]+:\t/.test(l)).map((l) => {
+    const addr = parseInt(l.trim().split(":")[0], 16);
+    return { addr, cyclesPerFrame: Math.round(buckets[(addr - s.addr) >> 1] / Math.max(1, frames)), text: l.trim().replace(/^[0-9a-f]+:\s+/, "").replace(/\s+/g, " ") };
+  });
+  const top = a.top ?? 40;
+  const hot = [...rows].sort((x, y) => y.cyclesPerFrame - x.cyclesPerFrame).slice(0, top);
+  const hotSet = new Set(hot.map((x) => x.addr));
+  return {
+    function: a.fn, object: s.object, address: "0x" + s.addr.toString(16), bytes: s.size, frames, cyclesPerFrame: Math.round(total / Math.max(1, frames)),
+    listing: rows.filter((x) => hotSet.has(x.addr)).map((x) => `${String(x.cyclesPerFrame).padStart(8)}  ${x.addr.toString(16)}  ${x.text}`),
+    note: "cycles per frame charged to each instruction (s32core model); the listing is the hottest instructions in address order",
+  };
+}

@@ -15,7 +15,7 @@ import { getRenderingContextCore } from "./rendering-context.js";
 import { humanCoDriveWarning } from "./playtest.js";
 import { runVerifyRecompile, runRecompileDiverge, runInstructionDiverge, runFuzzRecompile } from "./verify-recompile-op.js";
 import { traceInstructionsCore } from "./trace-instructions.js";
-import { measureCycles, mapBeside } from "../../host/s32-cycles.js";
+import { measureCycles, mapBeside, annotateFunction } from "../../host/s32-cycles.js";
 import { readS32RecompileLayout } from "../../analysis/recompile/native/s32-cart.js";
 import { S32CartHost } from "../../host/S32CartHost.js";
 import { installHost } from "../state.js";
@@ -52,6 +52,10 @@ async function runS32Cycles(sessionKey, args) {
   const map = args.map ? readFileSyncCycles(args.map, "utf8") : cartPath ? mapBeside(cartPath) : null;
   let groups = args.groups ?? null;
   if (!groups && cartPath) { try { if (readS32RecompileLayout(cartPath)) groups = GENESIS_NATIVE_GROUPS; } catch { /* not a native cart */ } }
+  if (args.annotate) {
+    if (!map || !cartPath) throw new Error("frame({op:'cycles', annotate}): needs the cart's linker map beside it (a native build writes <cart>.map)");
+    return { cart: cartPath, ...(await annotateFunction({ host, image: new Uint8Array(readFileSyncCycles(cartPath)), map, fn: args.annotate, from, to, input: args.input, top: args.top })) };
+  }
   const r = await measureCycles({ host, from, to, input: args.input, profile: !!args.profile, map, groups, top: args.top, series: !!args.series, perFrame: !!args.perFrame });
   return { cart: cartPath, ...r };
 }
@@ -1036,6 +1040,7 @@ export function registerFrameTools(server, z, sessionKey) {
       groups: z.record(z.string(), z.array(z.string())).optional().describe("op=cycles: profile groups, name -> object-file names or '/regex/' (a native Genesis cart gets 68000/VDP/Z80/YM2612/PSG/mix/host groups by default)."),
       top: z.number().int().min(1).max(200).optional().describe("op=cycles: how many functions to list (default 25)."),
       series: z.boolean().optional().describe("op=cycles: include every frame's cycle count."),
+      annotate: z.string().optional().describe("op=cycles: a function name from the cart's map: per-instruction cycles per frame over from..to, with its Thumb-2 disassembly (hottest `top` instructions)."),
       perFrame: z.boolean().optional().describe("op=cycles with profile:true: split EVERY frame by subsystem group (min/mean/p95/max per group, the worst frame's split; with series:true the per-frame group series)."),
       atFrames: z.array(z.number().int().min(1)).min(1).max(64).optional().describe("op=verifyRecompile: REFERENCE frames (frames stepped after loadMedia on the reference core) to score, ascending. Pick late frames with real, moving pictures: a title screen proves little."),
       input: z.union([z.string(), z.array(z.object({ frame: z.number().int().min(0), buttons: z.union([z.string(), z.array(z.string()), z.record(z.string(), z.boolean())]), hold: z.number().int().min(1).optional() }))]).optional().describe("op=verifyRecompile/findDiverge/fuzzRecompile/cycles: ONE input schedule (op=cycles: frames counted since loadMedia) applied to both sides, in REFERENCE frames: 'frame:buttons:hold,...' (e.g. '700:start:10,900:right+b:15') or [{frame, buttons:'a+right'|['a']|{a:true}, hold}]. libretro names (a,b,x,y,l,r,start,select,up,down,left,right) or spatial names (south,east,west,north); the cart gets each press at frame+offset, by physical position."),
