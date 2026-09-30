@@ -1,0 +1,32 @@
+{
+  "name": "romdev-pycparser",
+  "version": "0.1.0",
+  "description": "Plain-JS port of pycparser (the m2c / decomp-permuter fork with GCC extensions): C99 lexer, LALR parser on upstream's own tables, AST and C generator that round-trip like upstream.",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "license": "BSD-3-Clause",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/monteslu/romdev.git",
+    "directory": "packages/romdev-pycparser"
+  },
+  "homepage": "https://github.com/monteslu/romdev#readme",
+  "bugs": {
+    "url": "https://github.com/monteslu/romdev/issues"
+  },
+  "author": "Luis Montes",
+  "scripts": {
+    "test": "node --test"
+  }
+}

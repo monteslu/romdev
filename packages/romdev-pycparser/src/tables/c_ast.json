@@ -1,0 +1,944 @@
+[
+ {
+  "name": "ArrayDecl",
+  "fields": [
+   "type",
+   "dim",
+   "dim_quals"
+  ],
+  "children": [
+   [
+    "type",
+    "single"
+   ],
+   [
+    "dim",
+    "single"
+   ]
+  ],
+  "attrs": [
+   "dim_quals"
+  ]
+ },
+ {
+  "name": "ArrayRef",
+  "fields": [
+   "name",
+   "subscript"
+  ],
+  "children": [
+   [
+    "name",
+    "single"
+   ],
+   [
+    "subscript",
+    "single"
+   ]
+  ],
+  "attrs": []
+ },
+ {
+  "name": "Asm",
+  "fields": [
+   "quals",
+   "asm",
+   "output_operands",
+   "input_operands",
+   "clobbers",
+   "gotos"
+  ],
+  "children": [
+   [
+    "asm",
+    "single"
+   ],
+   [
+    "output_operands",
+    "list"
+   ],
+   [
+    "input_operands",
+    "list"
+   ],
+   [
+    "clobbers",
+    "list"
+   ]
+  ],
+  "attrs": [
+   "quals",
+   "gotos"
+  ]
+ },
+ {
+  "name": "AsmOperand",
+  "fields": [
+   "symbolic_name",
+   "constraint",
+   "expr"
+  ],
+  "children": [
+   [
+    "constraint",
+    "single"
+   ],
+   [
+    "expr",
+    "single"
+   ]
+  ],
+  "attrs": [
+   "symbolic_name"
+  ]
+ },
+ {
+  "name": "Assignment",
+  "fields": [
+   "op",
+   "lvalue",
+   "rvalue"
+  ],
+  "children": [
+   [
+    "lvalue",
+    "single"
+   ],
+   [
+    "rvalue",
+    "single"
+   ]
+  ],
+  "attrs": [
+   "op"
+  ]
+ },
+ {
+  "name": "Alignas",
+  "fields": [
+   "alignment"
+  ],
+  "children": [
+   [
+    "alignment",
+    "single"
+   ]
+  ],
+  "attrs": []
+ },
+ {
+  "name": "BinaryOp",
+  "fields": [
+   "op",
+   "left",
+   "right"
+  ],
+  "children": [
+   [
+    "left",
+    "single"
+   ],
+   [
+    "right",
+    "single"
+   ]
+  ],
+  "attrs": [
+   "op"
+  ]
+ },
+ {
+  "name": "Break",
+  "fields": [],
+  "children": [],
+  "attrs": []
+ },
+ {
+  "name": "Case",
+  "fields": [
+   "expr",
+   "stmts"
+  ],
+  "children": [
+   [
+    "expr",
+    "single"
+   ],
+   [
+    "stmts",
+    "list"
+   ]
+  ],
+  "attrs": []
+ },
+ {
+  "name": "Cast",
+  "fields": [
+   "to_type",
+   "expr"
+  ],
+  "children": [
+   [
+    "to_type",
+    "single"
+   ],
+   [
+    "expr",
+    "single"
+   ]
+  ],
+  "attrs": []
+ },
+ {
+  "name": "Compound",
+  "fields": [
+   "block_items"
+  ],
+  "children": [
+   [
+    "block_items",
+    "list"
+   ]
+  ],
+  "attrs": []
+ },
+ {
+  "name": "CompoundLiteral",
+  "fields": [
+   "type",
+   "init"
+  ],
+  "children": [
+   [
+    "type",
+    "single"
+   ],
+   [
+    "init",
+    "single"
+   ]
+  ],
+  "attrs": []
+ },
+ {
+  "name": "Constant",
+  "fields": [
+   "type",
+   "value"
+  ],
+  "children": [],
+  "attrs": [
+   "type",
+   "value"
+  ]
+ },
+ {
+  "name": "Continue",
+  "fields": [],
+  "children": [],
+  "attrs": []
+ },
+ {
+  "name": "Decl",
+  "fields": [
+   "name",
+   "quals",
+   "align",
+   "storage",
+   "funcspec",
+   "gcc_attributes",
+   "type",
+   "init",
+   "bitsize",
+   "asmlabel"
+  ],
+  "children": [
+   [
+    "type",
+    "single"
+   ],
+   [
+    "init",
+    "single"
+   ],
+   [
+    "bitsize",
+    "single"
+   ],
+   [
+    "asmlabel",
+    "single"
+   ],
+   [
+    "gcc_attributes",
+    "list"
+   ]
+  ],
+  "attrs": [
+   "name",
+   "quals",
+   "align",
+   "storage",
+   "funcspec"
+  ]
+ },
+ {
+  "name": "DeclList",
+  "fields": [
+   "decls"
+  ],
+  "children": [
+   [
+    "decls",
+    "list"
+   ]
+  ],
+  "attrs": []
+ },
+ {
+  "name": "Default",
+  "fields": [
+   "stmts"
+  ],
+  "children": [
+   [
+    "stmts",
+    "list"
+   ]
+  ],
+  "attrs": []
+ },
+ {
+  "name": "DoWhile",
+  "fields": [
+   "cond",
+   "stmt"
+  ],
+  "children": [
+   [
+    "cond",
+    "single"
+   ],
+   [
+    "stmt",
+    "single"
+   ]
+  ],
+  "attrs": []
+ },
+ {
+  "name": "EllipsisParam",
+  "fields": [],
+  "children": [],
+  "attrs": []
+ },
+ {
+  "name": "EmptyStatement",
+  "fields": [],
+  "children": [],
+  "attrs": []
+ },
+ {
+  "name": "Enum",
+  "fields": [
+   "name",
+   "gcc_attributes",
+   "values"
+  ],
+  "children": [
+   [
+    "values",
+    "single"
+   ],
+   [
+    "gcc_attributes",
+    "list"
+   ]
+  ],
+  "attrs": [
+   "name"
+  ]
+ },
+ {
+  "name": "Enumerator",
+  "fields": [
+   "name",
+   "gcc_attributes",
+   "value"
+  ],
+  "children": [
+   [
+    "value",
+    "single"
+   ]
+  ],
+  "attrs": [
+   "name",
+   "gcc_attributes"
+  ]
+ },
+ {
+  "name": "EnumeratorList",
+  "fields": [
+   "enumerators"
+  ],
+  "children": [
+   [
+    "enumerators",
+    "list"
+   ]
+  ],
+  "attrs": []
+ },
+ {
+  "name": "ExprList",
+  "fields": [
+   "exprs"
+  ],
+  "children": [
+   [
+    "exprs",
+    "list"
+   ]
+  ],
+  "attrs": []
+ },
+ {
+  "name": "FileAST",
+  "fields": [
+   "ext"
+  ],
+  "children": [
+   [
+    "ext",
+    "list"
+   ]
+  ],
+  "attrs": []
+ },
+ {
+  "name": "For",
+  "fields": [
+   "init",
+   "cond",
+   "next",
+   "stmt"
+  ],
+  "children": [
+   [
+    "init",
+    "single"
+   ],
+   [
+    "cond",
+    "single"
+   ],
+   [
+    "next",
+    "single"
+   ],
+   [
+    "stmt",
+    "single"
+   ]
+  ],
+  "attrs": []
+ },
+ {
+  "name": "FuncCall",
+  "fields": [
+   "name",
+   "args"
+  ],
+  "children": [
+   [
+    "name",
+    "single"
+   ],
+   [
+    "args",
+    "single"
+   ]
+  ],
+  "attrs": []
+ },
+ {
+  "name": "FuncDecl",
+  "fields": [
+   "args",
+   "type"
+  ],
+  "children": [
+   [
+    "args",
+    "single"
+   ],
+   [
+    "type",
+    "single"
+   ]
+  ],
+  "attrs": []
+ },
+ {
+  "name": "FuncDef",
+  "fields": [
+   "decl",
+   "param_decls",
+   "body"
+  ],
+  "children": [
+   [
+    "decl",
+    "single"
+   ],
+   [
+    "body",
+    "single"
+   ],
+   [
+    "param_decls",
+    "list"
+   ]
+  ],
+  "attrs": []
+ },
+ {
+  "name": "GccAttribute",
+  "fields": [
+   "name",
+   "args"
+  ],
+  "children": [
+   [
+    "args",
+    "list"
+   ]
+  ],
+  "attrs": [
+   "name"
+  ]
+ },
+ {
+  "name": "GccAttributeStatement",
+  "fields": [
+   "attrs"
+  ],
+  "children": [
+   [
+    "attrs",
+    "list"
+   ]
+  ],
+  "attrs": []
+ },
+ {
+  "name": "Goto",
+  "fields": [
+   "name"
+  ],
+  "children": [],
+  "attrs": [
+   "name"
+  ]
+ },
+ {
+  "name": "ID",
+  "fields": [
+   "name"
+  ],
+  "children": [],
+  "attrs": [
+   "name"
+  ]
+ },
+ {
+  "name": "IdentifierType",
+  "fields": [
+   "names"
+  ],
+  "children": [],
+  "attrs": [
+   "names"
+  ]
+ },
+ {
+  "name": "If",
+  "fields": [
+   "cond",
+   "iftrue",
+   "iffalse"
+  ],
+  "children": [
+   [
+    "cond",
+    "single"
+   ],
+   [
+    "iftrue",
+    "single"
+   ],
+   [
+    "iffalse",
+    "single"
+   ]
+  ],
+  "attrs": []
+ },
+ {
+  "name": "InitList",
+  "fields": [
+   "exprs"
+  ],
+  "children": [
+   [
+    "exprs",
+    "list"
+   ]
+  ],
+  "attrs": []
+ },
+ {
+  "name": "Label",
+  "fields": [
+   "name",
+   "stmt"
+  ],
+  "children": [
+   [
+    "stmt",
+    "single"
+   ]
+  ],
+  "attrs": [
+   "name"
+  ]
+ },
+ {
+  "name": "NamedInitializer",
+  "fields": [
+   "name",
+   "expr"
+  ],
+  "children": [
+   [
+    "expr",
+    "single"
+   ],
+   [
+    "name",
+    "list"
+   ]
+  ],
+  "attrs": []
+ },
+ {
+  "name": "ParamList",
+  "fields": [
+   "params"
+  ],
+  "children": [
+   [
+    "params",
+    "list"
+   ]
+  ],
+  "attrs": []
+ },
+ {
+  "name": "PtrDecl",
+  "fields": [
+   "quals",
+   "type"
+  ],
+  "children": [
+   [
+    "type",
+    "single"
+   ]
+  ],
+  "attrs": [
+   "quals"
+  ]
+ },
+ {
+  "name": "Range",
+  "fields": [
+   "first",
+   "last"
+  ],
+  "children": [
+   [
+    "first",
+    "single"
+   ],
+   [
+    "last",
+    "single"
+   ]
+  ],
+  "attrs": []
+ },
+ {
+  "name": "Return",
+  "fields": [
+   "expr"
+  ],
+  "children": [
+   [
+    "expr",
+    "single"
+   ]
+  ],
+  "attrs": []
+ },
+ {
+  "name": "StaticAssert",
+  "fields": [
+   "cond",
+   "message"
+  ],
+  "children": [
+   [
+    "cond",
+    "single"
+   ],
+   [
+    "message",
+    "single"
+   ]
+  ],
+  "attrs": []
+ },
+ {
+  "name": "Struct",
+  "fields": [
+   "name",
+   "gcc_attributes",
+   "decls"
+  ],
+  "children": [
+   [
+    "gcc_attributes",
+    "list"
+   ],
+   [
+    "decls",
+    "list"
+   ]
+  ],
+  "attrs": [
+   "name"
+  ]
+ },
+ {
+  "name": "StructRef",
+  "fields": [
+   "name",
+   "type",
+   "field"
+  ],
+  "children": [
+   [
+    "name",
+    "single"
+   ],
+   [
+    "field",
+    "single"
+   ]
+  ],
+  "attrs": [
+   "type"
+  ]
+ },
+ {
+  "name": "Switch",
+  "fields": [
+   "cond",
+   "stmt"
+  ],
+  "children": [
+   [
+    "cond",
+    "single"
+   ],
+   [
+    "stmt",
+    "single"
+   ]
+  ],
+  "attrs": []
+ },
+ {
+  "name": "TernaryOp",
+  "fields": [
+   "cond",
+   "iftrue",
+   "iffalse"
+  ],
+  "children": [
+   [
+    "cond",
+    "single"
+   ],
+   [
+    "iftrue",
+    "single"
+   ],
+   [
+    "iffalse",
+    "single"
+   ]
+  ],
+  "attrs": []
+ },
+ {
+  "name": "TypeDecl",
+  "fields": [
+   "declname",
+   "quals",
+   "align",
+   "type"
+  ],
+  "children": [
+   [
+    "type",
+    "single"
+   ]
+  ],
+  "attrs": [
+   "declname",
+   "quals",
+   "align"
+  ]
+ },
+ {
+  "name": "Typedef",
+  "fields": [
+   "name",
+   "quals",
+   "storage",
+   "gcc_attributes",
+   "type"
+  ],
+  "children": [
+   [
+    "type",
+    "single"
+   ],
+   [
+    "gcc_attributes",
+    "list"
+   ]
+  ],
+  "attrs": [
+   "name",
+   "quals",
+   "storage"
+  ]
+ },
+ {
+  "name": "Typename",
+  "fields": [
+   "name",
+   "quals",
+   "align",
+   "gcc_attributes",
+   "type"
+  ],
+  "children": [
+   [
+    "type",
+    "single"
+   ],
+   [
+    "gcc_attributes",
+    "list"
+   ]
+  ],
+  "attrs": [
+   "name",
+   "quals",
+   "align"
+  ]
+ },
+ {
+  "name": "Typeof",
+  "fields": [
+   "expr"
+  ],
+  "children": [
+   [
+    "expr",
+    "single"
+   ]
+  ],
+  "attrs": []
+ },
+ {
+  "name": "UnaryOp",
+  "fields": [
+   "op",
+   "expr"
+  ],
+  "children": [
+   [
+    "expr",
+    "single"
+   ]
+  ],
+  "attrs": [
+   "op"
+  ]
+ },
+ {
+  "name": "Union",
+  "fields": [
+   "name",
+   "gcc_attributes",
+   "decls"
+  ],
+  "children": [
+   [
+    "gcc_attributes",
+    "list"
+   ],
+   [
+    "decls",
+    "list"
+   ]
+  ],
+  "attrs": [
+   "name"
+  ]
+ },
+ {
+  "name": "While",
+  "fields": [
+   "cond",
+   "stmt"
+  ],
+  "children": [
+   [
+    "cond",
+    "single"
+   ],
+   [
+    "stmt",
+    "single"
+   ]
+  ],
+  "attrs": []
+ },
+ {
+  "name": "Pragma",
+  "fields": [
+   "string"
+  ],
+  "children": [],
+  "attrs": [
+   "string"
+  ]
+ }
+]

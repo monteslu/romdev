@@ -1,0 +1,23 @@
+romdev-pycparser
+
+A plain JavaScript port of pycparser 2.23 as vendored, with GCC-extension
+patches, by m2c (m2c_pycparser, m2c commit
+1d1c4454a445326541305f83f2b0cb680a9ecb2d) and by decomp-permuter
+(perm_pycparser, decomp-permuter commit
+41bd0bfc32aa5ea78de4cf28be603163256c2a4c). The two vendored copies are the
+same files under two package names.
+
+pycparser is Copyright (c) 2008-2022, Eli Bendersky. PLY (Python Lex-Yacc)
+is Copyright (C) 2001-2017, David M. Beazley (Dabeaz LLC). Both are
+BSD-licensed; the full license texts are in LICENSE.
+
+src/tables/lextab.json, src/tables/yacctab.json and src/tables/c_ast.json are
+data converted from the upstream lextab.py, yacctab.py and c_ast.py by
+scripts/gen-tables.mjs (which reads them as Python literals; nothing runs
+Python). The lexer and LALR parse loop follow PLY 3.10's ply/lex.py and
+ply/yacc.py; the grammar actions, AST, generator and AST transforms follow the
+upstream c_parser.py, plyparser.py, c_ast.py, c_generator.py and
+ast_transforms.py.
+
+The test suite under test/ is a port of the upstream pycparser tests; the C
+files under test/fixtures/c_files are copied from upstream's tests/c_files.
