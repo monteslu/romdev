@@ -96,6 +96,11 @@ w, h, ...)` reads columns `sx..sx+w-1`; art drawn outside that span is silently
 clipped. Drawing a 4px bullet at x=54 in a cell that starts at x=48 with w=8
 puts half of it outside the blit.
 
+**Mode `'128'` picture is sheared or repeats in bands** - the game is writing
+the canvas at a stride of 320. In `video:'128'` the canvas is 128 bytes per
+row: `fb[y * 128 + x]` (`S32_W128`). A frame that is 128x128 in romdev but
+looks right only in its top rows is this.
+
 **Black screen, but the frame counter advances** - the game is running and
 drawing nothing. Usual causes: no `present()` in the loop (nothing is ever
 shown); drawing to `canvas()` without `canvas_mark()`, so the console uploads no

@@ -14,6 +14,22 @@
 #define S32_LOAD_XIP     1
 #define S32_VIDEO_240    0             // 320x240 4:3
 #define S32_VIDEO_180    1             // 320x180 letterbox 16:9
+#define S32_VIDEO_128    2             // 128x128, shown at 3x (384x384) centred;
+                                       // the canvas is 128 bytes per row
+// Video modes (header byte video_mode). The mode picks the canvas geometry:
+//   S32_VIDEO_240  canvas 320x240, stride 320
+//   S32_VIDEO_180  canvas 320x180, stride 320, black bars above and below
+//   S32_VIDEO_128  canvas 128x128, stride 128. Each canvas pixel is shown as
+//                  an exact 3x3 block, the 384x384 picture centred in the
+//                  640x480 HDMI output with a black border. Pixels are still
+//                  indices into the 256-entry palette, and clear(), rect()
+//                  and sprite() clip to 128x128. Made for 128x128 fantasy-
+//                  console games (PICO-8 carts compiled to native ROMs).
+// A value the console does not know falls back to S32_VIDEO_240. Mode 2 is
+// an append-only extension inside api v2: it adds no function, so it does
+// not bump S32_API_VERSION. Firmware that predates it shows a mode-2 cart as
+// mode 0 (its 128-byte rows wrapped into 320-wide ones), so a mode-2 game
+// needs a console updated to this revision.
 
 // canonical pad: SNES-class digital (XInput bit layout)
 #define S32_PAD_UP       0x0001
@@ -32,7 +48,8 @@
 #define S32_SPRITE_FLIP_X 0x01
 #define S32_SPRITE_FLIP_Y 0x02
 
-#define S32_W 320
+#define S32_W 320                      // canvas width in modes 0 and 1
+#define S32_W128 128                   // canvas width and height in mode 2
 #define S32_MAX_SPRITES 128
 #define S32_SAVE_SLOTS 8
 #define S32_SAVE_MAX 65536

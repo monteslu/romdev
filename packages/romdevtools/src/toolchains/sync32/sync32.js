@@ -108,7 +108,7 @@ export const { runCc1: runCc1m33, runAs: runM33As, runLd: runM33Ld, runObjcopy: 
  * @param {"ram"|"xip"} [args.mode]
  * @param {string} [args.title] shown by the launcher (16 bytes)
  * @param {string} [args.id] save-file key (8 bytes)
- * @param {"240"|"180"} [args.video]
+ * @param {"240"|"180"|"128"} [args.video]
  * @param {number} [args.api] minimum console API the game requires
  * @param {string[]} [args.options] extra cc1 flags (the SDK's CFLAGS_EXTRA)
  * @param {string[]} [args.linkOptions] extra ld flags (LDFLAGS_EXTRA)

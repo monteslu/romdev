@@ -1119,7 +1119,9 @@ export async function buildForPlatform(args) {
       mode,
       title: args.title ?? args.projectName ?? "untitled",
       id: args.id,
-      video: args.video === "180" ? "180" : "240",
+      // An unknown value reaches packS32, which fails the build naming the
+      // valid ones rather than quietly packing some other mode.
+      video: args.video ?? "240",
       api: args.api ?? 1,
       options: args.options,
       linkOptions: args.linkOptions,

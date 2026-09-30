@@ -69,3 +69,23 @@ test("packS32 reproduces the SDK's own planes.s32e byte for byte", (t) => {
   const at = got.findIndex((b, i) => b !== want[i]);
   assert.equal(at, -1, at === -1 ? "identical" : `first difference at byte ${at} (header is 0-63)`);
 });
+
+test("packS32 writes each video mode's header byte and rejects unknown ones", (t) => {
+  if (!have) return t.skip("sync32-sdk fixtures not present");
+  const elf = new Uint8Array(readFileSync(path.join(PLANES, "planes.elf")));
+  const ref = new Uint8Array(readFileSync(path.join(PLANES, "planes.s32e")));
+  const dv = new DataView(ref.buffer, ref.byteOffset, ref.byteLength);
+  const image = ref.subarray(dv.getUint32(16, true), dv.getUint32(16, true) + dv.getUint32(20, true));
+  const pack = (video) => packS32({ image, elf, mode: "ram", title: "t", id: "t", video }).bytes;
+  // sync32.h: S32_VIDEO_240 = 0, S32_VIDEO_180 = 1, S32_VIDEO_128 = 2.
+  assert.equal(pack("240")[29], 0);
+  assert.equal(pack("180")[29], 1);
+  assert.equal(pack("128")[29], 2);
+  // The mode byte sits in the header, outside the CRC, so the three differ in
+  // byte 29 and nowhere else.
+  const a = pack("240"), c = pack("128");
+  const diffs = [...a].map((v, i) => (v !== c[i] ? i : -1)).filter((i) => i >= 0);
+  assert.deepEqual(diffs, [29]);
+  // An unknown value used to pack silently as mode 1; now it fails the build.
+  assert.throws(() => pack("360"), /video must be one of .*"128".*got "360"/);
+});

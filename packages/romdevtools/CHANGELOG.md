@@ -4,6 +4,23 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 -
 the `romdev-mcp` bin is kept as an alias.)
 
+## Unreleased
+
+### sync32: video mode 2, a 128x128 canvas
+
+`build({platform:'sync32', video:'128'})` writes header video_mode 2
+(`S32_VIDEO_128`): a 128x128 canvas with a 128-byte stride that the console
+shows at an exact 3x (384x384 centred in its 640x480 HDMI output), for
+PICO-8-style carts. The s32core WASM core emits it at its NATIVE 128x128, so
+`frame({op:'screenshot'})` of a mode-2 cart is 128x128 and can be compared
+pixel for pixel against a 128x128 reference; `sync32_canvas` is 16384 bytes.
+Modes '240' and '180' are unchanged.
+
+An unknown `video` value used to pack silently as mode 1; `packS32` now fails
+the build naming the valid values. `sync32.h` in `romdev-platform-sync32`
+gains `S32_VIDEO_128` and `S32_W128`. `romdev-core-s32core`'s wasm needs
+rebuilding (`scripts/build-s32core.sh`) and a version bump before release.
+
 ## 0.149.1 - 2026-09-16
 
 ### Version bumps for the punctuation pass

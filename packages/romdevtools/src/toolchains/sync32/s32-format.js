@@ -78,11 +78,17 @@ export function crc32(bytes) {
  * @param {"ram"|"xip"} [a.mode]
  * @param {string} [a.title] 16 bytes, truncated
  * @param {string} [a.id] 8 bytes, truncated
- * @param {"240"|"180"} [a.video]
+ * @param {"240"|"180"|"128"} [a.video]
  * @param {number} [a.api]
  * @param {Uint8Array} [a.icon] 512-byte RGB565 16x16, optional
  * @returns {{bytes: Uint8Array, entryOffset: number}}
  */
+/**
+ * Header video_mode byte for each `video` argument (sync32.h S32_VIDEO_*):
+ * 0 = 320x240, 1 = 320x180 letterbox, 2 = 128x128 shown at an exact 3x.
+ */
+export const S32_VIDEO_MODES = Object.freeze({ "240": 0, "180": 1, "128": 2 });
+
 export function packS32({ image, elf, mode = "ram", title = "untitled", id = "00000000", video = "240", api = 1, icon }) {
   const base = mode === "ram" ? BASE_RAM : BASE_XIP;
   // The thumb bit is cleared here; the loader sets it when it branches.
@@ -93,6 +99,11 @@ export function packS32({ image, elf, mode = "ram", title = "untitled", id = "00
       `entry _start=0x${entry.toString(16)} is outside the ${mode} image ` +
       `(base 0x${base.toString(16)}, ${image.length} bytes) - wrong linker script for this mode?`
     );
+  }
+  const videoMode = S32_VIDEO_MODES[String(video)];
+  if (videoMode === undefined) {
+    const valid = Object.keys(S32_VIDEO_MODES).map((k) => JSON.stringify(k)).join(", ");
+    throw new Error(`video must be one of ${valid}, got ${JSON.stringify(video)}`);
   }
   if (icon && icon.length !== 512) throw new Error(`icon must be 512 bytes (16x16 RGB565), got ${icon.length}`);
 
@@ -116,7 +127,7 @@ export function packS32({ image, elf, mode = "ram", title = "untitled", id = "00
   dv.setUint32(o, image.length, true); o += 4;
   dv.setUint32(o, entryOffset, true); o += 4;
   out[o++] = mode === "ram" ? 0 : 1;
-  out[o++] = video === "240" ? 0 : 1;
+  out[o++] = videoMode;
   out[o++] = 0;
   out[o++] = 0;
   const put = (s, n) => {

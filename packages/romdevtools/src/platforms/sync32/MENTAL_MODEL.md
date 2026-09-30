@@ -32,7 +32,7 @@ launcher.
 | | |
 |---|---|
 | CPU | ARM Cortex-M33 (ARMv8-M main), **thumb**, hard float (fpv5-sp-d16, single precision) |
-| Video | 320x240 (`S32_VIDEO_240`, 4:3) or 320x180 (`S32_VIDEO_180`, 16:9 letterbox) |
+| Video | 320x240 (`S32_VIDEO_240`, 4:3), 320x180 (`S32_VIDEO_180`, 16:9 letterbox), or 128x128 (`S32_VIDEO_128`, shown at an exact 3x) |
 | Colour | RGB565, 16-bit |
 | Sprites | `S32_MAX_SPRITES` = 128 per frame, from loaded sheets |
 | Audio | 48kHz stereo s16, a ring of `S32_AUDIO_RING` (1024) frames |
@@ -61,6 +61,25 @@ backgrounds, HUD colours and grid lines in there alongside the sprite colours.
 the game. For direct pixel work, `canvas()` returns the framebuffer bytes
 and `canvas_mark(y0, y1)` tells the console which rows changed - mark only what
 you touched, since the console uploads marked rows.
+
+**Video modes.** `build({platform:'sync32', video})` writes the header byte
+that picks the canvas geometry, and the whole API follows it:
+
+| `video` | Header | Canvas | Stride | On the console | In romdev |
+|---|---|---|---|---|---|
+| `'240'` (default) | 0 | 320x240 | 320 | 640x480 at 2x | 320x240 frames |
+| `'180'` | 1 | 320x180 | 320 | 2x, black bars top and bottom | 320x240, bars drawn |
+| `'128'` | 2 | 128x128 | **128** | exact 3x: 384x384 centred in 640x480, black border | **128x128** frames |
+
+Mode `'128'` is for PICO-8-style carts. `canvas()` is then 128x128 with 128
+bytes per row (index it `fb[y * S32_W128 + x]`, not `y * 320`), `clear()`
+fills 16384 bytes, and `rect()`/`sprite()` clip at 128 in both axes. Pixels
+are still indices into the same 256-entry palette. romdev's core emits the
+frame at its NATIVE 128x128 (the 3x is the console's display, not the game's
+picture), so `frame({op:'screenshot'})` returns 128x128 and a mode-2 frame
+can be compared pixel for pixel against a 128x128 reference;
+`memory({op:'read', region:'sync32_canvas'})` is 16384 bytes. A header byte
+the console does not know runs as mode 0.
 
 **Sprites.** `sheet_load(pixels8, w, h)` uploads an 8-bit indexed sheet and
 returns a handle; `palette_set()` supplies the 256-entry RGB565 palette.
