@@ -28,7 +28,8 @@ export function parse_file(filename, { use_cpp = false, preprocess = null, parse
     if (!preprocess) throw new Error("parse_file: use_cpp needs a preprocess(filename) function (no host cpp is spawned)");
     text = preprocess(filename);
   } else {
-    text = readFileSync(filename, encoding);
+    // open(filename) in text mode: universal newlines (\r\n and lone \r become \n).
+    text = readFileSync(filename, encoding).replace(/\r\n?/g, "\n");
   }
   return (parser ?? new CParser()).parse(text, filename);
 }
