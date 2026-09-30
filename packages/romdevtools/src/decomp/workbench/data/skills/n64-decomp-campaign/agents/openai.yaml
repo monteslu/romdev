@@ -1,0 +1,4 @@
+interface:
+  display_name: "N64 Decomp Campaign"
+  short_description: "Guide late-stage N64 decomp campaigns"
+  default_prompt: "Use $n64-decomp-campaign to classify and plan this late-stage N64 mismatch."

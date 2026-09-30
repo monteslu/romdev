@@ -11,6 +11,7 @@ import { createHash } from "node:crypto";
 import { ValueError, strRepr, sorted } from "./py.js";
 import { ZipFile, BadZipFile } from "./zipfile.js";
 import { splitCommand } from "./command-line.js";
+import { analyzeExpression, fileScopeDefinitions, lintSources } from "./context-lint.js";
 
 export const MAX_FILES = 64;
 export const MAX_FILE_BYTES = 16 * 1024 * 1024;
@@ -304,8 +305,7 @@ export function codeSpliceReport(code) {
 }
 
 /** Names defined at file scope in both ctx.c and code.c. */
-export async function duplicateFileScopeSymbols(context, code) {
-  const { fileScopeDefinitions } = await import("./context-lint.js");
+export function duplicateFileScopeSymbols(context, code) {
   const ctxNames = fileScopeDefinitions(context), codeNames = fileScopeDefinitions(code);
   const get = (m, k) => (m instanceof Map ? m.get(k) : m[k]);
   const keys = (m) => (m instanceof Map ? [...m.keys()] : Object.keys(m));
@@ -314,11 +314,10 @@ export async function duplicateFileScopeSymbols(context, code) {
 }
 
 /** Seed the context lint's macro table from metadata.json's -D flags. */
-export async function definesFromCompilerFlags(flags) {
+export function definesFromCompilerFlags(flags) {
   if (typeof flags !== "string") return new Map();
   let tokens;
   try { tokens = splitCommand(flags); } catch (e) { if (e?.name === "ValueError" || e instanceof ValueError) return new Map(); throw e; }
-  const { analyzeExpression } = await import("./context-lint.js");
   const result = new Map();
   for (const token of tokens) {
     if (!token.startsWith("-D") || token.length <= 2) continue;
@@ -334,16 +333,15 @@ export async function definesFromCompilerFlags(flags) {
 }
 
 /** The ctx.c/code.c checks that catch the two known paste traps. */
-export async function scratchContextHardening(pkg) {
+export function scratchContextHardening(pkg) {
   if (pkg.kind !== "decomp.me-export") return { applicable: false };
   const context = pkg.text("ctx.c"), code = pkg.text("code.c");
-  const defines = await definesFromCompilerFlags(pkg.metadata.compiler_flags);
-  const { lintSources } = await import("./context-lint.js");
+  const defines = definesFromCompilerFlags(pkg.metadata.compiler_flags);
   const report = lintSources([["ctx.c", context], ["code.c", code]], defines);
   return {
     applicable: true,
     context_newline_warning: contextNewlineWarning(context),
-    duplicate_symbols: await duplicateFileScopeSymbols(context, code),
+    duplicate_symbols: duplicateFileScopeSymbols(context, code),
     code_splices: codeSpliceReport(code),
     context_lint: report.asDict(),
   };
