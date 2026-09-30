@@ -258,6 +258,12 @@ test("the WASM preprocessor mounts exactly the reachable headers", async () => {
   assert.match(r.output.toString(), /typedef int b_t;\s*b_t v = 1;/);
   const deps = await preprocess({ cwd: d, args: ["-MM", "-MG", "-nostdinc", "-I", "include", "t.c"] });
   assert.match(deps.deps, /t\.o: t\.c include\/a\.h include\/b\.h/);
+  // A computed include is resolved by cc1 itself: the search path's headers are mounted.
+  fs.writeFileSync(path.join(d, "c.c"), "#define HDR \"unused2.h\"\n#include HDR\nint c = U2;\n");
+  fs.writeFileSync(path.join(d, "include", "unused2.h"), "#define U2 7\n");
+  const comp = await preprocess({ cwd: d, args: ["-E", "-P", "-nostdinc", "-I", "include", "c.c"] });
+  assert.equal(comp.exitCode, 0, comp.log);
+  assert.match(comp.output.toString(), /int c = 7;/);
 });
 
 test("build.js builds a synthetic project from its Makefile entirely as WASM", async () => {

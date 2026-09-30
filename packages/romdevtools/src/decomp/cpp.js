@@ -116,6 +116,9 @@ export async function preprocess({ cwd, args, stdin, timeoutMs = 120_000 }) {
   const virtualEntries = fromStdin ? [{ path: stdinPath, text: (stdin ?? Buffer.alloc(0)).toString("latin1") }] : [];
   if (fromStdin) inputs = [stdinPath];
   const closure = includeClosure(cwd, fromStdin ? [] : inputs, p, virtualEntries);
+  // A computed include (#include MACRO) cannot be resolved without running
+  // cpp: mount every header under the search path so cc1 can.
+  if (closure.computed.length) closure.files = [...new Set([...closure.files, ...headersUnder(cwd, [...p.quoteIncludes, ...p.includes])])];
   const cc1Args = ["cc1", "-E", "-quiet", ...(p.nostdinc ? ["-nostdinc"] : []), ...p.flags,
     ...p.quoteIncludes.flatMap((d) => ["-iquote", d]), ...p.includes.flatMap((d) => ["-I", d]), ...p.defines, ...p.forced];
   let depOut = null;
@@ -138,6 +141,22 @@ export async function preprocess({ cwd, args, stdin, timeoutMs = 120_000 }) {
   const output = Buffer.from(r.stdout ?? "", "base64");
   const deps = depOut && r.outputs?.[depOut] ? Buffer.from(r.outputs[depOut], "base64").toString("utf8") : undefined;
   return { exitCode: r.exitCode, output, log: r.log ?? "", deps, ...closure };
+}
+
+function headersUnder(cwd, dirs, cap = 5000) {
+  const out = [];
+  const walk = (d, depth) => {
+    let ents;
+    try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of ents) {
+      if (out.length >= cap) return;
+      const f = path.join(d, e.name);
+      if (e.isDirectory() && depth < 6) walk(f, depth + 1);
+      else if (e.isFile() && /\.(h|hh|hpp|inc|def)$/i.test(e.name)) out.push(f);
+    }
+  };
+  for (const d of dirs) walk(path.resolve(cwd, d), 0);
+  return out;
 }
 
 /** Parse a make-style dependency list ("obj: a b \\\n c") into paths. */
