@@ -1,0 +1,60 @@
+----- basic block $32 -----
+BASIC BLOCK: 429
+sucessors: 437,
+predecessors: 421,
+before reorganization
+Node   0: inst 8fa20090, relocation 0, lineno 16404
+        before 0, aftercycles 3, maxhazard 1
+        afternodes: 1/1
+Node   1: inst 2418000a, relocation 0, lineno 16408
+        before 0, aftercycles 0, maxhazard 0
+        afternodes:
+Node   2: inst 0002cc00, relocation 0, lineno 16414
+        before 0, aftercycles 0, maxhazard 0
+        afternodes: 3/1
+Node   3: inst 0019cf03, relocation 0, lineno 16414
+        before 1, aftercycles 0, maxhazard 0
+        afternodes:
+Initial nodes: 0 1 2
+  node 0 (INST 1), time = 0, aftercycles = 3, latency = 1, besttime = 0
+  node 1 (INST 2), time = 2, aftercycles = 0, latency = 0, besttime = 0
+  node 2 (INST 3), time = 2, aftercycles = 0, latency = 0, besttime = 0
+Picking node 0 (INST 1), at 0, best_addr = 0
+  node 1 (INST 2), time = 2, aftercycles = 0, latency = 0, besttime = 0
+  node 2 (INST 3), time = 2, aftercycles = 0, latency = 0, besttime = 0
+Picking node 1 (INST 2), at 0, best_addr = 0
+  node 2 (INST 3), time = 3, aftercycles = 0, latency = 0, besttime = 0
+Picking node 2 (INST 3), at 0, best_addr = 0
+  node 3 (INST 4), time = 4, aftercycles = 0, latency = 0, besttime = 0
+Picking node 3 (INST 4), at 0, best_addr = 0
+----- basic block after reorganization----- LINE 16404
+----- basic block $41 -----
+BASIC BLOCK: 131
+sucessors: 509,
+predecessors: 129,
+before reorganization
+Node   0: inst 3c020000, relocation 4, lineno 16529
+        before 0, aftercycles 7, maxhazard 1
+        afternodes: 1/1
+Node   1: inst 24420000, relocation 5, lineno 16529
+        before 1, aftercycles 6, maxhazard 1
+        afternodes:
+Node   2: inst 0324c823, relocation 0, lineno 16533
+        before 0, aftercycles 7, maxhazard 1
+        afternodes: 3/1
+Node   3: inst 0019c900, relocation 0, lineno 16533
+        before 1, aftercycles 6, maxhazard 1
+        afternodes:
+Initial nodes: 0 2
+  node 0 (INST 1), time = 1, aftercycles = 7, latency = 1, besttime = 1
+  node 2 (INST 3), time = 1, aftercycles = 7, latency = 1, besttime = 1
+Picking node 0 (INST 1), at 0, best_addr = 0
+  node 1 (INST 2), time = 3, aftercycles = 6, latency = 1, besttime = 3
+  node 2 (INST 3), time = 1, aftercycles = 7, latency = 1, besttime = 1
+Picking node 2 (INST 3), at 0, best_addr = 0
+  node 1 (INST 2), time = 3, aftercycles = 6, latency = 1, besttime = 3
+  node 3 (INST 4), time = 3, aftercycles = 6, latency = 1, besttime = 3
+Picking node 1 (INST 2), at 0, best_addr = 0
+  node 3 (INST 4), time = 3, aftercycles = 6, latency = 1, besttime = 3
+Picking node 3 (INST 4), at 0, best_addr = 0
+----- basic block after reorganization----- LINE 16529
