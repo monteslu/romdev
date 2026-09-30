@@ -43,14 +43,14 @@ export function registerDecompTools(server, z, sessionKey) {
   server.tool(
     "decomp",
     "Matching decompilation: recover C that compiles to the ORIGINAL bytes with the project's ORIGINAL compiler (splat + IDO/GCC projects; proven on an N64/IDO 5.3 checkout). Keyed by `op`. " +
-    "This is the user-authorized LOCAL-TOOLCHAIN path: a registered project's compiler, assembler and make are run as-is (never romdev's WASM toolchains, never a host install started by romdev). " +
+    "The compile path runs as WASM inside romdev: IDO 5.3/7.1 (romdev-toolchain-ido), the mips-linux-gnu binutils, asm-processor (JS port) and the C preprocessor, driven by the recipe romdev reads from the project's own Makefile (or a manifest-declared per-TU recipe). On the compile/compare/integrate/verify path no host make, compiler, python, binutils or diff is run; a recipe step with no WASM/JS equivalent is reported, never delegated to the host. " +
     "LOOP: import (once) → plan (payoff-ordered queue + batches over the call graph) → resolve (segment-exact address, provenance) → generate (m2c candidate with the TU's real type context) → compare (compile the candidate INSIDE its translation unit with the TU's exact flags; strict per-instruction + relocation equality; ROM-linked word equality; other functions in the TU unchanged; a documented distance for ranking) → search (bounded decomp-permuter job; cancel/resume/best/report) → integrate (reviewable patch; apply + full-ROM byte verify, auto-revert on mismatch) → progress (code-byte progress from the build's objects, states kept separate). " +
     "RUNTIME: smoke (base vs rebuilt, decoded pixels + CPU regs, replayable script), overlays (which overlay is resident, by bytes), symbolize (live PC → symbol with the resident overlay), state (is the session's emulator still there, and why not), trace (args/return of a function where the core can stop), coverage (sampled function-level observed/unobserved/unreferenced). " +
     "Every result names the project, function {symbol, segment, va}, candidate sha, compiler fingerprint and artifact paths; errors carry a typed [CODE]. `exactFunctionMatch` and `romLinked.status:'exact'` are the acceptance signals; `distance` is a ranking hint, never proof. " +
     "Ghidra pseudocode stays in disasm({target:'decompile'}) for understanding; it is never counted as matched.",
     {
       op: z.enum(DECOMP_OPS).describe(
-        "import=register a project (root; splat yaml auto-detected; ROM sha1 verified; toolchain fingerprinted; compile invocation captured from make); " +
+        "import=register a project (root; splat yaml auto-detected; ROM sha1 verified; toolchain fingerprinted; compile invocation derived from the project's Makefile, read in JS); " +
         "status=manifest + backend identities + segment table; list=registered projects; map=TU → object → segment → functions associations; " +
         "plan=payoff-ordered queue of remaining asm functions + batches that call each other inside one TU (call graph from the built objects' relocations); batch=generate+compare every function of a batch (`symbols`), sharing the context; " +
         "resolve=symbol/va → {segment, romOffset, va, size, tu, state, targetAsm, bytes sha1, compile invocation} (overlay VAs need `segment`; ambiguity returns the candidates, never a guess); " +
@@ -142,7 +142,7 @@ export function registerDecompTools(server, z, sessionKey) {
       splatYaml: z.string().optional().describe("op:'import' - splat yaml (relative to root) when auto-detection finds more than one."),
       rom: z.string().optional().describe("op:'import' - base ROM path when it differs from the yaml's target_path."),
       expectedSha1: z.string().optional().describe("op:'import' - expected base-ROM sha1 (default: the yaml's)."),
-      buildCommand: z.array(z.string()).optional().describe("op:'import' - argv of the full-build command run from root (default: tools/matching-build.sh if present, else make)."),
+      buildCommand: z.array(z.string()).optional().describe("op:'import' - the project's own full-build command, recorded for reference only: romdev builds from the Makefile's rules itself, as WASM."),
       symbol: z.string().optional().describe("Function symbol name (func_801DEB08). Alternative to `va`."),
       symbols: z.array(z.union([z.string(), z.object({ symbol: z.string(), segment: z.string().optional(), va: z.union([z.string(), z.number()]).optional(), targetId: z.string().optional() }).passthrough()])).optional().describe("op:'batch' - the functions to run (a batch from op:'plan'). op:'dispatch' - explicit symbols to triage; omit to take the top of the plan queue. op:'replay' - restrict the run to these case ids or symbols. Each entry is either a bare symbol name OR a target record {symbol, segment} - required when a VA is mapped by several overlays, since a bare name cannot say which overlay it belongs to. op:'plan' returns records in this shape, so a plan batch can be passed straight back."),
       va: z.union([z.number().int(), z.string()]).optional().describe("Virtual address (number, or hex string '0x801DEB08')."),
@@ -202,7 +202,7 @@ export function registerDecompTools(server, z, sessionKey) {
       // vocabularies unreachable.
       apply: z.boolean().default(false).describe("op:'integrate' - apply the patch to the TU (else only write it). op:'artifacts' action:'prune' - actually move the duplicates to trash. Default is a DRY RUN; only byte-identical duplicates are ever proposed, files backing an accepted conclusion are always skipped, and a prune is recoverable with action:'restore'."),
       verify: z.boolean().default(true).describe("op:'integrate' - after apply, run the full build and compare the ROM (revert on mismatch)."),
-      jobs: z.number().int().min(1).max(64).default(8).describe("op:'integrate'/'verify' - make -j."),
+      jobs: z.number().int().min(1).max(64).default(8).describe("op:'integrate'/'verify' - concurrent build steps in romdev's WASM full-ROM build."),
       frames: z.number().int().min(1).max(100000).default(720).describe("op:'smoke'/'coverage' - frames to run."),
       inputs: z.array(z.object({ frame: z.number().int().min(0), buttons: z.record(z.string(), z.boolean()) })).optional().describe("op:'smoke'/'coverage' - input script applied identically (persisted with the smoke report)."),
       scriptPath: z.string().optional().describe("op:'smoke' - replay a persisted inputs.json instead of `inputs`/`frames`."),

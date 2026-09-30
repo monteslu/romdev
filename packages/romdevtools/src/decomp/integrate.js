@@ -2,10 +2,15 @@
 // it, run the project's full build, and verify the ROM byte-for-byte. Any
 // failure restores the original TU. The patch file is written whether or not
 // it is applied, so a human can review it as a diff.
+//
+// The patch is a JS unified diff and the full build is romdev's own
+// (build.js: the project's Makefile rules, every step as WASM/JS), so neither
+// host diff nor host make/compilers are involved.
 import { readFile, writeFile, mkdir, copyFile } from "node:fs/promises";
 import fs from "node:fs";
 import path from "node:path";
-import { run } from "./mips-obj.js";
+import { unifiedDiff } from "./host-ports.js";
+import { loadMakefile, buildGoal } from "./build.js";
 import { spliceFunction } from "./compile.js";
 import { sha1File, sha256Text } from "./project.js";
 
@@ -28,9 +33,9 @@ export async function integrateCandidate(project, fn, { candidateText, apply = f
   const newPath = path.join(dir, `${fn.symbol}.${stamp}.c`);
   await writeFile(newPath, spliced.text);
   const patchPath = path.join(dir, `${fn.symbol}.${stamp}.patch`);
-  const d = await run("diff", ["-u", "--label", `a/${tuRel}`, "--label", `b/${tuRel}`, tuAbs, newPath], { cwd: project.root });
-  await writeFile(patchPath, d.stdout);
-  const result = { function: fn.symbol, tu: tuRel, replaced: spliced.replaced, atLine: spliced.line, patch: patchPath, patchLines: d.stdout.split("\n").length, applied: false, verification: { fullRom: "not-run" } };
+  const patchText = unifiedDiff(original, spliced.text, { labelA: `a/${tuRel}`, labelB: `b/${tuRel}` });
+  await writeFile(patchPath, patchText);
+  const result = { function: fn.symbol, tu: tuRel, replaced: spliced.replaced, atLine: spliced.line, patch: patchPath, patchLines: patchText.split("\n").length, applied: false, verification: { fullRom: "not-run" } };
   if (!apply) { result.note = "patch written, NOT applied (apply:true to write the TU and verify the full ROM)"; return result; }
   const backup = path.join(dir, `${fn.symbol}.${stamp}.orig.c`);
   await copyFile(tuAbs, backup);
@@ -95,29 +100,43 @@ export async function integrateCandidate(project, fn, { candidateText, apply = f
   return result;
 }
 
-/** Run the project's build and compare the built ROM with the base ROM. */
-export async function fullRomVerify(project, { jobs = 8 } = {}) {
-  const cmd = project.m.build.command;
+/**
+ * Build the project's ROM with romdev's WASM toolchain (its Makefile's goal,
+ * every object rebuilt) and compare the built ROM with the base ROM.
+ * Inputs whose recipe has no WASM/JS equivalent (a Python asset packer,
+ * armips) are not rebuilt: the existing outputs are used and listed in
+ * `keptPrebuilt`, never silently.
+ */
+export async function fullRomVerify(project, { jobs = 8, goal } = {}) {
   const t0 = Date.now();
-  const r = await run(cmd[0], [...cmd.slice(1), `-j${jobs}`], { cwd: project.root, env: project.env, timeoutMs: 900_000 });
+  const mk = await loadMakefile(project.root, { makefile: project.m.build?.makefile ?? "Makefile", overrides: project.m.build?.makeVariables ?? {} });
+  const target = goal ?? project.m.build?.finalTarget ?? project.m.built?.rom ?? "all";
+  const tmpRoot = path.join(project.ws, "tmp", "build");
+  await mkdir(tmpRoot, { recursive: true });
+  const r = await buildGoal(mk, target, { always: true, jobs, tmpRoot });
   const ms = Date.now() - t0;
   const built = project.m.built?.rom ? project.abs(project.m.built.rom) : null;
   // IMMUTABLE BUILD LOGS. §11: "Keep build logs under immutable
   // per-integration paths rather than relying only on `last-build.log`.
   // Successful recovery should not become unverifiable when another build
-  // runs." Every build gets its own timestamped file; `last-build.log` remains
-  // as a convenience pointer to the newest one.
+  // runs." Every build gets its own timestamped file; `last-build.log`
+  // remains as a convenience pointer to the newest one.
   const logDir = path.join(project.ws, "builds");
   await mkdir(logDir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const logPath = path.join(logDir, `build-${stamp}.log`);
-  const body = `$ ${cmd.join(" ")} -j${jobs}\nexit=${r.code}\n${r.stdout}\n${r.stderr}`;
+  const command = ["romdev-wasm-build", target];
+  const body = [`$ romdev WASM build of '${target}' (${r.built.length} targets rebuilt, ${ms} ms)`,
+    `exit=${r.ok ? 0 : 1}`,
+    ...r.keptPrebuilt.map((k) => `kept prebuilt: ${k.target} (${k.reason})`),
+    ...(r.failed ? [`FAILED ${r.failed.target}: ${r.failed.message}`, ...(r.failed.commands ?? []).map((c) => "$ " + c), r.failed.log ?? ""] : []),
+    ...Object.entries(r.logs).map(([k, v]) => `--- ${k}\n${v}`)].join("\n");
   await writeFile(logPath, body);
   await mkdir(project.ws, { recursive: true });
   await writeFile(path.join(project.ws, "last-build.log"), body);
-  const common = { buildExit: r.code, buildMs: ms, log: logPath, logIsImmutable: true,
-    command: [...cmd, `-j${jobs}`] };
-  if (r.code !== 0) return { ok: false, ...common, tail: (r.stdout + r.stderr).split("\n").filter(Boolean).slice(-8) };
+  const common = { buildExit: r.ok ? 0 : 1, buildMs: ms, log: logPath, logIsImmutable: true, command, runsAs: "wasm",
+    rebuiltTargets: r.built.length, keptPrebuilt: r.keptPrebuilt };
+  if (!r.ok) return { ok: false, ...common, tail: [r.failed?.message, ...(r.failed?.log ?? "").split("\n").filter(Boolean).slice(-6)].filter(Boolean) };
   if (!built || !fs.existsSync(built)) return { ok: false, ...common, error: `built ROM not found at ${built}` };
   const sha = await sha1File(built);
   return { ok: sha === project.m.rom.sha1, ...common, builtSha1: sha, baseSha1: project.m.rom.sha1, builtRom: project.m.built.rom };

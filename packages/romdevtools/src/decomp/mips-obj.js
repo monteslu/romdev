@@ -5,10 +5,23 @@
 // Both sides of every comparison (target assembled from the extracted asm,
 // candidate compiled from C) go through the SAME assembler + objdump, so a
 // textual match is a match of what the linker will see, relocations included.
+//
+// The assembler/objdump/objcopy are romdev's WASM mips-linux-gnu binutils
+// (toolchain.js); the tool-name arguments these functions still accept are
+// labels kept for callers and recorded identities, never host programs.
+// `run` stays for the non-toolchain commands callers use it for (git).
 import { spawn } from "node:child_process";
 import { writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { binutils } from "./toolchain.js";
+
+/** Run a binutils tool named by a label ("mips-linux-gnu-objdump", "objdump", ...) as WASM. */
+function wasmBinutils(label, args, { cwd } = {}) {
+  const tool = /(?:^|[-/])(as|ld|objcopy|objdump)$/.exec(String(label ?? ""))?.[1];
+  if (!tool) throw new Error(`not a binutils tool: ${label}`);
+  return binutils(tool, args, { cwd }).then((r) => ({ code: r.exitCode, stdout: r.stdout, stderr: r.stderr }));
+}
 
 /** Run a process, capture stdout/stderr, never throw on non-zero. */
 export function run(cmd, args, { cwd, env, input, timeoutMs = 120_000 } = {}) {
@@ -95,14 +108,14 @@ export function prepareTargetAsm(asmText) {
  * Assemble a splat .s into target.o with the project's assembler.
  * @param {{asmText:string, outDir:string, as:string, asFlags:string[], includeDirs:string[], cwd:string, env?:object}} a
  */
-export async function assembleTarget({ asmText, outDir, as, asFlags, includeDirs, cwd, env }) {
+export async function assembleTarget({ asmText, outDir, as, asFlags, includeDirs, cwd }) {
   await mkdir(outDir, { recursive: true });
   const sPath = path.join(outDir, "target.s");
   const oPath = path.join(outDir, "target.o");
   const prepared = prepareTargetAsm(asmText);
   await writeFile(sPath, prepared);
   const args = [...asFlags, ...includeDirs.flatMap((d) => ["-I", d]), "-o", oPath, sPath];
-  const r = await run(as, args, { cwd, env });
+  const r = await wasmBinutils(as, args, { cwd });
   if (r.code !== 0) throw new Error(`assembling target failed (${as} ${args.join(" ")}): ${r.stderr.slice(0, 800)}`);
   return { targetS: sPath, targetO: oPath, sha256: createHash("sha256").update(prepared).digest("hex") };
 }
@@ -112,9 +125,9 @@ export async function assembleTarget({ asmText, outDir, as, asFlags, includeDirs
  * streams. Each instruction: {offset, word, mnemonic, operands, reloc:{type,symbol,addend}|null}.
  * @param {{objdump:string, objPath:string, cwd?:string, env?:object, sections?:string[]}} a
  */
-export async function dumpObject({ objdump, objPath, cwd, env, extraFlags = [] }) {
+export async function dumpObject({ objdump, objPath, cwd, extraFlags = [] }) {
   const args = ["--disassemble", "--reloc", "--disassemble-zeroes", "-Mreg-names=32", "-Mno-aliases", ...extraFlags, objPath];
-  const r = await run(objdump, args, { cwd, env });
+  const r = await wasmBinutils(objdump, args, { cwd });
   if (r.code !== 0) throw new Error(`objdump failed on ${objPath}: ${r.stderr.slice(0, 600)}`);
   return parseObjdump(r.stdout);
 }
@@ -168,16 +181,16 @@ export function findSymbol(dump, name) {
 }
 
 /** Raw section bytes of an object (objcopy -O binary -j <section>). */
-export async function sectionBytes({ objcopy, objPath, section, cwd, env, tmpPath }) {
-  const r = await run(objcopy, ["-O", "binary", "--only-section=" + section, objPath, tmpPath], { cwd, env });
+export async function sectionBytes({ objcopy, objPath, section, cwd, tmpPath }) {
+  const r = await wasmBinutils(objcopy, ["-O", "binary", "--only-section=" + section, objPath, tmpPath], { cwd });
   if (r.code !== 0) return null;
   const { readFile } = await import("node:fs/promises");
   try { return await readFile(tmpPath); } catch { return null; }
 }
 
 /** `objdump -t` symbol table: name → {value, size, section, type:'F'|'O'|..., global}. */
-export async function symbolTable({ objdump, objPath, cwd, env }) {
-  const r = await run(objdump, ["-t", objPath], { cwd, env });
+export async function symbolTable({ objdump, objPath, cwd }) {
+  const r = await wasmBinutils(objdump, ["-t", objPath], { cwd });
   if (r.code !== 0) throw new Error(`objdump -t failed on ${objPath}: ${r.stderr.slice(0, 400)}`);
   const out = new Map();
   for (const line of r.stdout.split("\n")) {

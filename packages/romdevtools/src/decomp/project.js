@@ -1,7 +1,9 @@
 // project.js - a registered matching-decompilation project: the manifest, its
 // durable workspace, toolchain fingerprints, and the per-TU compile invocation
-// captured from the project's OWN build system (never re-derived from a
-// guessed flag set - the Makefile's per-file exceptions are the truth).
+// derived from the project's OWN build system (never a guessed flag set - the
+// Makefile's per-file exceptions are the truth). The Makefile is read by
+// makefile.js (no host make); a manifest may instead declare a TU's recipe in
+// build.recipes. Every tool the recipe names runs as WASM (toolchain.js).
 //
 // Workspace: ~/.romdev/decomp/<projectId>/ (or $ROMDEV_DECOMP_HOME/<id>). It
 // lives OUTSIDE the source checkout so nothing lands in the project's git
@@ -11,12 +13,16 @@
 //   targets/<func>/      target.s / target.o assembled from the extracted asm
 //   candidates/<func>/   every candidate ever compared: source + result JSON
 //   jobs/<jobId>/        bounded search runs (permuter dir, log, best)
-import { readFile, writeFile, mkdir, stat, readdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { run } from "./mips-obj.js";
+import { Makefile } from "./makefile.js";
+import { parseShell, classifyCommand } from "./recipe.js";
+import { preprocess, parseDepsText } from "./cpp.js";
+import { idoDir, binutilsGlue } from "./toolchain.js";
 import { loadSplatMap, loadSymbolAddrs, loadLinkerMap, findFunctionSource, parseSplatAsm, hx } from "./splat-map.js";
 import { profileFor, readRomHeader, classifyInvocation, binutilsPrefixFromAssembler } from "./platform.js";
 import { fileIdentities } from "./measurement.js";
@@ -38,14 +44,13 @@ export async function sha256File(p) {
 }
 export function sha256Text(s) { return createHash("sha256").update(s).digest("hex"); }
 
-/** Environment the project's build wrapper establishes (unpacked binutils etc.). */
+/**
+ * Environment the project's build declares (manifest build.env). Tools are no
+ * longer found on PATH - every compiler/binutils step runs as WASM - so this
+ * carries only what a project deliberately sets.
+ */
 export function projectEnv(manifest) {
   const env = {};
-  const tc = path.join(manifest.root, ".toolchains", "mips", "usr");
-  if (fs.existsSync(path.join(tc, "bin"))) {
-    env.PATH = path.join(tc, "bin") + ":" + process.env.PATH;
-    env.LD_LIBRARY_PATH = path.join(tc, "lib", "x86_64-linux-gnu") + (process.env.LD_LIBRARY_PATH ? ":" + process.env.LD_LIBRARY_PATH : "");
-  }
   for (const [k, v] of Object.entries(manifest.build?.env ?? {})) env[k] = v;
   return env;
 }
@@ -79,6 +84,8 @@ export async function importProject({ id, root, splatYaml, rom, expectedSha1, bu
   const profile = profileFor(splatPlatform);
   const { byteOrder, header: romHeader } = readRomHeader(profile, romBuf);
 
+  // The build is run by romdev itself (build.js reads the Makefile); the
+  // project's own command is recorded for humans, never executed.
   const buildCmd = buildCommand ?? (fs.existsSync(path.join(root, "tools", "matching-build.sh")) ? ["bash", "tools/matching-build.sh"] : ["make"]);
   const manifest = {
     manifestVersion: MANIFEST_VERSION, id, root, platform: profile.platform, splatPlatform, endian: profile.endian, platformVerified: profile.verified,
@@ -87,7 +94,7 @@ export async function importProject({ id, root, splatYaml, rom, expectedSha1, bu
     splat: { yaml: path.relative(root, yamlPath), name: map.name, compiler: o.compiler ?? null, srcPath: sourceDir ?? o.src_path ?? "src", asmPath: o.asm_path ?? "asm", buildPath: o.build_path ?? "build",
       symbolAddrs: (o.symbol_addrs_path ? [].concat(o.symbol_addrs_path) : []), elfPath: o.elf_path ?? null, ldScript: o.ld_script_path ?? null, basename: o.basename ?? null },
     rom: { path: path.relative(root, romPath), sha1: romSha1, expectedSha1: want, bytes: romBuf.length, byteOrder, header: romHeader },
-    build: { command: buildCmd, cwd: ".", finalTarget: makeTarget ?? null, env: {} },
+    build: { command: buildCmd, cwd: ".", finalTarget: makeTarget ?? null, env: {}, makefile: "Makefile", makeVariables: {} },
     toolchain: null, notes: notes ?? null,
     git: await gitState(root),
   };
@@ -187,48 +194,41 @@ function* walkFiles(dir) {
   }
 }
 
-/** Compiler / assembler / python identities with content hashes. */
+/**
+ * Compiler / assembler / asm-processor identities with content hashes. The
+ * compiler is whatever the project's OWN build invokes (one TU's recipe,
+ * classified); the identities hashed are the WASM modules romdev runs for it.
+ */
 export async function fingerprintToolchain(manifest, idoHint) {
-  const env = projectEnv(manifest);
   const root = manifest.root;
-  const profile = profileFor(manifest.splatPlatform ?? manifest.platform);
-  const out = { compiler: null, assembler: null, objdump: null, objcopy: null, python: null, asmProcessor: null, binutilsPrefix: null };
-  // The compiler is whatever the project's OWN build invokes: capture one TU's command and classify it.
-  let cls = null;
+  const out = { compiler: null, assembler: null, objdump: null, objcopy: null, asmProcessor: null, binutilsPrefix: null, runsAs: "wasm" };
+  let inv = null;
   try {
     const firstTu = firstTranslationUnit(root, manifest.splat.srcPath);
-    if (firstTu) { const inv = await new Project(manifest).compileInvocation(firstTu); cls = classifyInvocation(inv.compile); }
-  } catch { cls = null; }
-  const idoPath = idoHint ? path.resolve(root, idoHint) : path.join(root, "tools", "ido-static-recomp", "build", "5.3", "out", "cc");
-  if (cls?.compiler) {
-    const abs = path.isAbsolute(cls.compiler) ? cls.compiler : fs.existsSync(path.join(root, cls.compiler)) ? path.join(root, cls.compiler) : (await run("bash", ["-lc", `command -v ${cls.compiler}`], { env, cwd: root })).stdout.trim() || null;
-    const ver = abs && cls.kind === "gcc" ? (await run(abs, ["--version"], { env, cwd: root })).stdout.split("\n")[0]?.trim() : null;
-    out.compiler = { kind: cls.kind, path: abs ? path.relative(root, abs).replace(/^\.\.\//, "") : cls.compiler, version: cls.kind === "ido" ? (/\/(\d+\.\d+)\//.exec(cls.compiler)?.[1] ?? null) : ver, sha256: abs && fs.existsSync(abs) ? await sha256File(abs) : null, fromInvocation: true };
-    if (cls.kind === "ido") { const subHead = await run("git", ["-C", path.join(root, "tools", "ido-static-recomp"), "rev-parse", "HEAD"]); out.compiler.recompCommit = subHead.code === 0 ? subHead.stdout.trim() : null; }
-  } else if (fs.existsSync(idoPath)) {
-    const rel = path.relative(root, idoPath);
-    const subHead = await run("git", ["-C", path.join(root, "tools", "ido-static-recomp"), "rev-parse", "HEAD"]);
-    out.compiler = { kind: "ido", version: /\/(\d+\.\d+)\//.exec(rel)?.[1] ?? null, path: rel, sha256: await sha256File(idoPath), recompCommit: subHead.code === 0 ? subHead.stdout.trim() : null };
+    if (firstTu) inv = await new Project(manifest).compileInvocation(firstTu);
+  } catch { inv = null; }
+  const cls = inv ? classifyInvocation(inv.compile) : null;
+  const idoCmd = cls?.kind === "ido" ? cls.compiler : idoHint ?? null;
+  const idoVersion = idoCmd ? (/(?:^|[/_-])(5\.3|7\.1)(?:[/_]|$)/.exec(idoCmd)?.[1] ?? null) : null;
+  if (cls?.kind === "ido" || idoHint) {
+    let wasm = null;
+    try { wasm = path.join(idoDir(idoVersion ?? "5.3"), "cc.wasm"); } catch { wasm = null; }
+    out.compiler = { kind: "ido", version: idoVersion, path: idoCmd, fromInvocation: !!cls, runsAs: wasm ? "wasm" : "missing",
+      wasm: wasm ? { module: path.relative(path.dirname(path.dirname(path.dirname(wasm))), wasm), sha256: await sha256File(wasm) } : null };
+  } else if (cls) {
+    out.compiler = { kind: cls.kind, path: cls.compiler, fromInvocation: true, runsAs: "unsupported",
+      note: `romdev runs IDO as WASM; a '${cls.kind}' compiler step has no WASM equivalent yet` };
   }
-  // binutils: the prefix the build's assembler uses, else the first available one for the platform.
-  const prefixes = [binutilsPrefixFromAssembler(cls?.assembler), ...profile.binutilsPrefixes].filter(Boolean);
-  for (const prefix of prefixes) {
-    const w = await run("bash", ["-lc", `command -v ${prefix}as`], { env, cwd: root });
-    if (w.stdout.trim()) { out.binutilsPrefix = prefix; break; }
-  }
+  out.binutilsPrefix = binutilsPrefixFromAssembler(cls?.assembler) ?? "mips-linux-gnu-";
   for (const [key, tool] of [["assembler", "as"], ["objdump", "objdump"], ["objcopy", "objcopy"]]) {
-    const name = (out.binutilsPrefix ?? profile.binutilsPrefixes[0]) + tool;
-    const w = await run("bash", ["-lc", `command -v ${name}`], { env, cwd: root });
-    const p = w.stdout.trim();
-    if (!p) { out[key] = null; continue; }
-    const v = await run(p, ["--version"], { env });
-    out[key] = { name, path: p, version: v.stdout.split("\n")[0]?.trim() ?? null, sha256: await sha256File(p) };
+    try {
+      const glue = binutilsGlue(tool);
+      const wasm = glue.replace(/\.mjs$/, ".wasm");
+      out[key] = { name: `mips-linux-gnu-${tool}`, path: `mips-linux-gnu-${tool}`, runsAs: "wasm", module: path.basename(wasm), sha256: await sha256File(wasm) };
+    } catch { out[key] = null; }
   }
-  const py = fs.existsSync(path.join(root, ".venv", "bin", "python3")) ? path.join(root, ".venv", "bin", "python3") : "python3";
-  const pv = await run(py, ["--version"], { env });
-  out.python = { path: py, version: pv.stdout.trim() || pv.stderr.trim() };
   const ap = path.join(root, "tools", "asm-processor", "asm_processor.py");
-  if (fs.existsSync(ap)) out.asmProcessor = { path: path.relative(root, ap), sha256: await sha256File(ap) };
+  if (fs.existsSync(ap)) out.asmProcessor = { path: path.relative(root, ap), sha256: await sha256File(ap), runsAs: "js-port (src/decomp/asm-processor.js)" };
   return out;
 }
 
@@ -358,43 +358,85 @@ export class Project {
     } finally { await h.close(); }
   }
 
+  /** The project's Makefile, read by makefile.js (re-read when any makefile it included changes). */
+  async makefile() {
+    const b = this.m.build ?? {};
+    const mkFile = this.abs(b.makefile ?? "Makefile");
+    const identity = JSON.stringify(await fileIdentities([mkFile, ...(this._mkIncludes ?? [])]));
+    if (!this._mk || identity !== this._mkIdentity) {
+      const mk = await Makefile.load(this.root, { makefile: b.makefile ?? "Makefile", overrides: { VERBOSE: "1", COLOR: "0", ...(b.makeVariables ?? {}) } });
+      this._mkIncludes = (mk.vars.get("MAKEFILE_LIST")?.value ?? "").split(/\s+/).filter(Boolean).map((f) => this.abs(f));
+      this._mk = mk;
+      this._mkIdentity = JSON.stringify(await fileIdentities([mkFile, ...this._mkIncludes]));
+    }
+    return this._mk;
+  }
+
   /**
    * The exact compile invocation for a TU, from the project's own build
-   * system (`make --always-make --dry-run`). Returns argv arrays, never a shell
+   * configuration: the manifest's declared recipe (build.recipes[tu], a list
+   * of shell command lines or argv arrays) if present, else the recipe the
+   * project's Makefile gives the TU's object (target- and pattern-specific
+   * variables applied, as make would). Returns argv arrays, never a shell
    * string the caller must re-parse.
    */
   async compileInvocation(tuRel) {
     const objRel = path.join(this.m.splat.buildPath, tuRel.replace(/\.c$/, ".o"));
-    const r = await run("make", ["--always-make", "--dry-run", "VERBOSE=1", "COLOR=0", objRel], { cwd: this.root, env: this.env, timeoutMs: 60_000 });
-    if (r.code !== 0) throw new Error(`make --dry-run ${objRel} failed: ${(r.stderr || r.stdout).slice(-600)}`);
-    const lines = r.stdout.split("\n").map((l) => l.trim()).filter(Boolean);
-    const shellSplit = (s) => (s.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? []).map((t) => t.replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1"));
+    const declared = this.m.build?.recipes?.[tuRel] ?? this.m.build?.recipes?.[objRel] ?? null;
+    let lines, source;
+    if (declared) {
+      lines = declared.map((x) => (Array.isArray(x) ? x.map(shellQuote).join(" ") : String(x)));
+      source = "manifest";
+    } else {
+      const mk = await this.makefile();
+      const r = mk.recipeFor(objRel);
+      if (!r || !r.lines.length) throw Object.assign(new Error(`the Makefile has no recipe for ${objRel}`), { code: "NO_COMPILE_RECIPE" });
+      lines = r.lines.map((l) => l.command);
+      source = "makefile";
+    }
     const steps = [];
-    for (const l of lines) {
-      if (/^(mkdir|printf|echo|:)\b/.test(l) || l === ":") continue;
-      const argv = shellSplit(l);
-      if (!argv.length) continue;
-      const isCompile = argv.some((a) => a === tuRel) && argv.some((a) => a === objRel) && !/^gcc$|^clang$|^cc$/.test(argv[0]) || (argv.some((a) => a === objRel) && argv.some((a) => /ido|\/cc$/.test(a)));
-      const isCheck = /^(gcc|clang|cc)$/.test(argv[0]) && argv.includes("-fsyntax-only");
-      const isPost = argv.some((a) => a === objRel) && !isCompile && !isCheck;
-      steps.push({ argv, role: isCompile ? "compile" : isCheck ? "syntax-check" : isPost ? "post" : "other" });
+    for (const line of lines) {
+      const parsed = parseShell(line);
+      const single = parsed.length === 1 && parsed[0].pipeline.length === 1 && !parsed[0].pipeline[0].redirects.length ? parsed[0].pipeline[0].argv : null;
+      if (!single) { steps.push({ argv: null, line, role: "other" }); continue; }
+      const argv = single;
+      const cls = classifyCommand(argv);
+      if (cls.kind === "print" || cls.kind === "noop") continue;
+      const isCompile = (cls.kind === "asm-processor" || cls.kind === "ido") && argv.includes(objRel);
+      const role = isCompile ? "compile" : cls.kind === "syntax-check" ? "syntax-check" : argv.includes(objRel) ? "post" : "other";
+      steps.push({ argv, role, kind: cls.kind });
     }
     const compile = steps.find((s) => s.role === "compile");
-    if (!compile) throw new Error(`could not find the compile step for ${tuRel} in make's dry run (${steps.length} steps: ${steps.map((s) => s.argv[0]).join(", ")})`);
+    if (!compile) throw new Error(`could not find the compile step for ${tuRel} in its recipe (${steps.map((s) => s.argv?.[0] ?? s.line).join(", ")})`);
     return { tu: tuRel, object: objRel, steps, compile: compile.argv, post: steps.filter((s) => s.role === "post").map((s) => s.argv),
-      fingerprint: sha256Text(JSON.stringify(compile.argv)).slice(0, 16) };
+      recipe: lines, source, fingerprint: sha256Text(JSON.stringify(compile.argv)).slice(0, 16) };
   }
 
-  /** Header dependencies of a TU via the host preprocessor (-MM). */
+  /**
+   * Header dependencies of a TU, from the WASM preprocessor (cc1 -MM -MG, the
+   * same answer gcc -MM gave), memoised on the identities of every file the
+   * TU can reach so an unchanged tree never re-runs it.
+   */
   async tuDependencies(tuRel, compileArgv) {
-    const inc = compileArgv.filter((a, i, arr) => a === "-I" ? true : arr[i - 1] === "-I").reduce((acc, a, i, arr) => { if (a !== "-I") acc.push("-I", a); return acc; }, []);
+    const inc = compileArgv.filter((a, i, arr) => a === "-I" ? true : arr[i - 1] === "-I").reduce((acc, a) => { if (a !== "-I") acc.push("-I", a); return acc; }, []);
     const defs = compileArgv.filter((a) => /^-D/.test(a));
-    const r = await run("gcc", ["-MM", "-MG", "-nostdinc", ...inc, ...defs, "-D_LANGUAGE_C", "-x", "c", "-std=gnu89", "-fno-builtin", tuRel], { cwd: this.root, env: this.env });
-    if (r.code !== 0) return { ok: false, error: r.stderr.slice(0, 400), deps: [] };
-    const deps = r.stdout.replace(/\\\n/g, " ").split(/\s+/).filter((t) => t && !t.endsWith(":") && t !== tuRel);
-    return { ok: true, deps };
+    const args = ["-MM", "-MG", "-nostdinc", ...inc, ...defs, "-D_LANGUAGE_C", "-x", "c", "-std=gnu89", "-fno-builtin", tuRel];
+    const { includeClosure } = await import("./cpp.js");
+    const closure = includeClosure(this.root, [tuRel], { includes: inc.filter((a) => a !== "-I") });
+    const key = sha256Text(JSON.stringify({ args, files: await fileIdentities(closure.files) }));
+    this._depMemo ??= new Map();
+    if (this._depMemo.has(key)) return this._depMemo.get(key);
+    const r = await preprocess({ cwd: this.root, args });
+    const out = r.exitCode !== 0 || r.deps == null
+      ? { ok: false, error: (r.log || `preprocessor exit ${r.exitCode}`).slice(0, 400), deps: [] }
+      : { ok: true, deps: parseDepsText(r.deps, { exclude: [tuRel] }) };
+    if (this._depMemo.size > 2000) this._depMemo.clear();
+    this._depMemo.set(key, out);
+    return out;
   }
 }
+
+function shellQuote(a) { return /^[\w@%+=:,./-]+$/.test(a) ? a : "'" + String(a).replace(/'/g, "'\\''") + "'"; }
 
 /** Hash of a TU + all its header deps + the compile fingerprint: the cache key for contexts and objects. */
 export async function dependencyHash(project, tuRel, invocation) {

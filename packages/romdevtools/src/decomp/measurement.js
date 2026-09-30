@@ -33,24 +33,35 @@ export async function resolveToolFile(project, command) {
 
 export async function compilerFiles(project, invocation) {
   const tc = project.m.toolchain;
-  const commands = [tc.compiler?.path, tc.assembler?.path, tc.objdump?.path, tc.objcopy?.path,
-    tc.asmProcessor?.path, invocation.compile[0], ...(invocation.post ?? []).map(p => p[0])].filter(Boolean);
-  const files = await Promise.all(commands.map(c => resolveToolFile(project, c)));
+  const { programFiles } = await import("./toolchain.js");
+  // Programs run as WASM/JS: their identity is the module that runs, not a
+  // host path of the same name.
+  const files = [];
+  // A tool romdev runs as WASM/JS hashes as its module; any other named tool
+  // (a compiler with no WASM equivalent) still hashes as the file it names.
+  const identify = async (cmd, argv = []) => {
+    if (!cmd) return;
+    const own = programFiles(cmd, argv);
+    if (own.length) files.push(...own);
+    else files.push(await resolveToolFile(project, cmd));
+  };
+  for (const argv of [invocation.compile, ...(invocation.post ?? [])]) {
+    if (!argv?.length) continue;
+    await identify(argv[0], argv);
+    // asm-processor's compiler and assembler are named inside its argv.
+    const sep = argv.indexOf("--");
+    if (sep > 0) { await identify(argv[sep - 1]); if (argv[sep + 1]) await identify(argv[sep + 1]); }
+  }
+  for (const c of [tc.compiler?.path, tc.assembler?.path, tc.objdump?.path, tc.objcopy?.path]) await identify(c);
+  if (tc.asmProcessor?.path) files.push(project.abs(tc.asmProcessor.path));
   // Python/Node/shell wrappers are executable inputs too, not merely strings
   // in argv. This includes asm-processor/build.py and recorded custom drivers.
-  for (const argv of [invocation.compile, ...(invocation.post ?? [])]) for (const arg of argv.slice(1)) {
+  for (const argv of [invocation.compile, ...(invocation.post ?? [])]) for (const arg of (argv ?? []).slice(1)) {
     if (!/\.(?:py|mjs|cjs|js|sh)$/.test(arg) || arg.startsWith("-")) continue;
     const file = project.abs(arg);
     try { if ((await stat(file)).isFile()) files.push(file); } catch {}
   }
-  // IDO's cc is a driver: hashing it alone misses replaced optimization/codegen passes.
-  if (tc.compiler?.kind === "ido" && tc.compiler.path) {
-    const dir = path.dirname(await resolveToolFile(project, tc.compiler.path));
-    for (const name of ["cfe", "copt", "uopt", "ugen", "as0", "as1", "uld", "ujoin", "usplit", "umerge"]) {
-      const file = path.join(dir, name);
-      try { if ((await stat(file)).isFile()) files.push(file); } catch {}
-    }
-  }
+  // IDO's cc is a driver: programFiles already lists every pass module of the version.
   return [...new Set(files)];
 }
 

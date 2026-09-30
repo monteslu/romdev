@@ -7,17 +7,23 @@
 // what else the TU declares (types, statics, the -G 0 globals, literal pools).
 // A standalone snippet can compile to different code and then "match" a
 // target the real build never would.
+//
+// Every step runs as WASM/JS (recipe.js): IDO, asm-processor, the
+// mips-linux-gnu binutils. No host compiler, assembler or objdump.
 import { readFile, writeFile, mkdir, copyFile, rm, rename } from "node:fs/promises";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { run, assembleTarget, prepareTargetAsm, dumpObject, findSymbol, symbolTable, trimToSize } from "./mips-obj.js";
+import { assembleTarget, prepareTargetAsm, dumpObject, findSymbol, symbolTable, trimToSize } from "./mips-obj.js";
+import { runArgv } from "./recipe.js";
+import { binutils, programFiles } from "./toolchain.js";
+import { syntaxCheck } from "./cpp.js";
 import { strictCompare, scoreDistance, classifyDifferences, changedRanges, renderDiff } from "./diff.js";
 import { parseSplatAsm } from "./splat-map.js";
 import { dependencyHash, sha256Text } from "./project.js";
 import { assembleVerdictFields, cacheUsable, VERIFIER_VERSION } from "./verdict.js";
 import { profileFor, readWord } from "./platform.js";
-import { MEASUREMENT_SCHEMA, compilationIdentity, compilationEnvironment, compilerFiles, resolveToolFile, fileIdentities, fileRevisions, hashRecord, atomicJson, instructionIdentity } from "./measurement.js";
+import { MEASUREMENT_SCHEMA, compilationIdentity, compilationEnvironment, compilerFiles, fileIdentities, fileRevisions, hashRecord, atomicJson, instructionIdentity } from "./measurement.js";
 
 const compiling = new Map();
 const assembling = new Map();
@@ -169,7 +175,7 @@ export async function ensureTarget(project, fn) {
   const as = tc.assembler?.path ?? (tc.binutilsPrefix ?? profile.binutilsPrefixes[0]) + "as";
   const key = hashRecord({ schema: "target-v3", prepared: prepareTargetAsm(asmText),
     dependencies: await fileIdentities(await assemblerInputs(project, asmAbs, asmText)),
-    assembler: await fileIdentities([await resolveToolFile(project, as)]), flags: profile.asFlags, env: compilationEnvironment(project) }).slice(0, 24);
+    assembler: await fileIdentities(programFiles(as)), flags: profile.asFlags, env: compilationEnvironment(project) }).slice(0, 24);
   const meta = path.join(dir, `${key}.target.json`);
   if (fs.existsSync(meta)) {
     try { const m = JSON.parse(await readFile(meta, "utf8")); if (m.key === key && fs.existsSync(m.targetO)) return m; } catch {}
@@ -180,7 +186,7 @@ export async function ensureTarget(project, fn) {
   // Never assemble into a shared target.o: even independent server processes
   // publish metadata pointing only at their own fully completed target object.
   const targetDir = path.join(dir, `${key}-${randomUUID()}`);
-  const t = await assembleTarget({ asmText, outDir: targetDir, as, asFlags: profile.asFlags, includeDirs: inc, cwd: project.root, env: project.env });
+  const t = await assembleTarget({ asmText, outDir: targetDir, as, asFlags: profile.asFlags, includeDirs: inc, cwd: project.root });
   const parsed = parseSplatAsm(asmText);
   const m = { key, symbol: fn.symbol, asmPath: asmRel, targetFrom: fn.targetAsm?.from ?? "pragma", targetO: t.targetO, targetS: t.targetS, instructions: parsed.instructions.length, sizeBytes: parsed.sizeBytes, rodata: parsed.rodataSymbols.map((r) => r.name) };
   await atomicJson(meta, m);
@@ -341,7 +347,9 @@ export async function compileAndCompare(project, fn, opts) {
   const execute = async () => {
   const compileArgv = retargetArgv(inv.compile, { tuRel, objRel, newTu: newTuAbs, newObj: newObjAbs });
   const t0 = Date.now();
-  const cr = await run(compileArgv[0], compileArgv.slice(1), { cwd: project.root, env: project.env, timeoutMs: 180_000 });
+  const cr0 = await runArgv(compileArgv, { cwd: project.root, tmpRoot: path.join(work, ".tmp") });
+  if (cr0.unsupported) throw Object.assign(new Error(`the TU's compile step cannot run as WASM: ${cr0.unsupported}`), { code: "COMPILE_STEP_UNSUPPORTED" });
+  const cr = { code: cr0.code, stdout: cr0.stdout ? cr0.stdout.toString("latin1") : "", stderr: cr0.log ?? "" };
   const compileMs = Date.now() - t0;
   const log = [`$ ${compileArgv.join(" ")}`, cr.stdout, cr.stderr].join("\n");
   const logPath = path.join(candDir, `${artifactKey}.build.log`);
@@ -367,12 +375,13 @@ export async function compileAndCompare(project, fn, opts) {
     else if (result.diagnostics.some((d) => /Selector requires struct\/union/.test(d.message))) result.hint = "a field access through a non-struct pointer: the TU's prototype for this function (or a callee) types the argument as u8*/void*; declare the real struct type in the TU/header and regenerate";
     else if (/->unk-\d|\.unk-\d/.test(opts.candidateText)) result.hint = "m2c emitted a NEGATIVE field offset (`->unk-N`): the draft advanced a typed pointer and then indexed behind it - rewrite as an array/index expression before compiling";
     else if (/M2C_ERROR\(/.test(opts.candidateText)) result.hint = "the draft contains M2C_ERROR(...) markers: m2c could not translate those instructions; each needs a hand rewrite";
-    // A clearer parse error from the host syntax check, when the project has one.
+    // A clearer parse error from the project's syntax check (its gcc
+    // -fsyntax-only step), run with the WASM gcc front end.
     const check = inv.steps.find((s) => s.role === "syntax-check");
     if (check) {
       const ca = retargetArgv(check.argv, { tuRel, objRel, newTu: newTuAbs, newObj: path.join(work, "check.o") });
-      const chk = await run(ca[0], ca.slice(1), { cwd: project.root, env: project.env, timeoutMs: 60_000 });
-      result.diagnostics.push(...extractDiagnostics(chk.stderr).map((d) => ({ ...d, from: "host-syntax-check" })));
+      const chk = await syntaxCheck({ cwd: project.root, args: ca.slice(1) });
+      result.diagnostics.push(...extractDiagnostics(chk.log).map((d) => ({ ...d, from: "gcc-syntax-check (wasm)" })));
     }
     result.exactFunctionMatch = false; result.textExact = false;
     result.distance = null;
@@ -384,8 +393,9 @@ export async function compileAndCompare(project, fn, opts) {
   }
   for (const post of inv.post) {
     const pa = retargetArgv(post, { tuRel, objRel, newTu: newTuAbs, newObj: newObjAbs });
-    const postResult = await run(pa[0], pa.slice(1), { cwd: project.root, env: project.env });
-    if (postResult.code !== 0) throw Object.assign(new Error(`compile post-processing failed: ${postResult.stderr.slice(0, 400)}`), { code: "POST_COMPILE_FAILED" });
+    const postResult = await runArgv(pa, { cwd: project.root, tmpRoot: path.join(work, ".tmp") });
+    if (postResult.unsupported) throw Object.assign(new Error(`compile post-processing step cannot run as WASM: ${postResult.unsupported}`), { code: "POST_COMPILE_FAILED" });
+    if (postResult.code !== 0) throw Object.assign(new Error(`compile post-processing failed: ${(postResult.log ?? "").slice(0, 400)}`), { code: "POST_COMPILE_FAILED" });
   }
   // Extract + compare.
   const tc = project.m.toolchain;
@@ -393,11 +403,11 @@ export async function compileAndCompare(project, fn, opts) {
   const target = await ensureTarget(project, fn);
   let tstream = [];
   if (!target.romOnly) {
-    const tdump = await dumpObject({ objdump, objPath: target.targetO, cwd: project.root, env: project.env });
+    const tdump = await dumpObject({ objdump, objPath: target.targetO, cwd: project.root });
     tstream = trimToSize(findSymbol(tdump, fn.symbol)?.instructions ?? [], target.sizeBytes);
   }
-  const cdump = await dumpObject({ objdump, objPath: newObjAbs, cwd: project.root, env: project.env });
-  const csyms = await symbolTable({ objdump, objPath: newObjAbs, cwd: project.root, env: project.env });
+  const cdump = await dumpObject({ objdump, objPath: newObjAbs, cwd: project.root });
+  const csyms = await symbolTable({ objdump, objPath: newObjAbs, cwd: project.root });
   const csym = findSymbol(cdump, fn.symbol);
   if (!csym) {
     result.exactFunctionMatch = false; result.textExact = false; result.distance = null;
@@ -563,9 +573,9 @@ export async function compareAgainstRom(project, fn, cstream, csyms) {
 /** Compare every other .text symbol of the candidate object with the verified build object. */
 async function verifyTranslationUnit(project, fn, { objdump, candidateObj, buildObj, csyms }) {
   if (!fs.existsSync(buildObj)) return { status: "no-build-object", note: `${path.relative(project.root, buildObj)} does not exist; run the project build first` };
-  const bdump = await dumpObject({ objdump, objPath: buildObj, cwd: project.root, env: project.env });
-  const cdump = await dumpObject({ objdump, objPath: candidateObj, cwd: project.root, env: project.env });
-  const bsyms = await symbolTable({ objdump, objPath: buildObj, cwd: project.root, env: project.env });
+  const bdump = await dumpObject({ objdump, objPath: buildObj, cwd: project.root });
+  const cdump = await dumpObject({ objdump, objPath: candidateObj, cwd: project.root });
+  const bsyms = await symbolTable({ objdump, objPath: buildObj, cwd: project.root });
   const btext = bdump.sections.get(".text") ?? new Map();
   const ctext = cdump.sections.get(".text") ?? new Map();
   const changed = [], missing = [], added = [];
@@ -579,7 +589,7 @@ async function verifyTranslationUnit(project, fn, { objdump, candidateObj, build
   }
   for (const name of ctext.keys()) if (!btext.has(name) && name !== fn.symbol && !name.endsWith(".NON_MATCHING")) added.push(name);
   // Section sizes as evidence for rodata/data effects.
-  const sec = async (o) => { const r = await run(objdump, ["-h", o], { cwd: project.root, env: project.env }); const out = {}; for (const m of r.stdout.matchAll(/^\s*\d+\s+(\.\S+)\s+([0-9a-f]+)/gm)) out[m[1]] = parseInt(m[2], 16); return out; };
+  const sec = async (o) => { const r = await binutils("objdump", ["-h", o], { cwd: project.root }); const out = {}; for (const m of r.stdout.matchAll(/^\s*\d+\s+(\.\S+)\s+([0-9a-f]+)/gm)) out[m[1]] = parseInt(m[2], 16); return out; };
   const bsec = await sec(buildObj), csec = await sec(candidateObj);
   const sizeDiffs = Object.keys({ ...bsec, ...csec }).filter((k) => /^\.(rodata|data|bss|sdata|sbss|text)$/.test(k) && bsec[k] !== csec[k]).map((k) => ({ section: k, build: bsec[k] ?? 0, candidate: csec[k] ?? 0 }));
   const ok = changed.length === 0 && missing.length === 0 && added.length === 0;
@@ -654,7 +664,7 @@ export function lintCandidate(text) {
 export async function compareRodata(project, fn, { objdump, targetO, candidateO, tstream, cstream }) {
   const objcopy = project.m.toolchain.objcopy?.path ?? (project.m.toolchain.binutilsPrefix ?? "mips-linux-gnu-") + "objcopy";
   const side = async (objPath, stream, funcName) => {
-    const syms = await symbolTable({ objdump, objPath, cwd: project.root, env: project.env });
+    const syms = await symbolTable({ objdump, objPath, cwd: project.root });
     const secBytes = await sectionBytesOf(objcopy, objPath, ".rodata", project);
     const relocs = await sectionRelocs(objdump, objPath, ".rodata", project);
     const funcOff = syms.get(funcName)?.value ?? 0;
@@ -739,12 +749,12 @@ function wordsWithRelocs(buf, base, relocs, funcOff, endian = "big") {
 }
 async function sectionBytesOf(objcopy, objPath, section, project) {
   const tmp = objPath + `.${section.replace(".", "")}.bin`;
-  const r = await run(objcopy, ["-O", "binary", "--only-section=" + section, objPath, tmp], { cwd: project.root, env: project.env });
-  if (r.code !== 0) return null;
+  const r = await binutils("objcopy", ["-O", "binary", "--only-section=" + section, objPath, tmp], { cwd: project.root });
+  if (r.exitCode !== 0) return null;
   try { const b = await readFile(tmp); await rm(tmp, { force: true }); return b; } catch { return null; }
 }
 async function sectionRelocs(objdump, objPath, section, project) {
-  const r = await run(objdump, ["-r", "-j", section, objPath], { cwd: project.root, env: project.env });
+  const r = await binutils("objdump", ["-r", "-j", section, objPath], { cwd: project.root });
   const out = [];
   for (const m of r.stdout.matchAll(/^([0-9a-f]+)\s+(R_MIPS_\w+)\s+(\S+?)(?:\+0x([0-9a-f]+))?\s*$/gm)) out.push({ offset: parseInt(m[1], 16), type: m[2], symbol: m[3], addend: m[4] ? parseInt(m[4], 16) : 0 });
   return out;
@@ -762,7 +772,7 @@ export async function compareRodataAgainstRom(project, fn, { objdump, candidateO
   const map = await project.map();
   const objcopy = project.m.toolchain.objcopy?.path ?? (project.m.toolchain.binutilsPrefix ?? "mips-linux-gnu-") + "objcopy";
   const rodataSec = fn.object ? (ld?.objects.get(fn.object) ?? []).find((s) => s.section === ".rodata") : null;
-  const syms = await symbolTable({ objdump, objPath: candidateO, cwd: project.root, env: project.env });
+  const syms = await symbolTable({ objdump, objPath: candidateO, cwd: project.root });
   const secBytes = await sectionBytesOf(objcopy, candidateO, ".rodata", project);
   const relocs = await sectionRelocs(objdump, candidateO, ".rodata", project);
   const funcOff = syms.get(fn.symbol)?.value ?? 0;
