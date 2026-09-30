@@ -6,6 +6,7 @@ import * as O from "./cli-options.js";
 import { parseRowRange } from "./cascade.js";
 import { CSourceError } from "./csource.js";
 import { loadDumpRows, loadObjectRows } from "./row-source.js";
+import { dumpObject, trimFunctionPadding } from "./objdump.js";
 import { slotReport, volatileProbeSources } from "./slots.js";
 import { emitLines } from "./terminal.js";
 import { dumps } from "./pyjson.js";
@@ -17,11 +18,12 @@ export async function slotsCommand(args, io, ctx) {
   try {
     const rows = args.rows ? parseRowRange(args.rows) : null;
     let instructions;
-    if (args.dumps) instructions = loadDumpRows(args.object, { symbol: args.symbol });
+    if (args.dumps) instructions = loadDumpRows(ctx.resolve(args.object), { symbol: args.symbol });
     else {
       let cache = null;
       if (args.disassembly_cache) { const { DisassemblyCache } = await import("./dis-cache.js"); cache = new DisassemblyCache({ directory: args.disassembly_cache }); }
-      instructions = loadObjectRows(args.object, { objdump: args.objdump, symbol: args.symbol, section: args.section, cache });
+      if (cache !== null) instructions = loadObjectRows(args.object, { objdump: args.objdump, symbol: args.symbol, section: args.section, cache });
+      else instructions = trimFunctionPadding([...dumpObject(args.object, { objdump: args.objdump, symbol: args.symbol, section: args.section, cwd: ctx.cwd, env: ctx.env })[1]]);
     }
     report = slotReport(instructions, { label: args.object, rows, minimum: args.min_rows });
     if (args.volatile_probe) {

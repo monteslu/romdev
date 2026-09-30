@@ -8,6 +8,7 @@ import * as O from "./cli-options.js";
 import { displayPath, shortenPaths } from "./model.js";
 import { COSET_FAMILIES, DEFAULT_RING, MAX_ALL_RING, PhaseError, buildPhaseReport, parseRing, parseSlots, phaseLines } from "./phase.js";
 import { loadDumpRows, loadObjectRows } from "./row-source.js";
+import { dumpObject, trimFunctionPadding } from "./objdump.js";
 import { ALIGNMENT_GRANULARITIES, DEFAULT_GRANULARITY, buildShiftDiff } from "./shift-align.js";
 import { emitLines } from "./terminal.js";
 import { dumps } from "./pyjson.js";
@@ -27,9 +28,11 @@ function readSlots(args, ctx) {
   return null;
 }
 
-function rows(p, args, cache) {
-  if (args.dumps) return loadDumpRows(p, { symbol: args.symbol });
-  return loadObjectRows(p, { objdump: args.objdump, symbol: args.symbol, section: args.section, cache });
+function rows(p, args, cache, ctx) {
+  if (args.dumps) return loadDumpRows(ctx.resolve(p), { symbol: args.symbol });
+  if (cache !== null) return loadObjectRows(p, { objdump: args.objdump, symbol: args.symbol, section: args.section, cache });
+  const [, instructions] = dumpObject(p, { objdump: args.objdump, symbol: args.symbol, section: args.section, cwd: ctx.cwd, env: ctx.env });
+  return trimFunctionPadding([...instructions]);
 }
 
 function baseIdentity(args, ctx) {
@@ -90,14 +93,14 @@ export async function phaseCommand(args, io, ctx) {
     }
     const slots = readSlots(args, ctx);
     const [baseSource, baseSha] = baseIdentity(args, ctx);
-    const target = rows(args.target, args, cache);
-    const context = args.context ? rows(args.context, args, cache) : null;
-    const baseline = args.baseline ? rows(args.baseline, args, cache) : null;
+    const target = rows(args.target, args, cache, ctx);
+    const context = args.context ? rows(args.context, args, cache, ctx) : null;
+    const baseline = args.baseline ? rows(args.baseline, args, cache, ctx) : null;
     const shiftOf = (r, name) => buildShiftDiff(target, r, { target_name: displayPath(args.target, ctx.cwd), candidate_name: name, symbol: args.symbol, granularity: args.align_on });
     const contextShift = context !== null ? shiftOf(context, displayPath(args.context, ctx.cwd)) : null;
     const baselineShift = baseline !== null ? shiftOf(baseline, displayPath(args.baseline, ctx.cwd)) : null;
     for (const candidate of args.candidates) {
-      const r = rows(candidate, args, cache);
+      const r = rows(candidate, args, cache, ctx);
       const name = displayPath(candidate, ctx.cwd);
       const report = buildPhaseReport(target, r, { shift: shiftOf(r, name), slots, ring, coset_family: args.cosets, minimum_evidence: args.min_evidence,
         target_name: displayPath(args.target, ctx.cwd), candidate_name: name, symbol: args.symbol, context, context_shift: contextShift,

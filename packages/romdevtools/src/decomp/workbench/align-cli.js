@@ -8,6 +8,7 @@ import { ArgumentTypeError } from "./argparse.js";
 import * as O from "./cli-options.js";
 import { displayPath, shortenPaths } from "./model.js";
 import { loadDumpRows, loadObjectRows } from "./row-source.js";
+import { dumpObject, trimFunctionPadding } from "./objdump.js";
 import { ALIGNMENT_GRANULARITIES, DEFAULT_GRANULARITY, buildShiftDiff, shiftDiffLines } from "./shift-align.js";
 import { emitLines } from "./terminal.js";
 import { dumps } from "./pyjson.js";
@@ -30,9 +31,11 @@ export function parseWindow(value) {
 }
 parseWindow.displayName = "parse_window";
 
-function rows(p, args, cache) {
-  if (args.dumps) return loadDumpRows(p, { symbol: args.symbol });
-  return loadObjectRows(p, { objdump: args.objdump, symbol: args.symbol, section: args.section, cache });
+function rows(p, args, cache, ctx) {
+  if (args.dumps) return loadDumpRows(ctx.resolve(p), { symbol: args.symbol });
+  if (cache !== null) return loadObjectRows(p, { objdump: args.objdump, symbol: args.symbol, section: args.section, cache });
+  const [, instructions] = dumpObject(p, { objdump: args.objdump, symbol: args.symbol, section: args.section, cwd: ctx.cwd, env: ctx.env });
+  return trimFunctionPadding([...instructions]);
 }
 
 function windowTally(diff, [low, high]) {
@@ -69,13 +72,13 @@ export async function alignCommand(args, io, ctx) {
   }
   const results = [];
   try {
-    const target = rows(args.target, args, cache);
+    const target = rows(args.target, args, cache, ctx);
     if (!target.length) {
       io.eprint(`error: ${displayPath(args.target, ctx.cwd)} holds no instruction rows to align against; check --section and --symbol`);
       return 2;
     }
     for (const candidate of args.candidates) {
-      const r = rows(candidate, args, cache);
+      const r = rows(candidate, args, cache, ctx);
       const diff = buildShiftDiff(target, r, { target_name: displayPath(args.target, ctx.cwd), candidate_name: displayPath(candidate, ctx.cwd),
         symbol: args.symbol, granularity: args.align_on, context: args.context_rows });
       results.push([diff, args.window ? windowTally(diff, args.window) : null]);
