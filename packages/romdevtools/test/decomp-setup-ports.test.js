@@ -103,7 +103,7 @@ test("the setup scripts dispatch by sha256: a different script is not assumed to
   const d = path.join(TMP, "sha");
   fs.mkdirSync(path.join(d, "tools"), { recursive: true });
   fs.writeFileSync(path.join(d, "tools", "mio0_extract.py"), "print('another program')\n");
-  const c = classifyCommand(["python3", "tools/mio0_extract.py", "rom.z64"], d);
+  const c = classifyCommand(["uv", "run", "python3", "tools/mio0_extract.py", "rom.z64"], d);
   assert.equal(c.kind, "unsupported");
   assert.match(c.reason, /is not the version romdev ported/);
 });
