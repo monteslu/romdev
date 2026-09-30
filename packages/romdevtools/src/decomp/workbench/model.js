@@ -146,3 +146,50 @@ function normalizePure(value) {
   const s = (abs ? "/" : "") + parts.join("/");
   return s || (abs ? "/" : ".");
 }
+
+/** Compilation status plus an optional object comparison. */
+export class CompileResult {
+  constructor({ source, command, returncode, stdout, stderr, object_path, comparison, cache_key = "", cached = false,
+    duration_seconds = 0.0, stdout_bytes = 0, stderr_bytes = 0, stdout_truncated = false, stderr_truncated = false,
+    artifacts = {}, experiment = null, region = null, signals = [], object_sha256 = null }) {
+    Object.assign(this, { source, command, returncode, stdout, stderr, object_path, comparison, cache_key, cached,
+      duration_seconds, stdout_bytes, stderr_bytes, stdout_truncated, stderr_truncated, artifacts, experiment, region,
+      signals, object_sha256 });
+  }
+
+  asDict() {
+    const deep = (v) => (v === null || typeof v !== "object" ? v : Array.isArray(v) ? v.map(deep)
+      : typeof v.asDict === "function" ? v.asDict() : Object.fromEntries(Object.entries(v).map(([k, x]) => [k, deep(x)])));
+    const out = {};
+    for (const k of ["source", "command", "returncode", "stdout", "stderr", "object_path", "comparison", "cache_key", "cached",
+      "duration_seconds", "stdout_bytes", "stderr_bytes", "stdout_truncated", "stderr_truncated", "artifacts", "experiment",
+      "region", "signals", "object_sha256"]) out[k] = deep(this[k]);
+    if (this.comparison !== null && this.comparison !== undefined) out.comparison = this.comparison.asDict();
+    return out;
+  }
+}
+
+/**
+ * Strip the directory a census's candidates share, and name it once.
+ * Returns [name -> label mapping (Map), sentence or null].
+ */
+export function shortenPaths(names) {
+  const identity = () => [new Map(names.map((n) => [n, n])), null];
+  if (names.length < 2) return identity();
+  const partsOf = (n) => { const abs = n.startsWith("/"); const p = n.split("/").filter((x) => x && x !== "."); return abs ? ["/", ...p] : p; };
+  const parts = names.map(partsOf);
+  if (parts.some((p) => p.length < 2)) return identity();
+  const shared = [];
+  const minLen = Math.min(...parts.map((p) => p.length));
+  for (let i = 0; i < minLen; i++) {
+    const col = new Set(parts.map((p) => p[i]));
+    if (col.size !== 1 || shared.length + 1 >= minLen) break;
+    shared.push(parts[0][i]);
+  }
+  if (!shared.length) return identity();
+  const join = (list) => (list[0] === "/" ? "/" + list.slice(1).join("/") : list.join("/"));
+  const prefix = join(shared);
+  const labels = new Map(names.map((n) => [n, partsOf(n).slice(shared.length).join("/")]));
+  if (new Set(labels.values()).size !== new Set(names).size) return identity();
+  return [labels, `paths are relative to ${prefix}${prefix.endsWith("/") ? "" : "/"}`];
+}
