@@ -329,3 +329,33 @@ export function reportGuidance(report) {
     + "preprocessor line-assignment residual, not a compiler-version one.");
   return [...nextSteps(PLAYBOOK, { lead_in: leadIn })];
 }
+
+const lineCell = (v) => (v === null ? "?" : String(v));
+
+/** Render the statement-line section, in the vocabulary of the JSON keys. */
+export function renderLocBoundaries(report, painter = null) {
+  const bold = painter && typeof painter.bold === "function" ? (s) => painter.bold(s) : (s) => s;
+  const lines = ["", bold("STATEMENT LINES") + "  " + [["listing", report.listing], ["function", report.function || "<unnamed>"],
+    ["listing_instructions", report.listing_instructions], ["candidate_instructions", report.candidate_instructions],
+    ["mapped_instructions", report.mapped_instructions]].map(([k, v]) => `${k}=${v}`).join(" ")];
+  if (!report.sites.length && !report.target_only_hunks.length) { lines.push(`  ${report.summary_line}`); return lines; }
+  for (const s of report.sites) {
+    const detail = [["site", s.site], ["hunk", s.hunk], ["candidate", `${s.candidate_range[0]}..${s.candidate_range[1]}`],
+      ["window", `${s.window[0]}..${s.window[1]}`], ["widened", s.widened ? "yes" : "no"], ["unmapped", s.unmapped],
+      ["lines", s.lines.map(lineCell).join(",")], ["status", s.status]];
+    lines.push("  " + detail.map(([k, v]) => `${k}=${v}`).join(" "));
+  }
+  if (report.sites.some((s) => s.widened)) {
+    lines.push("  widened=yes: the hunk covers one candidate instruction, so the window takes one instruction on each side - what it was reordered past.");
+  }
+  if (report.sites.some((s) => s.unmapped)) {
+    lines.push("  ?: that instruction is not in the listing (a macro as1 expanded, a delay slot as1 filled). It is never guessed at by position.");
+  }
+  if (report.target_only_hunks.length) {
+    lines.push(`  ${plural(report.target_only_hunks.length, "hunk")} hold no candidate instruction (${report.target_only_hunks.join(", ")}): the candidate's listing cannot `
+      + "say which statement the target's instruction came from. Not counted as sites.");
+  }
+  if (report.unmapped_sites) lines.push(`  ${plural(report.unmapped_sites, "site")} could not be attributed to a statement and are excluded from the majority.`);
+  lines.push(`  ${report.summary_line}`);
+  return lines;
+}

@@ -1,0 +1,9 @@
+00000000 <update_demo>:
+   0: 27bdffe0  addiu $sp,$sp,-32
+   4: 3c010123  lui $at,0x123
+                        4: R_MIPS_HI16 global_value
+   8: 0c123456  jal 48d158 <helper>
+                        8: R_MIPS_26 helper
+   c: 460c0000  add.s $f0,$f0,$f12
+  10: 03e00008  jr $ra
+  14: 27bd0020  addiu $sp,$sp,32

@@ -16,7 +16,7 @@ import { dumps } from "./pyjson.js";
 import { parseAs1ReorganizeTrace } from "./as1-reorganize.js";
 import { CascadeError, CdxLog } from "./cascade.js";
 import { parseCensus, evaluateCensus, censusStatus } from "./census.js";
-import { diagnoseObjects } from "./diagnosis.js";
+import { diagnoseObjects, diagnoseDumps } from "./diagnosis.js";
 import { parseEmitTrace } from "./emit-provenance.js";
 import { frameLadder } from "./frame-ladder.js";
 import { parseGlobalcolorTrace, passEvidence } from "./globalcolor.js";
@@ -102,7 +102,7 @@ function comparisonAccepted(c, crossRom) {
 const errorText = (e) => (e && typeof e.code === "string" && /^E[A-Z]+$/.test(e.code) ? osErrorText(e) : e.message);
 const reportable = (e) => isInputError(e) || isReportedError(e);
 
-function emit(diagnosis, args, predicates, io, ctx, warn) {
+export function emit(diagnosis, args, predicates, io, ctx, warn = () => {}) {
   const comparison = diagnosis.comparison;
   if (args.json && args.html) { io.eprint("error: --json and --html are mutually exclusive"); return 2; }
   let listingReport;
@@ -161,4 +161,32 @@ export async function diagnoseCommand(args, io, ctx) {
   return emit(diagnosis, args, predicates, io, ctx, warn);
 }
 
-export { ValueError };
+/**
+ * Diagnose two retained GNU objdump text files (the same JSON document). Not
+ * a registered command; the object form is what romdev drives.
+ */
+export async function diagnoseDumpsCommand(args, io, ctx) {
+  const warn = (note) => io.eprint(`warning: ${note}`);
+  if (!args.json) {
+    io.eprint("error: the terminal rendering of diagnose is not available in romdev; pass --json for the diagnosis document");
+    return 2;
+  }
+  let diagnosis, predicates;
+  try {
+    guardFreshness(args, [args.target, args.candidate], { labels: ["target", "candidate"], cwd: ctx.cwd });
+    predicates = parseCensus(args.census ?? [], { allowed: COMPARISON_CENSUS_KEYS });
+    const evidence = traceEvidence(args, ctx, warn);
+    const res = (p) => (p === null || p === undefined ? null : ctx.resolve(expand(p)));
+    diagnosis = withTraceNote(diagnoseDumps(args.target, args.candidate, {
+      symbol: args.symbol, register_profile: args.register_profile, evidence,
+      target_reservations: loadReservations(res(args.target_reservations), ctx.resolve(args.target), args.symbol),
+      candidate_reservations: loadReservations(res(args.candidate_reservations), ctx.resolve(args.candidate), args.symbol),
+      cwd: ctx.cwd,
+    }), args, evidence, ctx);
+  } catch (e) {
+    if (!reportable(e) && !(e instanceof SyntaxError)) throw e;
+    io.eprint(`error: ${errorText(e)}`);
+    return 2;
+  }
+  return emit(diagnosis, args, predicates, io, ctx, warn);
+}
