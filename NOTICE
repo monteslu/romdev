@@ -43,6 +43,11 @@ only redistribution of these emulator binaries.)
   snes9x            SNES core           non-commercial (snes9x license)
   genesis_plus_gx   Genesis/SMS/GG core non-commercial (Genesis Plus GX license)
 
+  The native sync32 Genesis backend (packages/romdevtools/src/analysis/
+  recompile/native/genesis/runtime/gpgx) ships a subset of the Genesis Plus
+  GX source at the pinned commit, with ROMDEV_S32 guards (see UPSTREAM.txt
+  there); every .s32 it builds contains that code and is non-commercial.
+
 
 Emulator cores
 --------------

@@ -14,6 +14,8 @@ import { WasmcartHost } from "../../host/WasmcartHost.js";
 import { verifyRecompile, findRecompileDivergence, fuzzRecompile } from "../../host/verify-recompile.js";
 import { findInstructionDivergence } from "../../host/instruction-diverge.js";
 import { readRecompileLayout, validateRecompileLayout, cartWasmBytes, wascFromWasm } from "../../analysis/recompile/recompile-section.js";
+import { isS32, readS32RecompileLayout } from "../../analysis/recompile/native/s32-cart.js";
+import { S32CartHost } from "../../host/S32CartHost.js";
 import { installHost, installHostB, getHost, getHostBOrNull } from "../state.js";
 
 function resolveInputs(sessionKey, args, opName) {
@@ -36,7 +38,11 @@ function resolveInputs(sessionKey, args, opName) {
   for (const p of [cartPath, refPath]) if (!existsSync(p)) throw new Error(`frame({op:'${opName}'}): no file at ${p}`);
 
   const cartBytes = new Uint8Array(readFileSync(cartPath));
-  const section = readRecompileLayout(cartBytes);
+  // A natively recompiled sync32 cart carries its layout in the image
+  // (s32-cart.js) and runs on the sync32 core; everything below is shared.
+  const native = isS32(cartBytes);
+  const section = native ? readS32RecompileLayout(cartBytes) : readRecompileLayout(cartBytes);
+  if (native && !section) throw new Error(`frame({op:'${opName}'}): ${cartPath} is a sync32 cart without a recompile descriptor (build it with disasm({target:'recompile', emit:'sync32'}))`);
   let layout = section ? { ...section } : { regions: {}, fields: {}, probe: {} };
   const callerParts = ["regions", "fields", "probe"].filter((k) => args[k] && Object.keys(args[k]).length);
   for (const k of callerParts) layout[k] = { ...(layout[k] ?? {}), ...args[k] };
@@ -56,10 +62,16 @@ function resolveInputs(sessionKey, args, opName) {
     throw new Error(`frame({op:'${opName}'}): the cart was built from a ROM with sha1 ${section.romSha1}, but reference ${refPath} has sha1 ${refSha1}. Comparing a cart against a different ROM measures nothing.`);
   }
   // A bare .wasm is wrapped in memory: the wasmcart host loads archives.
-  const wasm = cartWasmBytes(cartBytes);
-  const loadBytes = wasm === cartBytes ? wascFromWasm(cartBytes, path.basename(cartPath, ".wasm")) : cartBytes;
+  const wasm = native ? null : cartWasmBytes(cartBytes);
+  const loadBytes = native ? null : wasm === cartBytes ? wascFromWasm(cartBytes, path.basename(cartPath, ".wasm")) : cartBytes;
 
   const openCart = async (hooks = {}) => {
+    if (native) {
+      const h = new S32CartHost();
+      await h.loadMedia({ path: path.resolve(cartPath), beforeSettle: hooks.beforeSettle });
+      h.inner.status.mediaPath = path.resolve(cartPath);
+      return h;
+    }
     const h = new WasmcartHost();
     await h.loadMedia({ platform: "wasmcart", bytes: loadBytes, beforeSettle: hooks.beforeSettle });
     h.status.mediaPath = path.resolve(cartPath);

@@ -15,6 +15,46 @@ import { getRenderingContextCore } from "./rendering-context.js";
 import { humanCoDriveWarning } from "./playtest.js";
 import { runVerifyRecompile, runRecompileDiverge, runInstructionDiverge, runFuzzRecompile } from "./verify-recompile-op.js";
 import { traceInstructionsCore } from "./trace-instructions.js";
+import { measureCycles, mapBeside } from "../../host/s32-cycles.js";
+import { readS32RecompileLayout } from "../../analysis/recompile/native/s32-cart.js";
+import { S32CartHost } from "../../host/S32CartHost.js";
+import { installHost } from "../state.js";
+import { readFileSync as readFileSyncCycles } from "node:fs";
+
+/** Default profile groups for a native Genesis cart (object files -> subsystem). */
+const GENESIS_NATIVE_GROUPS = {
+  "68000 recompiled blocks": ["/^rd_blocks\\d*$/"], "68000 interpreter + dispatch": ["m68kcpu"],
+  "VDP render": ["vdp_render"], "VDP ports/DMA": ["vdp_ctrl"], "Z80": ["z80", "memz80", "membnk"],
+  "YM2612": ["ym2612"], "PSG": ["psg"], "audio mix/resample": ["sound", "blip_buf"],
+  "68000 memory map + I/O": ["mem68k", "io_ctrl", "input", "gamepad", "md_cart", "sram", "genesis"],
+  "host glue (frame loop, canvas, audio ring, libc)": ["main", "libc", "setjmp", "system_s32", "rd_stubs"],
+};
+
+/** frame({op:'cycles'}): sync32 cycles per frame (+ profile). */
+async function runS32Cycles(sessionKey, args) {
+  let host, cartPath = args.cart ?? null;
+  if (cartPath) {
+    const h = new S32CartHost();
+    await h.loadMedia({ path: path.resolve(cartPath) });
+    h.inner.status.mediaPath = path.resolve(cartPath);
+    installHost(sessionKey, h.inner);
+    host = h.inner;
+  } else {
+    host = getHost(sessionKey);
+    cartPath = host.status?.mediaPath ?? null;
+  }
+  if (host.status?.platform !== "sync32" && host.platform !== "sync32") {
+    // LibretroHost keeps the platform in status
+    if (!(host.regionSize?.("sync32_timing") > 0)) throw new Error("frame({op:'cycles'}): the session's cart is not a sync32 cart (load one with loadMedia({platform:'sync32'}) or pass cart)");
+  }
+  const at = host.status?.frameCount ?? 0;
+  const from = args.from ?? at + 1, to = args.to ?? from + (args.frames > 1 ? args.frames - 1 : 599);
+  const map = args.map ? readFileSyncCycles(args.map, "utf8") : cartPath ? mapBeside(cartPath) : null;
+  let groups = args.groups ?? null;
+  if (!groups && cartPath) { try { if (readS32RecompileLayout(cartPath)) groups = GENESIS_NATIVE_GROUPS; } catch { /* not a native cart */ } }
+  const r = await measureCycles({ host, from, to, input: args.input, profile: !!args.profile, map, groups, top: args.top, series: !!args.series });
+  return { cart: cartPath, ...r };
+}
 
 // Normalize each platform's render-context into a CONSERVATIVE renderEnabled
 // (true | false | null). null = "can't tell from the registers" - verify never
@@ -972,7 +1012,7 @@ export function registerFrameTools(server, z, sessionKey) {
     "IMAGE CONTRACT (screenshot/stepAndShot): the image goes to `path` (default, returns {path}) OR inline:true - " +
     "you MUST pass one. Keeps PNGs out of context unless asked.",
     {
-      op: z.enum(["step", "screenshot", "stepAndShot", "sideBySide", "compareRam", "findDiverge", "compareRender", "portStatus", "stepInstruction", "stepInstructions", "traceInstructions", "verify", "verifyRecompile", "fuzzRecompile"]).describe("fuzzRecompile = seeded random play on a recompiled cart, first trap per seed; traceInstructions = the free-running instruction stream over N frames; step frames; capture a screenshot; step+capture in one call; capture both hosts side-by-side (A|B); compareRam = diff slot-A vs slot-B work-RAM (the logic-port oracle); findDiverge = find the first frame+byte where the two slots split (root-cause finder; with `cart` it runs the recompile per-frame state differ); compareRender = diff the decoded rendering state of the two slots (the presentation oracle); portStatus = ONE fused 'state of your port' verdict + next action (the capstone); single-step one CPU instruction; stepInstructions = bulk single-step N instructions into one ordered trace; verify the game is actually rendering/alive (no vision needed); verifyRecompile = verify a recompiled wasmcart against its reference core (scores, state compare, controls, verdict)."),
+      op: z.enum(["step", "screenshot", "stepAndShot", "sideBySide", "compareRam", "findDiverge", "compareRender", "portStatus", "stepInstruction", "stepInstructions", "traceInstructions", "verify", "verifyRecompile", "fuzzRecompile", "cycles"]).describe("cycles = sync32 only: CPU cycles per frame over a frame span on an input schedule (min/mean/p95/max, frames over the 2.5M ABI floor and the 252/315 MHz budgets, worst frames), with profile:true a pc-sampling profile that sums to the same cycles (vblank wait excluded) attributed per function/object/group from the build's linker map; fuzzRecompile = seeded random play on a recompiled cart, first trap per seed; traceInstructions = the free-running instruction stream over N frames; step frames; capture a screenshot; step+capture in one call; capture both hosts side-by-side (A|B); compareRam = diff slot-A vs slot-B work-RAM (the logic-port oracle); findDiverge = find the first frame+byte where the two slots split (root-cause finder; with `cart` it runs the recompile per-frame state differ); compareRender = diff the decoded rendering state of the two slots (the presentation oracle); portStatus = ONE fused 'state of your port' verdict + next action (the capstone); single-step one CPU instruction; stepInstructions = bulk single-step N instructions into one ordered trace; verify the game is actually rendering/alive (no vision needed); verifyRecompile = verify a recompiled wasmcart against its reference core (scores, state compare, controls, verdict)."),
       count: z.number().int().min(1).max(1_000_000).optional().describe("op=stepInstructions/step: stepInstructions = how many CPU instructions to single-step into the trace (default 16, max 4096); step = accepted as an alias for `frames`, since the unit is fixed by the op."),
       withRegisters: z.boolean().default(false).describe("op=stepInstructions: include the CPU register file at each step (heavier payload; omit if you only need pc/width/bytes for boundary+immediate-width analysis)."),
       stepFormat: z.enum(["full", "compact"]).default("full").describe("op=stepInstructions: 'full' = per-step objects (pc/flow/width/nextPc); 'compact' = one string per step (`$PC flow->$target`) + a `pcRanges` loop-map with hit counts (~90% fewer tokens for triage)."),
@@ -989,6 +1029,13 @@ export function registerFrameTools(server, z, sessionKey) {
       cart: z.string().optional().describe("op=verifyRecompile/findDiverge/fuzzRecompile: path to the recompiled cart (.wasc, or a bare .wasm that is wrapped in memory). Its `romdev.recompile` custom section, when present, supplies the reference platform, ROM sha1, warmupFrames, screen origin, button convention and the regions/fields to compare. Omitted: the wasmcart already in a slot."),
       reference: z.string().optional().describe("op=verifyRecompile/findDiverge: path to the SOURCE ROM, run on its reference core in slot B. Refused when the cart's section records a different ROM sha1. Omitted: the ROM already in the other slot."),
       platform: z.string().optional().describe("op=verifyRecompile/findDiverge: the reference core's loadMedia platform ('sms', 'gg', 'nes', 'gb', 'gbc', 'genesis', 'snes', 'gba'). Default: the cart section's `reference`/`platform`."),
+      from: z.number().int().min(1).optional().describe("op=cycles: first measured frame, counted in frames stepped since loadMedia (default: the next frame). The session steps there first on the same input schedule."),
+      to: z.number().int().min(1).optional().describe("op=cycles: last measured frame (default from+599, or from+frames-1). At most 4096 frames per call."),
+      profile: z.boolean().optional().describe("op=cycles: also run s32core's pc-sampling profiler over from..to and attribute the cycles (per function, per object file, per group) with the cart's linker map (<cart>.map, written by disasm emit:'sync32'; or pass map). Profiled frames run in the core's slower instrumented loop; the cycle model is the same."),
+      map: z.string().optional().describe("op=cycles: path of the GNU ld map for profile attribution (default <cart>.map)."),
+      groups: z.record(z.string(), z.array(z.string())).optional().describe("op=cycles: profile groups, name -> object-file names or '/regex/' (a native Genesis cart gets 68000/VDP/Z80/YM2612/PSG/mix/host groups by default)."),
+      top: z.number().int().min(1).max(200).optional().describe("op=cycles: how many functions to list (default 25)."),
+      series: z.boolean().optional().describe("op=cycles: include every frame's cycle count."),
       atFrames: z.array(z.number().int().min(1)).min(1).max(64).optional().describe("op=verifyRecompile: REFERENCE frames (frames stepped after loadMedia on the reference core) to score, ascending. Pick late frames with real, moving pictures: a title screen proves little."),
       input: z.union([z.string(), z.array(z.object({ frame: z.number().int().min(0), buttons: z.union([z.string(), z.array(z.string()), z.record(z.string(), z.boolean())]), hold: z.number().int().min(1).optional() }))]).optional().describe("op=verifyRecompile/findDiverge/fuzzRecompile: ONE input schedule applied to both sides, in REFERENCE frames: 'frame:buttons:hold,...' (e.g. '700:start:10,900:right+b:15') or [{frame, buttons:'a+right'|['a']|{a:true}, hold}]. libretro names (a,b,x,y,l,r,start,select,up,down,left,right) or spatial names (south,east,west,north); the cart gets each press at frame+offset, by physical position."),
       wrongInput: z.union([z.string(), z.array(z.object({ frame: z.number().int().min(0), buttons: z.union([z.string(), z.array(z.string()), z.record(z.string(), z.boolean())]), hold: z.number().int().min(1).optional() }))]).optional().describe("op=verifyRecompile: schedule for the wrong-input control (default: withhold ALL input; if the picture still matches, a perturbed script with the start/select presses kept and every other press replaced). The control must FAIL."),
@@ -1076,6 +1123,7 @@ export function registerFrameTools(server, z, sessionKey) {
         case "fuzzRecompile": return jsonContent(await runFuzzRecompile(sessionKey, { ...args, frames: args.frames === 1 ? undefined : args.frames }));
         case "traceInstructions": return await traceInstructionsCore(sessionKey, { frames: args.frames, slot: args.slot, maxEntries: args.maxEntries, fromPc: args.fromPc, outputPath: args.path, head: args.head });
         case "verify":          return await doVerify(args);
+        case "cycles":          return jsonContent(await runS32Cycles(sessionKey, args));
         default: throw new Error(`frame: unknown op '${args.op}'`);
       }
     }),

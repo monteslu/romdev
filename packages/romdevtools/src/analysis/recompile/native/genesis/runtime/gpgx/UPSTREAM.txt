@@ -1,0 +1,29 @@
+Genesis Plus GX, https://github.com/libretro/genesis-plus-gx.git
+commit 162c3439a697ffdfa00a5d3f44af103bf671f5dc (the pin in scripts/versions.json)
+License: LICENSE.txt in this directory (non-commercial).
+
+These files are the upstream core/ files of that commit with line endings
+normalised. Every change is inside a ROMDEV_S32 preprocessor guard, so
+`diff` against the upstream file shows exactly what changed and building
+without -DROMDEV_S32 gives the upstream code back. The changes fit the core
+to the sync32 console (Cortex-M33, 304 KB RAM, 3 MB flash, no libc):
+
+  genesis.h, md_cart.h/.c   Mega Drive cartridge only (no Mega CD, SVP,
+                            lock-on); cart.rom points at the image in flash
+  mem68k.c, vdp_ctrl.c      Mega CD / SVP register paths and savestates
+                            compiled out
+  vdp_render.c              no 512 KB pattern cache (tiles decoded from VRAM
+                            when drawn), layer tables in flash, one unaligned
+                            word access for READ_LONG/WRITE_LONG, lines go to
+                            the console canvas
+  ym2612.c                  pow/sin/log tables generated at build time
+  z80.c                     ADD/SUB flag tables computed per use; exact
+                            fast-forward of two idle idioms (DJNZ $, and a
+                            LD A,(HL)/OR A/JP cc,$ poll of Z80 RAM)
+  m68kcpu.c, m68kops.h      m68k_run dispatches to recompiled blocks; the
+                            opcode table is 16-bit handler numbers
+  loadrom.c, sound.c, psg.c ROM loading, savestates and CD audio compiled out
+
+Not vendored: system.c (replaced by ../s32/system_s32.c, the same frame loop
+for a cartridge), m68ki_cycles.h and m68ki_instruction_jump_table.h
+(generated from gpgx-derived.json.gz at build time).
