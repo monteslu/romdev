@@ -37,7 +37,7 @@ function typed(fn) {
  * the skill-staleness check reads it, so a shipped op cannot be missing from
  * the installed skill while the version number says everything is current.
  */
-export const DECOMP_OPS = Object.freeze(["import", "status", "refresh", "list", "map", "plan", "batch", "resolve", "context", "generate", "types", "compare", "search", "job", "jobs", "candidates", "integrate", "verify", "progress", "smoke", "overlays", "symbolize", "state", "trace", "coverage", "workbench", "dispatch", "experiment", "gate", "typeGraph", "rank", "ledger", "scenario", "capabilities", "knownSource", "assets", "artifacts", "handoff", "skill", "diagnose", "research", "variants", "layout", "replay"]);
+export const DECOMP_OPS = Object.freeze(["setup", "import", "status", "refresh", "list", "map", "plan", "batch", "resolve", "context", "generate", "types", "compare", "search", "job", "jobs", "candidates", "integrate", "verify", "progress", "smoke", "overlays", "symbolize", "state", "trace", "coverage", "workbench", "dispatch", "experiment", "gate", "typeGraph", "rank", "ledger", "scenario", "capabilities", "knownSource", "assets", "artifacts", "handoff", "skill", "diagnose", "research", "variants", "layout", "replay"]);
 
 export function registerDecompTools(server, z, sessionKey) {
   server.tool(
@@ -50,6 +50,7 @@ export function registerDecompTools(server, z, sessionKey) {
     "Ghidra pseudocode stays in disasm({target:'decompile'}) for understanding; it is never counted as matched.",
     {
       op: z.enum(DECOMP_OPS).describe(
+        "setup=run a fresh checkout's own setup/extract Makefile goals (ROM decompression, splat, segment/asset extraction) in-process: splat is romdev-splat (JS port, the splat/spimdisasm versions the project pins), project setup scripts are JS ports matched by content hash, native tools are WASM (`root`, optional `targets`, `makeVariables`); run it before import on a checkout whose asm/ has not been split; " +
         "import=register a project (root; splat yaml auto-detected; ROM sha1 verified; toolchain fingerprinted; compile invocation derived from the project's Makefile, read in JS); " +
         "status=manifest + backend identities + segment table; list=registered projects; map=TU → object → segment → functions associations; " +
         "plan=payoff-ordered queue of remaining asm functions + batches that call each other inside one TU (call graph from the built objects' relocations); batch=generate+compare every function of a batch (`symbols`), sharing the context; " +
@@ -142,7 +143,8 @@ export function registerDecompTools(server, z, sessionKey) {
       root: z.string().optional().describe("op:'import' - absolute path of the decompilation checkout (the dir with the splat yaml + Makefile). op:'research' action:'import' - a directory of prior research (drafts and notes) to INDEX. op:'replay' - the research root holding the replay fixtures (default: <project>/docs/research). Indexing records what exists; it never turns a note into a verified result."),
       splatYaml: z.string().optional().describe("op:'import' - splat yaml (relative to root) when auto-detection finds more than one."),
       buildPath: z.string().optional().describe("op:'import' - where the project's Makefile puts objects (e.g. 'build/us'), when it differs from the splat yaml's build_path."),
-      makeVariables: z.record(z.string()).optional().describe("op:'import' - Makefile variables the project is built with (e.g. {VERSION:'us'}), applied as make's command-line variables whenever romdev reads the Makefile."),
+      targets: z.array(z.string()).optional().describe("op:'setup' - Makefile goals to run (default: `setup` then `extract`, whichever the Makefile has)."),
+      makeVariables: z.record(z.string()).optional().describe("op:'import'/'setup' - Makefile variables the project is built with (e.g. {VERSION:'us'}), applied as make's command-line variables whenever romdev reads the Makefile."),
       rom: z.string().optional().describe("op:'import' - base ROM path when it differs from the yaml's target_path."),
       expectedSha1: z.string().optional().describe("op:'import' - expected base-ROM sha1 (default: the yaml's)."),
       buildCommand: z.array(z.string()).optional().describe("op:'import' - the project's own full-build command, recorded for reference only: romdev builds from the Makefile's rules itself, as WASM."),
@@ -217,6 +219,11 @@ export function registerDecompTools(server, z, sessionKey) {
       const { Project, importProject, listProjects } = await import("../../decomp/project.js");
       switch (args.op) {
         case "list": return jsonContent({ projects: await listProjects() });
+        case "setup": {
+          if (!args.root) throw Object.assign(new Error("decomp({op:'setup'}): `root` (the checkout) is required."), { code: "BAD_ARGS" });
+          const { runProjectSetup } = await import("../../decomp/setup.js");
+          return jsonContent(await runProjectSetup({ root: args.root, targets: args.targets, makeVariables: args.makeVariables }));
+        }
         case "import": {
           if (!args.project || !args.root) throw Object.assign(new Error("decomp({op:'import'}): `project` (an id you choose) and `root` are required."), { code: "BAD_ARGS" });
           let m;

@@ -9,12 +9,19 @@
 //   armips                                  -> WASM armips
 //   mips-linux-gnu-gcc / -cpp                -> WASM gcc 14.2 (mips-linux-gnu)
 //   slinky-cli / pigment64 / crunch64       -> WASM builds of decompals' releases
+//   .../sotn_str (a PS1 project's encoder)   -> WASM build of the pinned project tool
+//   sotn-disk / sotn-assets / ./sotn.sh /
+//   go run ./tools/<tool>, dirt_patcher.py,
+//   cat / truncate                          -> psx-setup.js (Go tools as wasip1, JS ports)
 //   mips-*-{as,ld,objcopy,objdump}         -> WASM mips-linux-gnu binutils
 //   <python> .../asm-processor/build.py      -> JS asm-processor
 //   <python> .../set_o32abi_bit.py           -> JS
 //   <python> <ported project script>.py      -> JS (PORTED_SCRIPTS, by sha256;
 //                                              maspsx included)
 //   cc1-psx-26 (.../gcc-2.6.3-psx/cc1)        -> WASM gcc 2.6.3-psx
+//   <python> -m splat split / .../splat/split.py / splat split
+//                                            -> romdev-splat (JS splat; the splat and
+//                                              spimdisasm versions the project pins)
 //   uv run <command>                         -> <command>
 //   cpp / clang -E / gcc -E                -> WASM cc1 -E (cpp.js)
 //   iconv / n64crc / sha1sum / md5sum / printf / echo / mkdir / rm / cp / touch / : / true
@@ -30,7 +37,10 @@ import { asmProcessorBuild } from "./asm-processor.js";
 import { idoCompile, binutils, toolName, armips, decompGcc, decompTool } from "./toolchain.js";
 import { preprocess } from "./cpp.js";
 import { maspsxMain } from "./maspsx.js";
+import { split as splatSplit } from "romdev-splat";
+import { classifyPsxSetup, runPsxSetup, PSX_SETUP_KINDS } from "./psx-setup.js";
 import { iconv, parseIconvArgs, n64crcFile, setO32AbiBit, buildAssetContainer, incFromBin, msgReencode, n64ChecksumUpdate, romCompress } from "./host-ports.js";
+import { romDecompress, parseBaseromHashes, extractCompressedSegments, mio0Extract, parseMio0Offsets } from "./setup-ports.js";
 
 // Project scripts with a JS port, by the exact script content ported (sha256).
 // A script whose bytes differ is a different program: it is reported
@@ -46,6 +56,12 @@ const PORTED_SCRIPTS = {
     helpers: { "maspsx/__init__.py": ["043e2480f05f9dc433eed14ad5b3ef60a379d9a988250822741fe4e15b359d33"] } },
   "rom_compressor.py": { kind: "rom-compressor", sha256: ["4ed8bab52b3d8d7fb8bf8fdb3edffd8473a436ba8917fc928be52c9b5b863d9c"],
     helpers: { "compression_common.py": ["4ae0c40605478dea0f17194f9a855d53b1d3d37d5e929e51bf39b6f906a1cb5e"] } },
+  // Project setup (setup-ports.js).
+  "rom_decompressor.py": { kind: "rom-decompressor", sha256: ["aa069aa129a7da2a800d79aa63b982eb4d35a1abf24ebbcfb2b3768c28dbb71f"],
+    helpers: { "compression_common.py": ["4ae0c40605478dea0f17194f9a855d53b1d3d37d5e929e51bf39b6f906a1cb5e"] } },
+  "extract_compressed_segments.py": { kind: "extract-compressed-segments", sha256: ["1c46b501e2d74cab03210eedef85608457412315116c73781876569cbec727fd"],
+    helpers: { "compression_common.py": ["4ae0c40605478dea0f17194f9a855d53b1d3d37d5e929e51bf39b6f906a1cb5e"] } },
+  "mio0_extract.py": { kind: "mio0-extract", sha256: ["ce486c3850127f377ac67cd2ef7e560aea74b5623913c277cc12c62c1754e6a6"] },
 };
 
 function portedScript(script, cwd) {
@@ -144,6 +160,16 @@ export function classifyCommand(argv, cwd = process.cwd()) {
     while (k < argv.length && argv[k].startsWith("-")) k++;
     return classifyCommand(argv.slice(k), cwd);
   }
+  // splat: `python -m splat split`, a vendored `.../splat/split.py`, or the
+  // `splat split` console script a project's venv installs.
+  if (PYTHON_RE.test(prog) && argv[1] === "-m" && argv[2] === "splat") return { kind: "splat", args: argv.slice(3) };
+  if (PYTHON_RE.test(prog)) {
+    const script = argv.find((a, i) => i > 0 && !a.startsWith("-")) ?? "";
+    if (/(^|\/)splat\/split\.py$/.test(script)) return { kind: "splat", args: ["split", ...argv.slice(argv.indexOf(script) + 1)] };
+  }
+  if (base === "splat") return { kind: "splat", args: argv.slice(1) };
+  const psx = classifyPsxSetup(argv, cwd);
+  if (psx) return psx;
   if (PYTHON_RE.test(prog)) {
     const script = argv.find((a, i) => i > 0 && !a.startsWith("-")) ?? "";
     if (/asm-processor\/build\.py$/.test(script)) return { kind: "asm-processor", script };
@@ -194,7 +220,7 @@ export async function runRecipeLine(line, ctx) {
       const cls = classifyCommand(cmd.argv, ctx.cwd);
       if (cls.kind === "unsupported") return { code: 127, log, steps, unsupported: `${cls.reason} (in: ${line.slice(0, 200)})` };
       let r;
-      try { r = await runOne(cmd.argv, cls, { ...ctx, stdin: input }); }
+      try { r = await runOne(cmd.argv, cls, { ...ctx, stdin: input, env: cmd.env }); }
       catch (e) {
         if (e instanceof Unsupported) return { code: 127, log, steps, unsupported: e.message };
         throw e;
@@ -308,6 +334,11 @@ async function runOne(argv, cls, ctx) {
     }
     case "assemble-rsp": return assembleRsp(argv.slice(argv.indexOf(cls.script) + 1), ctx);
     case "decomp-tool": {
+      if (cls.tool === "sotn_str") {
+        // a pipeline stage: stdin in, stdout out (bytes)
+        const r = await decompTool(cls.tool, argv.slice(1), { cwd, stdin: ctx.stdin ?? undefined, stdoutBinary: true });
+        return { code: r.exitCode, log: r.stderr ?? r.log, stdout: r.stdout };
+      }
       const r = await decompTool(cls.tool, argv.slice(1), { cwd });
       return { code: r.exitCode, log: r.log };
     }
@@ -322,9 +353,13 @@ async function runOne(argv, cls, ctx) {
       return { code: x.code, log: r.stderr + (x.log ?? ""), stdout: x.stdout };
     }
     case "inc-from-bin": case "msg-reencoder": case "n64-checksummer": case "rom-compressor":
+    case "rom-decompressor": case "extract-compressed-segments": case "mio0-extract":
       return runPortedScript(cls, argv.slice(argv.indexOf(cls.script) + 1), ctx);
     case "fs": return fsOp(cls.op, argv.slice(1), cwd);
-    default: throw new Unsupported(`no runner for ${cls.kind}`);
+    case "splat": return runSplat(cls.args, ctx);
+    default:
+      if (PSX_SETUP_KINDS.has(cls.kind)) return runPsxSetup(argv, cls, { cwd, tmpRoot, stdin: ctx.stdin ?? undefined, env: ctx.env ?? {} });
+      throw new Unsupported(`no runner for ${cls.kind}`);
   }
 }
 
@@ -378,6 +413,32 @@ async function runPortedScript(cls, args, { cwd, tmpRoot }) {
           fs.writeFileSync(abs(outRom), r.rom);
           return { code: 0, log: r.log };
         } finally { fs.rmSync(scratch, { recursive: true, force: true }); }
+      }
+      case "rom-decompressor": {
+        if (pos.length !== 4) return usage(4);
+        const [inRom, outRom, segments, version] = pos;
+        const r = romDecompress({
+          inRom: fs.readFileSync(abs(inRom)), segmentsCsv: fs.readFileSync(abs(segments), "utf8"), version,
+          baseromHashes: parseBaseromHashes(fs.readFileSync(abs(cls.script), "utf8")),
+        });
+        fs.writeFileSync(abs(outRom), r.rom);
+        return { code: 0, stdout: Buffer.from(r.log) };
+      }
+      case "extract-compressed-segments": {
+        if (pos.length !== 3) return usage(3);
+        const [inRom, segments, version] = pos;
+        const r = extractCompressedSegments({ inRom: fs.readFileSync(abs(inRom)), segmentsCsv: fs.readFileSync(abs(segments), "utf8"), version });
+        for (const f of r.files) { fs.mkdirSync(path.dirname(abs(f.path)), { recursive: true }); fs.writeFileSync(abs(f.path), f.bytes); }
+        return { code: 0, stdout: Buffer.from(r.log) };
+      }
+      case "mio0-extract": {
+        // sys.argv[1] is the ROM; later arguments are ignored.
+        if (args.length < 1) return { code: 1, stdout: Buffer.from("Usage: python mio0_extract.py <input_rom>\n") };
+        const offsets = parseMio0Offsets(fs.readFileSync(abs(cls.script), "utf8"));
+        const r = mio0Extract({ rom: fs.readFileSync(abs(args[0])), offsets });
+        for (const d of r.dirs) fs.mkdirSync(abs(d), { recursive: true });
+        for (const f of r.files) fs.writeFileSync(abs(f.path), f.bytes);
+        return { code: 0, stdout: Buffer.from(r.log) };
       }
     }
   } catch (e) { return { code: 1, log: `${cls.script}: ${e.message}\n` }; }
@@ -529,4 +590,25 @@ export function mapRecipeLine(line, map) {
     ].join(" ")).join(" | ");
     return (op ? `${op} ` : "") + body;
   }).join(" ");
+}
+
+// splat's `split` command line -> romdev-splat. The splat, spimdisasm and
+// rabbitizer versions are the ones the project pins (uv.lock, requirements,
+// a vendored copy), read from the project directory.
+const SPLAT_FLAGS = { "--verbose": "verbose", "--use-cache": "useCache", "--skip-version-check": "skipVersionCheck", "--stdout-only": "stdoutOnly", "--disassemble-all": "disassembleAll", "--make-full-disasm-for-code": "makeFullDisasmForCode" };
+async function runSplat(args, { cwd }) {
+  const a = args[0] === "split" ? args.slice(1) : args;
+  if (args[0] && args[0] !== "split" && !args[0].endsWith(".yaml") && !args[0].endsWith(".yml")) throw new Unsupported(`splat subcommand '${args[0]}' has no romdev port (only split)`);
+  const configs = [], o = {};
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i];
+    if (SPLAT_FLAGS[x]) o[SPLAT_FLAGS[x]] = true;
+    else if (x === "--modes") { o.modes = []; while (i + 1 < a.length && !a[i + 1].startsWith("-")) o.modes.push(a[++i]); }
+    else if (x.startsWith("-")) throw new Unsupported(`splat option '${x}' is not supported by romdev-splat`);
+    else configs.push(x);
+  }
+  if (!configs.length) return { code: 2, log: "splat split: at least one config yaml is required\n" };
+  let out = "";
+  const r = await splatSplit(configs, { ...o, cwd, projectDir: cwd, splatVersion: "auto", onOutput: (_stream, text) => { out += text; } });
+  return { code: r.exitCode, log: out || `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }

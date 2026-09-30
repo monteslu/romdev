@@ -68,14 +68,16 @@ export async function buildGoal(mkIn, goal, { always = false, jobs = 8, tmpRoot,
     if (state.has(target)) return state.get(target);
     const p = (async () => {
       const rule = mk.findRule(target);
-      if (!rule) {
-        if (exists(target) || mk.phony.has(target)) return { changed: false };
-        throw Object.assign(new Error(`no rule to make target '${target}'`), { target });
-      }
+      // A build tool romdev provides (a prebuilt binary a sub-make downloads,
+      // say) is never built, with or without a rule in this Makefile.
       const tool = classifyCommand([target], root);
       if (["armips", "binutils", "ido", "n64crc", "iconv", "cpp", "decomp-tool", "decomp-gcc"].includes(tool.kind)) {
         providedByRomdev.push({ target, runsAs: tool.kind });
         return { changed: false };
+      }
+      if (!rule) {
+        if (exists(target) || mk.phony.has(target)) return { changed: false };
+        throw Object.assign(new Error(`no rule to make target '${target}'`), { target });
       }
       const deps = [...rule.prereqs, ...rule.orderOnly];
       const results = await Promise.all(deps.map((d) => make(d)));
