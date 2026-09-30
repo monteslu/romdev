@@ -399,6 +399,17 @@ test("glibc iconv tables: Shift-JIS and EUC-JP reproduce glibc's choices", async
   assert.throws(() => iconvEncode("\uffe0", "EUC-JP"), /cannot convert/);
 });
 
+test("glibc iconv tables: EUC-CN is GB 2312 with glibc's two GB2312.TXT readings", async () => {
+  const { iconvEncode, iconvTable } = await import("../src/decomp/iconv-tables.js");
+  assert.equal(iconvTable("EUC-CN").size, 7445);
+  assert.deepEqual([...iconvEncode("a\u4e2d\u6587\u3000", "EUC-CN")], [0x61, 0xd6, 0xd0, 0xce, 0xc4, 0xa1, 0xa1]);
+  assert.deepEqual([...iconvEncode("\u30fb\u2015\u9f44", "GB2312")], [0xa1, 0xa4, 0xa1, 0xaa, 0xf7, 0xfe]);
+  assert.throws(() => iconvEncode("\u00b7", "EUC-CN"), /cannot convert/, "GBK's reading of 0xA1A4 is not glibc's");
+  assert.throws(() => iconvEncode("\u2170", "EUC-CN"), /cannot convert/, "GBK row 0xA2 additions are not GB 2312");
+  assert.throws(() => iconvEncode("\u0085", "EUC-CN"), /cannot convert/, "EUC-CN has no C1 bytes");
+  assert.deepEqual([...iconv(Buffer.from("\u6c49", "utf8"), "UTF-8", "EUC-CN")], [0xba, 0xba]);
+});
+
 test("Makefile reader: shortest-stem pattern rule wins; recursive $(MAKE) -C runs as a sub-build", async () => {
   const d = dir("submake");
   fs.mkdirSync(path.join(d, "lib"), { recursive: true });

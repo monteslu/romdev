@@ -1,5 +1,5 @@
 // iconv-tables.js - encoders that reproduce glibc iconv's UTF-8 -> SHIFT-JIS /
-// EUC-JP conversions, byte for byte, for a project's
+// EUC-JP / EUC-CN conversions, byte for byte, for a project's
 // `... | iconv --to-code=X | ...` build step.
 //
 // JS has decoders for these (WHATWG) but no encoders. Each table is the
@@ -31,6 +31,20 @@ const EUCJP_OVERRIDES = [
 // (Unlike SHIFT_JIS, glibc EUC-JP has no mapping at all for U+FFE0-U+FFE2.)
 const EUCJP_DROP = [0xff5e, 0x2225, 0xff0d, 0xffe0, 0xffe1, 0xffe2];
 
+// glibc EUC-CN = ASCII + GB 2312 (iconvdata/gb2312.c, generated from the
+// Unicode consortium's GB2312.TXT). Its cells are the GB 2312 code chart: rows
+// 0xA1-0xA9 (symbols) and 0xB0-0xF7 (hanzi) with these partial rows, every
+// other listed row full (0xA1-0xFE). WHATWG's GBK decoder agrees on every one
+// of those 7445 cells except two, where GB2312.TXT keeps the GB 2312 reading.
+// There are no C1 single bytes: glibc rejects 0x80-0xA0 outright.
+const GB2312_ROWS = [[0xa1, 0xa9], [0xb0, 0xf7]];
+const GB2312_PARTIAL = {
+  0xa2: [[0xb1, 0xe2], [0xe5, 0xee], [0xf1, 0xfc]], 0xa4: [[0xa1, 0xf3]], 0xa5: [[0xa1, 0xf6]],
+  0xa6: [[0xa1, 0xb8], [0xc1, 0xd8]], 0xa7: [[0xa1, 0xc1], [0xd1, 0xf1]], 0xa8: [[0xa1, 0xba], [0xc5, 0xe9]],
+  0xa9: [[0xa4, 0xef]], 0xd7: [[0xa1, 0xf9]],
+};
+const GB2312_OVERRIDES = [[0x30fb, [0xa1, 0xa4]], [0x2015, [0xa1, 0xaa]]]; // GBK: U+00B7, U+2014
+
 function invert(label, candidates) {
   const dec = new TextDecoder(label);
   const map = new Map();
@@ -60,6 +74,12 @@ function* eucjp0212Candidates() {
   for (let a = 0xa1; a <= 0xf2; a++) for (let b = 0xa1; b <= 0xfe; b++) yield [0x8f, a, b];
 }
 
+function* gb2312Candidates() {
+  for (const [lo, hi] of GB2312_ROWS) for (let a = lo; a <= hi; a++) {
+    for (const [c0, c1] of GB2312_PARTIAL[a] ?? [[0xa1, 0xfe]]) for (let b = c0; b <= c1; b++) yield [a, b];
+  }
+}
+
 function build(name) {
   let map;
   if (name === "shiftjis") {
@@ -78,6 +98,10 @@ function build(name) {
     for (const c of EUCJP_DROP) if (map.get(c)?.[0] !== 0x8f) map.delete(c);
     for (const [c, b] of EUCJP_OVERRIDES) map.set(c, b);
     for (let c = 0x80; c <= 0x9f; c++) if (c !== 0x8e && c !== 0x8f) map.set(c, [c]);
+  } else if (name === "euccn") {
+    map = invert("gbk", gb2312Candidates());
+    for (const [, b] of GB2312_OVERRIDES) for (const [c, v] of [...map]) if (v[0] === b[0] && v[1] === b[1]) map.delete(c);
+    for (const [c, b] of GB2312_OVERRIDES) map.set(c, b);
   } else throw new Error(`no table for ${name}`);
   return map;
 }
@@ -87,6 +111,7 @@ export function tableName(encoding) {
   const n = String(encoding).toLowerCase().replace(/[_-]/g, "");
   if (["shiftjis", "sjis", "mskanji", "csshiftjis"].includes(n)) return "shiftjis";
   if (["eucjp", "ujis"].includes(n)) return "eucjp";
+  if (["euccn", "gb2312", "cseuccn", "csgb2312"].includes(n)) return "euccn";
   return null;
 }
 
