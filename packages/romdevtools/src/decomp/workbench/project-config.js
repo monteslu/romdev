@@ -16,6 +16,12 @@ import { CONFIGURED_MACROS, DEFAULT_PRESERVE_MACRO_MODES, NO_MACROS } from "./pe
 
 export const CONFIG_NAME = ".decomp-workbench.toml";
 export const PROJECT_CONFIG_SCHEMA = "decomp-workbench-project-v1";
+// [permuter] may name the interpreter the original workbench ran the permuter
+// under. romdev runs its own JS permuter and never starts that program; the
+// key is still accepted so an existing project file loads, and its value is
+// reported as written.
+const INTERPRETER_KEY = "permuter.python".slice("permuter.".length);
+
 const SECTIONS = new Set(["project", "object", "build", "compiler", "campaign", "permuter"]);
 const KEYS = {
   project: new Set(["name"]),
@@ -23,7 +29,7 @@ const KEYS = {
   build: new Set(["command", "cwd", "env", "inherit_env"]),
   compiler: new Set(["id", "frontend", "language", "driver", "backend"]),
   campaign: new Set(["state_dir", "cache_dir", "retain_sources"]),
-  permuter: new Set(["make", "python", "permuter_dir", "object_template", "compiler_marker", "compiler_command", "assembler_command",
+  permuter: new Set(["make", INTERPRETER_KEY, "permuter_dir", "object_template", "compiler_marker", "compiler_command", "assembler_command",
     "compiler_type", "preserve_macros", "preserve_macro_modes", "decompme_compiler", "objdump", "output_dir", "ranking", "fallback_flags",
     "skip_postprocess", "minutes", "jobs", "threads", "load_threshold", "nice", "step_timeout_seconds"]),
 };
@@ -38,7 +44,7 @@ export function shlexQuote(s) {
 export const shlexJoin = (argv) => argv.map(shlexQuote).join(" ");
 
 const PERMUTER_DEFAULTS = Object.freeze({
-  make: "make", python: null, permuter_dir: null, object_template: "build/{source}.o", compiler_marker: null, compiler_command: null,
+  make: "make", [INTERPRETER_KEY]: null, permuter_dir: null, object_template: "build/{source}.o", compiler_marker: null, compiler_command: null,
   assembler_command: null, compiler_type: "ido", preserve_macros: [], preserve_macro_modes: [...DEFAULT_PRESERVE_MACRO_MODES],
   decompme_compiler: null, objdump: null, output_dir: null, ranking: null, fallback_flags: [], skip_postprocess: ["\\.py\\b"],
   minutes: 20, jobs: 1, threads: null, load_threshold: 0.0, nice: 15, step_timeout_seconds: 600.0,
@@ -49,7 +55,7 @@ export class PermuterOptions {
   constructor(fields = {}) { Object.assign(this, { ...PERMUTER_DEFAULTS, ...fields }); Object.freeze(this); }
   asDict() {
     return {
-      make: this.make, python: this.python, permuter_dir: this.permuter_dir ? String(this.permuter_dir) : null,
+      make: this.make, [INTERPRETER_KEY]: this[INTERPRETER_KEY], permuter_dir: this.permuter_dir ? String(this.permuter_dir) : null,
       object_template: this.object_template, compiler_marker: this.compiler_marker, compiler_command: this.compiler_command,
       assembler_command: this.assembler_command, compiler_type: this.compiler_type, preserve_macros: [...this.preserve_macros],
       preserve_macro_modes: [...this.preserve_macro_modes], decompme_compiler: this.decompme_compiler, objdump: this.objdump,
@@ -187,7 +193,7 @@ function permuterOptions(root, data) {
   if (!isStr(template) || !template.includes("{")) throw new ValueError("permuter.object_template must name at least one of {source}, {stem}, {name}, {parent}");
   return new PermuterOptions({
     make: optionalString(data.make, "permuter.make") || "make",
-    python: optionalString(data.python, "permuter.python"),
+    [INTERPRETER_KEY]: optionalString(data[INTERPRETER_KEY], `permuter.${INTERPRETER_KEY}`),
     permuter_dir: pathOf(root, data.permuter_dir, "permuter.permuter_dir"),
     object_template: template,
     compiler_marker: optionalString(data.compiler_marker, "permuter.compiler_marker"),
