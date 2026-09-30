@@ -1,0 +1,15 @@
+romdev-permuter
+
+A plain JavaScript port of decomp-permuter
+(https://github.com/simonlindholm/decomp-permuter), pinned at commit
+41bd0bfc32aa5ea78de4cf28be603163256c2a4c. decomp-permuter is
+Copyright (c) 2019 Simon Lindholm and contributors, MIT licensed; the license
+text is in LICENSE. default_weights.toml is copied unchanged from upstream.
+
+The C parser/printer it uses is romdev-pycparser (the port of the pycparser
+fork decomp-permuter vendors as perm_pycparser; BSD, see that package).
+
+src/pyrandom.js reimplements the documented algorithms of CPython's random
+module (MT19937 and the random.py sampling methods) and src/difflib.js those of
+difflib's SequenceMatcher and unified_diff, so seeds and scores replay
+upstream's; no CPython code is included.

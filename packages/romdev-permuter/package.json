@@ -1,0 +1,40 @@
+{
+  "name": "romdev-permuter",
+  "version": "0.1.0",
+  "description": "Plain-JS port of decomp-permuter: PERM macros, randomization passes, the objdump-diff scorer and the compile.sh contract, with candidate evaluation in node worker threads and disassembly through WASM binutils.",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "bin": {
+    "romdev-permuter": "bin/permuter.mjs"
+  },
+  "files": [
+    "src",
+    "bin",
+    "default_weights.toml",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "romdev-pycparser": "0.1.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/monteslu/romdev.git",
+    "directory": "packages/romdev-permuter"
+  },
+  "homepage": "https://github.com/monteslu/romdev#readme",
+  "bugs": {
+    "url": "https://github.com/monteslu/romdev/issues"
+  },
+  "author": "Luis Montes",
+  "scripts": {
+    "test": "node --test"
+  }
+}
