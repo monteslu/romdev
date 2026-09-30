@@ -3470,10 +3470,11 @@ void z80_run(unsigned int cycles)
        state the instruction-by-instruction loop would: registers, R, WZ, the
        cycle count and the last opcode fetched. Only iterations that finish
        before the target are skipped; the last one runs normally. */
-    if (!(Z80.irq_state && IFF1))
     {
       unsigned pc = PCD;
       UINT8 op0 = cpu_readop(pc);
+      if ((op0 == 0x10 || op0 == 0x7e) && !(Z80.irq_state && IFF1))
+      {
       if (op0 == 0x10 && cpu_readop((pc + 1) & 0xffff) == 0xfe && B > 1)
       {
         /* DJNZ $ : 8+5 T-states per taken iteration */
@@ -3512,10 +3513,17 @@ void z80_run(unsigned int cycles)
           }
         }
       }
+      }
+      /* ROP() with the opcode already fetched */
+      R++;
+      PC++;
+      z80_last_fetch = op0;
+      EXEC_INLINE(op,op0);
     }
-#endif
+#else
     R++;
     EXEC_INLINE(op,ROP());
+#endif
   }
 } 
 

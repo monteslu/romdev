@@ -496,6 +496,20 @@ static void psg_update(unsigned int clocks)
     polarity = psg.polarity[i];
 
     /* Tone channels */
+#ifdef ROMDEV_S32
+    /* ROMDEV_S32: a muted tone channel adds zero deltas; run its transitions
+       out in closed form (same polarity and next timestamp). */
+    if (i < 3 && !(psg.chanOut[i][0] | psg.chanOut[i][1]))
+    {
+      if (timestamp < clocks) /* the loop's own (unsigned) comparison */
+      {
+        unsigned int n = (clocks - timestamp + psg.freqInc[i] - 1) / psg.freqInc[i];
+        if (n & 1) polarity = -polarity;
+        timestamp += n * psg.freqInc[i];
+      }
+    }
+    else
+#endif
     if (i < 3)
     {
       /* process all transitions occurring until current clock timestamp */

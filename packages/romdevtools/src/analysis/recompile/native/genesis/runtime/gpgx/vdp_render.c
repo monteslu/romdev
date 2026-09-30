@@ -2653,6 +2653,17 @@ void render_bg_m5_im2_vs(int line)
    and the four-pixel fast paths of DRAW_BG_TILE. Same pixels, same order of
    reads. Anything else (window on the line, a clipped plane A) returns 0 and
    gpgx's function draws the line. */
+/* Plane B cannot show through 8 plane A pixels that are all opaque and
+   either all high priority or over a low-priority plane B tile: fast path 2
+   of rd_merge4 for both quads, decided before plane B's row is decoded. */
+static inline int rd_a_covers(const uint8 *lb, uint32 bprio)
+{
+  uint32 a0, a1;
+  __builtin_memcpy(&a0, lb, 4);
+  __builtin_memcpy(&a1, lb + 4, 4);
+  return RD_OPAQUE4(a0) && RD_OPAQUE4(a1) && ((((a0 & a1) & 0x40404040) == 0x40404040) || !bprio);
+}
+
 static int rd_render_bg_m5(int line)
 {
   uint32 xscroll = *(uint32 *)&vram[hscb + ((line & hscroll_mask) << 2)];
@@ -2722,12 +2733,18 @@ static int rd_render_bg_m5(int line)
   for (column = 0; column < width; column++, index++, lb += 16)
   {
     attr = nt[index & colmask];
-    atex = atex_table[(attr >> 13) & 7];
-    rd_row(attr, vl, &w0, &w1);
-    rd_merge4(lb, w0 | atex, table, fast); rd_merge4(lb + 4, w1 | atex, table, fast);
-    atex = atex_table[(attr >> 29) & 7];
-    rd_row(attr >> 16, vl, &w0, &w1);
-    rd_merge4(lb + 8, w0 | atex, table, fast); rd_merge4(lb + 12, w1 | atex, table, fast);
+    if (!fast || !rd_a_covers(lb, attr & 0x8000))
+    {
+      atex = atex_table[(attr >> 13) & 7];
+      rd_row(attr, vl, &w0, &w1);
+      rd_merge4(lb, w0 | atex, table, fast); rd_merge4(lb + 4, w1 | atex, table, fast);
+    }
+    if (!fast || !rd_a_covers(lb + 8, attr & 0x80000000))
+    {
+      atex = atex_table[(attr >> 29) & 7];
+      rd_row(attr >> 16, vl, &w0, &w1);
+      rd_merge4(lb + 8, w0 | atex, table, fast); rd_merge4(lb + 12, w1 | atex, table, fast);
+    }
   }
   return 1;
 }

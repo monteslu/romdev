@@ -1477,6 +1477,25 @@ INLINE void rd_chan_calc(FM_CH *CH, int num)
       goto rd_phase;
     }
 #endif
+    /* A channel whose four operators are released or off with their envelope
+       level below ENV_QUIET outputs 0 until its next key on (the level only
+       rises in release; TL and the LFO only add attenuation), and key on
+       resets the phases; with
+       its feedback and MEM history at 0 there is nothing to compute. */
+    if (!(CH->op1_out[0] | CH->op1_out[1] | CH->mem_value) &&
+        CH->SLOT[0].state <= EG_REL && CH->SLOT[1].state <= EG_REL &&
+        CH->SLOT[2].state <= EG_REL && CH->SLOT[3].state <= EG_REL &&
+        !(CH->SLOT[0].key | CH->SLOT[1].key | CH->SLOT[2].key | CH->SLOT[3].key) &&
+        CH->SLOT[0].volume >= ENV_QUIET && CH->SLOT[1].volume >= ENV_QUIET &&
+        CH->SLOT[2].volume >= ENV_QUIET && CH->SLOT[3].volume >= ENV_QUIET)
+    {
+      out_fm[CH - &ym2612.CH[0]] = 0;
+#ifdef RD_FM_HALF
+      rd_fm_held[CH - &ym2612.CH[0]] = 0;
+#endif
+      CH++;
+      continue;
+    }
     UINT32 AM = ym2612.OPN.LFO_AM >> CH->ams;
     unsigned int eg = volume_calc(&CH->SLOT[SLOT1]);
     UINT32 *mask = op_mask[CH->ALGO];
