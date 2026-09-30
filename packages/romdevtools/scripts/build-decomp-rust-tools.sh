@@ -8,6 +8,12 @@
 #   raw-deflate vanilla zlib raw deflate (scripts/src/raw-deflate.c), for ROM
 #               compressors that call Python's zlib; Node's zlib is Chromium's
 #               fork and writes different streams
+#   sotn_str    a PS1 decomp project's string encoder (tools/sotn_str in the
+#               project tree, pinned by commit: toolchains.sotn_decomp_tools);
+#               its own unit tests are built to WASM too and must pass
+#
+# Arguments name a subset to build (e.g. `build-decomp-rust-tools.sh sotn_str`);
+# none builds all.
 #
 # Projects download these as prebuilt host binaries (tools/Makefile); romdev
 # runs the same released sources, built here from their crates.io packages at
@@ -22,6 +28,9 @@ set -euo pipefail
 . "$(dirname "$0")/_lib.sh"
 require_cmd cargo
 require_cmd emcc
+
+ONLY="$*"
+want() { [ -z "$ONLY" ] || [[ " $ONLY " == *" $1 "* ]]; }
 
 ROOT="$BUILD_DIR/decomp-rust"
 PKG_OUT="$PROJECT_DIR/../romdev-toolchain-decomp-gcc/wasm/tools"
@@ -73,18 +82,43 @@ build_crate() { # <pin key> <bin name> <export name> [<subdir with the bin>]
   [ "$kind" = git ] && git -C "$dir" checkout -q -- . || rm -rf "$dir"
 }
 
-build_crate slinky_cli   slinky-cli createSlinky
-build_crate pigment64    pigment64  createPigment64
-build_crate crunch64_cli crunch64   createCrunch64 cli
+want slinky-cli && build_crate slinky_cli   slinky-cli createSlinky
+want pigment64 && build_crate pigment64    pigment64  createPigment64
+want crunch64 && build_crate crunch64_cli crunch64   createCrunch64 cli
+
+# sotn_str: a crate inside the project tree (no workspace at the root), built
+# with its own Cargo.lock. Its #[test]s run as WASM under node before shipping.
+build_sotn_str() {
+  local dir="$ROOT/sotn_decomp_tools" crate args=() a t
+  fetch_pinned "toolchains.sotn_decomp_tools" "$dir"
+  crate="$dir/tools/sotn_str"
+  for a in $LINK "-sEXPORT_NAME=createSotnStr"; do args+=(-C "link-arg=$a"); done
+  ( cd "$crate" && CARGO_TARGET_DIR="$ROOT/target" cargo rustc --release --locked \
+      --target wasm32-unknown-emscripten --bin sotn_str -- "${args[@]}" )
+  local out="$ROOT/target/wasm32-unknown-emscripten/release"
+  cp "$out/sotn_str.js" "$PKG_OUT/sotn_str.mjs"
+  cp "$out/sotn_str.wasm" "$PKG_OUT/sotn_str.wasm"
+  sync_glue "$PKG_OUT/sotn_str.mjs"
+  ( cd "$crate" && CARGO_TARGET_DIR="$ROOT/target-test" cargo test --release --locked --no-run \
+      --target wasm32-unknown-emscripten --bin sotn_str )
+  t="$(ls -t "$ROOT"/target-test/wasm32-unknown-emscripten/release/deps/sotn_str-*.js | head -1)"
+  # CommonJS glue under romdevtools' "type": "module"; run it as .cjs.
+  cp "$t" "${t%.js}.cjs"
+  node "${t%.js}.cjs" || { echo "FATAL: sotn_str unit tests failed as WASM" >&2; exit 1; }
+  rm -rf "$ROOT/target-test"
+}
+want sotn_str && build_sotn_str
 rm -rf "$ROOT/target"
 
 # emscripten's zlib port is vanilla zlib (emsdk 4.0.18: zlib 1.3.1).
-emcc -O2 -sUSE_ZLIB=1 $LINK -sEXPORT_NAME=createRawDeflate \
-  "$SCRIPT_DIR/src/raw-deflate.c" -o "$ROOT/raw-deflate.js"
-cp "$ROOT/raw-deflate.js" "$PKG_OUT/raw-deflate.mjs"
-cp "$ROOT/raw-deflate.wasm" "$PKG_OUT/raw-deflate.wasm"
-sync_glue "$PKG_OUT/raw-deflate.mjs"
-rm -f "$ROOT/raw-deflate.js" "$ROOT/raw-deflate.wasm"
+if want raw-deflate; then
+  emcc -O2 -sUSE_ZLIB=1 $LINK -sEXPORT_NAME=createRawDeflate \
+    "$SCRIPT_DIR/src/raw-deflate.c" -o "$ROOT/raw-deflate.js"
+  cp "$ROOT/raw-deflate.js" "$PKG_OUT/raw-deflate.mjs"
+  cp "$ROOT/raw-deflate.wasm" "$PKG_OUT/raw-deflate.wasm"
+  sync_glue "$PKG_OUT/raw-deflate.mjs"
+  rm -f "$ROOT/raw-deflate.js" "$ROOT/raw-deflate.wasm"
+fi
 
 echo "decomp Rust tools -> $PKG_OUT"
 echo "Refresh the binary manifest: node scripts/binary-manifest.mjs --write"

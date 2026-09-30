@@ -362,8 +362,9 @@
       "version": "2.6.3",
       "sha256": "66529b6ced4ccc580ec365809c1abed856d948283deff656801dec14f47d081a",
       "license": "GPL-2.0",
+      "patch": "scripts/patches/psx-gcc-2.6.3-wasm.patch",
       "platforms": ["psx"],
-      "note": "gcc 2.6.3 source, the tarball old-gcc's gcc-2.6.3-psx recipe builds (the cc1 PS1 decomp projects pin as cc1-psx-26). Built to WASM (cc1, cpp) by build-decomp-gcc.sh psx into romdev-toolchain-decomp-gcc (wasm/psx-gcc-2.6.3/)."
+      "note": "gcc 2.6.3 source, the tarball old-gcc's gcc-2.6.3-psx recipe builds (the cc1 PS1 decomp projects pin as cc1-psx-26). Built to WASM (gcc driver, cc1, cpp) by build-decomp-gcc.sh psx into romdev-toolchain-decomp-gcc (wasm/psx-gcc-2.6.3/)."
     },
     "egcs_binutils": {
       "kind": "git",
@@ -405,6 +406,54 @@
       "platforms": ["n64"],
       "note": "decompals' N64 compression library (gzip/yay0/yaz0/mio0) behind a CLI; the same crunch64 release decomp projects' Python ROM compressors call. Built to WASM by build-decomp-rust-tools.sh; ships in romdev-toolchain-decomp-gcc (wasm/tools/)."
     },
+    "sotn_decomp_tools": {
+      "kind": "git",
+      "url": "https://github.com/Xeeynamo/sotn-decomp.git",
+      "ref": "master",
+      "commit": "ea06850554ed29156cbabb1c7975c809b4cfef89",
+      "license": "AGPL-3.0",
+      "platforms": ["psx"],
+      "note": "A PS1 decomp project's own setup tools, built from the project tree at this commit: tools/sotn_str (Rust string encoder, cpp | sotn_str process | iconv) by build-decomp-rust-tools.sh, tools/sotn-disk (CD image extractor) and tools/sotn-assets (asset extract/build) (Go, go.work at the root) by build-decomp-go-tools.sh. Ship in romdev-toolchain-decomp-gcc (wasm/tools/)."
+    },
+    "go_toolchain": {
+      "kind": "tarball",
+      "url": "https://go.dev/dl/go1.27.1.linux-amd64.tar.gz",
+      "version": "1.27.1",
+      "sha256": "63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445",
+      "license": "BSD-3-Clause",
+      "platforms": ["psx"],
+      "note": "Official Go toolchain, a build-time dependency only (like cargo/emcc): build-decomp-go-tools.sh unpacks it under build/ and compiles Go tools with GOOS=wasip1 GOARCH=wasm. Module dependencies come from the tools' go.sum through proxy.golang.org (GOFLAGS=-mod=readonly)."
+    },
+    "rabbitizer_1_16_2": {
+      "kind": "git",
+      "url": "https://github.com/Decompollaborate/rabbitizer.git",
+      "ref": "1.16.2",
+      "commit": "724a49a5b4dbfb99f1a9e6992e63964fd29c90c8",
+      "version": "1.16.2",
+      "license": "MIT",
+      "platforms": ["n64", "psx", "ps2", "psp"],
+      "note": "MIPS instruction decoder (C library) that spimdisasm 1.42.4 calls through its Python extension. Built to WASM by build-rabbitizer.sh; ships in romdev-rabbitizer (wasm/rabbitizer-1.16.2.wasm) behind a JS binding that mirrors the Python module API."
+    },
+    "rabbitizer_1_14_3": {
+      "kind": "git",
+      "url": "https://github.com/Decompollaborate/rabbitizer.git",
+      "ref": "1.14.3",
+      "commit": "d5804fa488474830a47fbf9f3693048ec1e45589",
+      "version": "1.14.3",
+      "license": "MIT",
+      "platforms": ["n64", "psx", "ps2", "psp"],
+      "note": "MIPS instruction decoder (C library) that spimdisasm 1.39.3 calls through its Python extension. Built to WASM by build-rabbitizer.sh; ships in romdev-rabbitizer (wasm/rabbitizer-1.14.3.wasm) behind a JS binding that mirrors the Python module API."
+    },
+    "rabbitizer_1_13_0": {
+      "kind": "git",
+      "url": "https://github.com/Decompollaborate/rabbitizer.git",
+      "ref": "1.13.0",
+      "commit": "1df4709dcc927d9d9cc5859a6e7eb98e864f8468",
+      "version": "1.13.0",
+      "license": "MIT",
+      "platforms": ["n64", "psx", "ps2", "psp"],
+      "note": "MIPS instruction decoder (C library) that spimdisasm 1.35.0 calls through its Python extension. Built to WASM by build-rabbitizer.sh; ships in romdev-rabbitizer (wasm/rabbitizer-1.13.0.wasm) behind a JS binding that mirrors the Python module API."
+    },
     "ido_static_recomp": {
       "kind": "git",
       "url": "https://github.com/decompals/ido-static-recomp.git",
@@ -435,7 +484,16 @@
       "sha256": "a7b39bc69cbf9e25826c5a60ab26477001f7c08d85cec04bc0e29cabed6f3cc9",
       "license": "GPL-3.0",
       "patch": "scripts/patches/gcc-14-driver-wasm-spawn.patch",
-      "note": "gcc for target mips-linux-gnu (driver, cpp, cc1), the modern cross gcc N64 decomp projects compile data-only TUs and preprocess .s files and linker scripts with. Built to WASM by build-mips-linux-gcc-wasm.sh with Debian/Ubuntu's target configuration; ships in romdev-toolchain-decomp-gcc (wasm/mips-linux-gnu-14.2/). Same gcc release as romdev-toolchain-mips-gcc's cc1."
+      "distro_patch": "scripts/patches/gcc-14-debian-distro-specs.patch",
+      "note": "gcc for target mips-linux-gnu (driver, cpp, cc1), the modern cross gcc N64 decomp projects compile data-only TUs and preprocess .s files and linker scripts with. Built to WASM by build-mips-linux-gcc-wasm.sh with Debian trixie's gcc-14-cross-mipsen (14.2.0-13cross1) target configuration and distro specs (distro_patch); ships in romdev-toolchain-decomp-gcc (wasm/mips-linux-gnu-14.2/). Same gcc release as romdev-toolchain-mips-gcc's cc1."
+    },
+    "libc6_dev_mips_cross": {
+      "kind": "tarball",
+      "url": "https://snapshot.debian.org/archive/debian/20250109T144951Z/pool/main/c/cross-toolchain-base-mipsen/libc6-dev-mips-cross_2.40-5cross1_all.deb",
+      "version": "2.40-5cross1",
+      "sha256": "0d1c4e254c37e3a4dcde37c9cba4971df5fae3a4cab4ada6c0689f2984b53239",
+      "license": "LGPL-2.1-or-later",
+      "note": "Debian trixie's glibc headers for mips-linux-gnu. build-mips-linux-gcc-wasm.sh takes only usr/mips-linux-gnu/include/stdc-predef.h from it (ar + tar at build time) into wasm/mips-linux-gnu-14.2/mips-linux-gnu/include/, where the WASM cpp pre-includes it the way Debian's cross cpp does."
     },
     "binutils": {
       "kind": "tarball",

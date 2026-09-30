@@ -16,7 +16,7 @@
   "engines": {
     "node": ">=24"
   },
-  "license": "GPL-2.0-or-later AND GPL-3.0-or-later AND MIT AND Zlib",
+  "license": "GPL-2.0-or-later AND GPL-3.0-or-later AND LGPL-2.1-or-later AND AGPL-3.0-only AND MIT AND Zlib",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/monteslu/romdev.git",

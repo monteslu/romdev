@@ -43,6 +43,10 @@ export function parseCppArgs(args) {
     else if (a === "-x") next(); // cc1 is a C preprocessor already
     else if (a === "-E" || a === "-c" || a === "-S") { /* mode flags of the driver */ }
     else if (a === "-nostdinc") r.nostdinc = true;
+    // -l<lib> is a link option: the driver accepts and drops it when only
+    // preprocessing (so a Makefile's legacy `cpp -lang-c` is `-l ang-c`).
+    else if (a === "-l") next();
+    else if (/^-l./.test(a)) { /* link library: no effect on -E */ }
     else if (a === "-M" || a === "-MM") r.deps.mode = a;
     else if (a === "-MD" || a === "-MMD") r.deps.mode = a;
     else if (a === "-MG") r.deps.missingOk = true;
@@ -124,7 +128,10 @@ export async function preprocess({ cwd, args, stdin, timeoutMs = 120_000 }) {
   let depOut = null;
   if (p.deps.mode) {
     depOut = "/romdev-deps.d";
-    cc1Args.push(p.deps.mode === "-MM" || p.deps.mode === "-MMD" ? "-MM" : "-M", "-MF", depOut);
+    // -M/-MM replace the output with the rule; -MD/-MMD write it beside the
+    // preprocessed output (cc1 takes the file after the flag).
+    if (p.deps.mode === "-MD" || p.deps.mode === "-MMD") cc1Args.push(p.deps.mode, depOut);
+    else cc1Args.push(p.deps.mode === "-MM" ? "-MM" : "-M", "-MF", depOut);
     if (p.deps.missingOk) cc1Args.push("-MG");
     if (p.deps.phony) cc1Args.push("-MP");
     if (p.deps.target) cc1Args.push("-MT", p.deps.target);

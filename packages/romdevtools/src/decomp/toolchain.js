@@ -27,17 +27,23 @@ const BINUTILS = ["as", "ld", "objcopy", "objdump"];
 export const DECOMP_GCC = {
   "kmc-2.7.2": { dir: "kmc-2.7.2", programs: ["gcc", "cpp", "cc1", "as"], aliases: { xgcc: "gcc", cccp: "cpp" } },
   "egcs-1.1.2": { dir: "egcs-1.1.2", programs: ["gcc", "cpp", "cc1", "as"], aliases: { xgcc: "gcc", cccp: "cpp" } },
-  // PS1: projects run cc1 directly (decompals/old-gcc gcc-2.6.3-psx).
-  "psx-gcc-2.6.3": { dir: "psx-gcc-2.6.3", programs: ["cc1", "cpp"], aliases: { "cc1-psx-26": "cc1", cccp: "cpp" } },
+  // PS1: projects mostly run cc1 directly (decompals/old-gcc gcc-2.6.3-psx);
+  // the driver's as step is mips-linux-gnu-as (its specs pass -EL).
+  "psx-gcc-2.6.3": { dir: "psx-gcc-2.6.3", programs: ["cc1", "cpp", "gcc"], binutilsAs: true, aliases: { "cc1-psx-26": "cc1", cccp: "cpp", xgcc: "gcc" } },
+  // relocatable: run with GCC_EXEC_PREFIX=<dir>/lib/gcc/, so the tool include
+  // dir is <dir>/mips-linux-gnu/include (where stdc-predef.h ships, the header
+  // Debian's cross cpp pre-includes) and no host directory is searched.
   "mips-linux-gnu-14.2": {
-    dir: "mips-linux-gnu-14.2", programs: ["gcc", "cpp", "cc1"], binutilsAs: true,
+    dir: "mips-linux-gnu-14.2", programs: ["gcc", "cpp", "cc1"], binutilsAs: true, relocatable: true,
     aliases: { "mips-linux-gnu-gcc": "gcc", "mips-linux-gnu-cpp": "cpp", "mips-linux-gnu-cc1": "cc1", xgcc: "gcc" },
   },
 };
 // Command-line tools decomp builds run (romdev-toolchain-decomp-gcc
 // wasm/tools/, scripts/build-decomp-rust-tools.sh): decompals' Rust tools,
 // plus vanilla zlib's raw deflate for ports of Python compressors.
-export const DECOMP_TOOLS = ["slinky-cli", "pigment64", "crunch64", "raw-deflate"];
+// A PS1 decomp project's own sotn_str (string encoder the compile pipeline
+// pipes through) is built from the pinned project tree the same way.
+export const DECOMP_TOOLS = ["slinky-cli", "pigment64", "crunch64", "raw-deflate", "sotn_str"];
 
 function packageDir(pkg) {
   try {
@@ -78,7 +84,7 @@ export function binutilsGlue(tool) {
 export function decompGccFamily(cmd) {
   const base = path.basename(cmd);
   if (/^mips-linux-gnu-(gcc|cpp)$/.test(base)) return "mips-linux-gnu-14.2";
-  if (base === "cc1-psx-26" || (/^(cc1|cpp|cccp)$/.test(base) && /(^|\/)gcc-2\.6\.3-psx(\/|$)/.test(path.dirname(cmd)))) return "psx-gcc-2.6.3";
+  if (base === "cc1-psx-26" || (/^(cc1|cpp|cccp|gcc|xgcc)$/.test(base) && /(^|\/)gcc-2\.6\.3-psx(\/|$)/.test(path.dirname(cmd)))) return "psx-gcc-2.6.3";
   if (!/(^|\/)(gcc|xgcc|cpp|cccp|cc1|as)$/.test(base)) return null;
   if (/(^|\/)2\.7\.2(\/|$)/.test(path.dirname(cmd)) || /(^|[/_-])kmc([/_-]|$)/i.test(path.dirname(cmd))) return "kmc-2.7.2";
   if (/(^|\/)(1\.1\.2|2\.91\.66)(-\d+)?(\/|$)/.test(path.dirname(cmd)) || /(^|[/_-])egcs([/_-]|$)/i.test(path.dirname(cmd))) return "egcs-1.1.2";
@@ -89,7 +95,7 @@ export function decompGccPrograms(family) {
   const f = DECOMP_GCC[family];
   if (!f) throw Object.assign(new Error(`no decomp gcc '${family}' (have ${Object.keys(DECOMP_GCC).join(", ")})`), { code: "UNSUPPORTED_COMPILER" });
   const dir = path.join(packageDir("romdev-toolchain-decomp-gcc"), "wasm", f.dir);
-  if (!existsSync(path.join(dir, `${f.programs[0]}.wasm`))) throw Object.assign(new Error(`${dir} missing (${f.binutilsAs ? "scripts/build-mips-linux-gcc-wasm.sh" : "scripts/build-decomp-gcc.sh"})`), { code: "TOOLCHAIN_MISSING" });
+  if (!existsSync(path.join(dir, `${f.programs[0]}.wasm`))) throw Object.assign(new Error(`${dir} missing (${family === "mips-linux-gnu-14.2" ? "scripts/build-mips-linux-gcc-wasm.sh" : "scripts/build-decomp-gcc.sh"})`), { code: "TOOLCHAIN_MISSING" });
   const programs = Object.fromEntries(f.programs.map((p) => [p, path.join(dir, `${p}.mjs`)]));
   if (f.binutilsAs) programs.as = binutilsGlue("as");
   return programs;
@@ -103,9 +109,9 @@ export function decompToolGlue(name) {
   return p;
 }
 
-/** Run a decomp build tool as WASM on the real tree. */
-export function decompTool(name, args, { cwd, timeoutMs } = {}) {
-  return execWasm({ argv: [name, ...args], cwd, programs: { [name]: decompToolGlue(name) }, timeoutMs });
+/** Run a decomp build tool as WASM on the real tree (stdin: bytes piped in; stdoutBinary: stdout as a Buffer). */
+export function decompTool(name, args, { cwd, timeoutMs, stdin, stdoutBinary = false } = {}) {
+  return execWasm({ argv: [name, ...args], cwd, programs: { [name]: decompToolGlue(name) }, stdin, stdoutBinary, timeoutMs });
 }
 
 /**
@@ -118,9 +124,10 @@ export async function decompGcc({ family, argv, cwd, tmpRoot, stdin, timeoutMs, 
   const programs = decompGccPrograms(family);
   const self = DECOMP_GCC[family].aliases[path.basename(argv[0])] ?? path.basename(argv[0]);
   const tmp = path.join(tmpRoot, `gcc-${randomUUID().slice(0, 8)}`);
+  const reloc = DECOMP_GCC[family].relocatable ? { GCC_EXEC_PREFIX: path.join(path.dirname(programs.gcc), "lib", "gcc") + "/" } : {};
   mkdirSync(tmp, { recursive: true });
   try {
-    return await execWasm({ argv, cwd, programs: { ...programs, [path.basename(argv[0])]: programs[self] }, env: { TMPDIR: tmp, ...env }, stdin, stdoutBinary: true, inheritStdin: true, timeoutMs });
+    return await execWasm({ argv, cwd, programs: { ...programs, [path.basename(argv[0])]: programs[self] }, env: { TMPDIR: tmp, ...reloc, ...env }, stdin, stdoutBinary: true, inheritStdin: true, timeoutMs });
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

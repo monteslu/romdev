@@ -546,3 +546,71 @@ test("PS1 gcc 2.6.3-psx cc1 (WASM) compiles little-endian R3000 code through a c
   assert.match(s, /lbu\s+\$2,0\(\$4\)/, "the low byte of a little-endian word is at offset 0");
   assert.match(s, /Sony Playstation/);
 });
+
+test("PS1 gcc 2.6.3-psx driver (WASM) runs cpp, cc1 and the mipsel as step like the cc1 path", async () => {
+  const d = dir("psx-driver");
+  const tmpRoot = dir("psx-driver-tmp");
+  fs.writeFileSync(path.join(d, "t.c"), [
+    "struct S { int a; short b; unsigned char c[4]; };",
+    "extern int g;",
+    "static int tab[4] = { 1, 2, 3, 4 };",
+    "int f(struct S *s, int n) { int i, acc = 0; for (i = 0; i < n; i++) acc += s->c[i & 3] * tab[i & 3] + g / (n + 1); if (s->b > 7) acc ^= s->a; return acc; }",
+    "unsigned char lo(unsigned int *p) { return *(unsigned char *)p; }", ""].join("\n"));
+  const gcc = "bin/gcc-2.6.3-psx/gcc";
+  assert.equal(classifyCommand([gcc, "-c", "t.c"]).family, "psx-gcc-2.6.3");
+  const FL = "-G0 -O2 -w -funsigned-char -fpeephole -ffunction-cse -fpcc-struct-return -fcommon -msoft-float -fgnu-linker -mgas";
+  const run = async (line) => { const r = await runRecipeLine(line, { cwd: d, tmpRoot }); assert.equal(r.code, 0, `${line}\n${r.log}`); return r; };
+  // .s: the driver (cpp -> cc1) and cc1 on the driver's own preprocessed output.
+  await run(`${gcc} -S ${FL} t.c -o drv.s`);
+  await run(`${gcc} -E ${FL} t.c -o t.i`);
+  await run(`bin/cc1-psx-26 ${FL} -quiet t.i -o cc1.s`);
+  const drvS = fs.readFileSync(path.join(d, "drv.s"), "utf8"), cc1S = fs.readFileSync(path.join(d, "cc1.s"), "utf8");
+  // cc1 echoes its own argv as " # ..." comments; everything else is identical.
+  const code = (s) => s.split("\n").filter((l) => !l.startsWith(" #")).join("\n");
+  assert.ok(code(drvS).length > 500 && /lbu\s+\$2,0\(\$4\)/.test(drvS), drvS);
+  assert.equal(code(drvS), code(cc1S));
+  // .o: the driver's as step (romdev's mips-linux-gnu-as, -EL from the specs)
+  // against cc1 -> mipsel-linux-gnu-as with the same assembler flags.
+  await run(`${gcc} -c ${FL} -Wa,-march=r3000,-mtune=r3000,-no-pad-sections t.c -o drv.o`);
+  await run("mipsel-linux-gnu-as -G0 -O2 -march=r3000 -mtune=r3000 -no-pad-sections -o cc1.o cc1.s");
+  const o = fs.readFileSync(path.join(d, "drv.o"));
+  assert.equal(o[5], 1, "ELFDATA2LSB: little-endian object");
+  assert.ok(o.equals(fs.readFileSync(path.join(d, "cc1.o"))), "driver .o == cc1 + as .o");
+  // The driver's error texts come from its sys_errlist (built from strerror).
+  const miss = await runRecipeLine(`${gcc} -S nosuch.c`, { cwd: d, tmpRoot });
+  assert.equal(miss.code, 1);
+  assert.match(miss.log, /gcc: nosuch\.c: No such file or directory/);
+});
+
+test("mips-linux-gnu-cpp (WASM) pre-includes stdc-predef.h like Debian's cross cpp, and skips it where gcc does", async () => {
+  const d = dir("predef");
+  fs.writeFileSync(path.join(d, "empty.c"), "");
+  const { decompGcc } = await import("../src/decomp/toolchain.js");
+  const macros = async (args) => {
+    const r = await decompGcc({ family: "mips-linux-gnu-14.2", argv: ["mips-linux-gnu-cpp", "-dM", ...args, "empty.c"], cwd: d, tmpRoot: dir("predef-tmp") });
+    assert.equal(r.exitCode, 0, r.stderr);
+    return new Set(r.stdout.toString("utf8").split("\n").filter(Boolean));
+  };
+  const plain = await macros([]);
+  assert.ok(plain.size > 300);
+  for (const m of ["#define _STDC_PREDEF_H 1", "#define __STDC_IEC_559__ 1", "#define __STDC_ISO_10646__ 201706L",
+    "#define _TIME_BITS 64", "#define _FILE_OFFSET_BITS 64"]) assert.ok(plain.has(m), m);
+  assert.ok(!plain.has("#define __mips_no_madd4 1"), "Debian configures madd4 only for mipsel");
+  // TARGET_C_PREINCLUDE is skipped under -nostdinc and -ffreestanding (and for preprocessed input).
+  for (const flag of ["-nostdinc", "-ffreestanding"]) {
+    const m = await macros([flag]);
+    assert.ok(!m.has("#define _STDC_PREDEF_H 1"), flag);
+    assert.ok(m.has("#define __mips__ 1"), flag);
+  }
+  // -undef drops the target macros, not the pre-include.
+  assert.ok((await macros(["-undef"])).has("#define _STDC_PREDEF_H 1"));
+  // Debian's own cross cpp as the oracle, when one is at hand.
+  const oracle = process.env.ROMDEV_TEST_DEBIAN_MIPS_CPP;
+  if (oracle) {
+    const { execFileSync } = await import("node:child_process");
+    for (const args of [[], ["-nostdinc"], ["-ffreestanding"], ["-undef"], ["-EL"], ["-march=vr4300", "-mabi=32", "-mno-abicalls", "-fno-pic", "-G0"], ["-D_TIME_BITS=32"], ["-std=c89"], ["-x", "assembler-with-cpp"]]) {
+      const want = new Set(execFileSync(oracle, ["-dM", ...args, "empty.c"], { cwd: d, encoding: "utf8" }).split("\n").filter(Boolean));
+      assert.deepEqual([...(await macros(args))].sort(), [...want].sort(), args.join(" "));
+    }
+  }
+});

@@ -6,13 +6,15 @@
 #         iQue (China) builds' compiler
 #         -> packages/romdev-toolchain-decomp-gcc/wasm/egcs-1.1.2/
 #   psx   gcc 2.6.3 for the PlayStation (decompals/old-gcc gcc-2.6.3-psx):
-#         cc1 and cpp (cccp), which PS1 decomp projects run directly
+#         cc1 and cpp (cccp), which PS1 decomp projects run directly, and the
+#         driver (gcc), whose as step is the mips-linux-gnu binutils as
+#         (psx-gcc-2.6.3-wasm.patch)
 #         -> packages/romdev-toolchain-decomp-gcc/wasm/psx-gcc-2.6.3/
 # The N64 directories hold gcc (the driver), cpp (cccp), cc1, as.
 #   build-decomp-gcc.sh [kmc|egcs|psx|all]   (default all)
 # romdev runs `gcc` in its WASM worker; the driver's subprograms run as
 # sibling modules through a JS spawn hook (kmc-gcc-2.7.2-wasm.patch,
-# egcs-1.1.2-wasm.patch).
+# egcs-1.1.2-wasm.patch, psx-gcc-2.6.3-wasm.patch).
 #
 # These 1996 sources cannot be configured for an emscripten host (the build
 # runs generators it just compiled; libiberty probes libc by linking), so
@@ -198,6 +200,9 @@ patch -s -u -p1 obstack.h -i "$OG/patches/obstack-2.7.2.h.patch"
 patch -s -u -p1 sdbout.c -i "$OG/patches/sdbout-2.6.3.c.patch"
 patch -s -u -p1 cp/g++.c -i "$OG/patches/g++-2.6.3.c.patch"
 patch -s -u -p1 < "$OG/patches/psx-2.5.7.patch"
+# romdev: the driver's spawn hook and a sys_errlist built from strerror (musl
+# has none), and -EL for the (big-endian by default) mips-linux-gnu as.
+patch -s -u -p1 < "$PROJECT_DIR/$(pin_get toolchains.psx_gcc_263 patch)"
 touch -c cp/parse.y cp/parse.h cp/parse.c
 touch insn-config.h
 ./configure --target=mips-sony-psx --prefix=/opt/cross --with-endian-little --with-gnu-as \
@@ -224,20 +229,20 @@ printf '{"type":"commonjs"}\n' > "$P/package.json"
 # headers supplied: HZ, and __linux__ (sdbout.c then uses gcc's own gsyms.h).
 local DEFS="-Dbsd4_4 -Dmips -DHAVE_STRERROR -DHZ=100 -D__linux__=1"
 local PSXCC="-O2 -flto -fno-strict-aliasing -fwrapv -std=gnu89 -w -Wno-error -Wno-implicit-function-declaration -Wno-int-conversion -Wno-incompatible-pointer-types -Wno-implicit-int $DEFS"
-make cccp cc1 CC="$P/emcc-exe $PSXCC" CFLAGS="" \
+make cccp cc1 xgcc CC="$P/emcc-exe $PSXCC" CFLAGS="" \
   LDFLAGS="-sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1 -sEMULATE_FUNCTION_POINTER_CASTS=1 -Wl,--allow-multiple-definition -sSTACK_SIZE=8388608 -sEXIT_RUNTIME=1" \
   > "$P/build.log" 2>&1
-rm -f cc1 cc1.wasm cccp cccp.wasm
-make cccp cc1 CC="emcc $PSXCC" CFLAGS="" LDFLAGS="${EMLINK_BASE#"$EMCC"} -sEXPORT_NAME=psxGcc" >> "$P/build.log" 2>&1
+rm -f cc1 cc1.wasm cccp cccp.wasm xgcc xgcc.wasm
+make cccp cc1 xgcc CC="emcc $PSXCC" CFLAGS="" LDFLAGS="${EMLINK_BASE#"$EMCC"} -sEXPORT_NAME=psxGcc" >> "$P/build.log" 2>&1
 mkdir -p "$PKG_OUT"
-for t in cc1:cc1 cccp:cpp; do
+for t in cc1:cc1 cccp:cpp xgcc:gcc; do
   cp "${t%%:*}" "$PKG_OUT/${t#*:}.mjs"
   cp "${t%%:*}.wasm" "$PKG_OUT/${t#*:}.wasm"
   sync_glue "$PKG_OUT/${t#*:}.mjs"
 done
 cd "$P"
 rm -rf "$P/gcc-2.6.3" "$P/emcc-exe" "$P/package.json"
-echo "gcc 2.6.3-psx (cc1, cpp) -> $PKG_OUT"
+echo "gcc 2.6.3-psx (gcc, cc1, cpp) -> $PKG_OUT"
 }
 
 case "$WHICH" in
