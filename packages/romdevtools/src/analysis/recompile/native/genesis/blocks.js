@@ -42,7 +42,7 @@ const fname = (pc) => `rdb_${hx(pc)}`;
  * @param {{pcs:Iterable<number>|Map<number,number>, pairs:Iterable<number>, irqTargets?:Iterable<number>, profile?:'fast'|'exact', maxInsns?:number, files?:number, onlyHot?:number}} cov
  */
 export async function emitBlocks(cart, cov) {
-  const profile = cov.profile ?? "fast";
+  const profile = cov.profile ?? "exact";
   if (profile !== "fast" && profile !== "exact") throw new Error(`genesis native: options.profile must be 'fast' or 'exact', got '${profile}'`);
   const D = loadGpgxData();
   const rom = cart.normalized;

@@ -12,11 +12,13 @@
 // Musashi itself stays linked as the fallback interpreter for everything else.
 //
 // Timing profiles (options.profile):
-//   'fast' (default): cycles charged once per block (flushed before any access
-//     that can observe the clock), interrupts and line ends at block ends.
-//   'exact': cycles charged per instruction and blocks stop at every
-//     m68k_run boundary, which keeps the 68000 instruction-for-instruction
-//     with gpgx.
+//   'exact' (default): cycles charged per instruction and blocks stop at
+//     every m68k_run boundary, which keeps the 68000 instruction-for-
+//     instruction with gpgx (and so the whole machine state, every frame).
+//   'fast': cycles charged once per block (flushed before any access that can
+//     observe the clock), interrupts and line ends at block ends. Measured on
+//     a 512 KB platformer: ~3% cheaper per frame than 'exact', but the moved
+//     interrupt points change the game's own timeline within seconds.
 //
 // LICENSE: contains Genesis Plus GX code (non-commercial, see NOTICE).
 //
@@ -34,7 +36,12 @@ export const REFERENCE_CORE = "genesis_plus_gx";
 const RUNTIME = new URL("./runtime/", import.meta.url);
 
 /** Defines every runtime translation unit is compiled with. */
-export const RUNTIME_DEFINES = ["-DLSB_FIRST", "-DALIGN_LONG", "-DROMDEV_S32", "-DUSE_16BPP_RENDERING"];
+// ALT_RENDERER is gpgx's own alternative Mode 5 background path (planes merged
+// while plane B is drawn, one pass fewer); same pixels, measured 17% faster on
+// sync32.
+export const RUNTIME_DEFINES = ["-DLSB_FIRST", "-DALIGN_LONG", "-DROMDEV_S32", "-DUSE_16BPP_RENDERING", "-DALT_RENDERER"];
+/** Hot inner loops that -O3 measured faster on s32core (sound chips, renderer, Z80). */
+export const O3_UNITS = ["ym2612.c", "vdp_render.c", "z80.c", "blip_buf.c", "psg.c"];
 /** Warnings gpgx's own sources raise under these flags (not errors). */
 const QUIET = ["-Wno-unused-variable", "-Wno-unused-but-set-variable", "-Wno-unused-function", "-Wno-discarded-qualifiers",
   "-Wno-missing-braces", "-Wno-return-type", "-Wno-maybe-uninitialized", "-Wno-pointer-sign", "-Wno-parentheses"];
@@ -154,7 +161,7 @@ export function describe(raw, opts = {}) {
     title: txt(0x150, 0x180) || txt(0x120, 0x150),
     sram: sramConfig(img),
     sixButton: sixButtonPads(img),
-    profile: opts.profile ?? "fast",
+    profile: opts.profile ?? "exact",
     licenseNote: "the .s32 contains Genesis Plus GX code (runtime and 68000 handlers): non-commercial",
   };
 }
@@ -274,7 +281,7 @@ export async function buildProject(project, o = {}) {
   let failed = null;
   await Promise.all(units.map(async ([name, text]) => {
     const t1 = Date.now();
-    const flags = [...base, ...project.cflags, ...(o.perFileFlags?.[name] ?? [])];
+    const flags = [...base, ...project.cflags, ...(O3_UNITS.includes(name) ? ["-O3"] : []), ...(o.perFileFlags?.[name] ?? [])];
     const cc = await runCc1m33({ source: text, headers, options: flags });
     if (cc.exitCode !== 0 || !cc.asmSource) { failed ??= { stage: "cc1", unit: name, log: cc.log }; return; }
     const as = await runM33As({ source: cc.asmSource, includes: headers });

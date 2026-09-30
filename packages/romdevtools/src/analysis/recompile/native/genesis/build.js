@@ -3,7 +3,8 @@
 // (emit:'sync32') for the sync32 console. See index.js for the design.
 //
 // options:
-//   profile: 'fast' (default) | 'exact'          timing profile of the blocks
+//   profile: 'exact' (default) | 'fast'          timing profile of the blocks
+//   audioQuality: 'fast' (default) | 'hq'         gpgx's linear or band-limited resampling
 //   blocks: false                                 no recompiled blocks (Musashi only)
 //   coverage: {                                   what to compile (see ../coverage.js)
 //     cart: '<exact .wasc>'                       the verified wasmcart to trace; omitted,
