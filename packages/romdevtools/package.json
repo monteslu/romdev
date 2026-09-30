@@ -82,6 +82,7 @@
     "romdev-platform-snes": "0.12.1",
     "romdev-platform-sync32": "0.2.1",
     "romdev-toolchain-cc65": "0.1.4",
+    "romdev-toolchain-ido": "0.1.0",
     "romdev-toolchain-m68k-gcc": "0.4.1",
     "romdev-toolchain-mips-gcc": "0.1.2",
     "romdev-toolchain-rgbds": "0.1.2",

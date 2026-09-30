@@ -300,10 +300,30 @@
       "platforms": [
         "genesis"
       ]
+    },
+    "ido_static_recomp": {
+      "kind": "git",
+      "url": "https://github.com/decompals/ido-static-recomp.git",
+      "ref": "master",
+      "commit": "5a220629edb99040777fdba0b8f6db6c50246e2d",
+      "license": "ido-static-recomp: MIT (recompiler); IRIX IDO binaries it translates: see ido/<ver>/LICENSE.md upstream",
+      "patch": "scripts/patches/ido-static-recomp-wasm.patch",
+      "platforms": [
+        "n64"
+      ],
+      "note": "IDO 5.3 + 7.1 statically recompiled to C by the pinned recomp, then compiled to WASM by build-ido.sh; ships via romdev-toolchain-ido. Same commit the decompals N64 projects pin as their submodule."
     }
   },
   "heavy_toolchains": {
     "_comment": "GCC-family cross-toolchains \u2014 NOT covered by the light build image; need a native cross-gcc bootstrap. Pins recorded for completeness.",
+    "binutils_mips_linux": {
+      "kind": "tarball",
+      "url": "https://ftp.gnu.org/gnu/binutils/binutils-2.46.0.tar.xz",
+      "version": "2.46.0",
+      "sha256": "d75a94f4d73e7a4086f7513e67e439e8fcdcbb726ffe63f4661744e6256b2cf2",
+      "license": "GPL-3.0",
+      "note": "binutils for target mips-linux-gnu (the traditional-MIPS ELF vectors N64 decomp projects assemble, link and objcopy with). Built to WASM by build-mips-linux-binutils-wasm.sh; ships as mips-linux-gnu-{as,ld,objcopy,objdump} in romdev-toolchain-mips-gcc. The mips-elf tools cannot stand in: their IRIX-compatible vector names section symbols in .strtab and reorders symbols, so objects differ byte-for-byte."
+    },
     "binutils": {
       "kind": "tarball",
       "version": "2.42",

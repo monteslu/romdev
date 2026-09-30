@@ -66,6 +66,8 @@ each toolchain recipe the same `PKG_OUT` copy step the core recipes have.)
 | dasm | `build-dasm.sh` | `romdev-platform-atari2600` |
 | arm-none-eabi-gcc | `build-arm-wasm-tools.sh` (toolchain by `build-arm-toolchain.sh`) | `romdev-platform-gba` |
 | libtonc / libgba / maxmod | `build-libtonc.sh`, `build-libgba.sh`, `build-maxmod.sh` | GBA SDK libs (linked, ship as source/lib) |
+| IDO 5.3 / 7.1 (N64 decomp compilers; ido-static-recomp C, patch `ido-static-recomp-wasm.patch`) | `build-ido.sh` | `romdev-toolchain-ido` |
+| mips-linux-gnu binutils (N64 decomp as/ld/objcopy/objdump) | `build-mips-linux-binutils-wasm.sh` | `romdev-toolchain-mips-gcc` |
 
 ## Analysis engine → packages
 

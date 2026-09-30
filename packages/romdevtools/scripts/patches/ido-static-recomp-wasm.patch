@@ -1,0 +1,358 @@
+diff --git a/header.h b/header.h
+index 0a72f1a..3d44507 100644
+--- a/header.h
++++ b/header.h
+@@ -8,6 +8,34 @@
+ #include "libc_impl.h"
+ #include "helpers.h"
+ 
++#ifdef __EMSCRIPTEN__
++// romdev: vfork-style fork emulation (see libc_impl.c). build-ido.sh rewrites
++// each recompiled `v0 = wrapper_fork(mem);` to ROMDEV_FORK(v0). The child path
++// runs first; when its execvp finishes, longjmp lands here and every register
++// local is restored to its value at the fork before the parent path runs.
++#include <setjmp.h>
++#define ROMDEV_FORK_NREGS 32
++extern jmp_buf romdev_fork_jmp;
++extern volatile uint32_t romdev_fork_regs[ROMDEV_FORK_NREGS];
++int romdev_fork_child(uint8_t* mem, uint32_t sp);
++int romdev_fork_parent(uint8_t* mem);
++#define ROMDEV_FORK_REGS(X) X(0, at) X(1, v1) X(2, t0) X(3, t1) X(4, t2) X(5, t3) X(6, t4) X(7, t5) \
++    X(8, t6) X(9, t7) X(10, s0) X(11, s1) X(12, s2) X(13, s3) X(14, s4) X(15, s5) X(16, s6) X(17, s7) \
++    X(18, t8) X(19, t9) X(20, gp) X(21, fp) X(22, s8) X(23, ra) X(24, lo) X(25, hi) X(26, a0) X(27, a1) \
++    X(28, a2) X(29, a3) X(30, sp) X(31, v0)
++#define ROMDEV_SAVE_REG(i, r) romdev_fork_regs[i] = (r);
++#define ROMDEV_LOAD_REG(i, r) (r) = romdev_fork_regs[i];
++#define ROMDEV_FORK(dst) do { \
++        ROMDEV_FORK_REGS(ROMDEV_SAVE_REG) \
++        if (setjmp(romdev_fork_jmp) == 0) { \
++            (dst) = romdev_fork_child(mem, sp); \
++        } else { \
++            ROMDEV_FORK_REGS(ROMDEV_LOAD_REG) \
++            (dst) = romdev_fork_parent(mem); \
++        } \
++    } while (0)
++#endif
++
+ #define RM_RN 0
+ #define RM_RZ 1
+ #define RM_RP 2
+diff --git a/libc_impl.c b/libc_impl.c
+index a13307d..61f4435 100644
+--- a/libc_impl.c
++++ b/libc_impl.c
+@@ -36,6 +36,76 @@
+ #include "libc_impl.h"
+ #include "helpers.h"
+ 
++#ifdef __EMSCRIPTEN__
++// romdev: WASM host. There is no fork/exec in WebAssembly, so cc's passes run
++// as separate WASM modules through a JS spawn hook (romdev_spawn), and fork is
++// emulated vfork-style: the recompiled fork site (rewritten to ROMDEV_FORK by
++// build-ido.sh) takes the child path first under a setjmp, the child's
++// execvp runs the pass to completion, then the parent resumes at the fork
++// with its registers, its stack and its file descriptors restored.
++#include <emscripten.h>
++#include <setjmp.h>
++jmp_buf romdev_fork_jmp;
++volatile uint32_t romdev_fork_regs[32];
++static int romdev_in_child;
++static int romdev_child_pid = 4200;
++static int romdev_child_status;
++static int romdev_have_child;
++static int romdev_saved_std[3];
++static uint8_t romdev_open_at_fork[256];
++#define ROMDEV_STACK_SNAPSHOT (1024 * 1024)
++static uint8_t romdev_stack_copy[ROMDEV_STACK_SNAPSHOT];
++static uint32_t romdev_stack_lo;
++
++EM_JS(int, romdev_spawn, (const char* file, char** argv, int argc), {
++    const args = [];
++    for (let i = 0; i < argc; i++) args.push(UTF8ToString(HEAPU32[(argv >> 2) + i]));
++    if (!Module["romdevSpawn"]) {
++        err("romdev: no spawn handler installed; cannot run " + UTF8ToString(file));
++        return 127 << 8;
++    }
++    return Module["romdevSpawn"](UTF8ToString(file), args, Module);
++});
++
++int romdev_fork_child(uint8_t* mem, uint32_t sp) {
++    for (int i = 0; i < 3; i++) {
++        romdev_saved_std[i] = dup(i);
++    }
++    for (int fd = 0; fd < 256; fd++) {
++        romdev_open_at_fork[fd] = fcntl(fd, F_GETFD) != -1;
++    }
++    romdev_stack_lo = sp;
++    memcpy(romdev_stack_copy, mem + sp, ROMDEV_STACK_SNAPSHOT);
++    romdev_child_pid++;
++    romdev_in_child = 1;
++    return 0;
++}
++
++int romdev_fork_parent(uint8_t* mem) {
++    return romdev_child_pid;
++}
++
++static void romdev_child_done(uint8_t* mem, int status) {
++    fflush(NULL);
++    for (int fd = 0; fd < 256; fd++) {
++        if (!romdev_open_at_fork[fd] && fcntl(fd, F_GETFD) != -1) {
++            close(fd);
++        }
++    }
++    for (int i = 0; i < 3; i++) {
++        if (romdev_saved_std[i] >= 0) {
++            dup2(romdev_saved_std[i], i);
++            close(romdev_saved_std[i]);
++        }
++    }
++    memcpy(mem + romdev_stack_lo, romdev_stack_copy, ROMDEV_STACK_SNAPSHOT);
++    romdev_child_status = status;
++    romdev_have_child = 1;
++    romdev_in_child = 0;
++    longjmp(romdev_fork_jmp, 1);
++}
++#endif /* __EMSCRIPTEN__ */
++
+ #define MIN(a, b) ((a) < (b) ? (a) : (b))
+ #define MAX(a, b) ((a) > (b) ? (a) : (b))
+ 
+@@ -224,6 +294,23 @@ static size_t g_Pagesize;
+ #endif /* PageSize Macros */
+ 
+ static uint8_t* memory_map(size_t length) {
++#ifdef __EMSCRIPTEN__
++    // wasm32 load/store offsets are added WITHOUT wrapping, so the guest base
++    // (region - MEM_REGION_START) must not wrap either: the region has to start
++    // at or above MEM_REGION_START in linear memory. The padding below it is
++    // never touched, and fresh linear memory is already zero (no memset: that
++    // would commit every page of the 512MB region).
++    uint8_t* raw = malloc(MEM_REGION_START + length + 0x10000);
++    if (raw == NULL) {
++        fprintf(stderr, "romdev: cannot reserve the IDO guest memory region\n");
++        exit(1);
++    }
++    uintptr_t base = ((uintptr_t)raw + 0xffff) & ~(uintptr_t)0xffff;
++    if (base < MEM_REGION_START) {
++        base = MEM_REGION_START;
++    }
++    return (uint8_t*)base;
++#endif
+ #ifdef __CYGWIN__
+     uint8_t* mem = mmap(0, length, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+ #else
+@@ -245,6 +332,10 @@ static void memory_allocate(uint8_t* mem, uint32_t start, uint32_t end) {
+     // `start` will be passed to mmap,
+     // so it has to be host aligned in order to keep the guest's pages valid
+     assert(start == TRUNC_PAGE(start) && "Page size too small, try increasing `page_size` in recomp.cpp");
++#ifdef __EMSCRIPTEN__
++    (void)mem;
++    return; // the whole region is already readable, writable and zero
++#endif
+ #ifdef __CYGWIN__
+     uintptr_t _start = TRUNC_PAGE((uintptr_t)mem + start);
+     uintptr_t _end = ROUND_PAGE((uintptr_t)mem + end);
+@@ -265,6 +356,11 @@ static void memory_allocate(uint8_t* mem, uint32_t start, uint32_t end) {
+ }
+ 
+ static void memory_unmap(uint8_t* mem, size_t length) {
++#ifdef __EMSCRIPTEN__
++    (void)mem;
++    (void)length;
++    return; // the module instance is discarded after the run
++#endif
+     if (munmap(mem, length)) {
+         perror("munmap");
+         exit(1);
+@@ -2434,6 +2530,11 @@ void wrapper_abort(uint8_t* mem) {
+ }
+ 
+ void wrapper_exit(uint8_t* mem, int status) {
++#ifdef __EMSCRIPTEN__
++    if (romdev_in_child) {
++        romdev_child_done(mem, (status & 0xff) << 8);
++    }
++#endif
+     final_cleanup(mem);
+     exit(status);
+ }
+@@ -2599,7 +2700,12 @@ uint32_t wrapper_sigset(uint8_t* mem, int signum, fptr_trampoline trampoline, ui
+     signal_context.handlers[signum].mem = mem;
+     signal_context.handlers[signum].fp_dest = disp_addr;
+ 
++#ifdef __EMSCRIPTEN__
++    (void)handler;
++    return 0; // no asynchronous signals reach a WASM module
++#else
+     return (uint32_t)(uintptr_t)sigset(signum, handler); // for now only support SIG_DFL etc. as return value
++#endif
+ }
+ 
+ int wrapper_get_fpc_csr(uint8_t* mem) {
+@@ -2618,10 +2724,64 @@ void wrapper_longjmp(uint8_t* mem, uint32_t addr, int status) {
+     assert(0 && "longjmp not implemented");
+ }
+ 
++#ifdef __EMSCRIPTEN__
++// glibc's tempnam, which the native builds get: $TMPDIR wins over the dir
++// argument, the prefix defaults to "file" and is cut to 5 characters, and six
++// random characters follow it directly. musl's would ignore TMPDIR and, for an
++// empty dir, name a file in "/".
++static int romdev_is_dir(const char* d) {
++    struct stat st;
++    return d != NULL && *d != '\0' && stat(d, &st) == 0 && S_ISDIR(st.st_mode);
++}
++
++static char* romdev_tempnam(const char* dir, const char* pfx) {
++    static const char letters[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
++    static unsigned int counter;
++    const char* d = getenv("TMPDIR");
++    if (!romdev_is_dir(d)) {
++        d = romdev_is_dir(dir) ? dir : "/tmp";
++    }
++    if (pfx == NULL || *pfx == '\0') {
++        pfx = "file";
++    }
++    char buf[PATH_MAX];
++    for (int tries = 0; tries < 10000; tries++) {
++        unsigned int v = (unsigned int)getpid() * 2654435761u + (++counter) * 40503u + (unsigned int)time(NULL);
++        char suffix[7];
++        for (int i = 0; i < 6; i++) {
++            suffix[i] = letters[v % 62];
++            v = v / 62 + (unsigned int)(i + 1) * 7919u;
++        }
++        suffix[6] = '\0';
++        if (snprintf(buf, sizeof(buf), "%s/%.5s%s", d, pfx, suffix) >= (int)sizeof(buf)) {
++            errno = ENAMETOOLONG;
++            return NULL;
++        }
++        if (access(buf, F_OK) != 0) {
++            return strdup(buf);
++        }
++    }
++    errno = EEXIST;
++    return NULL;
++}
++#endif
++
+ uint32_t wrapper_tempnam(uint8_t* mem, uint32_t dir_addr, uint32_t pfx_addr) {
++#ifdef __EMSCRIPTEN__
++    char dir[PATH_MAX + 1] = { 0 };
++    char pfx[PATH_MAX + 1] = { 0 };
++    if (dir_addr != 0) {
++        strcpy_mem2str(mem, dir, dir_addr);
++    }
++    if (pfx_addr != 0) {
++        strcpy_mem2str(mem, pfx, pfx_addr);
++    }
++    char* ret = romdev_tempnam(dir_addr != 0 ? dir : NULL, pfx_addr != 0 ? pfx : NULL);
++#else
+     STRING(dir)
+     STRING(pfx)
+     char* ret = tempnam(dir, pfx);
++#endif
+     char* ret_saved = ret;
+     if (ret == NULL) {
+         MEM_U32(ERRNO_ADDR) = errno;
+@@ -2703,6 +2863,17 @@ uint32_t wrapper_tmpfile(uint8_t* mem) {
+ }
+ 
+ int wrapper_wait(uint8_t* mem, uint32_t wstatus_addr) {
++#ifdef __EMSCRIPTEN__
++    if (!romdev_have_child) {
++        MEM_U32(ERRNO_ADDR) = ECHILD;
++        return -1;
++    }
++    romdev_have_child = 0;
++    if (wstatus_addr != 0) {
++        MEM_S32(wstatus_addr) = romdev_child_status;
++    }
++    return romdev_child_pid;
++#endif
+     int wstatus;
+     pid_t ret = wait(&wstatus);
+     MEM_S32(wstatus_addr) = wstatus;
+@@ -2710,6 +2881,9 @@ int wrapper_wait(uint8_t* mem, uint32_t wstatus_addr) {
+ }
+ 
+ int wrapper_kill(uint8_t* mem, int pid, int sig) {
++#ifdef __EMSCRIPTEN__
++    return 0; // children run to completion synchronously; nothing is ever pending
++#endif
+     int ret = kill(pid, sig);
+     if (ret != 0) {
+         MEM_U32(ERRNO_ADDR) = errno;
+@@ -2730,6 +2904,16 @@ int wrapper_execv(uint8_t* mem, uint32_t pathname_addr, uint32_t argv_addr) {
+     }
+     char** argv = make_argv_from_mem(mem, argc, argv_addr);
+ 
++#ifdef __EMSCRIPTEN__
++    {
++        int status = romdev_spawn(pathname, argv, argc);
++        free_argv(argc, argv);
++        if (romdev_in_child) {
++            romdev_child_done(mem, status);
++        }
++        wrapper_exit(mem, (status >> 8) & 0xff);
++    }
++#endif
+     execv(pathname, argv);
+     MEM_U32(ERRNO_ADDR) = errno;
+ 
+@@ -2753,6 +2937,16 @@ int wrapper_execvp(uint8_t* mem, uint32_t file_addr, uint32_t argv_addr) {
+         filePtr = rfile;
+     }
+ 
++#ifdef __EMSCRIPTEN__
++    {
++        int status = romdev_spawn(filePtr, argv, argc);
++        free_argv(argc, argv);
++        if (romdev_in_child) {
++            romdev_child_done(mem, status);
++        }
++        wrapper_exit(mem, (status >> 8) & 0xff);
++    }
++#endif
+     execvp(filePtr, argv);
+ 
+     MEM_U32(ERRNO_ADDR) = errno;
+@@ -2762,6 +2956,13 @@ int wrapper_execvp(uint8_t* mem, uint32_t file_addr, uint32_t argv_addr) {
+ }
+ 
+ int wrapper_fork(uint8_t* mem) {
++#ifdef __EMSCRIPTEN__
++    // Every recompiled fork site is rewritten to ROMDEV_FORK (build-ido.sh); a
++    // bare call means a site the rewrite missed.
++    fprintf(stderr, "romdev: unrewritten fork site\n");
++    MEM_U32(ERRNO_ADDR) = EAGAIN;
++    return -1;
++#endif
+     int ret = fork();
+     if (ret == -1) {
+         MEM_U32(ERRNO_ADDR) = errno;
+@@ -2771,6 +2972,10 @@ int wrapper_fork(uint8_t* mem) {
+ 
+ int wrapper_system(uint8_t* mem, uint32_t command_addr) {
+     STRING(command)
++#ifdef __EMSCRIPTEN__
++    fprintf(stderr, "romdev: system(\"%s\") is not available in WASM\n", command);
++    return 127 << 8;
++#endif
+     return system(command); // no errno
+ }
+ 
+@@ -3038,7 +3243,13 @@ uint32_t wrapper_regex(uint8_t* mem, uint32_t re_addr, uint32_t subject_addr, ui
+ void wrapper___assert(uint8_t* mem, uint32_t assertion_addr, uint32_t file_addr, int line) {
+     STRING(assertion)
+     STRING(file)
++#ifdef __EMSCRIPTEN__
++    // musl has no glibc __assert entry point; report the same way and abort.
++    fprintf(stderr, "%s:%d: failed assertion `%s'\n", file, line, assertion);
++    abort();
++#else
+     __assert(assertion, file, line);
++#endif
+ }
+ 
+ // https://linux.die.net/man/3/twalk

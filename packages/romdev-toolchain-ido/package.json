@@ -1,0 +1,30 @@
+{
+  "name": "romdev-toolchain-ido",
+  "version": "0.1.0",
+  "description": "IRIX IDO 5.3 and 7.1 C compilers (cc, cfe, uopt, ugen, as1 and the other passes), statically recompiled by ido-static-recomp and bundled as WASM for romdev's N64 matching-decompilation domain.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./wasm/*": "./wasm/*"
+  },
+  "files": [
+    "index.js",
+    "wasm",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "license": "SEE LICENSE IN README.md",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/monteslu/romdev.git",
+    "directory": "packages/romdev-toolchain-ido"
+  },
+  "homepage": "https://github.com/monteslu/romdev#readme",
+  "bugs": {
+    "url": "https://github.com/monteslu/romdev/issues"
+  },
+  "author": "Luis Montes"
+}
