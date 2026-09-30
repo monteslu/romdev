@@ -174,7 +174,12 @@ function carry(source, target, { link }) {
     fs.symlinkSync(source, target);
     return;
   }
-  if (isDir(source)) { fs.cpSync(source, target, { recursive: true, dereference: true, force: true }); return; }
+  if (isDir(source)) {
+    // Copy the tree with every link dereferenced into an ordinary file.
+    fs.mkdirSync(target, { recursive: true });
+    for (const name of fs.readdirSync(source)) carry(path.join(source, name), path.join(target, name), { link: false });
+    return;
+  }
   fs.copyFileSync(source, target);
   const st = fs.statSync(source);
   fs.chmodSync(target, st.mode & 0o7777);
