@@ -11,7 +11,6 @@ import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { decompileInWorker, UPSTREAM as M2C_UPSTREAM } from "romdev-m2c";
-import { run } from "./mips-obj.js";
 import { buildContext, scanContextDeclarations } from "./context.js";
 import { sha256Text } from "./project.js";
 import { profileFor } from "./platform.js";
@@ -22,33 +21,18 @@ export const PINNED = {
   permuter: { repo: "https://github.com/simonlindholm/decomp-permuter.git", commit: "41bd0bfc32aa5ea78de4cf28be603163256c2a4c" },
 };
 
-export function toolPaths() {
-  const py = path.join(TOOLS_HOME, "venv", "bin", "python");
-  return {
-    python: fs.existsSync(py) ? py : "python3",
-    permuter: path.join(TOOLS_HOME, "decomp-permuter"),
-  };
-}
-
 /** Identity of the in-process m2c port (package name/version + the upstream commit it mirrors). */
 export function m2cEngine() {
   const pkg = createRequire(import.meta.url)("romdev-m2c/package.json");
   return { present: true, engine: "js", package: pkg.name, version: pkg.version, commit: M2C_UPSTREAM.commit, pinned: PINNED.m2c.commit, atPin: M2C_UPSTREAM.commit === PINNED.m2c.commit };
 }
 
-/** Identity + presence of the pinned backends (recorded in every result). */
+/** Identity of the pinned backends (recorded in every result). Both run in-process as JS ports. */
 export async function backendStatus() {
-  const t = toolPaths();
-  const out = { toolsHome: TOOLS_HOME, python: t.python, m2c: m2cEngine(), permuter: null };
-  for (const [key, dir, pin] of [["permuter", t.permuter, PINNED.permuter]]) {
-    if (!fs.existsSync(dir)) { out[key] = { present: false, path: dir, pinned: pin.commit, setup: `git clone ${pin.repo} ${dir} && git -C ${dir} checkout ${pin.commit}` }; continue; }
-    const r = await run("git", ["-C", dir, "rev-parse", "HEAD"]);
-    const head = r.stdout.trim();
-    out[key] = { present: true, path: dir, commit: head, pinned: pin.commit, atPin: head === pin.commit };
-  }
-  const pv = await run(t.python, ["-c", "import sys, toml; print(sys.version.split()[0])"]);
-  out.pythonOk = pv.code === 0; out.pythonVersion = pv.stdout.trim() || null; out.pythonError = pv.code === 0 ? undefined : pv.stderr.slice(0, 200);
-  return out;
+  const { permuterEngine } = await import("./jobs.js");
+  const { defaultWeights, ...permuter } = permuterEngine();
+  void defaultWeights;
+  return { m2c: m2cEngine(), permuter: { present: true, ...permuter } };
 }
 
 /**

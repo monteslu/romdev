@@ -77,6 +77,7 @@
     "romdev-famitone": "0.2.1",
     "romdev-m2c": "0.1.0",
     "romdev-maxmod": "0.2.1",
+    "romdev-permuter": "0.1.0",
     "romdev-platform-atari2600": "0.10.1",
     "romdev-platform-gba": "0.14.0",
     "romdev-platform-snes": "0.12.1",

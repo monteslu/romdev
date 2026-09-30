@@ -1,40 +1,56 @@
 // jobs.js - bounded candidate search as a cancellable, resumable background
-// job around decomp-permuter. The permuter owns the mutation + scoring loop
-// (it is the community's tool for exactly this); romdev owns the budget, the
-// persistence, the process lifetime and the honest status.
+// job around the permuter. romdev-permuter (a JS port of decomp-permuter at
+// the pinned upstream commit) owns the mutation + scoring loop; romdev owns the
+// budget, the persistence, the lifetime and the honest status.
 //
-// A job never touches the project's sources: import.py copies the TU + the
-// target asm into its own directory under the workspace, and the compile
-// script it writes runs the project's compiler with the candidate as input.
-import { readFile, writeFile, mkdir, readdir, stat } from "node:fs/promises";
+// The search runs IN this process: romdev-permuter evaluates candidates in
+// node worker threads, compiles each one through romdev's WASM toolchain
+// (permuter-compile.js, the TU's own compile argv) and scores it with WASM
+// binutils. No Python, no bash, no host compiler. A job therefore lives exactly
+// as long as the server that started it; a record whose server went away is
+// reported as interrupted, with its artifacts intact.
+//
+// A job never touches the project's sources: the TU + target object are
+// prepared in the job's own directory under the workspace.
+import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { run } from "./mips-obj.js";
-import { toolPaths, backendStatus } from "./m2c.js";
+import { createRequire } from "node:module";
+import { run as runPermuter, get_default_randomization_weights, UPSTREAM as PERMUTER_UPSTREAM, DEFAULT_WEIGHTS_FILE } from "romdev-permuter";
+import { PINNED } from "./m2c.js";
 import { sha256Text, dependencyHash } from "./project.js";
 import { profileFor } from "./platform.js";
 import { atomicJson, hashRecord, storedMeasurementFreshness, fileRevisions, linkedMismatchCount } from "./measurement.js";
 
 const jobsDir = (project) => path.join(project.ws, "jobs");
 let counter = 0;
-const ownedChildren = new Map();
+/** Searches running in this process: jobId -> {controller, done, permuterDir}. */
+const liveJobs = new Map();
+
+/** Identity of the in-process permuter (package + the upstream commit it ports). */
+export function permuterEngine() {
+  const pkg = createRequire(import.meta.url)("romdev-permuter/package.json");
+  return { name: "romdev-permuter", engine: "js", package: pkg.name, version: pkg.version, upstream: PERMUTER_UPSTREAM.repo,
+    commit: PERMUTER_UPSTREAM.commit, pinned: PINNED.permuter.commit, atPin: PERMUTER_UPSTREAM.commit === PINNED.permuter.commit,
+    defaultWeights: DEFAULT_WEIGHTS_FILE };
+}
 
 /**
- * Build a decomp-permuter directory WITHOUT touching the project tree:
+ * Build a permuter directory WITHOUT touching the project tree:
  *   base.c       the real TU with the candidate spliced in, preprocessed with the
  *                build's own includes/defines (pragmas stripped; the permuter
  *                replaces every other function with a declaration itself)
  *   target.o     the extracted asm assembled by romdev (same prelude the
  *                permuter's import.py uses)
  *   compile.sh   the project's compiler with the TU's exact flags (asm-processor
- *                stripped away: base.c has no GLOBAL_ASM left to process)
+ *                stripped away: base.c has no GLOBAL_ASM left to process). Kept
+ *                as upstream's contract (a record of the step, and what the
+ *                romdev-permuter CLI would run); the in-process search runs the
+ *                same argv through permuter-compile.js instead.
  *   settings.toml func_name + compiler_type + objdump
  */
 async function preparePermuterDir(project, fn, baseCandidateText, jobDir, weights = null) {
-  const t = toolPaths();
-  if (!fs.existsSync(path.join(t.permuter, "permuter.py"))) throw Object.assign(new Error(`decomp-permuter not installed at ${t.permuter}. ${(await backendStatus()).permuter.setup}`), { code: "MISSING_BACKEND" });
   const { spliceFunction, ensureTarget } = await import("./compile.js");
   const tuRel = fn.source?.tu;
   if (!tuRel) throw Object.assign(new Error(`function '${fn.symbol}' is in no TU`), { code: "FUNCTION_NOT_IN_TU" });
@@ -50,9 +66,10 @@ async function preparePermuterDir(project, fn, baseCandidateText, jobDir, weight
   await writeFile(inPath, spliced);
   const inc = inv.compile.reduce((acc, a, i, arr) => { if (arr[i - 1] === "-I") acc.push("-I", a); return acc; }, []);
   const defs = inv.compile.filter((a) => /^-D/.test(a));
-  const pp = await run("gcc", ["-E", "-P", "-nostdinc", "-fno-builtin", "-std=gnu89", "-x", "c", ...inc, "-I", path.dirname(project.abs(tuRel)), ...defs, "-D_LANGUAGE_C", "-DPERMUTER", "-D__attribute__(x)=", "-U__GNUC__", inPath], { cwd: project.root, env: project.env, timeoutMs: 60_000 });
-  if (pp.code !== 0) throw Object.assign(new Error(`preprocessing the TU for the permuter failed: ${pp.stderr.slice(0, 800)}`), { code: "SEARCH_IMPORT_FAILED" });
-  await writeFile(path.join(permDir, "base.c"), pp.stdout);
+  const { preprocess } = await import("./cpp.js");
+  const pp = await preprocess({ cwd: project.root, args: ["-P", "-nostdinc", "-fno-builtin", "-std=gnu89", "-x", "c", ...inc, "-I", path.dirname(project.abs(tuRel)), ...defs, "-D_LANGUAGE_C", "-DPERMUTER", "-D__attribute__(x)=", "-U__GNUC__", inPath], timeoutMs: 60_000 });
+  if (pp.exitCode !== 0) throw Object.assign(new Error(`preprocessing the TU for the permuter failed: ${String(pp.log ?? "").slice(0, 800)}`), { code: "SEARCH_IMPORT_FAILED" });
+  await writeFile(path.join(permDir, "base.c"), pp.output);
   try { fs.unlinkSync(inPath); } catch {}
   await copyFileSafe(target.targetO, path.join(permDir, "target.o"));
   // compile.sh: the IDO invocation from the captured argv (drop the asm-processor wrapper + assembler section).
@@ -67,6 +84,7 @@ async function preparePermuterDir(project, fn, baseCandidateText, jobDir, weight
   }
   const objRel = inv.object;
   const ccOut = cc.map((a) => (a === tuRel ? '"$INPUT"' : a === objRel ? '"$OUTPUT"' : shq(a)));
+  const ccArgv = cc.map((a) => (a === tuRel ? "$INPUT" : a === objRel ? "$OUTPUT" : a));
   const envLines = Object.entries(project.env).map(([k, v]) => `export ${k}=${shq(v)}`).join("\n");
   const sh = `#!/usr/bin/env bash\nset -euo pipefail\nINPUT="$(realpath "$1")"\nOUTPUT="$(realpath "$3")"\n${envLines}\ncd ${shq(project.root)}\n${ccOut.join(" ")}\n`;
   await writeFile(path.join(permDir, "compile.sh"), sh, { mode: 0o755 });
@@ -76,8 +94,8 @@ async function preparePermuterDir(project, fn, baseCandidateText, jobDir, weight
   const permuterType = profile.permuterTypeByCompiler[compilerKind] ?? "gcc";
   await writeFile(path.join(permDir, "settings.toml"), `func_name = "${fn.symbol}"\ncompiler_type = "${permuterType}"\nobjdump_command = "${objdump} --disassemble --reloc --disassemble-zeroes -Mreg-names=32 -Mno-aliases"\n`
     + (weights ? "\n[weight_overrides]\n" + Object.entries(weights).map(([k, v]) => `${k} = ${v}.0`).join("\n") + "\n" : ""));
-  await writeFile(path.join(jobDir, "import.log"), `base.c: preprocessed ${tuRel} with the candidate spliced at ${fn.symbol}\ncompile.sh: ${ccOut.join(" ")}\ntarget.o: ${target.targetO}\n`);
-  return { permDir, importLog: path.join(jobDir, "import.log"), compile: ccOut.join(" ") };
+  await writeFile(path.join(jobDir, "import.log"), `base.c: preprocessed ${tuRel} with the candidate spliced at ${fn.symbol} (WASM cpp)\ncompile: ${ccOut.join(" ")} (WASM toolchain, in-process)\ntarget.o: ${target.targetO}\n`);
+  return { permDir, importLog: path.join(jobDir, "import.log"), compile: ccOut.join(" "), ccArgv };
 }
 
 function shq(s) { return /^[A-Za-z0-9_\/.=:+-]+$/.test(s) ? s : "'" + String(s).replace(/'/g, "'\\''") + "'"; }
@@ -127,7 +145,6 @@ export function resolveSeed(seed) {
  */
 export async function startSearch({ project, fn, baseCandidateText, timeLimitS = 300, threads = 2, seed, stopOnZero = true, label, resumeFrom, preflight = null,
   purpose, family, mutationPasses, noImprovementS = 30, repeatSearch = false }) {
-  const t = toolPaths();
   // PREFLIGHT BEFORE SPENDING BUDGET.
   //
   // §9: a 300-second, eight-thread search returned no improvement after ~317
@@ -169,17 +186,15 @@ export async function startSearch({ project, fn, baseCandidateText, timeLimitS =
   let weights = null;
   if (mutationPasses?.length) {
     const type = profileFor(project.m.splatPlatform ?? project.m.platform).permuterTypeByCompiler[project.m.toolchain.compiler.kind] ?? "gcc";
-    const query = await run(t.python, ["-c", "import sys,json; sys.path.insert(0,sys.argv[1]); from src.helpers import get_default_randomization_weights; print(json.dumps(get_default_randomization_weights(sys.argv[2])))", t.permuter, type]);
-    if (query.code !== 0) throw new Error(`cannot discover backend mutation passes: ${query.stderr.slice(0, 200)}`);
-    const available = Object.keys(JSON.parse(query.stdout));
+    const available = Object.keys(get_default_randomization_weights(type));
     if (mutationPasses.some(p => !available.includes(p))) throw Object.assign(new Error(`unknown mutation pass; backend supports: ${available.join(", ")}`), { code: "BAD_ARGS" });
     weights = Object.fromEntries(available.map(p => [p, mutationPasses.includes(p) ? 1 : 0]));
   }
   if (family && !weights && !/PERM_\w+\s*\(/.test(baseCandidateText)) throw Object.assign(new Error("a declared search family needs mutationPasses or PERM macros; a prose label does not constrain the backend"), { code: "BAD_ARGS" });
   const searchScope = { baseline: preflight.inputIdentity.sha256, reference: preflight.referenceHash,
     output: preflight.outputIdentity, family: family ?? "undirected-randomization", mutationWeights: weights, seed: seedInfo.seed, threads,
-    defaultWeightsSha256: sha256Text(await readFile(path.join(t.permuter, "default_weights.toml"), "utf8")),
-    backend: (await backendStatus()).permuter?.commit ?? null };
+    defaultWeightsSha256: sha256Text(await readFile(permuterEngine().defaultWeights, "utf8")),
+    backend: permuterEngine().commit };
   const searchIdentity = hashRecord(searchScope);
   const priorScope = [];
   for (const id of await readdir(jobsDir(project)).catch(() => [])) {
@@ -200,31 +215,44 @@ export async function startSearch({ project, fn, baseCandidateText, timeLimitS =
     await atomicJson(path.join(jobDir, "preparation-invalid.json"), { reason: "inputs changed during search preparation", spawned: false });
     throw Object.assign(new Error("inputs changed during search preparation; no search was spawned, refresh baseline"), { code: "PREFLIGHT_STALE" });
   }
-  const args = [path.join(t.permuter, "permuter.py"), prep.permDir, "-j", String(Math.max(1, threads)), "--quiet", "--no-context-output", ...(stopOnZero ? ["--stop-on-zero"] : []), ...(seedInfo.seed ? ["--seed", seedInfo.seed] : [])];
   const logPath = path.join(jobDir, "permuter.log");
-  const out = fs.openSync(logPath, "a");
-  const child = spawn("timeout", ["-s", "INT", "-k", "10", String(timeLimitS), t.python, ...args], { cwd: jobDir, env: { ...process.env, ...project.env, PYTHONUNBUFFERED: "1" }, detached: true, stdio: ["ignore", out, out] });
-  child.unref();
-  ownedChildren.set(prep.permDir, child);
-  fs.closeSync(out);
+  const engine = permuterEngine();
+  const argv = [prep.permDir, "-j", String(Math.max(1, threads)), "--quiet", "--no-context-output", ...(stopOnZero ? ["--stop-on-zero"] : []), ...(seedInfo.seed ? ["--seed", seedInfo.seed] : [])];
   const rec = {
     jobId, project: project.id, function: { symbol: fn.symbol, segment: fn.segment, va: fn.vaHex }, label: label ?? null,
-    status: "running", pid: child.pid, startedAt: new Date().toISOString(), timeLimitS, threads, seed: seedInfo.seed, seedRequested: seed ?? null, seedFrom: seedInfo.from, seedMapping: seedInfo.mapping, stopOnZero,
+    status: "running", runner: "in-process", pid: process.pid, startedAt: new Date().toISOString(), timeLimitS, threads, seed: seedInfo.seed, seedRequested: seed ?? null, seedFrom: seedInfo.from, seedMapping: seedInfo.mapping, stopOnZero,
     resumeFrom: resumeFrom ?? null, baseCandidateSha256: sha256Text(baseCandidateText).slice(0, 16),
     purpose, family: family ?? null, mutationPasses: mutationPasses ?? null, searchScope, searchIdentity, priorScope, noImprovementS,
     ...(preflight ? { preflight } : {}),
     dir: jobDir, permuterDir: prep.permDir, log: logPath, importLog: prep.importLog,
-    backend: { name: "decomp-permuter", commit: (await backendStatus()).permuter?.commit, argv: [t.python, ...args] },
+    backend: { name: engine.name, engine: "js", package: engine.package, version: engine.version, commit: engine.commit, upstream: engine.upstream,
+      argv: ["romdev-permuter", ...argv], compile: "in-process WASM (permuter-compile.js)", objdump: "WASM binutils (romdev-permuter)" },
     best: null,
   };
   await writeFile(path.join(jobDir, "base.c"), baseCandidateText);
   await atomicJson(path.join(jobDir, "job.json"), rec);
-  // Watch only the child this process just created, never a recycled PID from
-  // an old job record. The external timeout still enforces the overall budget
-  // if this server exits. No-progress enforcement is process-local, disclosed.
-  let lastImprovedAt = Date.now(), bestObserved = Infinity, checking = false, stopReason = null;
+  launchSearch({ rec, jobDir, logPath, prep, project, threads, seedInfo, stopOnZero, timeLimitS, noImprovementS, preflight });
+  return rec;
+}
+
+/**
+ * Run the permuter in this process for one job, enforcing the total-time and
+ * no-progress budgets, and record how it ended (exit.json / termination.json /
+ * stats.json) in the shapes jobStatus reads.
+ */
+function launchSearch({ rec, jobDir, logPath, prep, project, threads, seedInfo, stopOnZero, timeLimitS, noImprovementS, preflight }) {
+  const controller = new AbortController();
+  const out = fs.openSync(logPath, "a");
+  const write = (str) => { try { fs.writeSync(out, str); } catch { /* log closed */ } };
+  let stopReason = null;
+  const stop = (reason) => { if (!stopReason) { stopReason = reason; controller.abort(); } };
+  // Total budget (upstream ran under timeout(1), exit 124).
+  const budgetTimer = setTimeout(() => stop("time-budget"), timeLimitS * 1000);
+  budgetTimer.unref?.();
+  // No-progress and scorer-blind-spot watchdog, read from the permuter's own log lines.
+  let lastImprovedAt = Date.now(), bestObserved = Infinity, checking = false;
   const watchdog = setInterval(async () => {
-    if (checking || child.exitCode != null || child.signalCode != null) return;
+    if (checking || stopReason) return;
     checking = true;
     try {
       const log = await readFile(logPath, "utf8");
@@ -232,26 +260,41 @@ export async function startSearch({ project, fn, baseCandidateText, timeLimitS =
       if (progress.best != null && progress.best < bestObserved) { bestObserved = progress.best; lastImprovedAt = Date.now(); }
       const reason = progress.normalizedZeroNonExact ? "normalized-zero-nonexact-baseline"
         : Date.now() - lastImprovedAt >= noImprovementS * 1000 ? "no-improvement-budget" : null;
-      if (reason && !stopReason) {
-        stopReason = reason;
+      if (reason) {
         await atomicJson(path.join(jobDir, "termination.json"), { reason, at: new Date().toISOString(), logBytes: Buffer.byteLength(log) });
-        try { process.kill(-child.pid, "SIGINT"); } catch { child.kill("SIGINT"); }
+        stop(reason);
       }
-    } catch { /* import/startup may not have written its first log line yet */ }
-    finally { checking = false; }
+    } catch { /* the first log line may not exist yet */ } finally { checking = false; }
   }, 1000);
-  watchdog.unref();
-  child.once("exit", (code, signal) => {
-    clearInterval(watchdog);
-    ownedChildren.delete(prep.permDir);
-    void atomicJson(path.join(jobDir, "exit.json"), { code, signal, at: new Date().toISOString() }).catch(() => {});
-  });
-  child.once("error", error => {
-    clearInterval(watchdog);
-    ownedChildren.delete(prep.permDir);
-    void atomicJson(path.join(jobDir, "exit.json"), { code: null, error: error.message, at: new Date().toISOString() }).catch(() => {});
-  });
-  return rec;
+  watchdog.unref?.();
+  const compileModule = { url: new URL("./permuter-compile.js", import.meta.url).href, name: "compileCandidate",
+    config: { argv: prep.ccArgv, cwd: project.root, tmpRoot: path.join(jobDir, "tmp") } };
+  const done = (async () => {
+    let exit;
+    try {
+      const r = await runPermuter({
+        directories: [prep.permDir], threads: Math.max(1, threads), workers: true, quiet: true, no_context_output: true,
+        stop_on_zero: stopOnZero, force_seed: seedInfo.seed ?? null, signal: controller.signal, out: write,
+        compileModule, compileTimeoutMs: 120_000, tmpDir: path.join(jobDir, "tmp", "candidates"),
+      });
+      await atomicJson(path.join(jobDir, "stats.json"), { ...r.stats, at: new Date().toISOString() });
+      exit = stopReason === "time-budget" ? { code: 124, signal: null }
+        : stopReason === "cancelled" ? { code: 130, signal: "SIGINT" }
+        : stopReason ? { code: 124, signal: null, stopReason }
+        : { code: 0, signal: null };
+    } catch (e) {
+      write(`Error: ${e?.stack ?? e}\n`);
+      exit = { code: 1, error: String(e?.message ?? e) };
+    } finally {
+      clearTimeout(budgetTimer);
+      clearInterval(watchdog);
+      try { fs.closeSync(out); } catch { /* closed */ }
+      fs.rmSync(path.join(jobDir, "tmp"), { recursive: true, force: true });
+    }
+    await atomicJson(path.join(jobDir, "exit.json"), { ...exit, at: new Date().toISOString() }).catch(() => {});
+    liveJobs.delete(rec.jobId);
+  })();
+  liveJobs.set(rec.jobId, { controller, done, permuterDir: prep.permDir, stop });
 }
 
 export function searchLogProgress(log, preflight) {
@@ -299,7 +342,7 @@ export async function jobStatus(project, jobId) {
   const termination = await readFile(path.join(jobDir, "termination.json"), "utf8").then(JSON.parse, () => null);
   const exit = await readFile(path.join(jobDir, "exit.json"), "utf8").then(JSON.parse, () => null);
   const alive = await jobProcessAlive(rec);
-  const ownershipUnknown = !alive && !!rec.pid && isAlive(rec.pid);
+  const ownershipUnknown = rec.runner === "in-process" ? false : !alive && !!rec.pid && isAlive(rec.pid);
   // Permuter lines: "base score = N", "found new best score! (N vs M)", "iteration K", "Found zero score!"
   const baseScore = Number(/base score\s*=\s*(\d+)/.exec(log)?.[1] ?? NaN);
   const bestHits = [...log.matchAll(/found (?:new best|a better) score!? \((\d+) vs (\d+)\)/g)].map((m) => Number(m[1]));
@@ -317,7 +360,9 @@ export async function jobStatus(project, jobId) {
     }
   } catch {}
   let status = rec.status;
-  if (status === "running" && !alive) status = zero ? "complete-zero" : "complete-budget";
+  // An in-process search whose server went away before it finished has no exit record.
+  const interrupted = rec.runner === "in-process" && !alive && !exit && rec.status === "running";
+  if (status === "running" && !alive) status = zero ? "complete-zero" : interrupted ? "interrupted" : "complete-budget";
   const progress = searchLogProgress(log, rec.preflight);
   if (!alive && termination?.reason === "no-improvement-budget") status = "complete-no-progress";
   if (!alive && progress.normalizedZeroNonExact) status = "complete-scorer-blind-spot";
@@ -338,16 +383,18 @@ export async function jobStatus(project, jobId) {
   // being recorded a few lines below - and note it is stamped AFTER this line,
   // so a job detected as finished on THIS call had no endedAt to use yet.
   // Stamp it first, then measure.
-  if (!alive && !ownershipUnknown && !rec.endedAt && ["running", "cancelling"].includes(rec.status)) rec.endedAt = exit?.at ?? new Date().toISOString();
+  if (!alive && !ownershipUnknown && !interrupted && !rec.endedAt && ["running", "cancelling"].includes(rec.status)) rec.endedAt = exit?.at ?? new Date().toISOString();
   const endMs = rec.endedAt ? Date.parse(rec.endedAt) : (rec.cancelledAt ? Date.parse(rec.cancelledAt) : Date.now());
   const elapsedS = Math.round((endMs - Date.parse(rec.startedAt)) / 1000);
   const derived = { ...rec, status, alive, ownershipUnknown, elapsedS, normalizedZeroNonExact: progress.normalizedZeroNonExact,
     terminationReason: termination?.reason ?? (progress.normalizedZeroNonExact ? "normalized-zero-nonexact-baseline" : null),
-    noProgressWatchdog: "process-local; after a server restart only the external total-time budget remains active",
+    noProgressWatchdog: rec.runner === "in-process" ? "in-process: the search, its budget and its watchdog end with the server that started it" : "process-local; after a server restart only the external total-time budget remains active",
+    ...(interrupted ? { interruptedNote: "the server that ran this search exited before it finished; its outputs so far are on disk and its best candidate is usable" } : {}),
     baseScore: Number.isNaN(baseScore) ? null : baseScore, bestScoreSeen: bestHits.length ? Math.min(...bestHits) : null, improvements: bestHits.length, candidatesWritten: (log.match(/^wrote to /gm) ?? []).length, zeroFound: zero, ...logErrors, best,
     logTail: log.split("\n").filter(Boolean).slice(-6), note: status === "complete-budget" ? "budget exhausted - NOT a match unless best.score is 0 and compare confirms exact" : status === "complete-zero" ? "the permuter found a zero-score candidate; run decomp({op:'compare'}) on best.path to confirm strict equality" : undefined };
-  if (status !== rec.status || (best && JSON.stringify(best) !== JSON.stringify(rec.best))) {
-    rec.status = status; rec.best = best; if (!alive && !ownershipUnknown && !rec.endedAt) rec.endedAt = derived.endedAt ?? new Date().toISOString();
+  if ((status !== rec.status && !interrupted) || (best && JSON.stringify(best) !== JSON.stringify(rec.best))) {
+    if (!interrupted) rec.status = status;
+    rec.best = best; if (!alive && !ownershipUnknown && !interrupted && !rec.endedAt) rec.endedAt = derived.endedAt ?? new Date().toISOString();
     await atomicJson(path.join(jobDir, "job.json"), rec);
   }
   return derived;
@@ -359,10 +406,17 @@ export async function cancelJob(project, jobId) {
     cancellationNote: "already stopped; preserved its actual completion reason and search-history evidence" };
   const jobDir = path.join(jobsDir(project), jobId);
   const rec = JSON.parse(await readFile(path.join(jobDir, "job.json"), "utf8"));
-  if (rec.pid && isAlive(rec.pid) && !await jobProcessAlive(rec)) throw Object.assign(new Error("cannot establish that the live PID still belongs to this search; no process was signalled"), { code: "PROCESS_OWNERSHIP_UNKNOWN" });
-  if (await jobProcessAlive(rec)) { try { process.kill(-rec.pid, "SIGINT"); } catch { try { process.kill(rec.pid, "SIGINT"); } catch {} } }
+  if (rec.runner !== "in-process") {
+    if (rec.pid && isAlive(rec.pid) && !await jobProcessAlive(rec)) throw Object.assign(new Error("cannot establish that the live PID still belongs to this search; no process was signalled"), { code: "PROCESS_OWNERSHIP_UNKNOWN" });
+    if (await jobProcessAlive(rec)) { try { process.kill(-rec.pid, "SIGINT"); } catch { try { process.kill(rec.pid, "SIGINT"); } catch {} } }
+  }
   rec.cancelledAt = new Date().toISOString(); rec.status = "cancelling";
   await atomicJson(path.join(jobDir, "job.json"), rec);
+  const live = liveJobs.get(jobId);
+  if (live) {
+    live.stop("cancelled");
+    await live.done;
+  }
   return jobStatus(project, jobId);
 }
 
@@ -381,7 +435,7 @@ export async function listJobs(project, symbol) {
       // process is reported as abandoned rather than as work in progress.
       const live = s.alive;
       const lifecycle = s.ownershipUnknown ? "unknown" : live ? "live"
-        : s.status === "running" ? "abandoned"
+        : s.status === "running" || s.status === "interrupted" ? "abandoned"
         : "terminal";
       out.push({ jobId: id, symbol: s.function.symbol, segment: s.function.segment ?? null,
         status: s.status, lifecycle, live, pid: s.pid ?? null,
@@ -396,9 +450,9 @@ export async function listJobs(project, symbol) {
 function isAlive(pid) { try { process.kill(pid, 0); return true; } catch { return false; } }
 
 async function jobProcessAlive(rec) {
+  // In-process searches are alive exactly while this process runs them.
+  if (rec.runner === "in-process") return liveJobs.has(rec.jobId) && rec.pid === process.pid;
   if (!rec.pid || !isAlive(rec.pid)) return false;
-  const child = ownedChildren.get(rec.permuterDir);
-  if (child?.pid === rec.pid && child.exitCode == null && child.signalCode == null) return true;
   // A PID on its own is not job ownership after a restart. On Linux, require
   // the exact owned permuter directory in the process argv before status or
   // cancellation treats it as this search. Unknown ownership fails closed.
@@ -452,8 +506,9 @@ export async function jobReport(project, jobId, { maxOutputs = 12 } = {}) {
   // accounting below is read from the backend's own output rather than
   // inferred. A field the log does not support is reported as null - an
   // invented count would be worse than an absent one.
-  const iterations = Number(/(?:iteration|tried)\s+(\d+)/i.exec(log)?.[1] ?? NaN);
-  const compileFails = (log.match(/compile (?:error|failed)/gi) ?? []).length;
+  const stats = await readFile(path.join(s.dir, "stats.json"), "utf8").then(JSON.parse, () => null);
+  const iterations = stats?.iterations ?? Number(/(?:iteration|tried)\s+(\d+)/i.exec(log)?.[1] ?? NaN);
+  const compileFails = stats?.compileFailures ?? (log.match(/compile (?:error|failed)/gi) ?? []).length;
   const permMacros = /No perm macros found/i.test(log);
   const baseSources = Number(/Will try (\d+) different base sources/i.exec(log)?.[1] ?? NaN);
   const accounting = {
@@ -473,6 +528,8 @@ export async function jobReport(project, jobId, { maxOutputs = 12 } = {}) {
       : s.status === "complete-budget" ? `time budget of ${s.timeLimitS}s exhausted`
       : s.status === "running" ? "still running"
       : s.status),
+    passesApplied: stats?.passCounts ?? null,
+    internalErrors: stats?.internalErrors ?? null,
     note: Number.isFinite(iterations) ? undefined
       : "the backend's log does not report an iteration count, so effective compilations and cache hits cannot be stated. They are null rather than guessed.",
   };
