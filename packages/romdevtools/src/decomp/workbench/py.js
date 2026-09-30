@@ -212,9 +212,21 @@ export function hex(value, width = 0, { prefix = false, upper = false } = {}) {
 
 /** `{value:.Nf}` */
 export function fixed(value, n) {
-  // toFixed rounds half-away on exact binary halves differently; the
-  // original rounds the exact binary value, which toFixed also does.
-  return Number(value).toFixed(n);
+  // Both round the exact binary value; they differ only on an exact tie,
+  // where toFixed rounds up and the original rounds to even.
+  const x = Number(value);
+  if (!Number.isFinite(x)) return x !== x ? "nan" : x > 0 ? "inf" : "-inf";
+  const s = x.toFixed(n);
+  const exact = Math.abs(x).toFixed(Math.min(100, n + 60));
+  const tail = exact.slice(exact.indexOf(".") + 1 + n);
+  if (!/^50*$/.test(tail)) return s;
+  const lastDigit = n === 0 ? Math.trunc(Math.abs(x)) % 10 : Number(exact[exact.indexOf(".") + n]);
+  if (lastDigit % 2 === 0) {
+    // Keep the even digit: truncate instead of rounding up.
+    const kept = exact.slice(0, exact.indexOf(".") + (n ? 1 + n : 0));
+    return (x < 0 ? "-" : "") + kept;
+  }
+  return s;
 }
 
 /** `{value:.N%}` */
