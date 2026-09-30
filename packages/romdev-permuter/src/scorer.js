@@ -4,6 +4,7 @@
 // reorder/insert/delete penalties for the rest.
 import { createHash } from "node:crypto";
 import { SequenceMatcher } from "./difflib.js";
+import { opcodes as levenshteinOpcodes } from "./levenshtein.js";
 import { get_arch, objdump, pySplitWs1 } from "./objdump.js";
 
 export const PENALTY_INF = 10 ** 9;
@@ -91,9 +92,7 @@ export class Scorer {
     this.ign_branch_targets = opts.ign_branch_targets;
     this.PENALTY_INF = PENALTY_INF;
     this.debugLog = [];
-    if (this.algorithm === "levenshtein") {
-      throw new Error("the levenshtein diff algorithm needs the python-Levenshtein opcodes; only difflib (the default) is ported");
-    }
+    if (this.algorithm !== "difflib" && this.algorithm !== "levenshtein") throw new Error(`unknown diff algorithm ${this.algorithm}`);
     // re.search needs a non-global copy of the stack-relative pattern.
     this.re_sprel_search = new RegExp(this.arch.re_sprel.source, this.arch.re_sprel.flags.replace("g", ""));
   }
@@ -186,8 +185,20 @@ export class Scorer {
       return old_regalloc !== num_regalloc_penalties || old_stack !== num_stack_penalties || old_branch !== num_branch_penalties;
     };
 
-    this.difflib_differ.set_seq1(cand_seq.map((line) => line.mnemonic));
-    const result_diff = this.difflib_differ.get_opcodes();
+    let result_diff;
+    if (this.algorithm === "levenshtein") {
+      // Upstream remaps mnemonics to characters (a fresh map per score) and
+      // diffs the two strings with Levenshtein.opcodes(cand, target).
+      const remapping = new Map();
+      const remap = (seq) => seq.map((m) => {
+        if (!remapping.has(m)) remapping.set(m, remapping.size);
+        return remapping.get(m);
+      });
+      result_diff = levenshteinOpcodes(remap(cand_seq.map((l) => l.mnemonic)), remap(this.target_seq.map((l) => l.mnemonic)));
+    } else {
+      this.difflib_differ.set_seq1(cand_seq.map((line) => line.mnemonic));
+      result_diff = this.difflib_differ.get_opcodes();
+    }
     const equal_no_diff = new Set();
     for (const [tag, i1, i2, j1, j2] of result_diff) {
       if (tag === "equal") {

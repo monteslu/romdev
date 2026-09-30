@@ -7,7 +7,7 @@ import { RANDOMIZATION_PASSES, PASS_DOCS } from "../src/randomizer.js";
 
 const usage = `usage: romdev-permuter [-h] [--help=randomization-passes] [--show-errors] [--show-timings]
        [--print-diffs] [--abort-exceptions] [--better-only] [--best-only] [--stop-on-zero] [--quiet]
-       [--stack-diffs] [--algorithm {difflib}] [--keep-prob PROB] [-j THREADS] [--no-context-output]
+       [--stack-diffs] [--algorithm {difflib,levenshtein}] [--keep-prob PROB] [-j THREADS] [--no-context-output]
        [--only-if-below N] [--debug] [--speed [1-100]] [--no-ignore-branch-targets] [--seed SEED]
        directory [directory ...]`;
 
@@ -46,7 +46,7 @@ for (let i = 0; i < argv.length; i++) {
     case "--stop-on-zero": opts.stop_on_zero = true; break;
     case "--quiet": opts.quiet = true; break;
     case "--stack-diffs": opts.stack_differences = true; break;
-    case "--algorithm": { const v = val(); if (v !== "difflib") fail(`argument --algorithm: '${v}' is not ported (only difflib)`); opts.algorithm = v; break; }
+    case "--algorithm": { const v = val(); if (v !== "difflib" && v !== "levenshtein") fail(`argument --algorithm: invalid choice: '${v}' (choose from 'difflib', 'levenshtein')`); opts.algorithm = v; break; }
     case "--keep-prob": opts.keep_prob = floatIn(val(), 0, 1, "--keep-prob"); break;
     case "--seed": opts.force_seed = val(); break;
     case "-j": { const v = val(); opts.threads = parseInt(v, 10); if (!Number.isInteger(opts.threads)) fail(`argument -j: invalid int value: '${v}'`); break; }

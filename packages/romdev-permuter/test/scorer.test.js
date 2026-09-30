@@ -20,8 +20,9 @@ const row = (addr, word, text) => `${addr.toString(16).padStart(4, " ")}:\t${wor
 const reloc = (addr, type, sym) => `\t\t\t${addr.toString(16)}: ${type}\t${sym}`;
 
 /** A scorer over already-simplified target text, bypassing ELF/objdump. */
-function scorerFor(targetLines, { stack_differences = false, ign_branch_targets = true } = {}) {
+function scorerFor(targetLines, { stack_differences = false, ign_branch_targets = true, algorithm = "difflib" } = {}) {
   const s = Object.create(Scorer.prototype);
+  s.algorithm = algorithm;
   s.arch = MIPS_SETTINGS;
   s.stack_differences = stack_differences;
   s.ign_branch_targets = ign_branch_targets;
@@ -111,4 +112,20 @@ test("decimal immediates become hex unless glued to a letter; addiu on sp become
   const seq = simplify_objdump([...HEAD, row(0, "27bdffe8", "addiu\tsp,sp,-24"), row(4, "24420010", "addiu\tv0,v0,16"),
     row(8, "8c820000", "lw\tv0,0(a0)")], MIPS_SETTINGS, { stack_differences: false, ign_branch_targets: true });
   assert.deepEqual(seq.map((l) => l.row), ["addiu\tsp,sp,imm", "addiu\tv0,v0,0x10", "lw\tv0,0(a0)"]);
+});
+
+test("--algorithm levenshtein: rows come from Levenshtein.opcodes over remapped mnemonics", async () => {
+  const { opcodes } = await import("../src/levenshtein.js");
+  const cand = TARGET.slice();
+  [cand[4], cand[5]] = [row(8, "00451021", "addu\tv0,v0,a1"), row(12, "8c820000", "lw\tv0,0(a0)")];
+  const lev = score(scorerFor(TARGET, { algorithm: "levenshtein" }), cand);
+  const t = ["lui", "addiu", "lw", "addu", "jr"], c = ["lui", "addiu", "addu", "lw", "jr"];
+  const ids = new Map();
+  const remap = (xs) => xs.map((m) => (ids.has(m) ? ids.get(m) : (ids.set(m, ids.size), ids.size - 1)));
+  const ops = opcodes(remap(c), remap(t));
+  // Every non-equal row is paired across the swap, so all of them are reorderings.
+  const changed = ops.filter((o) => o[0] !== "equal").reduce((n, [, i1, i2]) => n + (i2 - i1), 0);
+  assert.equal(lev.penalties.reordering, changed);
+  assert.equal(lev.score, 60 * changed);
+  assert.equal(score(scorerFor(TARGET, { algorithm: "levenshtein" }), TARGET).score, 0);
 });
