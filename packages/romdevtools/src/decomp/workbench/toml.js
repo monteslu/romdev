@@ -30,7 +30,7 @@ const ILLEGAL = (c) => { const x = c.charCodeAt(0); return (x < 0x20 && c !== "\
 
 /** Parse a TOML document into plain objects (arrays of tables are arrays). */
 export function parseToml(src) {
-  src = src.replace(/^﻿/, "");
+  src = src.replace(/^\ufeff/, "");
   let i = 0;
   const root = {};
   const defined = new Set();      // explicitly defined tables ([x])

@@ -10,7 +10,7 @@ import { NoteError, addNote, mergeNotes, mergedView, notesDirectory, parseLogEnt
   reservationsDirectory, reserveIdentifiers, takenIdentifiers } from "../src/decomp/workbench/notes.js";
 import { runCommand, runCommandIsolated } from "../src/decomp/workbench/cli.js";
 
-const D = "—";
+const D = "\u2014";
 const LOG = `# Findings\n\n## WB-01 ${D} the first finding\n**Status:** LOGGED.\n\n## WB-02 ${D} the second finding\nSome prose about the finding.\n**Status:** SHIPPED.\n\n# Recovery notice\n\nProse that is not an entry.\n`;
 
 function setup() {

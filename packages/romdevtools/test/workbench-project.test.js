@@ -98,11 +98,11 @@ test("dump mode rejects an inapplicable objdump", withDir((root) => {
 }));
 
 test("the rendered config round-trips non-ASCII and quotes", withDir((root) => {
-  const d = withObjectOverrides(discoverProject(root), { target: 'build/a "target".o', candidate: "build/candidaté.o", symbol: "demo" });
+  const d = withObjectOverrides(discoverProject(root), { target: 'build/a "target".o', candidate: "build/candidat\u00e9.o", symbol: "demo" });
   fs.writeFileSync(path.join(root, CONFIG_NAME), renderProjectConfig(d));
   const loaded = loadProjectConfig(path.join(root, CONFIG_NAME));
   assert.ok(loaded.target.includes('a "target".o'));
-  assert.ok(loaded.candidate.includes("candidaté.o"));
+  assert.ok(loaded.candidate.includes("candidat\u00e9.o"));
 }));
 
 test("project init JSON has schema and proposal", withDir(async (root) => {
