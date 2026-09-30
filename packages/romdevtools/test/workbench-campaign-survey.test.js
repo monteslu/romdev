@@ -55,7 +55,7 @@ test("a truncated walk says so", async () => {
 });
 
 test("a findings log is read through the note mechanism", async () => {
-  writeFileSync(path.join(root, "WORKBENCH-IMPROVEMENTS.md"), "## WB-1 — a finding\n**Status:** LOGGED\n");
+  writeFileSync(path.join(root, "WORKBENCH-IMPROVEMENTS.md"), "## WB-1 \u2014 a finding\n**Status:** LOGGED\n");
   const sidecar = path.join(root, "WORKBENCH-IMPROVEMENTS.md.notes.d");
   mkdirSync(sidecar);
   writeFileSync(path.join(sidecar, "20260809T000000-WB-2-abcd1234.json"), JSON.stringify({ schema: "decomp-workbench-note-v1", id: "WB-2", title: "pending",
