@@ -1,0 +1,84 @@
+// SPDX-FileCopyrightText: 2024 RizinOrg <info@rizin.re>
+// SPDX-License-Identifier: LGPL-3.0-only
+
+// clang-format off
+#ifndef RZ_HASH_PLUGINS_BUILD_H
+#define RZ_HASH_PLUGINS_BUILD_H
+
+#define RZ_HASH_STATIC_PLUGINS &rz_hash_plugin_md2, &rz_hash_plugin_md4, &rz_hash_plugin_md5, &rz_hash_plugin_sha1, &rz_hash_plugin_sha256, &rz_hash_plugin_sha384, &rz_hash_plugin_sha512, &rz_hash_plugin_sm3, &rz_hash_plugin_blake3, &rz_hash_plugin_fletcher8, &rz_hash_plugin_fletcher16, &rz_hash_plugin_fletcher32, &rz_hash_plugin_fletcher64, &rz_hash_plugin_adler32, &rz_hash_plugin_crca_crc8smbus, &rz_hash_plugin_crca_crc8cdma2000, &rz_hash_plugin_crca_crc8darc, &rz_hash_plugin_crca_crc8dvbs2, &rz_hash_plugin_crca_crc8ebu, &rz_hash_plugin_crca_crc8icode, &rz_hash_plugin_crca_crc8itu, &rz_hash_plugin_crca_crc8maxim, &rz_hash_plugin_crca_crc8rohc, &rz_hash_plugin_crca_crc8wcdma, &rz_hash_plugin_crca_crc15can, &rz_hash_plugin_crca_crc16, &rz_hash_plugin_crca_crc16citt, &rz_hash_plugin_crca_crc16usb, &rz_hash_plugin_crca_crc16hdlc, &rz_hash_plugin_crca_crc16augccitt, &rz_hash_plugin_crca_crc16buypass, &rz_hash_plugin_crca_crc16cdma2000, &rz_hash_plugin_crca_crc16dds110, &rz_hash_plugin_crca_crc16dectr, &rz_hash_plugin_crca_crc16dectx, &rz_hash_plugin_crca_crc16dnp, &rz_hash_plugin_crca_crc16en13757, &rz_hash_plugin_crca_crc16genibus, &rz_hash_plugin_crca_crc16maxim, &rz_hash_plugin_crca_crc16mcrf4xx, &rz_hash_plugin_crca_crc16riello, &rz_hash_plugin_crca_crc16t10dif, &rz_hash_plugin_crca_crc16teledisk, &rz_hash_plugin_crca_crc16tms37157, &rz_hash_plugin_crca_crca, &rz_hash_plugin_crca_crc16kermit, &rz_hash_plugin_crca_crc16modbus, &rz_hash_plugin_crca_crc16x25, &rz_hash_plugin_crca_crc16xmodem, &rz_hash_plugin_crca_crc24, &rz_hash_plugin_crca_crc32, &rz_hash_plugin_crca_crc32ecma267, &rz_hash_plugin_crca_crc32c, &rz_hash_plugin_crca_crc32bzip2, &rz_hash_plugin_crca_crc32d, &rz_hash_plugin_crca_crc32mpeg2, &rz_hash_plugin_crca_crc32posix, &rz_hash_plugin_crca_crc32q, &rz_hash_plugin_crca_crc32jamcrc, &rz_hash_plugin_crca_crc32xfer, &rz_hash_plugin_crca_crc64, &rz_hash_plugin_crca_crc64ecma182, &rz_hash_plugin_crca_crc64we, &rz_hash_plugin_crca_crc64xz, &rz_hash_plugin_crca_crc64iso, &rz_hash_plugin_xor8, &rz_hash_plugin_xor16, &rz_hash_plugin_xxhash32, &rz_hash_plugin_ssdeep, &rz_hash_plugin_parity, &rz_hash_plugin_entropy, &rz_hash_plugin_entropy_fract
+
+extern RzHashPlugin rz_hash_plugin_md2;
+extern RzHashPlugin rz_hash_plugin_md4;
+extern RzHashPlugin rz_hash_plugin_md5;
+extern RzHashPlugin rz_hash_plugin_sha1;
+extern RzHashPlugin rz_hash_plugin_sha256;
+extern RzHashPlugin rz_hash_plugin_sha384;
+extern RzHashPlugin rz_hash_plugin_sha512;
+extern RzHashPlugin rz_hash_plugin_sm3;
+extern RzHashPlugin rz_hash_plugin_blake3;
+extern RzHashPlugin rz_hash_plugin_fletcher8;
+extern RzHashPlugin rz_hash_plugin_fletcher16;
+extern RzHashPlugin rz_hash_plugin_fletcher32;
+extern RzHashPlugin rz_hash_plugin_fletcher64;
+extern RzHashPlugin rz_hash_plugin_adler32;
+extern RzHashPlugin rz_hash_plugin_crca_crc8smbus;
+extern RzHashPlugin rz_hash_plugin_crca_crc8cdma2000;
+extern RzHashPlugin rz_hash_plugin_crca_crc8darc;
+extern RzHashPlugin rz_hash_plugin_crca_crc8dvbs2;
+extern RzHashPlugin rz_hash_plugin_crca_crc8ebu;
+extern RzHashPlugin rz_hash_plugin_crca_crc8icode;
+extern RzHashPlugin rz_hash_plugin_crca_crc8itu;
+extern RzHashPlugin rz_hash_plugin_crca_crc8maxim;
+extern RzHashPlugin rz_hash_plugin_crca_crc8rohc;
+extern RzHashPlugin rz_hash_plugin_crca_crc8wcdma;
+extern RzHashPlugin rz_hash_plugin_crca_crc15can;
+extern RzHashPlugin rz_hash_plugin_crca_crc16;
+extern RzHashPlugin rz_hash_plugin_crca_crc16citt;
+extern RzHashPlugin rz_hash_plugin_crca_crc16usb;
+extern RzHashPlugin rz_hash_plugin_crca_crc16hdlc;
+extern RzHashPlugin rz_hash_plugin_crca_crc16augccitt;
+extern RzHashPlugin rz_hash_plugin_crca_crc16buypass;
+extern RzHashPlugin rz_hash_plugin_crca_crc16cdma2000;
+extern RzHashPlugin rz_hash_plugin_crca_crc16dds110;
+extern RzHashPlugin rz_hash_plugin_crca_crc16dectr;
+extern RzHashPlugin rz_hash_plugin_crca_crc16dectx;
+extern RzHashPlugin rz_hash_plugin_crca_crc16dnp;
+extern RzHashPlugin rz_hash_plugin_crca_crc16en13757;
+extern RzHashPlugin rz_hash_plugin_crca_crc16genibus;
+extern RzHashPlugin rz_hash_plugin_crca_crc16maxim;
+extern RzHashPlugin rz_hash_plugin_crca_crc16mcrf4xx;
+extern RzHashPlugin rz_hash_plugin_crca_crc16riello;
+extern RzHashPlugin rz_hash_plugin_crca_crc16t10dif;
+extern RzHashPlugin rz_hash_plugin_crca_crc16teledisk;
+extern RzHashPlugin rz_hash_plugin_crca_crc16tms37157;
+extern RzHashPlugin rz_hash_plugin_crca_crca;
+extern RzHashPlugin rz_hash_plugin_crca_crc16kermit;
+extern RzHashPlugin rz_hash_plugin_crca_crc16modbus;
+extern RzHashPlugin rz_hash_plugin_crca_crc16x25;
+extern RzHashPlugin rz_hash_plugin_crca_crc16xmodem;
+extern RzHashPlugin rz_hash_plugin_crca_crc24;
+extern RzHashPlugin rz_hash_plugin_crca_crc32;
+extern RzHashPlugin rz_hash_plugin_crca_crc32ecma267;
+extern RzHashPlugin rz_hash_plugin_crca_crc32c;
+extern RzHashPlugin rz_hash_plugin_crca_crc32bzip2;
+extern RzHashPlugin rz_hash_plugin_crca_crc32d;
+extern RzHashPlugin rz_hash_plugin_crca_crc32mpeg2;
+extern RzHashPlugin rz_hash_plugin_crca_crc32posix;
+extern RzHashPlugin rz_hash_plugin_crca_crc32q;
+extern RzHashPlugin rz_hash_plugin_crca_crc32jamcrc;
+extern RzHashPlugin rz_hash_plugin_crca_crc32xfer;
+extern RzHashPlugin rz_hash_plugin_crca_crc64;
+extern RzHashPlugin rz_hash_plugin_crca_crc64ecma182;
+extern RzHashPlugin rz_hash_plugin_crca_crc64we;
+extern RzHashPlugin rz_hash_plugin_crca_crc64xz;
+extern RzHashPlugin rz_hash_plugin_crca_crc64iso;
+extern RzHashPlugin rz_hash_plugin_xor8;
+extern RzHashPlugin rz_hash_plugin_xor16;
+extern RzHashPlugin rz_hash_plugin_xxhash32;
+extern RzHashPlugin rz_hash_plugin_ssdeep;
+extern RzHashPlugin rz_hash_plugin_parity;
+extern RzHashPlugin rz_hash_plugin_entropy;
+extern RzHashPlugin rz_hash_plugin_entropy_fract;
+// clang-format on
+
+#endif

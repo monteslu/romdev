@@ -71,8 +71,8 @@ each toolchain recipe the same `PKG_OUT` copy step the core recipes have.)
 
 | Component | Recipe | Patch(es) | Ships in |
 |---|---|---|---|
-| Rizin (CFG / xrefs / functions) | `build-rizin.sh` | `rizin-romdev-emscripten.patch`, `rizin-libzip-emscripten.patch` | `romdev-analysis` |
-| Ghidra decompiler + rz-ghidra + SLEIGH | `build-decompiler.sh` | (rz-ghidra/meson pins; SLEIGH specs pinned in `analysis.sleigh_specs.*`) | `romdev-analysis-decompiler` |
+| Rizin (CFG / xrefs / functions) | `build-rizin.sh` (+ `rizin-wasm/build.mjs`, `rizin-wasm/plan.json`) | `rizin-romdev-emscripten.patch`, `rizin-libzip-emscripten.patch` | `romdev-analysis` |
+| Ghidra decompiler + rz-ghidra + SLEIGH | `build-decompiler.sh` | (rz-ghidra pin; SLEIGH specs pinned in `analysis.sleigh_specs.*`) | `romdev-analysis-decompiler` |
 
 ## Shared primitives (build no package directly)
 

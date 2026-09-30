@@ -360,14 +360,6 @@
       "license": "LGPL-3.0-only",
       "_comment": "Phase 3: Ghidra C++ decompiler via rz-ghidra. Not built yet."
     },
-    "meson": {
-      "kind": "tarball",
-      "url": "https://github.com/mesonbuild/meson/releases/download/1.6.1/meson-1.6.1.tar.gz",
-      "version": "1.6.1",
-      "sha256": "1eca49eb6c26d58bbee67fd3337d8ef557c0804e30a6d16bfdf269db997464de",
-      "license": "Apache-2.0",
-      "_comment": "Pure-python build tool for rizin; used standalone, no install."
-    },
     "sleigh_specs": {
       "_comment": "External Ghidra SLEIGH specs for the 3 CPUs stock Ghidra lacks (SM83/65816/HuC6280). Compiled to .sla by build-decompiler.sh; only the compiled .sla ships, never the .slaspec source.",
       "ghidraboy": {

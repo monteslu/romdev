@@ -1,0 +1,11 @@
+#ifndef RZ_BUILD_VERSION_H
+#define RZ_BUILD_VERSION_H
+
+#define RZ_VERSION_MAJOR 0
+#define RZ_VERSION_MINOR 8
+#define RZ_VERSION_PATCH 2
+#define RZ_VERSION_NUMBER 8002
+#define RZ_VERSION "0.8.2"
+/* #undef RZ_PACKAGER_VERSION */
+/* #undef RZ_PACKAGER */
+#endif /* RZ_BUILD_VERSION_H */
