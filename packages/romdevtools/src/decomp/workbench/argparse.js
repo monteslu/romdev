@@ -15,7 +15,7 @@
 //                 default?, choices?, required?, help?, metavar? }
 //   action: store | store_true | store_false | store_const | append |
 //           append_const | count | extend | version | help | symbol |
-//           explain_keys | list_file
+//           explain_keys | list_file | print_exit (prints output() and exits 0)
 //   type: "int" | "float" | "str" | function(text) -> value (throw
 //         ArgumentTypeError(message) to reject)
 //
@@ -84,7 +84,7 @@ function initialValue(a) {
     case "store_true": return a.default ?? false;
     case "store_false": return a.default ?? true;
     case "count": return a.default ?? null;
-    case "help": case "version": case "explain_keys": return SUPPRESS;
+    case "help": case "version": case "explain_keys": case "print_exit": return SUPPRESS;
     default: {
       const d = a.default;
       if (d === undefined) return null;
@@ -138,7 +138,7 @@ export function parseArgs(spec, tokens, { prog, explainKeys = null, version = nu
     const label = optLabel(a);
     seen.add(a);
     const action = a.action ?? "store";
-    const noValue = ["store_true", "store_false", "store_const", "append_const", "count", "help", "version", "explain_keys"].includes(action);
+    const noValue = ["store_true", "store_false", "store_const", "append_const", "count", "help", "version", "explain_keys", "print_exit"].includes(action);
     if (noValue) {
       if (inline !== null) throw new ArgumentError(`${label}: ignored explicit argument ${strRepr(inline)}`, { prog });
       if (action === "store_true") args[d] = true;
@@ -149,6 +149,7 @@ export function parseArgs(spec, tokens, { prog, explainKeys = null, version = nu
       else if (action === "help") throw new ParserExit(0, formatHelp(spec, { prog }));
       else if (action === "version") throw new ParserExit(0, `${version ?? ""}\n`);
       else if (action === "explain_keys") throw new ParserExit(0, `${explainKeys ? explainKeys() : ""}\n`);
+      else if (action === "print_exit") throw new ParserExit(0, `${a.output()}\n`);
       continue;
     }
     // Values: nargs None/"?"/"*"/"+"/N
@@ -246,7 +247,7 @@ function argUsage(a) {
   const mv = metavarOf(a);
   const vals = a.nargs === "?" ? `[${mv}]` : a.nargs === "*" ? `[${mv} ...]` : a.nargs === "+" ? `${mv} [${mv} ...]` : typeof a.nargs === "number" ? Array(a.nargs).fill(mv).join(" ") : mv;
   if (!isOption(a)) return vals;
-  const noValue = ["store_true", "store_false", "store_const", "append_const", "count", "help", "version", "explain_keys"].includes(a.action);
+  const noValue = ["store_true", "store_false", "store_const", "append_const", "count", "help", "version", "explain_keys", "print_exit"].includes(a.action);
   const f = a.flags[0];
   return noValue ? f : `${f} ${vals}`;
 }
@@ -292,7 +293,7 @@ export function formatHelp(spec, { prog }) {
   section("positional arguments", spec.arguments.filter((a) => !isOption(a)).map((a) => [metavarOf(a), a.help]));
   const opts = [["-h, --help", "show this help message and exit"]];
   for (const a of spec.arguments.filter(isOption)) {
-    const noValue = ["store_true", "store_false", "store_const", "append_const", "count", "help", "version", "explain_keys"].includes(a.action);
+    const noValue = ["store_true", "store_false", "store_const", "append_const", "count", "help", "version", "explain_keys", "print_exit"].includes(a.action);
     opts.push([a.flags.map((f) => (noValue ? f : `${f} ${metavarOf(a)}`)).join(", "), a.help]);
   }
   section("options", opts);
