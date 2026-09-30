@@ -1,37 +1,34 @@
-// workbench.js - the bridge to n64-decomp-workbench.
+// workbench.js - romdev's late-stage mechanism diagnostics (the workbench).
 //
-// WHY A BRIDGE AND NOT A REIMPLEMENTATION. romdev's comparator classifies
-// instruction count, stack frame, register substitutions, immediates, branch
-// targets, relocations and whole-stream reordering. That is good first-pass
-// triage and it cannot diagnose the mechanisms a late-stage campaign actually
-// turns on: allocator webs, uopt global coloring, ugen temporary provenance,
-// stack homes, as1 ready-set scheduling, emitted-line-number ties, pass
-// ownership, frontend lineage. The workbench already does all of that, it is
-// the tool real campaigns already use by hand, and building a second shallower
-// copy inside romdev would produce two tools that disagree.
+// WHY THESE EXIST. romdev's comparator classifies instruction count, stack
+// frame, register substitutions, immediates, branch targets, relocations and
+// whole-stream reordering. That is good first-pass triage and it cannot
+// diagnose the mechanisms a late-stage campaign actually turns on: allocator
+// webs, uopt global coloring, stack homes, as1 ready-set scheduling,
+// emitted-line-number ties, pass ownership. The workbench commands do, and
+// they run IN PROCESS: src/decomp/workbench/ holds them as plain JS modules,
+// so there is no second runtime to install and nothing to locate on disk.
 //
-// DISCOVERY, NOT HARDCODING. `decomp-workbench commands --json` is a versioned,
-// self-describing catalog: 128 commands in 24 groups, each carrying its own
-// `invocation`, `report_schema`, and a `safety` block that says whether it is
-// destructive, touches the network, or spawns an external process. The bridge
-// reads that catalog and refuses anything it has not been told about, so the
-// workbench can grow without romdev being edited - and so a command's own
-// safety metadata, not a guess here, decides what is allowed to run.
+// A SELF-DESCRIBING CATALOG. `commands` returns the versioned command map
+// (decomp-workbench-command-map-v1): each command carries its `invocation`,
+// `report_schema`, and a `safety` block that says whether it is destructive,
+// touches the network, or spawns an external process. The bridge refuses
+// anything the catalog does not list, and the command's own safety metadata,
+// not a guess here, decides what is allowed to run.
 //
-// Its exit codes are part of the contract: 0 success, 1 gate/no-result (a real
+// Exit codes are part of the contract: 0 success, 1 gate/no-result (a real
 // answer, NOT an error), 2 usage/capability/process, 3 census-failed.
 //
 // Plain JS ESM + JSDoc.
 
-import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
-import { spawn } from "node:child_process";
 import { readFile, mkdir, copyFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { compilationEnvironment, fileIdentities, fileRevisions, atomicJson, instructionIdentity, hashRecord } from "./measurement.js";
 import { dumpObject, findSymbol, trimToSize, run } from "./mips-obj.js";
 import { dependencyHash } from "./project.js";
+import { runCommand, commandMapPayload, commandAcceptsFlag as specAcceptsFlag, PROG } from "./workbench/cli.js";
 
 /** The catalog schema this bridge understands. */
 export const SUPPORTED_COMMAND_MAP_SCHEMA = "decomp-workbench-command-map-v1";
@@ -44,107 +41,50 @@ export const WORKBENCH_EXIT = Object.freeze({
   3: "census-failed",
 });
 
-/** Where the workbench may live, in priority order. */
-function candidateRoots() {
-  const out = [];
-  if (process.env.ROMDEV_WORKBENCH_HOME) out.push(process.env.ROMDEV_WORKBENCH_HOME);
-  out.push(path.join(os.homedir(), ".romdev", "tools", "n64-decomp-workbench"));
-  out.push(path.join(os.homedir(), "code", "cliemu", "n64-decomp-reference", "n64-decomp-workbench"));
-  return out;
-}
+/** Directory holding the in-process workbench modules. */
+export const WORKBENCH_SOURCE_DIR = fileURLToPath(new URL("./workbench/", import.meta.url));
 
-/**
- * Locate the workbench: an installed `decomp-workbench` on PATH, or a source
- * checkout run through `python3 -m decomp_workbench.cli`.
- */
+/** The workbench is part of romdev; there is nothing to locate. */
 export function locateWorkbench() {
-  // A real install wins: it is the supported entry point.
-  for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
-    const p = path.join(dir, "decomp-workbench");
-    try { if (fs.existsSync(p) && fs.statSync(p).isFile()) return { kind: "installed", argv0: [p], root: null }; } catch {}
-  }
-  for (const root of candidateRoots()) {
-    const cli = path.join(root, "src", "decomp_workbench", "cli.py");
-    if (fs.existsSync(cli)) {
-      return { kind: "checkout", argv0: [process.env.ROMDEV_PYTHON ?? "python3", "-m", "decomp_workbench.cli"], root, pythonPath: path.join(root, "src") };
-    }
-  }
-  return null;
+  return { kind: "in-process", root: WORKBENCH_SOURCE_DIR };
 }
 
-/** Run one workbench command. Never throws on exit 1 - that is an answer. */
-export async function runWorkbench(args, { cwd, timeoutMs = 600_000, json = true, env: extraEnv } = {}) {
-  const loc = locateWorkbench();
-  if (!loc) {
-    throw Object.assign(new Error(
-      "n64-decomp-workbench is not installed. Set ROMDEV_WORKBENCH_HOME to a checkout, "
-      + "or `pip install n64-decomp-workbench` so `decomp-workbench` is on PATH. "
-      + "romdev bridges to it rather than reimplementing late-stage mechanism diagnosis."),
-      { code: "MISSING_WORKBENCH" });
-  }
-  const argv = [...loc.argv0, ...args, ...(json && !args.includes("--json") ? ["--json"] : [])];
+/** Run one workbench command in process. Never throws on exit 1 - that is an answer. */
+export async function runWorkbench(args, { cwd, json = true, env: extraEnv } = {}) {
+  const argv = [...args, ...(json && !args.includes("--json") ? ["--json"] : [])];
   // The PROJECT's environment matters: a project-local binutils is built
   // against project-local shared objects, so running its objdump without the
-  // project's LD_LIBRARY_PATH fails with a missing-library error that reads
-  // like a workbench bug and is not one.
-  const env = { ...process.env, ...(extraEnv ?? {}) };
-  if (loc.pythonPath) env.PYTHONPATH = loc.pythonPath + (env.PYTHONPATH ? path.delimiter + env.PYTHONPATH : "");
-
-  return await new Promise((resolve) => {
-    const child = spawn(argv[0], argv.slice(1), { cwd: cwd ?? process.cwd(), env });
-    let stdout = "", stderr = "", done = false;
-    const timer = setTimeout(() => { if (!done) { try { child.kill("SIGKILL"); } catch {} } }, timeoutMs);
-    child.stdout.on("data", (d) => { stdout += d; });
-    child.stderr.on("data", (d) => { stderr += d; });
-    child.on("error", (e) => { done = true; clearTimeout(timer); resolve({ code: 2, stdout, stderr: String(e?.message ?? e), argv, json: null }); });
-    child.on("close", (code) => {
-      done = true; clearTimeout(timer);
-      let parsed = null;
-      if (json) { try { parsed = JSON.parse(stdout); } catch {} }
-      resolve({ code: code ?? 2, meaning: WORKBENCH_EXIT[code ?? 2] ?? "unknown", stdout, stderr, argv, json: parsed });
-    });
-  });
+  // project's LD_LIBRARY_PATH fails with a missing-library error.
+  const r = await runCommand(argv, { cwd: cwd ?? process.cwd(), env: extraEnv ?? {} });
+  let parsed = null;
+  if (json) { try { parsed = JSON.parse(r.stdout); } catch {} }
+  return { code: r.code, meaning: WORKBENCH_EXIT[r.code] ?? "unknown", stdout: r.stdout, stderr: r.stderr, argv: [PROG, ...argv], json: parsed };
 }
 
 let _catalog = null;
 
-/**
- * The workbench's own command catalog. Cached per process; the workbench is a
- * fixed install for the life of a session.
- */
+/** The workbench's own command catalog, cached per process. */
 export async function workbenchCatalog({ force = false } = {}) {
   if (_catalog && !force) return _catalog;
-  const loc = locateWorkbench();
-  if (!loc) return { available: false, reason: "not installed", setup: "set ROMDEV_WORKBENCH_HOME, or pip install n64-decomp-workbench" };
-  const r = await runWorkbench(["commands"], { timeoutMs: 60_000 });
-  if (!r.json) {
-    return { available: false, reason: `could not read the command map (exit ${r.code})`, stderr: r.stderr.slice(0, 400) };
-  }
-  const d = r.json;
+  const d = commandMapPayload();
   const groups = {};
   let total = 0;
   for (const [name, list] of Object.entries(d.groups ?? {})) {
-    const cmds = (Array.isArray(list) ? list : []).map((c) => ({
+    const cmds = list.map((c) => ({
       command: c.command, description: c.description,
       invocation: c.invocation, reportSchema: c.report_schema, safety: c.safety,
     }));
     groups[name] = cmds; total += cmds.length;
   }
   _catalog = {
-    available: true, kind: loc.kind, root: loc.root,
-    schema: d.schema ?? null,
-    schemaSupported: (d.schema ?? null) === SUPPORTED_COMMAND_MAP_SCHEMA,
+    available: true, kind: "in-process", root: WORKBENCH_SOURCE_DIR,
+    schema: d.schema, schemaSupported: d.schema === SUPPORTED_COMMAND_MAP_SCHEMA,
     compatibility: d.compatibility ?? null,
     exitCodes: d.automation?.exit_codes ?? WORKBENCH_EXIT,
     groups, groupCount: Object.keys(groups).length, commandCount: total,
-    ...(d.schema && d.schema !== SUPPORTED_COMMAND_MAP_SCHEMA
-      ? { schemaWarning: `the workbench reports command-map schema '${d.schema}'; this bridge was written against '${SUPPORTED_COMMAND_MAP_SCHEMA}'. Commands are still discovered and run, but new fields may be ignored.` }
-      : {}),
   };
   return _catalog;
 }
-
-const _flagCache = new Map();
 
 /** Resolve exact compared objects instead of asking the client to reconstruct
  * a compiler invocation and guess which nearby object belongs to an artifact. */
@@ -278,26 +218,12 @@ export async function captureSchedulerTrace(project, artifactPath) {
 }
 
 /**
- * Does a workbench command accept a given flag?
- *
- * Asked of the COMMAND ITSELF via `--help`, not guessed. romdev used to append
- * `--objdump <path>` to every invocation so a project-local binutils would
- * load - correct for `object diagnose`, and fatal for `project show`, which
- * has no such flag and exits 2. A read-only command must be called only with
- * flags its own schema accepts.
- *
- * Cached per process: the workbench is a fixed install for the session.
+ * Does a workbench command accept a given flag? Answered from the command's
+ * own argument grammar, not guessed: appending `--objdump` is right for
+ * `object diagnose` and a usage error for commands without that option.
  */
 export async function commandAcceptsFlag(inv, flag) {
-  const key = `${inv.join(" ")}::${flag}`;
-  if (_flagCache.has(key)) return _flagCache.get(key);
-  let ok = false;
-  try {
-    const r = await runWorkbench([...inv, "--help"], { timeoutMs: 30_000, json: false });
-    ok = new RegExp(`(^|\\s)${flag.replace(/[-]/g, "[-]")}(\\s|=|$)`, "m").test(r.stdout ?? "");
-  } catch { ok = false; }
-  _flagCache.set(key, ok);
-  return ok;
+  return specAcceptsFlag(inv, flag);
 }
 
 /** Find one command in the catalog by "<group> <command>" or a flat name. */
@@ -318,10 +244,10 @@ export function findCommand(catalog, group, command) {
  * anything whose own safety metadata says it is destructive or networked
  * unless the caller opted in explicitly.
  */
-export async function invokeWorkbench({ group, command, args = [], cwd, timeoutMs, env, allowDestructive = false, allowNetwork = false }) {
+export async function invokeWorkbench({ group, command, args = [], cwd, env, allowDestructive = false, allowNetwork = false }) {
   const catalog = await workbenchCatalog();
   if (!catalog.available) {
-    throw Object.assign(new Error(`workbench unavailable: ${catalog.reason}. ${catalog.setup ?? ""}`), { code: "MISSING_WORKBENCH" });
+    throw Object.assign(new Error(`workbench unavailable: ${catalog.reason}`), { code: "MISSING_WORKBENCH" });
   }
   const spec = findCommand(catalog, group, command);
   if (!spec) {
@@ -329,7 +255,7 @@ export async function invokeWorkbench({ group, command, args = [], cwd, timeoutM
       .flatMap(([g, l]) => l.map((c) => `${g} ${c.command}`)).slice(0, 25);
     throw Object.assign(new Error(
       `workbench has no command '${[group, command].filter(Boolean).join(" ")}'. `
-      + `The catalog is read from the workbench itself (${catalog.commandCount} commands in ${catalog.groupCount} groups), so this is authoritative. `
+      + `The catalog is the workbench's own (${catalog.commandCount} commands in ${catalog.groupCount} groups), so this is authoritative. `
       + `Nearby: ${near.join(", ")}`), { code: "NO_SUCH_WORKBENCH_COMMAND" });
   }
   // The command's OWN safety metadata decides, not a guess here.
@@ -340,9 +266,9 @@ export async function invokeWorkbench({ group, command, args = [], cwd, timeoutM
     throw Object.assign(new Error(`workbench '${group ?? spec.group} ${command}' reaches the NETWORK; pass allowNetwork:true to run it.`), { code: "WORKBENCH_NETWORK" });
   }
 
-  // Use the catalog's own invocation, minus its argv0 (the bridge supplies that).
+  // Use the catalog's own invocation, minus its program name.
   const inv = Array.isArray(spec.invocation) ? spec.invocation.slice(1) : [group, command].filter(Boolean);
-  const r = await runWorkbench([...inv, ...args], { cwd, timeoutMs, env });
+  const r = await runWorkbench([...inv, ...args], { cwd, env });
   return {
     command: `${group ?? spec.group ?? ""} ${command}`.trim(),
     reportSchema: spec.reportSchema ?? null,

@@ -1,28 +1,30 @@
-// Opt-in adapter for the EXISTING workbench's pinned instrumentation profile.
+// Opt-in adapter for the workbench's pinned uopt instrumentation profile.
 // Builds a diagnostic compiler copy in the workspace; never replaces the
 // project's compiler or enables forced coloring. Off/on output must both equal
 // the original compared object before this can support allocator attribution.
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, copyFile, symlink, writeFile } from "node:fs/promises";
-import { artifactWorkbenchInput, locateWorkbench, runWorkbench, verifyTraceBundle } from "./workbench.js";
+import { artifactWorkbenchInput, runWorkbench, verifyTraceBundle, WORKBENCH_SOURCE_DIR } from "./workbench.js";
 import { compilationEnvironment, fileIdentities, fileRevisions, hashRecord, atomicJson, resolveToolFile } from "./measurement.js";
 import { dependencyHash } from "./project.js";
 import { run } from "./mips-obj.js";
 import { fileURLToPath } from "node:url";
+// The modules that define the instrumentation profile and the command that applies it.
+const PROFILE_MODULES = ["instrument-uopt.js", "instrument-uopt-cli.js", "globalcolor.js", "py.js", "cli.js"];
 const runner = fileURLToPath(new URL("./ido-trace-driver.mjs", import.meta.url));
 
 async function instrumentedCompiler(project, r) {
   const cc = project.abs(r.compiler.compiler.path), out = path.dirname(cc);
   const build = path.dirname(out), sourceRoot = path.resolve(build, "../..");
   const source = path.join(build, "uopt.c");
-  const wb = locateWorkbench();
-  if (!wb?.root) throw new Error("automatic allocator instrumentation requires the existing workbench checkout so its profile source can be fingerprinted");
-  const wbSource = path.join(wb.root, "src/decomp_workbench");
+  // The instrumentation profile is romdev's own workbench code: fingerprint it
+  // so a changed profile builds a new diagnostic compiler.
+  const wbSource = WORKBENCH_SOURCE_DIR;
   const gcc = await resolveToolFile(project, "gcc");
   const paths = [source, cc, gcc, runner, process.execPath, ...["header.h", "helpers.h", "libc_impl.h"].map(f => path.join(sourceRoot, f)),
     ...["libc_impl.o", "version_info.o"].map(f => path.join(build, f)),
-    ...(await readdir(wbSource, { recursive: true })).filter(f => f.endsWith(".py")).map(f => path.join(wbSource, f))];
+    ...(await readdir(wbSource)).filter(f => PROFILE_MODULES.includes(f)).sort().map(f => path.join(wbSource, f))];
   const inputs = await fileIdentities(paths);
   if (inputs.some(i => i.missing)) throw new Error("IDO generated source/runtime or host gcc unavailable; allocator instrumentation was not built");
   const key = hashRecord({ inputs, recipe: "globalcolor-trace-only-v1-gcc-Os-c11" });
@@ -54,7 +56,7 @@ async function instrumentedCompiler(project, r) {
   if (hashRecord(await fileIdentities(paths)) !== hashRecord(inputs)) throw new Error("compiler/profile inputs moved during diagnostic compiler build");
   const files = await fileIdentities([generated, runner, process.execPath, ...await readdir(bin).then(names => names.map(n => path.join(bin, n)))]);
   const result = { driver: path.join(bin, "cc"), files, inputs, buildInvocation: argv, linkInvocation: link,
-    disclosure: "workspace copy of IDO driver; only uopt is replaced by the existing workbench's pinned globalcolor trace profile; no forced-color controls" };
+    disclosure: "workspace copy of IDO driver; only uopt is replaced by the workbench's pinned globalcolor trace profile; no forced-color controls" };
   await atomicJson(index, result);
   return result;
 }

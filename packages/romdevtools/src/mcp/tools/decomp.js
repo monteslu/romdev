@@ -64,7 +64,7 @@ export function registerDecompTools(server, z, sessionKey) {
         "overlays=which overlay is resident at each shared VA in the live session (`session`), by comparing RAM with each candidate's ROM bytes; symbolize=live `va` → symbol/segment using the resident overlay; state=is `session`'s emulator alive, else a machine-readable loss reason + recovery; " +
         "trace=stop at a function's entry on the live session and read a0-a3/f12/f14/stack args, then v0/v1/f0 at return (N64: load the session with coreOptions {'parallel-n64-cpucore':'pure_interpreter'}; the result carries the core probe and says PC_BREAK_UNSUPPORTED with evidence otherwise); coverage=instruction-exact function + basic-block observed/unobserved/unreferenced over `frames` with `inputs` from the core's PC log (interpreter), else frame-boundary samples with the method stated."),
       project: z.string().optional().describe("Project id (required by every op except list). op:'import' picks it."),
-      // op:'workbench' - the n64-decomp-workbench bridge.
+      // op:'workbench' - the in-process late-stage workbench commands.
       // op:'experiment' / op:'gate'
       // ONE `action` FOR EVERY OP THAT HAS ONE. This was declared twice and the
       // second declaration - the job-only set - overwrote the first, so every
@@ -131,13 +131,12 @@ export function registerDecompTools(server, z, sessionKey) {
       // op:'dispatch' - parallel, memory-bounded triage.
       budgetMiB: z.number().int().min(512).optional().describe("op:'dispatch' - memory ceiling for the worker pool. Default: total RAM minus a reserve for the server and the build. Admission is by MEASURED peak RSS per worker class, not by a thread count."),
       maxWorkers: z.number().int().min(1).max(64).optional().describe("op:'dispatch' - hard cap on concurrent workers (default: cpus-2, max 12). The per-TU lock usually binds first."),
-      wbGroup: z.string().optional().describe("op:'workbench' - command group (object, campaign, experiment, probe, trace, permute, sweep, oracle, pass, instrument, ...). Omit wbCommand to list the discovered catalog."),
-      wbCommand: z.string().optional().describe("op:'workbench' - the command inside the group (e.g. 'diagnose', 'compare', 'collateral', 'staleness', 'linked-compare', 'reloc-proof'). Omit to get the catalog instead of running anything."),
+      wbGroup: z.string().optional().describe("op:'workbench' - command group (object, trace, instrument). Omit wbCommand to list the catalog."),
+      wbCommand: z.string().optional().describe("op:'workbench' - the command inside the group: object diagnose, trace scheduler, trace globalcolor, instrument globalcolor. Omit to get the catalog instead of running anything."),
       wbArgs: z.array(z.string()).optional().describe("op:'workbench' - positional args and flags passed through verbatim (e.g. [targetObj, candidateObj]). The project's --objdump is appended automatically when you do not pass one."),
-      traceMode: z.enum(["scheduler", "globalcolor"]).optional().describe("op:'workbench' with artifactId: scheduler captures native IDO -Wa,-R; globalcolor explicitly opts into building a workspace-only diagnostic IDO 5.3 uopt with the existing workbench's pinned profile. No project compiler is replaced. Both tracing-disabled and tracing-enabled diagnostic objects must equal the compared object before allocator attribution. Baseline optimization flags stay unchanged."),
+      traceMode: z.enum(["scheduler", "globalcolor"]).optional().describe("op:'workbench' with artifactId: scheduler captures native IDO -Wa,-R; globalcolor explicitly opts into building a workspace-only diagnostic IDO 5.3 uopt with the workbench's pinned profile. No project compiler is replaced. Both tracing-disabled and tracing-enabled diagnostic objects must equal the compared object before allocator attribution. Baseline optimization flags stay unchanged."),
       allowDestructive: z.boolean().default(false).describe("op:'workbench' - required to run a command the workbench's OWN catalog marks destructive."),
       allowNetwork: z.boolean().default(false).describe("op:'workbench' - required to run a command the workbench's OWN catalog marks as reaching the network."),
-      timeoutMs: z.number().int().min(1000).max(3_600_000).optional().describe("op:'workbench' - per-command timeout (default 600000)."),
       force: z.boolean().default(false).describe("op:'workbench' - re-read the command catalog instead of using the cached one."),
       root: z.string().optional().describe("op:'import' - absolute path of the decompilation checkout (the dir with the splat yaml + Makefile). op:'research' action:'import' - a directory of prior research (drafts and notes) to INDEX. op:'replay' - the research root holding the replay fixtures (default: <project>/docs/research). Indexing records what exists; it never turns a note into a verified result."),
       splatYaml: z.string().optional().describe("op:'import' - splat yaml (relative to root) when auto-detection finds more than one."),
@@ -337,27 +336,24 @@ export function registerDecompTools(server, z, sessionKey) {
           });
         }
         case "workbench": {
-          // The BRIDGE to n64-decomp-workbench: romdev's comparator is
+          // The late-stage workbench, run in process: romdev's comparator is
           // first-pass triage and cannot diagnose allocator webs, uopt global
           // coloring, ugen temporary provenance, stack homes or as1 scheduling.
-          // The workbench does, and it is the tool this campaign already uses
-          // by hand - so romdev calls it rather than growing a second, shallower
-          // copy that would disagree with it.
+          // The workbench commands do, in process (src/decomp/workbench/).
           const { workbenchCatalog, invokeWorkbench } = await import("../../decomp/workbench.js");
           const catalog = await workbenchCatalog({ force: !!args.force });
           if (!args.wbCommand) {
-            // No command: report the discovered catalog. Discovery means the
-            // workbench can grow without romdev being edited.
+            // No command: report the catalog.
             return jsonContent({ workbench: catalog,
               usage: "decomp({op:'workbench', wbGroup:'object', wbCommand:'diagnose', wbArgs:[targetObj, candidateObj]}). "
                 + "Objects are resolved against the project root; the project's objdump and LD_LIBRARY_PATH are supplied automatically. "
                 + "Exit 1 means gate/no-result - a real answer, not an error.",
               note: catalog.available
-                ? `${catalog.commandCount} commands in ${catalog.groupCount} groups, read from the workbench itself.`
-                : "workbench not installed; see `setup`." });
+                ? `${catalog.commandCount} commands in ${catalog.groupCount} groups, run in process.`
+                : "workbench unavailable." });
           }
           if (!catalog.available) {
-            throw Object.assign(new Error(`workbench unavailable: ${catalog.reason}. ${catalog.setup ?? ""}`), { code: "MISSING_WORKBENCH" });
+            throw Object.assign(new Error(`workbench unavailable: ${catalog.reason}`), { code: "MISSING_WORKBENCH" });
           }
           // Supply what the workbench cannot know: this project's objdump and
           // its runtime library path. A project-local binutils fails to load
@@ -410,7 +406,7 @@ export function registerDecompTools(server, z, sessionKey) {
           const { compactWorkbenchReport } = await import("../../decomp/workbench.js");
           const res = await compactWorkbenchReport(project, await invokeWorkbench({
             group: args.wbGroup, command: args.wbCommand, args: wbArgs,
-            cwd: project.root, env: project.env, timeoutMs: args.timeoutMs ?? 600_000,
+            cwd: project.root, env: project.env,
             allowDestructive: !!args.allowDestructive, allowNetwork: !!args.allowNetwork,
           }), { outputPath: args.outputPath, detail: args.detail });
           return jsonContent({ project: project.id, ...res, ...(artifactProvenance ? { artifactProvenance } : {}), ...(traceBundle ? { traceBundle } : {}),
