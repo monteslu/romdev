@@ -253,3 +253,4 @@ export function buildWordCensus(base, shifted, { insertion_offset, delta, region
     unexplained: Object.freeze(unexplained), stale: Object.freeze(stale),
   });
 }
+export { classifyTextWord as _classifyTextWord };

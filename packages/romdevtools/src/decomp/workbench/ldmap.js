@@ -337,7 +337,7 @@ export function parseElfSymbols(data, { path = null } = {}) {
     const limit = tableOffset + tableSize;
     let end = buf.indexOf(0, start);
     if (end < 0 || end >= limit) end = limit;
-    return [...buf.subarray(start, end)].map((b) => (b < 0x80 ? String.fromCharCode(b) : "�")).join("");
+    return [...buf.subarray(start, end)].map((b) => (b < 0x80 ? String.fromCharCode(b) : "\ufffd")).join("");
   };
   const sh = header(shstrndx);
   const shstrOffset = sh[4], shstrSize = sh[5];
