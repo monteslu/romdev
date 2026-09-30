@@ -23,7 +23,7 @@ const optional = async (file, name) => { if (!fs.existsSync(path.join(WB, file))
 
 const regionScore = await optional("campaign.js", "regionScore");
 const buildStatus = await optional("campaign-state.js", "buildStatus");
-const compactParameterEvidence = await optional("campaign-cli.js", "compactParameterEvidence");
+const compactParameterEvidence = (await optional("campaign-cli.js", "_compactParameterEvidence")) ?? (await optional("campaign-cli.js", "compactParameterEvidence"));
 const hasCampaign = (await commandSpecs()).has("campaign");
 
 const compare = (t, c) => compareInstructions(parseDisassembly(t), parseDisassembly(c), { target_name: "target", candidate_name: "candidate", symbol: null });
@@ -212,7 +212,7 @@ test("homology refuses an unassigned baseline", withDir((root) => {
   assert.throws(() => loadExperiment(p), /baseline must appear/);
 }));
 
-test("the campaign cockpit compacts large parameter evidence", { skip: !compactParameterEvidence && "the campaign cockpit is not present in this tree" }, () => {
+test("the campaign cockpit compacts large parameter evidence", { skip: !compactParameterEvidence && "the campaign cockpit does not export its parameter-evidence compactor" }, () => {
   const tested = Array.from({ length: 64 }, (_, i) => ({ shape: String(i) }));
   const [testedText, declaredText] = compactParameterEvidence({ tested_parameters: tested, tested_parameter_sets: 375,
     declared_parameter_space: { shape: Array.from({ length: 25 }, (_, i) => String(i)), type: ["int", "s16", "s32", "u16", "u32"] } });
