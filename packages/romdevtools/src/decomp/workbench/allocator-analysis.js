@@ -39,7 +39,7 @@ export function compactJson(value) {
     if (v && typeof v === "object") return Object.fromEntries(sorted(Object.keys(v)).map((k) => [k, sortKeys(v[k])]));
     return v;
   };
-  return JSON.stringify(sortKeys(value)).replace(/[\u007f-￿]/g, (c) => (c === "\u007f" ? c : `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`));
+  return JSON.stringify(sortKeys(value)).replace(/[\u007f-\uffff]/g, (c) => (c === "\u007f" ? c : `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`));
 }
 
 const hash20 = (value) => createHash("sha256").update(Buffer.from(compactJson(value), "utf8")).digest("hex").slice(0, 20);
