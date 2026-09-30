@@ -223,7 +223,14 @@ process.on("message", async (msg) => {
       return;
     }
     if (msg.type === "run") {
-      const result = await runJob(msg.job);
+      // A job may name a handler module that runs it instead of the single-
+      // tool MEMFS path above (the decomp domain's NODERAWFS toolchains: IDO's
+      // cc spawning its passes as sibling modules, binutils over a real tree).
+      // It still runs HERE, in the isolated worker, so an abort cannot reach
+      // the server.
+      const result = msg.job.handler
+        ? await (await import(msg.job.handler)).runWorkerJob(msg.job)
+        : await runJob(msg.job);
       process.send({ type: "result", id: msg.id, result });
       // After every job, signal ready again so the pool can recycle us.
       process.send({ type: "ready" });
