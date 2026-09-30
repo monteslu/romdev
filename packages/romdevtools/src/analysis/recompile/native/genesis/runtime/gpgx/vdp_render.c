@@ -322,6 +322,19 @@ INLINE void WRITE_LONG(void *address, uint32 data)
    high priority, or plane B low priority: result plane A). Any other group
    goes through gpgx's table per pixel. Background pixels are 0PPPCCCC. */
 #define RD_OPAQUE4(X) (((((X) & 0x0F0F0F0F) + 0x0F0F0F0F) & 0x10101010) == 0x10101010)
+/* make_lut_bg for four pixels at once, in word arithmetic: plane A's pixel
+   where it is opaque and either high priority or not under an opaque high
+   priority plane B pixel, else plane B's where that is opaque, else 0 (the
+   table strips a transparent result to 0). Pixels are 0PPPCCCC. */
+static inline uint32 rd_merge_bg4(uint32 a, uint32 b)
+{
+  uint32 oa = ((((a & 0x0F0F0F0F) + 0x0F0F0F0F) & 0x10101010) >> 4) * 0xFF;
+  uint32 ob = ((((b & 0x0F0F0F0F) + 0x0F0F0F0F) & 0x10101010) >> 4) * 0xFF;
+  uint32 pa = ((a >> 6) & 0x01010101) * 0xFF;
+  uint32 pb = ((b >> 6) & 0x01010101) * 0xFF;
+  uint32 sa = oa & (pa | ~(pb & ob));
+  return (a & sa) | (b & ~sa & ob);
+}
 #define DRAW_BG_TILE(SRC_A, SRC_B) \
   if (table == lut[0] && !((SRC_A) & 0x0F0F0F0F) && RD_OPAQUE4(SRC_B)) \
   { \
@@ -330,6 +343,10 @@ INLINE void WRITE_LONG(void *address, uint32 data)
   else if (table == lut[0] && RD_OPAQUE4(SRC_A) && ((((SRC_A) & 0x40404040) == 0x40404040) || !((SRC_B) & 0x40404040))) \
   { \
     WRITE_LONG(lb, SRC_A); lb += 4; \
+  } \
+  else if (table == lut[0]) \
+  { \
+    WRITE_LONG(lb, rd_merge_bg4(SRC_A, SRC_B)); lb += 4; \
   } \
   else \
   { \
@@ -672,6 +689,7 @@ static inline void rd_row(uint32 attr, uint32 vl, uint32 *w0, uint32 *w1)
   uint32 y = vl >> 3, bp;
   if (attr & 0x1000) y ^= 7;
   bp = *(const uint32 *)&vram[((attr & 0x7FF) << 5) | (y << 2)];
+  if (!bp) { *w0 = 0; *w1 = 0; return; }          /* a blank row */
   if (attr & 0x800)
   {
     *w0 = rd_spread(bp >> 16);
@@ -690,6 +708,14 @@ static inline void rd_merge4(uint8 *lb, uint32 b, const uint8 *table, int fast)
   __builtin_memcpy(&a, lb, 4);
   if (fast && !(a & 0x0F0F0F0F) && RD_OPAQUE4(b)) { __builtin_memcpy(lb, &b, 4); return; }
   if (fast && RD_OPAQUE4(a) && (((a & 0x40404040) == 0x40404040) || !(b & 0x40404040))) return;
+  if (fast && !(b & 0x0F0F0F0F))
+  {
+    /* plane B transparent: plane A where opaque, else 0 */
+    a &= ((((a & 0x0F0F0F0F) + 0x0F0F0F0F) & 0x10101010) >> 4) * 0xFF;
+    __builtin_memcpy(lb, &a, 4);
+    return;
+  }
+  if (fast) { a = rd_merge_bg4(a, b); __builtin_memcpy(lb, &a, 4); return; }
   lb[0] = table[((b << 8) & 0xff00) | (a & 0xff)];
   lb[1] = table[(b & 0xff00) | ((a >> 8) & 0xff)];
   lb[2] = table[((b >> 8) & 0xff00) | ((a >> 16) & 0xff)];
