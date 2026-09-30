@@ -86,7 +86,7 @@ export function readTraceSource(source, { name = null } = {}) {
   else { data = readFileSync(source); label = name ?? source; }
   const text = decodeStrict(data);
   if (text !== null && !(looksBinary(data) && countTraceTags(text) === 0)) {
-    return { text, encoding: "utf-8", undecodable_bytes: 0, notes: [] };
+    return { text, encoding: "utf-8", undecodable_bytes: 0, recovered: false, notes: [] };
   }
   const streamFormat = classifyTraceBytes(data);
   const lossy = new TextDecoder("utf-8", { fatal: false, ignoreBOM: true }).decode(data);
@@ -94,7 +94,7 @@ export function readTraceSource(source, { name = null } = {}) {
   if (text !== null && streamFormat === null) {
     // Decodable, binary-looking, and framed as neither stream: say so and
     // let the caller read it; refusing here would be a guess.
-    return { text, encoding: "utf-8", undecodable_bytes: 0,
+    return { text, encoding: "utf-8", undecodable_bytes: 0, recovered: false,
       notes: [`${label} decodes as text but reads as binary (${percent(binaryRatio(data), 0)} control bytes) and holds no `
         + "CODEX/DKWB diagnostic line; it frames as neither Ucode nor "
         + `Binasm. Parsed as text anyway (${PHASE_CAPTURE_DOC}).`] };
@@ -104,7 +104,7 @@ export function readTraceSource(source, { name = null } = {}) {
   }
   const undecodable = [...lossy].filter((c) => c === "\ufffd").length;
   if (tags === 0) throw new BinaryTraceStreamError(unframedBinaryMessage(data, { name: label, undecodable }));
-  return { text: lossy, encoding: "utf-8/replace", undecodable_bytes: undecodable,
+  return { text: lossy, encoding: "utf-8/replace", undecodable_bytes: undecodable, recovered: undecodable > 0,
     notes: [`${label} is not valid UTF-8: ${undecodable} byte(s) were replaced `
       + `and ${tags} diagnostic line(s) were recovered from the rest. A `
       + "mixed file is a trace with binary written into the same stream; "
