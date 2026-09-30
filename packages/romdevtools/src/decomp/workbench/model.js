@@ -6,7 +6,7 @@
 import path from "node:path";
 import fs from "node:fs";
 import { canonicalFields } from "./schema.js";
-import { splitWs } from "./py.js";
+import { splitWs, PyDict } from "./py.js";
 
 /** One relocation attached to an instruction word. */
 export class Relocation {
@@ -36,6 +36,7 @@ function copyValue(v) {
   if (Array.isArray(v)) return v.map(copyValue);
   if (v && typeof v === "object") {
     if (typeof v.asDict === "function") return v.asDict();
+    if (v instanceof PyDict) return new PyDict([...v.entries()].map(([k, x]) => [k, copyValue(x)]));
     if (v instanceof Map) return new Map([...v].map(([k, x]) => [k, copyValue(x)]));
     const o = {};
     for (const [k, x] of Object.entries(v)) o[k] = copyValue(x);
