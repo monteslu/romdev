@@ -21,6 +21,8 @@ Internalize this above all else: **you never need - and must never install - a c
 
 This rule is about **compilers and emulators only** - NOT about content tools. ImageMagick, GIMP, Aseprite/LibreSprite, Audacity, Tiled, a tracker (FamiStudio/Deflemask), Python for a quick art script - all fine to use, and fine for the user to install. They produce **raw source art/audio** (a PNG, a sprite sheet, a `.wav`, a `.tmx`); romdev then **imports and packs** that into platform-native data. Use them freely when they help; just don't reach for a *compiler or emulator*.
 
+romdev itself is the other way round: it is JS (ESM) + WASM only and never runs Python. Its tools, build scripts (bash + node; rizin builds from `scripts/rizin-wasm/build.mjs`, no meson) and runtime are node + WASM, with emsdk as the one external compiler SDK. `test/no-python.test.js` enforces it.
+
 ## The second rule: READ YOUR TARGET PLATFORM'S DOCS BEFORE YOU WRITE CODE FOR IT
 
 This doc is deliberately GENERIC - it can't hold 19 platforms' worth of detail without bloating every session. The knowledge that actually saves you - the memory map, the input/control quirks, the render-enable order, the codegen traps, the SDK's footguns - lives in each platform's docs, read on demand:
