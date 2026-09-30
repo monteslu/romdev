@@ -141,6 +141,8 @@ export function registerDecompTools(server, z, sessionKey) {
       force: z.boolean().default(false).describe("op:'workbench' - re-read the command catalog instead of using the cached one."),
       root: z.string().optional().describe("op:'import' - absolute path of the decompilation checkout (the dir with the splat yaml + Makefile). op:'research' action:'import' - a directory of prior research (drafts and notes) to INDEX. op:'replay' - the research root holding the replay fixtures (default: <project>/docs/research). Indexing records what exists; it never turns a note into a verified result."),
       splatYaml: z.string().optional().describe("op:'import' - splat yaml (relative to root) when auto-detection finds more than one."),
+      buildPath: z.string().optional().describe("op:'import' - where the project's Makefile puts objects (e.g. 'build/us'), when it differs from the splat yaml's build_path."),
+      makeVariables: z.record(z.string()).optional().describe("op:'import' - Makefile variables the project is built with (e.g. {VERSION:'us'}), applied as make's command-line variables whenever romdev reads the Makefile."),
       rom: z.string().optional().describe("op:'import' - base ROM path when it differs from the yaml's target_path."),
       expectedSha1: z.string().optional().describe("op:'import' - expected base-ROM sha1 (default: the yaml's)."),
       buildCommand: z.array(z.string()).optional().describe("op:'import' - the project's own full-build command, recorded for reference only: romdev builds from the Makefile's rules itself, as WASM."),
@@ -218,7 +220,7 @@ export function registerDecompTools(server, z, sessionKey) {
         case "import": {
           if (!args.project || !args.root) throw Object.assign(new Error("decomp({op:'import'}): `project` (an id you choose) and `root` are required."), { code: "BAD_ARGS" });
           let m;
-          try { m = await importProject({ id: args.project, root: args.root, splatYaml: args.splatYaml, rom: args.rom, expectedSha1: args.expectedSha1, buildCommand: args.buildCommand }); }
+          try { m = await importProject({ id: args.project, root: args.root, splatYaml: args.splatYaml, rom: args.rom, expectedSha1: args.expectedSha1, buildCommand: args.buildCommand, buildPath: args.buildPath, makeVariables: args.makeVariables }); }
           catch (e) { if (/sha1 .* != expected/.test(e.message)) e.code = "WRONG_ROM"; throw e; }
           const { backendStatus } = await import("../../decomp/m2c.js");
           const p = new Project(m);
