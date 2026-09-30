@@ -13,7 +13,7 @@ import path from "node:path";
 import { splitlines, strip } from "./py.js";
 import { RuntimeError, FileNotFoundError } from "./py-extra.js";
 import { discoverObjdump } from "./objdump.js";
-import { executableIdentity, fileSha256 } from "./phase-process.js";
+import { executableIdentity, fileSha256 } from "./campaign.js";
 
 export const FIDELITY_SCHEMA = "decomp-workbench-object-fidelity-v1";
 export const DEFAULT_SECTIONS = Object.freeze([".text", ".rodata", ".data"]);

@@ -17,7 +17,7 @@ import path from "node:path";
 import { ValueError, strRepr } from "./py.js";
 import { dumps } from "./pyjson.js";
 import { DEFAULT_SECTIONS, compareObjectFidelity } from "./fidelity.js";
-import { fileSha256 } from "./phase-process.js";
+import { fileSha256 } from "./campaign.js";
 
 export const GATE_SCHEMA = "decomp-workbench-instrument-gate-v1";
 
