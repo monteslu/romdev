@@ -210,3 +210,63 @@ function myers(a, b) {
   }
   return out;
 }
+
+// -- N64 texture sheets / asset containers (a project's font_texture.py +
+// build_font_container.py) ----------------------------------------------
+const CHANNEL5 = Array.from({ length: 32 }, (_, v) => (v << 3) | (v >> 2));
+const CHANNEL5_INVERSE = new Map(CHANNEL5.map((v, i) => [v, i]));
+
+/**
+ * Decode a PNG to RGBA8 rows, as pypng's Reader.asRGBA8() does (palette and
+ * grey expanded, alpha added as 255, other bit depths rescaled to 8).
+ */
+export async function pngRgba8(file) {
+  const { PNG } = await import("pngjs");
+  const png = PNG.sync.read(readFileSync(file));
+  return { width: png.width, height: png.height, data: Buffer.from(png.data.buffer, png.data.byteOffset, png.width * png.height * 4) };
+}
+
+/** encode(source, fmt) of font_texture.py: a PNG sheet to linear ia8/rgba16/rgba32 bytes. */
+export async function encodeTexture(file, fmt) {
+  const { width, height, data } = await pngRgba8(file);
+  if (fmt === "rgba32") return { width, height, data: Buffer.from(data) };
+  const out = Buffer.alloc(width * height * (fmt === "rgba16" ? 2 : 1));
+  for (let p = 0; p < width * height; p++) {
+    const r = data[p * 4], g = data[p * 4 + 1], b = data[p * 4 + 2], a = data[p * 4 + 3];
+    if (fmt === "rgba16") {
+      if (![r, g, b].every((v) => CHANNEL5_INVERSE.has(v)) || (a !== 0 && a !== 255)) throw new Error("RGBA16 requires expanded 5-bit RGB and binary alpha");
+      out.writeUInt16BE((CHANNEL5_INVERSE.get(r) << 11) | (CHANNEL5_INVERSE.get(g) << 6) | (CHANNEL5_INVERSE.get(b) << 1) | (a === 255 ? 1 : 0), p * 2);
+    } else if (fmt === "ia8") {
+      if (r !== g || r !== b || r % 17 || a % 17) throw new Error("IA8 requires gray RGB and intensity/alpha multiples of 17");
+      out[p] = ((r / 17) << 4) | (a / 17);
+    } else throw new Error(`Unsupported format: ${fmt}`);
+  }
+  return { width, height, data: out };
+}
+
+/**
+ * build_font_container.py: concatenate a layout's raw ranges and encoded
+ * texture sheets, checking every offset/size exactly as the Python does.
+ */
+export async function buildAssetContainer(layoutPath) {
+  const manifest = JSON.parse(readFileSync(layoutPath, "utf8"));
+  const dir = layoutPath.replace(/[^/]*$/, "");
+  const parts = [];
+  let len = 0;
+  for (const seg of manifest.segments) {
+    if (seg.offset !== len) throw new Error("Asset ranges must be contiguous and ordered");
+    const source = dir + seg.file;
+    let data;
+    if (seg.format === "raw") data = readFileSync(source);
+    else if (["ia8", "rgba16", "rgba32"].includes(seg.format)) {
+      const t = await encodeTexture(source, seg.format);
+      if (t.width !== seg.width || t.height !== seg.height) throw new Error(`Incorrect texture sheet dimensions: ${source}`);
+      data = t.data;
+    } else throw new Error(`Unsupported format: ${seg.format}`);
+    if (data.length !== seg.size) throw new Error(`Incorrect asset size: ${source}`);
+    parts.push(data);
+    len += data.length;
+  }
+  if (len !== manifest.size) throw new Error("Incorrect container size");
+  return Buffer.concat(parts);
+}

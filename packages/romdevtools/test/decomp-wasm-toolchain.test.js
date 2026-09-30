@@ -322,3 +322,45 @@ test("host-program ports: diff -u, n64crc, set_o32abi_bit", () => {
   setO32AbiBit(f);
   assert.equal(fs.readFileSync(f).readUInt32BE(36), 0x20001101);
 });
+
+test("armips (WASM) assembles RSP source in place, as a project's rsp rule does", async () => {
+  const { armips } = await import("../src/decomp/toolchain.js");
+  const d = dir("armips");
+  fs.writeFileSync(path.join(d, "t.asm"), '.rsp\n.create "t.bin", 0x04001080\n  addi r1, r0, 0x10\n  j 0x04001080\n  nop\n.close\n');
+  const r = await armips(["t.asm"], { cwd: d });
+  assert.equal(r.exitCode, 0, r.log);
+  const bin = fs.readFileSync(path.join(d, "t.bin"));
+  assert.deepEqual([...bin.subarray(0, 4)], [0x20, 0x01, 0x00, 0x10]);
+  assert.equal(bin.readUInt32BE(4), 0x09000420, "j target field = 0x04001080 >> 2");
+});
+
+test("asset container port encodes ia8/rgba16/rgba32 PNG sheets and raw ranges exactly", async () => {
+  const { buildAssetContainer, encodeTexture } = await import("../src/decomp/host-ports.js");
+  const { PNG } = await import("pngjs");
+  const d = dir("assets");
+  const png = (name, w, h, px) => { const p = new PNG({ width: w, height: h }); px.forEach((v, i) => { p.data[i] = v; }); fs.writeFileSync(path.join(d, name), PNG.sync.write(p)); };
+  png("ia.png", 2, 1, [0x11, 0x11, 0x11, 0xff, 0xff, 0xff, 0xff, 0x22]);
+  png("c16.png", 1, 1, [0xff, 0x08, 0x00, 0xff]);
+  png("c32.png", 1, 1, [1, 2, 3, 4]);
+  fs.writeFileSync(path.join(d, "raw.bin"), Buffer.from([9, 9, 9]));
+  fs.writeFileSync(path.join(d, "layout.json"), JSON.stringify({ size: 11, segments: [
+    { offset: 0, size: 3, file: "raw.bin", format: "raw" },
+    { offset: 3, size: 2, file: "ia.png", format: "ia8", width: 2, height: 1 },
+    { offset: 5, size: 2, file: "c16.png", format: "rgba16", width: 1, height: 1 },
+    { offset: 7, size: 4, file: "c32.png", format: "rgba32", width: 1, height: 1 },
+  ] }));
+  const out = await buildAssetContainer(path.join(d, "layout.json"));
+  assert.deepEqual([...out], [9, 9, 9, 0x1f, 0xf2, 0xf8, 0x41, 1, 2, 3, 4]);
+  png("bad.png", 1, 1, [0x12, 0x12, 0x12, 0xff]);
+  await assert.rejects(encodeTexture(path.join(d, "bad.png"), "ia8"), /multiples of 17/);
+});
+
+test("runArgv threads ido overrides (cwd, env) into the IDO compile", async () => {
+  const { runArgv } = await import("../src/decomp/recipe.js");
+  const d = dir("idocwd"), other = dir("idocwd-other");
+  fs.writeFileSync(path.join(d, "t.c"), "int f(int x) { return x; }\n");
+  const r = await runArgv(["tools/ido/5.3/cc", ...IDO_FLAGS, "-o", path.join(d, "t.o"), path.join(d, "t.c")], { cwd: d, tmpRoot: dir("idocwd-tmp"), ido: { cwd: other } });
+  assert.equal(r.code, 0, r.log);
+  assert.equal(r.kind, "ido");
+  assert.ok(fs.existsSync(path.join(d, "t.o")));
+});

@@ -135,7 +135,7 @@ export async function fullRomVerify(project, { jobs = 8, goal } = {}) {
   await mkdir(project.ws, { recursive: true });
   await writeFile(path.join(project.ws, "last-build.log"), body);
   const common = { buildExit: r.ok ? 0 : 1, buildMs: ms, log: logPath, logIsImmutable: true, command, runsAs: "wasm",
-    rebuiltTargets: r.built.length, keptPrebuilt: r.keptPrebuilt };
+    rebuiltTargets: r.built.length, keptPrebuilt: r.keptPrebuilt, providedByRomdev: r.providedByRomdev };
   if (!r.ok) return { ok: false, ...common, tail: [r.failed?.message, ...(r.failed?.log ?? "").split("\n").filter(Boolean).slice(-6)].filter(Boolean) };
   if (!built || !fs.existsSync(built)) return { ok: false, ...common, error: `built ROM not found at ${built}` };
   const sha = await sha1File(built);

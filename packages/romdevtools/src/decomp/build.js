@@ -3,6 +3,10 @@
 // runs each step. Used for one TU's object (compile/compare), and for the full
 // ROM (integrate/verify): every object, the link, objcopy and the checksum.
 //
+// A target that IS a build tool romdev provides as WASM/JS (a project rule
+// that clones and compiles armips, say) is not built: every later step that
+// names it runs romdev's module instead. It is reported in `providedByRomdev`.
+//
 // Policy for recipes romdev cannot run (a Python asset packer, armips): the
 // step is never handed to a host program. If its output already exists it is
 // kept and listed in `keptPrebuilt` (so a verdict can say exactly which inputs
@@ -10,7 +14,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Makefile } from "./makefile.js";
-import { runRecipeLine } from "./recipe.js";
+import { runRecipeLine, classifyCommand } from "./recipe.js";
 
 /** Load the project's Makefile with the variables a quiet, uncoloured build uses. */
 export async function loadMakefile(root, { makefile = "Makefile", overrides = {} } = {}) {
@@ -41,7 +45,7 @@ export async function runTargetRecipe(mk, target, { cwd = mk.root, tmpRoot, line
  * Build `goal` and everything it depends on.
  * @param {{always?:boolean, jobs?:number, tmpRoot:string, onProgress?:(e:object)=>void}} o
  *   always: rebuild every target that has a runnable recipe (make --always-make)
- * @returns {Promise<{ok:boolean, goal:string, built:string[], keptPrebuilt:Array<{target:string, reason:string}>, failed:object|null, ms:number, logs:Record<string,string>}>}
+ * @returns {Promise<{ok:boolean, goal:string, built:string[], keptPrebuilt:Array<{target:string, reason:string}>, providedByRomdev:Array<{target:string, runsAs:string}>, failed:object|null, ms:number, logs:Record<string,string>}>}
  */
 export async function buildGoal(mk, goal, { always = false, jobs = 8, tmpRoot, onProgress } = {}) {
   const t0 = Date.now();
@@ -49,7 +53,7 @@ export async function buildGoal(mk, goal, { always = false, jobs = 8, tmpRoot, o
   const exists = (p) => fs.existsSync(path.resolve(root, p));
   const mtime = (p) => { try { return fs.statSync(path.resolve(root, p)).mtimeMs; } catch { return -1; } };
   const state = new Map(); // target -> Promise<{changed:boolean}>
-  const built = [], keptPrebuilt = [], logs = {};
+  const built = [], keptPrebuilt = [], providedByRomdev = [], logs = {};
   let failed = null;
   let active = 0;
   const queue = [];
@@ -66,6 +70,11 @@ export async function buildGoal(mk, goal, { always = false, jobs = 8, tmpRoot, o
       if (!rule) {
         if (exists(target) || mk.phony.has(target)) return { changed: false };
         throw Object.assign(new Error(`no rule to make target '${target}'`), { target });
+      }
+      const tool = classifyCommand([target], root);
+      if (["armips", "binutils", "ido", "n64crc", "iconv", "cpp"].includes(tool.kind)) {
+        providedByRomdev.push({ target, runsAs: tool.kind });
+        return { changed: false };
       }
       const deps = [...rule.prereqs, ...rule.orderOnly];
       const results = await Promise.all(deps.map((d) => make(d)));
@@ -95,5 +104,5 @@ export async function buildGoal(mk, goal, { always = false, jobs = 8, tmpRoot, o
   }
   // Let in-flight jobs settle before reporting.
   await Promise.allSettled([...state.values()]);
-  return { ok: !failed, goal, built, keptPrebuilt, failed, ms: Date.now() - t0, logs };
+  return { ok: !failed, goal, built, keptPrebuilt, providedByRomdev, failed, ms: Date.now() - t0, logs };
 }

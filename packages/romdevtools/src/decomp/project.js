@@ -400,7 +400,7 @@ export class Project {
       const single = parsed.length === 1 && parsed[0].pipeline.length === 1 && !parsed[0].pipeline[0].redirects.length ? parsed[0].pipeline[0].argv : null;
       if (!single) { steps.push({ argv: null, line, role: "other" }); continue; }
       const argv = single;
-      const cls = classifyCommand(argv);
+      const cls = classifyCommand(argv, this.root);
       if (cls.kind === "print" || cls.kind === "noop") continue;
       const isCompile = (cls.kind === "asm-processor" || cls.kind === "ido") && argv.includes(objRel);
       const role = isCompile ? "compile" : cls.kind === "syntax-check" ? "syntax-check" : argv.includes(objRel) ? "post" : "other";

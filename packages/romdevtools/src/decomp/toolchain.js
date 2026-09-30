@@ -52,14 +52,27 @@ export function binutilsGlue(tool) {
   return p;
 }
 
+/** armips (RSP/MIPS assembler) glue, shipped beside IDO. */
+export function armipsGlue() {
+  const p = path.join(packageDir("romdev-toolchain-ido"), "wasm", "armips.mjs");
+  if (!existsSync(p)) throw Object.assign(new Error(`${p} missing (scripts/build-armips.sh)`), { code: "TOOLCHAIN_MISSING" });
+  return p;
+}
+
+/** Run armips as WASM on the real tree (cwd = where its .create paths resolve). */
+export function armips(args, { cwd, timeoutMs } = {}) {
+  return execWasm({ argv: ["armips", ...args], cwd, programs: { armips: armipsGlue() }, timeoutMs });
+}
+
 /**
  * Classify a program named by a build recipe.
- * @returns {{kind:'ido', version:string, program:string} | {kind:'binutils', tool:string, prefix:string} | null}
+ * @returns {{kind:'ido', version:string, program:string} | {kind:'binutils', tool:string, prefix:string} | {kind:'armips'} | null}
  */
 export function toolName(cmd) {
   const base = path.basename(cmd);
   const bin = /^(.*-)?(as|ld|objcopy|objdump)$/.exec(base);
   if (bin && bin[1] && /mips/.test(bin[1])) return { kind: "binutils", tool: bin[2], prefix: bin[1] };
+  if (base === "armips") return { kind: "armips" };
   const ido = /(?:^|[/_-])(?:ido)?[/_-]?(5\.3|7\.1)(?:[/_]|$)/i.exec(cmd);
   if (ido && IDO_PROGRAMS.includes(base)) return { kind: "ido", version: ido[1], program: base };
   return null;
@@ -138,6 +151,7 @@ export function programFiles(argv0, argv = []) {
       return [...IDO_PROGRAMS.map((p) => path.join(dir, `${p}.wasm`)), path.join(dir, "err.english.cc")];
     }
     if (t?.kind === "binutils") return [binutilsGlue(t.tool).replace(/\.mjs$/, ".wasm")];
+    if (t?.kind === "armips") return [armipsGlue().replace(/\.mjs$/, ".wasm")];
   } catch { return []; }
   if (argv.some((a) => /asm-processor\/build\.py$/.test(a))) return [path.join(here, "asm-processor.js"), path.join(here, "euc-jp.js")];
   return [];

@@ -18,9 +18,32 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { asmProcessorBuild } from "./asm-processor.js";
-import { idoCompile, binutils, toolName } from "./toolchain.js";
+import { idoCompile, binutils, toolName, armips } from "./toolchain.js";
 import { preprocess } from "./cpp.js";
-import { iconv, parseIconvArgs, n64crcFile, setO32AbiBit } from "./host-ports.js";
+import { iconv, parseIconvArgs, n64crcFile, setO32AbiBit, buildAssetContainer } from "./host-ports.js";
+
+// Project scripts with a JS port, by the exact script content ported (sha256).
+// A script whose bytes differ is a different program: it is reported
+// unsupported rather than assumed to behave like the port.
+const PORTED_SCRIPTS = {
+  "build_font_container.py": { kind: "asset-container", sha256: ["45c9d8af2f4dce095da093411641cba59016711cdd2e2b8cefd68cc7c7936b24"],
+    helpers: { "font_texture.py": ["7f778618cf4aedc5d232a515b2fd0d2ecb62402db6c276f642094cbed599618d"] } },
+  "assemble_rsp.py": { kind: "assemble-rsp", sha256: ["782936f3b533bb9c91d000f3797bc1f28d0a74a75e67df73e7c79e345824de54"] },
+};
+
+function portedScript(script, cwd) {
+  const spec = PORTED_SCRIPTS[path.basename(script)];
+  if (!spec) return null;
+  const sha = (f) => { try { return createHash("sha256").update(fs.readFileSync(f)).digest("hex"); } catch { return null; } };
+  const abs = path.resolve(cwd, script);
+  const got = sha(abs);
+  if (!spec.sha256.includes(got)) return { kind: "unsupported", reason: `${script} (sha256 ${got ?? "unreadable"}) is not the version romdev ported` };
+  for (const [h, shas] of Object.entries(spec.helpers ?? {})) {
+    const hs = sha(path.join(path.dirname(abs), h));
+    if (!shas.includes(hs)) return { kind: "unsupported", reason: `${script}'s helper ${h} (sha256 ${hs ?? "missing"}) is not the version romdev ported` };
+  }
+  return { kind: spec.kind, script };
+}
 
 // -- sh parsing ----------------------------------------------------------
 /**
@@ -92,7 +115,7 @@ export function parseShell(line) {
 const PYTHON_RE = /(^|\/)(python[0-9.]*|pypy[0-9.]*)$/;
 
 /** What a command would run as (for reporting and for callers that plan). */
-export function classifyCommand(argv) {
+export function classifyCommand(argv, cwd = process.cwd()) {
   const prog = argv[0] ?? "";
   const base = path.basename(prog);
   if (prog === ":" || prog === "true") return { kind: "noop" };
@@ -102,11 +125,14 @@ export function classifyCommand(argv) {
     const script = argv.find((a, i) => i > 0 && !a.startsWith("-")) ?? "";
     if (/asm-processor\/build\.py$/.test(script)) return { kind: "asm-processor", script };
     if (/set_o32abi_bit\.py$/.test(script)) return { kind: "set-o32abi-bit", script };
+    const ported = portedScript(script, cwd);
+    if (ported) return ported;
     return { kind: "unsupported", reason: `python script ${script || "(none)"} has no romdev port` };
   }
   const tn = toolName(prog);
   if (tn?.kind === "ido") return { kind: "ido", version: tn.version, program: tn.program };
   if (tn?.kind === "binutils") return { kind: "binutils", tool: tn.tool };
+  if (tn?.kind === "armips") return { kind: "armips" };
   if ((base === "gcc" || base === "clang" || base === "cc" || /-gcc$/.test(base)) && argv.includes("-fsyntax-only")) return { kind: "syntax-check" };
   if (base === "cpp" || /-cpp$/.test(base) || ((base === "gcc" || base === "clang" || /-gcc$/.test(base)) && argv.includes("-E"))) return { kind: "cpp" };
   if (base === "iconv") return { kind: "iconv" };
@@ -139,7 +165,7 @@ export async function runRecipeLine(line, ctx) {
       const last = s === pipeline.length - 1;
       const redirIn = cmd.redirects.find((r) => r.fd === 0);
       if (redirIn) input = fs.readFileSync(path.resolve(ctx.cwd, redirIn.target));
-      const cls = classifyCommand(cmd.argv);
+      const cls = classifyCommand(cmd.argv, ctx.cwd);
       if (cls.kind === "unsupported") return { code: 127, log, steps, unsupported: `${cls.reason} (in: ${line.slice(0, 200)})` };
       let r;
       try { r = await runOne(cmd.argv, cls, { ...ctx, stdin: input }); }
@@ -230,6 +256,22 @@ async function runOne(argv, cls, ctx) {
       return { code: 0, stdout: Buffer.from(n64crcFile(path.resolve(cwd, file))) };
     }
     case "sha1sum": return sha1sum(argv.slice(1), cwd);
+    case "armips": {
+      const r = await armips(argv.slice(1), { cwd });
+      return { code: r.exitCode, log: r.log };
+    }
+    case "asset-container": {
+      const args = argv.slice(argv.indexOf(cls.script) + 1).filter((a) => !a.startsWith("-"));
+      if (args.length !== 2) return { code: 2, log: `usage: ${cls.script} layout output\n` };
+      try {
+        const data = await buildAssetContainer(path.resolve(cwd, args[0]));
+        const out = path.resolve(cwd, args[1]);
+        fs.mkdirSync(path.dirname(out), { recursive: true });
+        fs.writeFileSync(out, data);
+        return { code: 0 };
+      } catch (e) { return { code: 1, log: `${e.message}\n` }; }
+    }
+    case "assemble-rsp": return assembleRsp(argv.slice(argv.indexOf(cls.script) + 1), ctx);
     case "fs": return fsOp(cls.op, argv.slice(1), cwd);
     default: throw new Unsupported(`no runner for ${cls.kind}`);
   }
@@ -281,13 +323,16 @@ function fsOp(op, args, cwd) {
 
 /**
  * Run one argv (a single command, no shell syntax) through the same dispatch.
- * `ido: { programs, env }` is threaded into every IDO compile the step makes
- * (including asm-processor's): pass-module overrides and extra environment.
+ * `ido: { programs, env, cwd }` is threaded into every IDO compile the step
+ * makes (including asm-processor's compile; asm-processor itself keeps the
+ * step's cwd): pass-module overrides, extra environment, and the directory cc
+ * runs in (where -K intermediates land).
  * For an IDO or asm-processor step `log` holds the passes' stderr and stdout.
  * @returns {Promise<{code:number, log:string, stdout?:Buffer, kind:string, unsupported?:string}>}
  */
+/** @param {{cwd:string, tmpRoot:string, stdin?:Buffer, ido?:{programs?:Record<string,string>, env?:Record<string,string>, cwd?:string}}} [o] */
 export async function runArgv(argv, { cwd, tmpRoot, stdin, ido } = {}) {
-  const cls = classifyCommand(argv);
+  const cls = classifyCommand(argv, cwd);
   if (cls.kind === "unsupported") return { code: 127, log: "", kind: cls.kind, unsupported: cls.reason };
   try {
     const r = await runOne(argv, cls, { cwd, tmpRoot, stdin, ido });
@@ -296,4 +341,32 @@ export async function runArgv(argv, { cwd, tmpRoot, stdin, ido } = {}) {
     if (e instanceof Unsupported) return { code: 127, log: "", kind: cls.kind, unsupported: e.message };
     throw e;
   }
+}
+
+/**
+ * assemble_rsp.py: assemble one RSP source with armips in an isolated scratch
+ * directory beside the output, check the generated size, publish atomically.
+ * The --assembler path names the project's armips; romdev runs its WASM armips.
+ */
+async function assembleRsp(args, { cwd }) {
+  const opt = {};
+  for (let i = 0; i < args.length; i++) {
+    const m = /^--(assembler|source|output|size)(?:=(.*))?$/.exec(args[i]);
+    if (m) opt[m[1]] = m[2] ?? args[++i];
+  }
+  for (const k of ["assembler", "source", "output", "size"]) if (opt[k] == null) return { code: 2, log: `assemble_rsp: --${k} is required\n` };
+  const size = Number(opt.size);
+  const source = path.resolve(cwd, opt.source), output = path.resolve(cwd, opt.output);
+  fs.mkdirSync(path.dirname(output), { recursive: true });
+  const scratch = fs.mkdtempSync(path.join(path.dirname(output), "rsp-"));
+  try {
+    fs.copyFileSync(source, path.join(scratch, path.basename(source)));
+    const r = await armips([path.basename(source)], { cwd: scratch });
+    if (r.exitCode !== 0) return { code: 1, log: r.log };
+    const generated = path.join(scratch, path.basename(source).replace(/\.[^.]*$/, "") + ".bin");
+    const got = fs.statSync(generated).size;
+    if (got !== size) return { code: 1, log: `${path.basename(source)}: expected ${size} bytes, got ${got}\n` };
+    fs.renameSync(generated, output);
+    return { code: 0, log: r.log };
+  } finally { fs.rmSync(scratch, { recursive: true, force: true }); }
 }
