@@ -3,7 +3,8 @@
 // ELF machine sniff. Disassembly itself runs romdev's WASM binutils (never a
 // host objdump); see runObjdump().
 import { readFileSync } from "node:fs";
-import { runWasmTool } from "./wasm-tool.js";
+import path from "node:path";
+import { runWasmTool, runRawFsTool } from "./wasm-tool.js";
 
 // Ignore registers, for cleaner output. (Upstream: False.)
 const ign_regs = false;
@@ -371,9 +372,10 @@ export function setObjdumpGlue(archName, gluePath) { objdumpGlue[archName] = glu
 export async function resolveObjdumpGlue(archName) {
   if (objdumpGlue[archName]) return objdumpGlue[archName];
   if (archName === "mips") {
+    // The mips-linux-gnu build: the same objdump romdev's compare path runs.
     try {
       const { toolchain } = await import("romdev-toolchain-mips-gcc");
-      objdumpGlue.mips = toolchain["mips-elf-objdump"].gluePath;
+      objdumpGlue.mips = toolchain["mips-linux-gnu-objdump"].gluePath;
       return objdumpGlue.mips;
     } catch { /* not installed */ }
   }
@@ -393,9 +395,14 @@ export async function resolveObjdumpGlue(archName) {
 export async function objdump(o_file, arch, { objdump_command = null, stack_differences = false, ign_branch_targets = false } = {}) {
   const args = objdump_command ? objdump_command.slice(1) : arch.arguments;
   const glue = await resolveObjdumpGlue(arch.name);
-  if (usesRawFs(glue)) throw new Error(`${glue} is a NODERAWFS build; the scorer runs MEMFS binutils (the object is copied in)`);
-  const bytes = typeof o_file === "string" ? readFileSync(o_file) : o_file;
-  const r = await runWasmTool(glue, [...args, "/work/in.o"], { "/work/in.o": bytes });
+  let r;
+  if (usesRawFs(glue)) {
+    if (typeof o_file !== "string") throw new Error("a NODERAWFS objdump reads the object from disk: pass a path");
+    r = await runRawFsTool(glue, [...args, path.resolve(o_file)], { argv0: "mips-linux-gnu-objdump" });
+  } else {
+    const bytes = typeof o_file === "string" ? readFileSync(o_file) : o_file;
+    r = await runWasmTool(glue, [...args, "/work/in.o"], { "/work/in.o": bytes });
+  }
   if (r.exitCode !== 0) throw new Error(`objdump exited ${r.exitCode}: ${r.stderr.slice(0, 400)}`);
   const lines = splitlines(r.stdout);
   return simplify_objdump(lines, arch, { stack_differences, ign_branch_targets });

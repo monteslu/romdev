@@ -71,3 +71,74 @@ export async function runWasmTool(gluePath, argv, files = {}, outputs = []) {
   }
   return { exitCode: exitCode ?? 0, stdout: out.join("\n") + (out.length ? "\n" : ""), stderr: err.join("\n"), outputs: read };
 }
+
+// -- NODERAWFS tools ---------------------------------------------------------
+// romdev's mips-linux-gnu binutils are NODERAWFS builds (they read the real
+// filesystem), the same modules romdev's compile/compare path runs. Their
+// glue initialises synchronously when handed a precompiled module; stdio is
+// rebound to in-memory streams so output is captured rather than written to
+// this process's fds.
+
+/** @type {Map<string, {factory: Function, module: WebAssembly.Module, bytes: Buffer}>} */
+const rawCache = new Map();
+
+async function loadRaw(gluePath) {
+  let e = rawCache.get(gluePath);
+  if (!e) {
+    const bytes = readFileSync(gluePath.replace(/\.m?js$/, ".wasm"));
+    const module = new WebAssembly.Module(bytes);
+    const factory = (await import(pathToFileURL(gluePath).href)).default;
+    e = { factory, module, bytes };
+    rawCache.set(gluePath, e);
+  }
+  return e;
+}
+
+const S_IFCHR = 0o020000;
+function captureStream(FS, collect) {
+  return FS.createStream({
+    path: "/dev/romdev-out", flags: 1, seekable: false, position: 0,
+    node: { mode: S_IFCHR | 0o666, id: 0 },
+    stream_ops: {
+      write(_s, buffer, offset, length) { collect.push(Buffer.from(buffer.subarray(offset, offset + length))); return length; },
+      read() { return 0; },
+      llseek() { throw new FS.ErrnoError(29); },
+      close() {},
+    },
+  });
+}
+function bindStd(FS, fd, stream) {
+  FS.closeStream(stream.fd);
+  FS.closeStream(fd);
+  stream.fd = fd;
+  FS.streams[fd] = stream;
+}
+
+/**
+ * Run a NODERAWFS tool (paths in argv are real host paths).
+ * @returns {Promise<{exitCode: number, stdout: string, stderr: string}>}
+ */
+export async function runRawFsTool(gluePath, argv, { argv0 = "tool" } = {}) {
+  const e = await loadRaw(gluePath);
+  const out = [], err = [];
+  const M = {
+    noInitialRun: true, thisProgram: argv0, wasmBinary: e.bytes,
+    print: () => {}, printErr: () => {},
+    quit: (_status, toThrow) => { throw toThrow; },
+  };
+  const RealModule = WebAssembly.Module;
+  WebAssembly.Module = function (bytes) { return bytes === e.bytes ? e.module : new RealModule(bytes); };
+  try { e.factory(M); } finally { WebAssembly.Module = RealModule; }
+  if (typeof M.callMain !== "function") throw new Error(`${gluePath}: module did not initialise synchronously`);
+  const FS = M.FS;
+  bindStd(FS, 1, captureStream(FS, out));
+  bindStd(FS, 2, captureStream(FS, err));
+  let code;
+  try {
+    code = M.callMain(argv);
+  } catch (x) {
+    if (x && typeof x === "object" && typeof x.status === "number") code = x.status;
+    else { err.push(Buffer.from(String(x?.message ?? x))); code = 134; }
+  }
+  return { exitCode: code ?? 0, stdout: Buffer.concat(out).toString("utf8"), stderr: Buffer.concat(err).toString("utf8") };
+}

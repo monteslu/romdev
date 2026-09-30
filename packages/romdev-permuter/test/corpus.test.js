@@ -5,15 +5,15 @@
 //   1. the "before" side of each diff.txt (upstream's pretty-printed base
 //      source, with line numbers) equals this port's printed base,
 //   2. the whole diff.txt is reproduced byte for byte from the candidate,
-//   3. compiling a candidate / the base with the job's compile.sh and scoring
-//      it gives upstream's score.txt / logged base score.
+//   3. (in romdevtools: test/decomp-permuter-corpus.test.js) compiling each
+//      candidate through romdev's WASM toolchain and scoring it gives
+//      upstream's score.txt / logged base score.
 // The corpus is local data (never committed); without one the test skips.
 // ROMDEV_PERMUTER_CORPUS may name a jobs directory; otherwise every
-// ~/.romdev/decomp/<project>/jobs is used. ROMDEV_PERMUTER_CORPUS_SCORES caps
-// how many compiles part 3 spends (default 24; 0 skips it).
+// ~/.romdev/decomp/<project>/jobs is used.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { perm_parse } from "../src/perm/parse.js";
@@ -21,9 +21,6 @@ import { perm_evaluate_one } from "../src/perm/eval.js";
 import { Candidate } from "../src/candidate.js";
 import { unified_diff } from "../src/difflib.js";
 import { trim_source, get_default_randomization_weights, get_settings } from "../src/helpers.js";
-import { Scorer } from "../src/scorer.js";
-import { Compiler } from "../src/compiler.js";
-import { workDir, removeDir } from "./helpers/work.js";
 
 function jobDirs() {
   const roots = process.env.ROMDEV_PERMUTER_CORPUS ? [process.env.ROMDEV_PERMUTER_CORPUS]
@@ -95,43 +92,4 @@ test("upstream's diff.txt is reproduced byte for byte", { skip: !JOBS.length && 
     n++;
   }
   assert.ok(n > 0);
-});
-
-const budget = Number(process.env.ROMDEV_PERMUTER_CORPUS_SCORES ?? 24);
-test("upstream's scores (score.txt and the logged base score) are reproduced", { skip: (!JOBS.length && "no decomp corpus") || (!budget && "score budget 0") }, async (t) => {
-  const tmp = workDir("corpus");
-  let spent = 0, compared = 0;
-  try {
-    // Spread the budget over jobs: first each job's base, then its outputs.
-    const byJob = JOBS.filter(({ job }) => existsSync(path.join(job, "permuter.log")));
-    const tasks = [];
-    for (const { job, pd } of byJob) {
-      const m = /base score = (\d+)/.exec(readFileSync(path.join(job, "permuter.log"), "utf8"));
-      if (m) tasks.push({ pd, kind: "base", want: Number(m[1]) });
-    }
-    for (const { pd, o } of outputs()) tasks.push({ pd, kind: o, want: Number(readFileSync(path.join(pd, o, "score.txt"), "utf8").trim()) });
-    const step = Math.max(1, Math.floor(tasks.length / budget));
-    const scorers = new Map();
-    for (let k = 0; k < tasks.length && spent < budget; k += step) {
-      const { pd, kind, want } = tasks[k];
-      const settings = get_settings(pd);
-      if (!scorers.has(pd)) {
-        scorers.set(pd, await Scorer.create({ target_o: path.join(pd, "target.o"), stack_differences: false, algorithm: "difflib",
-          debug_mode: false, ign_branch_targets: true, objdump_command: settings.objdump_command ?? null }));
-      }
-      const { fn, source } = baseSource(pd);
-      const text = kind === "base" ? source : reconstruct(source, fn, readFileSync(path.join(pd, kind, "source.c"), "utf8"));
-      const compiler = new Compiler(path.join(pd, "compile.sh"), { tmpDir: tmp, timeoutMs: 120_000 });
-      const obj = await compiler.compile(text);
-      spent++;
-      if (!obj) { t.diagnostic(`compile.sh failed for ${pd} (${kind}); toolchain unavailable?`); continue; }
-      const [got] = await scorers.get(pd).score(obj);
-      rmSync(obj, { force: true });
-      assert.equal(got, want, `${pd} ${kind}`);
-      compared++;
-    }
-    t.diagnostic(`compared ${compared} upstream scores (${spent} compiles)`);
-  } finally {
-    removeDir(tmp);
-  }
 });
