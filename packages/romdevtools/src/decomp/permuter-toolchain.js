@@ -123,10 +123,10 @@ export async function preprocess({ cwd, argv, stdin }) {
   return r.output.toString("utf8");
 }
 
+/** A private scratch dir per call: concurrent compiles share the permuter's tmp dir. */
 function tmpRootFor(dir) {
-  const t = path.join(dir, ".romdev-tmp");
-  fs.mkdirSync(t, { recursive: true });
-  return t;
+  fs.mkdirSync(dir, { recursive: true });
+  return fs.mkdtempSync(path.join(dir, ".romdev-tmp-"));
 }
 
 export async function run({ cwd, argv }) {
