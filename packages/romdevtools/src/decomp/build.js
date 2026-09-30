@@ -1,0 +1,99 @@
+// build.js - build a decomp project's targets from its own Makefile, entirely
+// through romdev's WASM/JS toolchain: makefile.js reads the rules, recipe.js
+// runs each step. Used for one TU's object (compile/compare), and for the full
+// ROM (integrate/verify): every object, the link, objcopy and the checksum.
+//
+// Policy for recipes romdev cannot run (a Python asset packer, armips): the
+// step is never handed to a host program. If its output already exists it is
+// kept and listed in `keptPrebuilt` (so a verdict can say exactly which inputs
+// were not rebuilt); if it does not exist the build fails with the reason.
+import fs from "node:fs";
+import path from "node:path";
+import { Makefile } from "./makefile.js";
+import { runRecipeLine } from "./recipe.js";
+
+/** Load the project's Makefile with the variables a quiet, uncoloured build uses. */
+export async function loadMakefile(root, { makefile = "Makefile", overrides = {} } = {}) {
+  return Makefile.load(root, { makefile, overrides: { VERBOSE: "1", COLOR: "0", ...overrides } });
+}
+
+/**
+ * Run one target's recipe (not its prerequisites).
+ * @returns {Promise<{ok:boolean, target:string, code:number, log:string, commands:string[], unsupported?:string, skipped?:string[]}>}
+ */
+export async function runTargetRecipe(mk, target, { cwd = mk.root, tmpRoot, lines = null } = {}) {
+  const r = lines ? { lines } : mk.recipeFor(target);
+  if (!r) return { ok: false, target, code: 2, log: `no rule to make target '${target}'`, commands: [] };
+  let log = "";
+  const commands = [], skipped = [];
+  for (const l of r.lines) {
+    commands.push(l.command);
+    const x = await runRecipeLine(l.command, { cwd, tmpRoot });
+    log += x.log;
+    if (x.skipped) skipped.push(...x.skipped);
+    if (x.unsupported) return { ok: false, target, code: 127, log, commands, unsupported: x.unsupported, skipped };
+    if (x.code !== 0 && !l.ignoreErrors) return { ok: false, target, code: x.code, log, commands, skipped };
+  }
+  return { ok: true, target, code: 0, log, commands, ...(skipped.length ? { skipped: [...new Set(skipped)] } : {}) };
+}
+
+/**
+ * Build `goal` and everything it depends on.
+ * @param {{always?:boolean, jobs?:number, tmpRoot:string, onProgress?:(e:object)=>void}} o
+ *   always: rebuild every target that has a runnable recipe (make --always-make)
+ * @returns {Promise<{ok:boolean, goal:string, built:string[], keptPrebuilt:Array<{target:string, reason:string}>, failed:object|null, ms:number, logs:Record<string,string>}>}
+ */
+export async function buildGoal(mk, goal, { always = false, jobs = 8, tmpRoot, onProgress } = {}) {
+  const t0 = Date.now();
+  const root = mk.root;
+  const exists = (p) => fs.existsSync(path.resolve(root, p));
+  const mtime = (p) => { try { return fs.statSync(path.resolve(root, p)).mtimeMs; } catch { return -1; } };
+  const state = new Map(); // target -> Promise<{changed:boolean}>
+  const built = [], keptPrebuilt = [], logs = {};
+  let failed = null;
+  let active = 0;
+  const queue = [];
+  const slot = async (fn) => {
+    if (active >= jobs) await new Promise((res) => queue.push(res));
+    active++;
+    try { return await fn(); } finally { active--; queue.shift()?.(); }
+  };
+
+  const make = (target) => {
+    if (state.has(target)) return state.get(target);
+    const p = (async () => {
+      const rule = mk.findRule(target);
+      if (!rule) {
+        if (exists(target) || mk.phony.has(target)) return { changed: false };
+        throw Object.assign(new Error(`no rule to make target '${target}'`), { target });
+      }
+      const deps = [...rule.prereqs, ...rule.orderOnly];
+      const results = await Promise.all(deps.map((d) => make(d)));
+      if (!rule.recipe.length) return { changed: results.some((r) => r.changed) };
+      const phony = mk.phony.has(target);
+      const tm = mtime(target);
+      const need = always || phony || tm < 0 || rule.prereqs.some((d) => mtime(d) > tm) || results.some((r, i) => r.changed && i < rule.prereqs.length);
+      if (!need) return { changed: false };
+      const r = await slot(() => runTargetRecipe(mk, target, { tmpRoot }));
+      if (r.unsupported) {
+        if (exists(target) && !phony) { keptPrebuilt.push({ target, reason: r.unsupported }); return { changed: false }; }
+        throw Object.assign(new Error(`cannot build '${target}': ${r.unsupported}`), { target, result: r });
+      }
+      if (r.log) logs[target] = r.log;
+      if (!r.ok) throw Object.assign(new Error(`'${target}' failed (exit ${r.code})`), { target, result: r });
+      built.push(target);
+      onProgress?.({ target, built: built.length });
+      return { changed: true };
+    })();
+    state.set(target, p);
+    return p;
+  };
+
+  try { await make(goal); }
+  catch (e) {
+    failed = { target: e.target ?? goal, message: e.message, code: e.result?.code ?? null, log: (e.result?.log ?? "").slice(-4000), commands: e.result?.commands ?? [] };
+  }
+  // Let in-flight jobs settle before reporting.
+  await Promise.allSettled([...state.values()]);
+  return { ok: !failed, goal, built, keptPrebuilt, failed, ms: Date.now() - t0, logs };
+}
