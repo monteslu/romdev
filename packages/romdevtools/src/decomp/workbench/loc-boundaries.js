@@ -7,6 +7,7 @@
 //
 // Plain JS ESM + JSDoc.
 
+import { SequenceMatcher } from "./difflib.js";
 import { ValueError, splitlines, strip, splitWs, strRepr } from "./py.js";
 import { nextSteps } from "./field-guide.js";
 
@@ -40,70 +41,6 @@ function quotedPath(value) {
     if (/^[0-7]+$/.test(e)) return String.fromCharCode(parseInt(e, 8));
     return "\\" + e;
   });
-}
-
-// ---- difflib.SequenceMatcher (no junk, no autojunk) ----
-
-class SequenceMatcher {
-  constructor(a, b) {
-    this.a = a; this.b = b;
-    this.b2j = new Map();
-    b.forEach((elt, i) => { if (!this.b2j.has(elt)) this.b2j.set(elt, []); this.b2j.get(elt).push(i); });
-  }
-  findLongestMatch(alo, ahi, blo, bhi) {
-    const { a, b, b2j } = this;
-    let besti = alo, bestj = blo, bestsize = 0;
-    let j2len = new Map();
-    for (let i = alo; i < ahi; i++) {
-      const newj2len = new Map();
-      for (const j of b2j.get(a[i]) ?? []) {
-        if (j < blo) continue;
-        if (j >= bhi) break;
-        const k = (j2len.get(j - 1) ?? 0) + 1;
-        newj2len.set(j, k);
-        if (k > bestsize) { besti = i - k + 1; bestj = j - k + 1; bestsize = k; }
-      }
-      j2len = newj2len;
-    }
-    while (besti > alo && bestj > blo && a[besti - 1] === b[bestj - 1]) { besti--; bestj--; bestsize++; }
-    while (besti + bestsize < ahi && bestj + bestsize < bhi && a[besti + bestsize] === b[bestj + bestsize]) bestsize++;
-    return [besti, bestj, bestsize];
-  }
-  getMatchingBlocks() {
-    const la = this.a.length, lb = this.b.length;
-    const queue = [[0, la, 0, lb]];
-    const blocks = [];
-    while (queue.length) {
-      const [alo, ahi, blo, bhi] = queue.pop();
-      const [i, j, k] = this.findLongestMatch(alo, ahi, blo, bhi);
-      if (k) {
-        blocks.push([i, j, k]);
-        if (alo < i && blo < j) queue.push([alo, i, blo, j]);
-        if (i + k < ahi && j + k < bhi) queue.push([i + k, ahi, j + k, bhi]);
-      }
-    }
-    blocks.sort((x, y) => x[0] - y[0] || x[1] - y[1] || x[2] - y[2]);
-    let i1 = 0, j1 = 0, k1 = 0;
-    const out = [];
-    for (const [i2, j2, k2] of blocks) {
-      if (i1 + k1 === i2 && j1 + k1 === j2) k1 += k2;
-      else { if (k1) out.push([i1, j1, k1]); [i1, j1, k1] = [i2, j2, k2]; }
-    }
-    if (k1) out.push([i1, j1, k1]);
-    out.push([la, lb, 0]);
-    return out;
-  }
-  getOpcodes() {
-    let i = 0, j = 0;
-    const answer = [];
-    for (const [ai, bj, size] of this.getMatchingBlocks()) {
-      const tag = i < ai && j < bj ? "replace" : i < ai ? "delete" : j < bj ? "insert" : "";
-      if (tag) answer.push([tag, i, ai, j, bj]);
-      i = ai + size; j = bj + size;
-      if (size) answer.push(["equal", ai, i, bj, j]);
-    }
-    return answer;
-  }
 }
 
 export class ListingInstruction {
@@ -201,10 +138,10 @@ export function mapToListing(candidate, fn) {
   const listing = fn.instructions;
   const left = candidate.map(normalized), right = listing.map((i) => normalized(i.text));
   const mapping = new Array(candidate.length).fill(null);
-  for (const [tag, ls, le, rs, re] of new SequenceMatcher(left, right).getOpcodes()) {
+  for (const [tag, ls, le, rs, re] of new SequenceMatcher(left, right, { autojunk: false }).getOpcodes()) {
     if (tag === "equal") { for (let o = 0; o < le - ls; o++) mapping[ls + o] = rs + o; continue; }
     if (tag === "delete" || tag === "insert") continue;
-    const inner = new SequenceMatcher(candidate.slice(ls, le).map(mnemonicOf), listing.slice(rs, re).map((i) => i.mnemonic)).getOpcodes();
+    const inner = new SequenceMatcher(candidate.slice(ls, le).map(mnemonicOf), listing.slice(rs, re).map((i) => i.mnemonic), { autojunk: false }).getOpcodes();
     for (const [it, as, ae, bs] of inner) {
       if (it !== "equal") continue;
       for (let o = 0; o < ae - as; o++) mapping[ls + as + o] = rs + bs + o;
