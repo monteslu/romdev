@@ -354,3 +354,54 @@ export function traceSummary(events) {
     procedures: byInt(m.filter((e) => e.procedure !== null).map((e) => String(e.procedure))),
   };
 }
+
+export const EMISSION_MAP_SCHEMA = "decomp-workbench-ugen-emission-map-v1";
+
+/** Validate a durable emitted-index/object-row/source join document: Map emitted_index -> EmissionLocation. */
+export function parseEmissionMap(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || value.schema !== EMISSION_MAP_SCHEMA) {
+    throw new ValueError(`emission map schema must be ${EMISSION_MAP_SCHEMA}`);
+  }
+  const entries = value.entries;
+  if (!Array.isArray(entries)) throw new ValueError("emission map entries must be a list");
+  const result = new Map();
+  const toInt = (v) => {
+    if (typeof v === "number" && Number.isFinite(v)) return Math.trunc(v);
+    if (typeof v === "boolean") return v ? 1 : 0;
+    if (typeof v === "string" && /^\s*[-+]?\d+\s*$/.test(v)) return parseInt(v, 10);
+    throw new TypeError("not an integer");
+  };
+  entries.forEach((raw, index) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new ValueError(`emission map entry ${index} must be an object`);
+    let emittedIndex, objectRow;
+    try { emittedIndex = toInt(raw.emitted_index); objectRow = toInt(raw.object_row); } catch {
+      throw new ValueError(`emission map entry ${index} requires integer emitted_index and object_row`);
+    }
+    if (emittedIndex < 0 || objectRow < 0) throw new ValueError(`emission map entry ${index} indices must be non-negative`);
+    if (result.has(emittedIndex)) throw new ValueError(`emission map emitted_index ${emittedIndex} is duplicated`);
+    const sl = raw.source_line;
+    const sourceLine = sl !== null && sl !== undefined ? toInt(sl) : null;
+    if (sourceLine !== null && sourceLine < 1) throw new ValueError(`emission map entry ${index} source_line must be positive`);
+    const sf = raw.source_file ?? null;
+    if (sf !== null && typeof sf !== "string") throw new ValueError(`emission map entry ${index} source_file must be a string`);
+    const ins = raw.instruction ?? null;
+    if (ins !== null && typeof ins !== "string") throw new ValueError(`emission map entry ${index} instruction must be a string`);
+    result.set(emittedIndex, new EmissionLocation({ emitted_index: emittedIndex, object_row: objectRow, source_line: sourceLine, source_file: sf, instruction: ins }));
+  });
+  return result;
+}
+
+/** Summarize the profiled uopt base-provenance and alias decisions. */
+export function aliasTraceSummary(events) {
+  const m = [...events].filter((e) => e.action === "base" || e.action === "alias-query");
+  const bases = m.filter((e) => e.action === "base"), queries = m.filter((e) => e.action === "alias-query");
+  const tally = (items) => Object.fromEntries(sorted([...counter(items).entries()], (e) => e[0]));
+  const countField = (sel, name) => tally(sel.filter((e) => has(e.fields, name)).map((e) => e.fields[name]));
+  return {
+    events: m.length, base_events: bases.length, alias_queries: queries.length,
+    base_paths: countField(bases, "path"), base_types: countField(bases, "type"), query_results: countField(queries, "result"),
+    left_types: countField(queries, "left_type"), right_types: countField(queries, "right_type"),
+    registers: tally(m.filter((e) => e.register !== null).map((e) => registerName(e.register))),
+    queries: queries.map((e) => e.asDict()),
+  };
+}

@@ -1,0 +1,10 @@
+# Reader-supplied slot names. The ucode carries none: see
+# src/decomp_workbench/patches/README.md.
+sp:212  curplayernum
+sp:204  x
+sp:198  viewleft
+sp:144  i
+sp:136  same_team_colour
+sp:92   self_paused
+sp:84   viewx
+sp:80   colour
