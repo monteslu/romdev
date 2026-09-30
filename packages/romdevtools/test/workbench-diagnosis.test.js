@@ -24,7 +24,7 @@ const CANDIDATE = "\n00000000 <demo>:\n   0: 27bdffe0  addiu $sp,$sp,-32\n   4: 
 async function run(argv, cwd = FIX) {
   const args = parseArgs(DIAGNOSE_SPEC, argv);
   const out = [], err = [];
-  const io = { print: (s = "") => out.push(`${s}\n`), eprint: (s = "") => err.push(`${s}\n`) };
+  const io = { print: (s = "") => out.push(`${s}\n`), eprint: (s = "") => err.push(`${s}\n`), write: (s) => out.push(String(s)), ewrite: (s) => err.push(String(s)) };
   const status = await diagnoseDumpsCommand(args, io, { cwd, env: process.env, resolve: (p) => path.resolve(cwd, p) });
   return [status, out.join(""), err.join("")];
 }
@@ -62,14 +62,37 @@ test("fail and census exit contracts are shared", async () => {
   assert.equal((await run([path.join(d, "target.objdump"), path.join(d, "target.objdump"), "--function", "demo", "--fail-on-mismatch", "--json"], d))[0], 0);
 });
 
-test("the terminal rendering and file outputs say they are not available", async () => {
+test("human default is one decisive hunk", async () => {
+  const d = writeDumps();
+  const [status, stdout] = await run([path.join(d, "target.objdump"), path.join(d, "candidate.objdump"), "--function", "demo", "--color", "never"], d);
+  assert.equal(status, 0);
+  for (const s of ["COMPARISON", "MECHANISM", "HUNK 1"]) assert.ok(stdout.includes(s), s);
+  assert.ok(!stdout.includes("HUNK 2"));
+});
+
+test("human fail and census exit contracts are shared", async () => {
+  const d = writeDumps();
+  const base = [path.join(d, "target.objdump"), path.join(d, "candidate.objdump"), "--function", "demo", "--fail-on-mismatch"];
+  assert.equal((await run(base, d))[0], 1);
+  assert.equal((await run([...base, "--census", "aligned_register=1"], d))[0], 1);
+  assert.equal((await run([path.join(d, "target.objdump"), path.join(d, "target.objdump"), "--function", "demo", "--fail-on-mismatch"], d))[0], 0);
+});
+
+test("--html writes a self-contained report and --emit-force-spec a handoff; neither overwrites", async () => {
   const d = writeDumps();
   const pair = [path.join(d, "target.objdump"), path.join(d, "candidate.objdump"), "--function", "demo"];
-  let [status, , stderr] = await run(pair, d);
-  assert.equal(status, 2); assert.ok(stderr.includes("--json"));
-  [status, , stderr] = await run([...pair, "--json", "--emit-force-spec", path.join(d, "f.json")], d);
-  assert.equal(status, 2); assert.ok(stderr.includes("--emit-force-spec"));
-  [status, , stderr] = await run([...pair, "--json", "--html", path.join(d, "r.html")], d);
+  let [status, stdout, stderr] = await run([...pair, "--html", path.join(d, "r.html"), "--emit-force-spec", path.join(d, "f.json")], d);
+  assert.equal(status, 0, stderr);
+  assert.ok(stderr.includes("ROM-derived"));
+  assert.ok(stdout.includes("HTML report: " + path.join(d, "r.html")));
+  const html = fs.readFileSync(path.join(d, "r.html"), "utf8");
+  assert.ok(html.startsWith("<!doctype html>") && html.includes("decomp-workbench-html-diagnosis-v1") && !html.includes("<script"));
+  const spec = JSON.parse(fs.readFileSync(path.join(d, "f.json"), "utf8"));
+  assert.equal(spec.schema, "decomp-workbench-diagnostic-force-v1");
+  assert.equal(spec.permutation[0].allocator_web, null);
+  [status, , stderr] = await run([...pair, "--html", path.join(d, "r.html")], d);
+  assert.equal(status, 2); assert.ok(stderr.includes("refusing to overwrite HTML report"));
+  [status, , stderr] = await run([...pair, "--json", "--html", path.join(d, "x.html")], d);
   assert.equal(status, 2); assert.ok(stderr.includes("mutually exclusive"));
 });
 

@@ -2,9 +2,9 @@
 // mechanism evidence, and the source-edit class that evidence supports, as
 // one versioned JSON document (decomp-workbench-diagnosis-v3).
 //
-// Only the JSON document is produced here. The terminal rendering and the
-// --html / --emit-force-spec file outputs are not part of romdev; asking for
-// them is a usage error that says so.
+// Three outputs from one diagnosis: the JSON document, the terminal screen
+// (comparison truth, then the aligned mechanism view, then the lever), and
+// the optional --html report and --emit-force-spec handoff files.
 //
 // Plain JS ESM + JSDoc.
 
@@ -20,8 +20,12 @@ import { diagnoseObjects, diagnoseDumps } from "./diagnosis.js";
 import { parseEmitTrace } from "./emit-provenance.js";
 import { frameLadder } from "./frame-ladder.js";
 import { parseGlobalcolorTrace, passEvidence } from "./globalcolor.js";
-import { leverFor } from "./levers.js";
-import { MISSING_LISTING_STEPS, annotateScheduleSites, reportGuidance, scheduleClassCount } from "./loc-boundaries.js";
+import { leverFor, formatLever } from "./levers.js";
+import { MISSING_LISTING_STEPS, annotateScheduleSites, reportGuidance, scheduleClassCount, renderLocBoundaries } from "./loc-boundaries.js";
+import { alignmentCautionLines, comparisonAcceptance, comparisonExplanationLines, comparisonLine, diffSiteLines,
+  relocationSymbolCautionLines, warningLines } from "./comparison-render.js";
+import { Painter, emitLines, resolveColor } from "./terminal.js";
+import { renderView, writeViewOutputs } from "./view-cli.js";
 import { displayPath } from "./model.js";
 import { loadReservations } from "./register-state.js";
 import { COMPARISON_CENSUS_KEYS } from "./schema.js";
@@ -94,12 +98,6 @@ function statementLines(diagnosis, args, ctx) {
   return [replace(diagnosis, { view: replace(view, { guidance: [...view.guidance, ...reportGuidance(report)] }) }), report];
 }
 
-function comparisonAccepted(c, crossRom) {
-  if (c.relocation_symbol_mismatches) return false;
-  if (c.exact) return true;
-  return !!(crossRom && c.structural_exact);
-}
-
 const errorText = (e) => (e && typeof e.code === "string" && /^E[A-Z]+$/.test(e.code) ? osErrorText(e) : e.message);
 const reportable = (e) => isInputError(e) || isReportedError(e);
 
@@ -121,27 +119,50 @@ export function emit(diagnosis, args, predicates, io, ctx, warn = () => {}) {
     io.eprint(`error: ${e.message}`);
     return 2;
   }
-  if (args.html || args.emit_force_spec) {
-    io.eprint(`error: ${args.html ? "--html" : "--emit-force-spec"} writes a file romdev does not produce; this in-process diagnose returns the JSON document only (use --json)`);
+  let outputs;
+  try { outputs = writeViewOutputs(diagnosis.view, args, ctx, io, { comparison }); } catch (e) {
+    if (!reportable(e)) throw e;
+    io.eprint(`error: ${errorText(e)}`);
     return 2;
   }
-  const accepted = comparisonAccepted(comparison, args.cross_rom);
-  const [freshness] = freshnessDisplay(args, [args.target, args.candidate], { labels: ["target", "candidate"], cwd: ctx.cwd });
-  const payload = diagnosis.asDict({ report_regs: args.report_regs, cross_rom: args.cross_rom });
-  if (census.length) payload.comparison.census = census.map((c) => c.asDict());
-  Object.assign(payload, freshnessPayload(freshness));
-  if (listingReport) payload.loc_boundaries = listingReport.asDict();
-  io.print(dumps(payload));
+  const [accepted] = comparisonAcceptance(comparison, { cross_rom: args.cross_rom });
+  const [freshness, freshnessWarnings] = freshnessDisplay(args, [args.target, args.candidate], { labels: ["target", "candidate"], cwd: ctx.cwd });
+  if (args.json) {
+    const payload = diagnosis.asDict({ report_regs: args.report_regs, cross_rom: args.cross_rom });
+    if (census.length) payload.comparison.census = census.map((c) => c.asDict());
+    Object.assign(payload, freshnessPayload(freshness));
+    if (listingReport) payload.loc_boundaries = listingReport.asDict();
+    io.print(dumps(payload));
+  } else {
+    const painter = new Painter(resolveColor(args.color, { env: ctx.env }));
+    const lines = [
+      ...freshnessWarnings,
+      ...freshness.provenanceLines().map((l) => `compared: ${l}`),
+      ...warningLines(comparison.warnings),
+      painter.bold("COMPARISON"),
+      ...alignmentCautionLines(comparison),
+      ...relocationSymbolCautionLines(comparison),
+      comparisonLine(comparison, painter),
+      ...comparisonExplanationLines(comparison, { cross_rom: args.cross_rom, guidance: false }),
+    ];
+    if (args.show_diff || args.show_all) lines.push(...diffSiteLines(comparison));
+    lines.push("", painter.bold("MECHANISM"));
+    const view = diagnosis.view;
+    lines.push(...renderView(view, { context: args.context, max_hunks: args.show_all ? 0 : args.max_hunks,
+      lane_window: args.show_all ? Math.max(view.target_instructions, view.candidate_instructions) : args.lane_window,
+      report_regs: args.report_regs, painter, show_warnings: false, width: args.width, terse: args.terse,
+      extra_sections: [...(listingReport ? renderLocBoundaries(listingReport, painter) : []), ...(diagnosis.lever ? ["", ...formatLever(diagnosis.lever)] : [])] }));
+    lines.push(...census.map((c) => c.line));
+    if (args.html) lines.push(`HTML report: ${outputs.htmlOutput}`);
+    if (args.emit_force_spec) lines.push(`diagnostic force specification: ${outputs.forceOutput}`);
+    emitLines(io, lines, { width: args.width, pager: args.pager });
+  }
   return censusStatus(census, { otherwise: args.fail_on_mismatch && !accepted ? 1 : 0 });
 }
 
 /** Diagnose two object files after disassembling each exactly once. */
 export async function diagnoseCommand(args, io, ctx) {
   const warn = (note) => io.eprint(`warning: ${note}`);
-  if (!args.json) {
-    io.eprint("error: the terminal rendering of diagnose is not available in romdev; pass --json for the diagnosis document");
-    return 2;
-  }
   let diagnosis, predicates;
   try {
     guardFreshness(args, [args.target, args.candidate], { labels: ["target", "candidate"], cwd: ctx.cwd });
@@ -162,16 +183,9 @@ export async function diagnoseCommand(args, io, ctx) {
   return emit(diagnosis, args, predicates, io, ctx, warn);
 }
 
-/**
- * Diagnose two retained GNU objdump text files (the same JSON document). Not
- * a registered command; the object form is what romdev drives.
- */
+/** Diagnose two retained GNU objdump text files. */
 export async function diagnoseDumpsCommand(args, io, ctx) {
   const warn = (note) => io.eprint(`warning: ${note}`);
-  if (!args.json) {
-    io.eprint("error: the terminal rendering of diagnose is not available in romdev; pass --json for the diagnosis document");
-    return 2;
-  }
   let diagnosis, predicates;
   try {
     guardFreshness(args, [args.target, args.candidate], { labels: ["target", "candidate"], cwd: ctx.cwd });
