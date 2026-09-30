@@ -177,7 +177,7 @@ async function runOne(argv, cls, ctx) {
       return { code: 0, stdout: Buffer.from(text, "latin1") };
     }
     case "ido": {
-      const r = await idoCompile({ version: cls.version, argv, cwd, tmpRoot });
+      const r = await idoCompile({ version: cls.version, argv, cwd, tmpRoot, ...(ctx.ido ?? {}) });
       return { code: r.exitCode, log: r.log };
     }
     case "binutils": {
@@ -192,7 +192,7 @@ async function runOne(argv, cls, ctx) {
         compile: async (ccArgv) => {
           const c = classifyCommand(ccArgv);
           if (c.kind !== "ido") throw new Unsupported(`asm-processor compiler '${ccArgv[0]}' has no WASM equivalent`);
-          const x = await idoCompile({ version: c.version, argv: ccArgv, cwd, tmpRoot });
+          const x = await idoCompile({ version: c.version, argv: ccArgv, cwd, tmpRoot, ...(ctx.ido ?? {}) });
           return { code: x.exitCode, log: x.log };
         },
         assemble: async (asArgv, s, o) => {
@@ -281,13 +281,16 @@ function fsOp(op, args, cwd) {
 
 /**
  * Run one argv (a single command, no shell syntax) through the same dispatch.
+ * `ido: { programs, env }` is threaded into every IDO compile the step makes
+ * (including asm-processor's): pass-module overrides and extra environment.
+ * For an IDO or asm-processor step `log` holds the passes' stderr and stdout.
  * @returns {Promise<{code:number, log:string, stdout?:Buffer, kind:string, unsupported?:string}>}
  */
-export async function runArgv(argv, { cwd, tmpRoot, stdin } = {}) {
+export async function runArgv(argv, { cwd, tmpRoot, stdin, ido } = {}) {
   const cls = classifyCommand(argv);
   if (cls.kind === "unsupported") return { code: 127, log: "", kind: cls.kind, unsupported: cls.reason };
   try {
-    const r = await runOne(argv, cls, { cwd, tmpRoot, stdin });
+    const r = await runOne(argv, cls, { cwd, tmpRoot, stdin, ido });
     return { code: r.code, log: (r.log ?? "") + (r.stdout && cls.kind !== "print" ? "" : ""), stdout: r.stdout, kind: cls.kind };
   } catch (e) {
     if (e instanceof Unsupported) return { code: 127, log: "", kind: cls.kind, unsupported: e.message };

@@ -101,10 +101,14 @@ export function binutils(tool, args, { cwd, stdin, timeoutMs } = {}) {
  * IDO cc (the driver) with every pass it can exec available as a sibling module.
  * TMPDIR is a fresh directory under `tmpRoot` (the project workspace; never /tmp),
  * removed afterwards.
- * @param {{version:string, argv:string[], cwd:string, tmpRoot:string, trace?:boolean}} a argv[0] is the path the project named cc by
+ * `programs` overrides pass modules by name (e.g. { uopt: <diagnostic uopt glue> })
+ * and `env` adds environment over { USR_LIB, TMPDIR }.
+ * The returned `log` is the passes' stderr followed by their stdout (both
+ * streams, not interleaved); `stdout` is stdout alone.
+ * @param {{version:string, argv:string[], cwd:string, tmpRoot:string, trace?:boolean, programs?:Record<string,string>, env?:Record<string,string>}} a argv[0] is the path the project named cc by
  */
-export async function idoCompile({ version, argv, cwd, tmpRoot, trace = false, timeoutMs }) {
-  const programs = idoPrograms(version);
+export async function idoCompile({ version, argv, cwd, tmpRoot, trace = false, timeoutMs, programs: extraPrograms = {}, env: extraEnv = {} }) {
+  const programs = { ...idoPrograms(version), ...extraPrograms };
   const tmp = path.join(tmpRoot, `ido-${randomUUID().slice(0, 8)}`);
   mkdirSync(tmp, { recursive: true });
   try {
@@ -112,7 +116,7 @@ export async function idoCompile({ version, argv, cwd, tmpRoot, trace = false, t
     // the recompiled libc redirects under USR_LIB (also where err.english.cc is).
     return await execWasm({
       argv, cwd, programs: { ...programs, [path.basename(argv[0])]: programs.cc },
-      env: { USR_LIB: idoDir(version), TMPDIR: tmp }, trace, timeoutMs,
+      env: { USR_LIB: idoDir(version), TMPDIR: tmp, ...extraEnv }, trace, timeoutMs,
     });
   } finally {
     rmSync(tmp, { recursive: true, force: true });
