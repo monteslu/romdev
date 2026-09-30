@@ -5,7 +5,7 @@
 //
 // Plain JS ESM + JSDoc.
 
-import { spawnSync } from "node:child_process";
+import { runProgramSync } from "./proc.js";
 import { createHash } from "node:crypto";
 import { statSync, realpathSync } from "node:fs";
 import os from "node:os";
@@ -21,7 +21,7 @@ const HEX_DUMP_ADDRESS_RE = /^\s*[0-9a-fA-F]+\s+/;
 const HEX_DUMP_TOKEN_RE = /[0-9a-fA-F]{2,8}(?=\s|$)/y;
 
 function run(executable, args, { timeout, env }) {
-  const r = spawnSync(executable, args, { encoding: "utf8", timeout: timeout * 1000, env, maxBuffer: 1 << 30 });
+  const r = runProgramSync([executable, ...args], { encoding: "utf8", timeout: timeout * 1000, env });
   if (r.error) {
     if (r.error.code === "ETIMEDOUT") throw new RuntimeError(`objdump ${args.join(" ")} timed out after ${timeout} seconds`);
     throw r.error;

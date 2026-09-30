@@ -8,7 +8,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawnRouted } from "./proc.js";
 import { createHash } from "node:crypto";
 import { ValueError, sorted, strRepr } from "./py.js";
 import { dumps } from "./pyjson.js";
@@ -91,7 +91,7 @@ export function runCompiler(command, { environment, compile_cwd, timeout = null 
   return new Promise((resolve, reject) => {
     let child;
     try {
-      child = spawn(command[0], command.slice(1), { cwd: compile_cwd, env: environment, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+      child = spawnRouted(command, { cwd: compile_cwd, env: environment, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     } catch (e) { reject(Object.assign(new OSError(osMessage(e, command[0])), { code: e.code })); return; }
     RUNNING.add(child);
     const out = [], err = [];

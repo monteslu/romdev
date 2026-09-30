@@ -18,7 +18,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawnRouted } from "./proc.js";
 import { fileURLToPath } from "node:url";
 import { ValueError, sorted } from "./py.js";
 import { expanduser } from "./py-path.js";
@@ -77,7 +77,7 @@ export function runOwned(argv, { cwd = null, stdout = "pipe", stderr = "pipe", t
     else if (stderr === "stdout") stdio[2] = outFd !== null ? outFd : "pipe";
     let child;
     try {
-      child = spawn(argv[0], argv.slice(1), { cwd: cwd ?? undefined, env: env ?? process.env, stdio, detached: process.platform !== "win32" });
+      child = spawnRouted(argv, { cwd: cwd ?? undefined, env: env ?? process.env, stdio, detached: process.platform !== "win32" });
     } catch (e) { if (outFd !== null) fs.closeSync(outFd); reject(e); return; }
     let out = "", err = "", timedOut = false, timer = null;
     child.stdout?.on("data", (d) => { out += d; });

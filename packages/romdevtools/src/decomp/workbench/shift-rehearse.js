@@ -13,7 +13,7 @@
 
 import { readFileSync, writeFileSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { runProgramSync } from "./proc.js";
 import { ValueError, sorted, splitlines, strip, lstrip, pyInt, strRepr, osErrorText, minBy } from "./py.js";
 import { auditSymbolMovement } from "./ldmap.js";
 import { GeneratedSpec, RegionSpec, buildWordCensus, checkImageDelta } from "./mips-refs.js";
@@ -436,7 +436,7 @@ function lastLine(completed) {
 
 function runWrapper(wrapper, ldScript, outDir, { label, cwd, env }) {
   mkdirSync(outDir, { recursive: true });
-  const r = spawnSync(wrapper, [ldScript, outDir], { encoding: "utf8", cwd, env, maxBuffer: 1 << 30 });
+  const r = runProgramSync([wrapper, ldScript, outDir], { encoding: "utf8", cwd, env });
   if (r.error) throw new ValueError(`cannot run the wrapper for ${label}: ${osErrorText(Object.assign(r.error, { path: r.error.path ?? wrapper }))}`);
   return { returncode: r.status ?? 1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }

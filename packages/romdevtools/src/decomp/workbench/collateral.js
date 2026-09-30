@@ -7,7 +7,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { spawnSync } from "node:child_process";
+import { runProgramSync } from "./proc.js";
 import { createHash } from "node:crypto";
 import { compareObjects } from "./compare.js";
 import { canonicalTable, sectionBytes } from "./fidelity.js";
@@ -42,7 +42,7 @@ const ignored = (name, patterns) => patterns.some((p) => fnmatchcase(name, p));
 
 /** Run objdump; an absent optional section is stable evidence, not a failure. */
 function run(executable, args, { timeout, env }) {
-  const r = spawnSync(executable, args, { encoding: "utf8", timeout: timeout * 1000, env, maxBuffer: 1 << 30 });
+  const r = runProgramSync([executable, ...args], { encoding: "utf8", timeout: timeout * 1000, env });
   if (r.error) {
     if (r.error.code === "ETIMEDOUT") throw new RuntimeError(`objdump ${args.join(" ")} timed out after ${timeout} seconds`);
     throw r.error;

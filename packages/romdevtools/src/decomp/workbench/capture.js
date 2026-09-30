@@ -19,6 +19,9 @@ import { ValueError, strRepr, sorted, splitlines } from "./py.js";
 import { FileNotFoundError, OSError } from "./py-extra.js";
 import { dumps } from "./pyjson.js";
 import { fileSha256 } from "./campaign.js";
+import { fileURLToPath } from "node:url";
+
+const PROC_CHILD = fileURLToPath(new URL("./proc-child.js", import.meta.url));
 
 export const CAPTURE_SCHEMA = "decomp-workbench-capture-toolchain-v1";
 export const CAPTURE_RUNS_SCHEMA = "decomp-workbench-capture-runs-v1";
@@ -30,8 +33,14 @@ export const DEFAULT_PHASES = ["ugen", "as0", "as1"];
 export const VALUE_OPTIONS = new Set(["-o", "-t", "-temp", "-l", "-G"]);
 export const OPTION_ROLES = { "-o": "output", "-t": "symtab", "-temp": "temp", "-l": "listing" };
 
-/** The wrapper every wrapped phase name links to. */
-export const WRAPPER_TEXT = `#!/usr/bin/env node
+/**
+ * The wrapper every wrapped phase name links to. A phase binary that is a
+ * real IDO pass (an ELF executable) runs through romdev's WASM toolchain
+ * (proc-child.js, whose path is written into the wrapper), never on the host;
+ * a phase that is itself a script (a stand-in) runs as it is.
+ */
+export function wrapperText(procChild = PROC_CHILD) {
+  return `#!/usr/bin/env node
 // decomp-workbench phase capture wrapper.
 //
 // Preserve one compiler phase's file arguments around a single invocation.
@@ -53,8 +62,20 @@ const realTool = path.join(toolDir, phase + ".real");
 const args = process.argv.slice(2);
 
 function executable(p) { try { fs.accessSync(p, fs.constants.X_OK); return fs.statSync(p).isFile(); } catch { return false; } }
+const ROMDEV_PROC_CHILD = ${JSON.stringify(procChild)};
+function isElf(p) {
+  try { const fd = fs.openSync(p, "r"); const b = Buffer.alloc(4); fs.readSync(fd, b, 0, 4, 0); fs.closeSync(fd); return b.toString("latin1") === "\\x7fELF"; } catch { return false; }
+}
 function run() {
-  const r = spawnSync(realTool, args, { stdio: "inherit" });
+  let r;
+  if (isElf(realTool)) {
+    const version = /(?:^|[\\/_-])(?:ido)?[\\/_-]?(5\\.3|7\\.1)(?:[\\/_]|$)/i.exec(toolDir);
+    if (!version) { process.stderr.write("capture wrapper: " + realTool + " is a host IDO pass and its IDO version is not in the toolchain path; romdev runs IDO passes only as WASM\\n"); return 127; }
+    const job = JSON.stringify({ argv: ["/ido/" + version[1] + "/" + phase, ...args], cwd: process.cwd(), mode: "wasm", env: process.env, stdin: null });
+    r = spawnSync(process.execPath, [ROMDEV_PROC_CHILD], { input: job, stdio: ["pipe", "inherit", "inherit"] });
+  } else {
+    r = spawnSync(realTool, args, { stdio: "inherit" });
+  }
   if (r.error) { process.stderr.write("capture wrapper: " + r.error.message + "\\n"); return 127; }
   if (r.signal) return 128 + (require("os").constants.signals[r.signal] || 1);
   return r.status;
@@ -95,6 +116,7 @@ args.forEach((arg, i) => {
 fs.writeFileSync(path.join(runDir, "status.txt"), status + "\\n");
 process.exit(status);
 `;
+}
 
 function makeExecutable(p) {
   const mode = fs.statSync(p).mode;
@@ -232,7 +254,7 @@ export function makeCaptureToolchain(source, destination, { phases = DEFAULT_PHA
     carried.push({ name, carried: link ? "symlink" : "copy", bytes: isFile(entry) ? fs.statSync(entry).size : null });
   }
   const wrapper = path.join(toolchain, WRAPPER_NAME);
-  fs.writeFileSync(wrapper, WRAPPER_TEXT, "utf8");
+  fs.writeFileSync(wrapper, wrapperText(), "utf8");
   makeExecutable(wrapper);
   for (const phase of wanted) {
     const linkPath = path.join(toolchain, phase);

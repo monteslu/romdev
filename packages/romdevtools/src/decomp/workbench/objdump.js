@@ -8,7 +8,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { runProgramSync } from "./proc.js";
+import { toolName } from "../toolchain.js";
+
+/** The shipped WASM objdump, by the name proc.js routes to it. */
+export const WASM_OBJDUMP = "mips-linux-gnu-objdump";
 import { MINIMUM_ELIDED_RUN } from "./elf-instructions.js";
 import { symbolExtent } from "./elf-symbols.js";
 import { annotateLocalPc16 } from "./local-pc16.js";
@@ -72,7 +76,7 @@ export function mipsProbeObject() {
 
 const decoder = () => new TextDecoder("utf-8", { fatal: false, ignoreBOM: true });
 function runText(cmd, args, { timeout, env } = {}) {
-  const r = spawnSync(cmd, args, { encoding: "buffer", timeout, env: env ?? process.env, maxBuffer: 1 << 30 });
+  const r = runProgramSync([cmd, ...args], { timeout, env: env ?? process.env });
   if (r.error) throw r.error;
   return { returncode: r.status ?? -1, stdout: decoder().decode(r.stdout ?? Buffer.alloc(0)).replace(/\r\n?/g, "\n"), stderr: decoder().decode(r.stderr ?? Buffer.alloc(0)).replace(/\r\n?/g, "\n") };
 }
@@ -81,8 +85,10 @@ const probeCache = new Map();
 
 /** Measure whether `executable` satisfies the workbench contract. */
 export function probeObjdump(executable, { env } = {}) {
-  const resolved = fs.realpathSync(executable);
-  const st = fs.statSync(resolved);
+  // A WASM binutils name has no host file: it is identified by its name.
+  const wasm = !executable.includes("/") && toolName(executable)?.kind === "binutils" && !fs.existsSync(executable);
+  const resolved = wasm ? executable : fs.realpathSync(executable);
+  const st = wasm ? { mtimeMs: 0, size: 0 } : fs.statSync(resolved);
   const key = `${resolved}:${st.mtimeMs}:${st.size}`;
   if (probeCache.has(key)) return probeCache.get(key);
   let version = null;
@@ -139,6 +145,8 @@ export function discoverObjdump(explicit = null, { cwd = process.cwd(), env = pr
     if (isExecutableFile(p)) return fs.realpathSync(p);
     const found = which(explicit, env);
     if (found) return found;
+    // romdev ships the MIPS binutils as WASM: a mips-*-objdump name runs there.
+    if (!explicit.includes("/") && toolName(explicit)?.kind === "binutils") return explicit;
     throw new FileNotFoundError(`explicit objdump does not exist or is not executable: ${explicit}`);
   }
   const rejected = [];
@@ -150,6 +158,8 @@ export function discoverObjdump(explicit = null, { cwd = process.cwd(), env = pr
     if (probe.compatible) return probe.executable;
     rejected.push(`${candidatePath}: ${probe.error}`);
   }
+  // Nothing on the host: the WASM mips-linux-gnu-objdump romdev ships.
+  if (!rejected.length) return WASM_OBJDUMP;
   const detail = rejected.length ? `; rejected incompatible tools: ${rejected.join("; ")}` : "";
   throw new FileNotFoundError("could not find a GNU-compatible MIPS objdump; install MIPS GNU binutils or pass --objdump /path/to/mips64-elf-objdump" + detail);
 }
@@ -325,7 +335,7 @@ export function trueInstructionCount(instructions) { return trimFunctionPadding(
 function runObjdump(executable, file, { section, symbol, cwd, env }) {
   const command = ["-d", "-r", "-z", "-j", section, String(file)];
   if (symbol) command.push(`--disassemble=${symbol}`);
-  const r = spawnSync(executable, command, { cwd, env: env ?? process.env, encoding: "buffer", maxBuffer: 1 << 30 });
+  const r = runProgramSync([executable, ...command], { cwd, env: env ?? process.env });
   if (r.error) {
     const e = new FileNotFoundError(r.error.code === "ENOENT" ? `[Errno 2] No such file or directory: '${executable}'` : String(r.error.message));
     throw e;

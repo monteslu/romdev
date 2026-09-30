@@ -9,7 +9,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { runProgramSync } from "./proc.js";
 import { ScoreError, scoreReport, scoreSpecFromDict } from "./score.js";
 import { formatG } from "./globalcolor.js";
 import { sorted, strRepr, splitlines, strip } from "./py.js";
@@ -90,7 +90,7 @@ export async function runVariant(variant, { run_dir, spec, timeout, cwd = proces
   const rendered = variant.command.split(OUTPUT_PLACEHOLDER).join(outputPath);
   const started = performance.now();
   let runError = null, returncode = null, stdout = "", stderr = "";
-  const r = spawnSync("/bin/sh", ["-c", rendered], { cwd, env, timeout: timeout * 1000, killSignal: "SIGKILL", maxBuffer: 1 << 30 });
+  const r = runProgramSync(["/bin/sh", "-c", rendered], { cwd, env, timeout: timeout * 1000, killSignal: "SIGKILL" });
   const dec = (b) => (b ? new TextDecoder("utf-8", { fatal: false }).decode(b) : "");
   stdout = dec(r.stdout); stderr = dec(r.stderr);
   if (r.error && r.error.code === "ETIMEDOUT") { runError = `variant command exceeded --timeout (${formatG(timeout)}s)`; stdout = ""; stderr = ""; }
