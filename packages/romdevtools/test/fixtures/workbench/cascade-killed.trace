@@ -1,0 +1,24 @@
+[CDX] globalcolor proc=0
+[CDX] webdetail phase=p1 proc=0 role=target web=1035 sym=1035 type=3 dtype=13 table=847 chain=1 exprtable=1865 exprchain=1 bb=371 line=23 raw10=0xfffffdf8 raw14=0x00030102 raw18=0x04010000 raw20=0x00000000
+[CDX] webdetail phase=p1 proc=0 role=target web=3055 sym=1035 type=3 dtype=13 table=847 chain=1 exprtable=1865 exprchain=1 bb=371 line=23 raw10=0xfffffdf8 raw14=0x00030102 raw18=0x04010000 raw20=0x00000000
+[CDX] webdetail phase=p1 proc=0 role=target web=255 sym=255 type=3 dtype=13 table=847 chain=1 exprtable=1865 exprchain=1 bb=371 line=23 raw10=0xfffffcec raw14=0x00030102 raw18=0x04010000 raw20=0x00000000
+[CDX] saveocc proc=0 web=255 occ=1 usesdefs=1.0 weight=1.0 term=1.000000 bb=900 uses=2 defs=0 occp=1 nl=0 bb5=0 o22=0 o23=0 w34=0
+[CDX] savedetail proc=0 web=255 sym=255 occ=1 gross=24.000000 chargeA=0.000000 chargeB=0.000000 net=24.000000 divisor=3 nocs=3 dtype=13 save=8.000000 class=1 forced=0
+[CDX] p1dec phase=p1 proc=0 web=255 sym=255 class=2 save=8.000000 nocs=3 totalsave=24.000000 bestcost=0.000000 bestcolor=25 bestreg=? forbidden0=0x000000e3 forbidden1=0x00000000 regsleft=5 numintf=16 available0=0x0000001c available1=0x00000000 allcallersave=0 taken1=-1 taken2=-1 decision=color forced=-2
+[CDX] p1color phase=p1 proc=0 web=255 sym=255 color=25 reg=? forced=-2
+[CDX] saveocc proc=0 web=1035 occ=1 usesdefs=1.0 weight=1.0 term=1.000000 bb=101 uses=1 defs=0 occp=1 nl=0 bb5=0 o22=0 o23=0 w34=1
+[CDX] savedetail proc=0 web=1035 sym=1035 occ=1 gross=8.000000 chargeA=0.000000 chargeB=0.000000 net=8.000000 divisor=19 nocs=19 dtype=13 save=0.421053 class=1 forced=0
+[CDX] p1dec phase=p1 proc=0 web=1035 sym=1035 class=2 save=0.421053 nocs=19 totalsave=8.000000 bestcost=8.000000 bestcolor=29 bestreg=? forbidden0=0x000000fb forbidden1=0x00000000 regsleft=5 numintf=28 available0=0x00000004 available1=0x00000000 allcallersave=0 taken1=-1 taken2=-1 decision=split forced=-2
+[CDX] savedetail proc=0 web=1035 sym=1035 occ=1 gross=1.000000 chargeA=2.000000 chargeB=0.000000 net=-1.000000 divisor=2 nocs=2 dtype=13 save=-0.500000 class=2 forced=0
+[CDX] saveocc proc=0 web=1035 occ=1 usesdefs=1.0 weight=1.0 term=1.000000 bb=102 uses=1 defs=0 occp=1 nl=0 bb5=0 o22=0 o23=0 w34=1
+[CDX] saveocc proc=0 web=1035 occ=2 usesdefs=1.0 weight=2.0 term=1.000000 bb=202 uses=0 defs=1 occp=1 nl=0 bb5=0 o22=1 o23=0 w34=1
+[CDX] savedetail proc=0 web=1035 sym=1035 occ=2 gross=5.000000 chargeA=0.000000 chargeB=2.000000 net=3.000000 divisor=19 nocs=19 dtype=13 save=0.157895 class=1 forced=0
+[CDX] p1dec phase=p1 proc=0 web=1035 sym=1035 class=2 save=0.157895 nocs=19 totalsave=3.000000 bestcost=8.000000 bestcolor=29 bestreg=? forbidden0=0x000000fb forbidden1=0x00000000 regsleft=5 numintf=28 available0=0x00000004 available1=0x00000000 allcallersave=0 taken1=-1 taken2=-1 decision=split forced=-2
+[CDX] savedetail proc=0 web=1035 sym=1035 occ=1 gross=1.000000 chargeA=2.000000 chargeB=0.000000 net=-1.000000 divisor=2 nocs=2 dtype=13 save=-0.500000 class=2 forced=0
+[CDX] saveocc proc=0 web=1035 occ=1 usesdefs=1.0 weight=1.0 term=1.000000 bb=103 uses=1 defs=0 occp=1 nl=0 bb5=0 o22=0 o23=0 w34=1
+[CDX] savedetail proc=0 web=1035 sym=1035 occ=1 gross=2.000000 chargeA=0.000000 chargeB=0.000000 net=2.000000 divisor=19 nocs=19 dtype=13 save=0.105263 class=1 forced=0
+[CDX] p1dec phase=p1 proc=0 web=1035 sym=1035 class=2 save=0.105263 nocs=19 totalsave=2.000000 bestcost=8.000000 bestcolor=29 bestreg=? forbidden0=0x000000fb forbidden1=0x00000000 regsleft=5 numintf=28 available0=0x00000004 available1=0x00000000 allcallersave=0 taken1=-1 taken2=-1 decision=split forced=-2
+[CDX] savedetail proc=0 web=1035 sym=1035 occ=1 gross=1.000000 chargeA=2.000000 chargeB=0.000000 net=-1.000000 divisor=2 nocs=2 dtype=13 save=-0.500000 class=2 forced=0
+[CDX] saveocc proc=0 web=3055 occ=1 usesdefs=1.0 weight=1.0 term=1.000000 bb=300 uses=2 defs=1 occp=1 nl=0 bb5=0 o22=0 o23=1 w34=1
+[CDX] savedetail proc=0 web=3055 sym=1035 occ=1 gross=5.000000 chargeA=1.000000 chargeB=0.000000 net=0.000000 divisor=2 nocs=2 dtype=13 save=0.000000 class=2 forced=0
+[CDX] p1dec phase=p1 proc=0 web=3055 sym=1035 class=2 save=0.000000 nocs=2 totalsave=0.000000 bestcost=0.000000 bestcolor=27 bestreg=? forbidden0=0x000000e3 forbidden1=0x00000000 regsleft=5 numintf=10 available0=0x0000001c available1=0x00000000 allcallersave=0 taken1=-1 taken2=-1 decision=split forced=-2

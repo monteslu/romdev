@@ -208,7 +208,7 @@ async function romLines(args, cascade, ctx) {
 async function screenLines(args, ctx) {
   const { buildScreenLine } = await import("./screen.js");
   const instructions = await rows(args.object, args, ctx);
-  const line = buildScreenLine(instructions, { label: args.object, path: args.dumps ? null : ctx.resolve(args.object), slot: args.slot });
+  const line = await buildScreenLine(instructions, { label: args.object, path: args.dumps ? null : ctx.resolve(args.object), slot: args.slot });
   return ["", line.render()];
 }
 

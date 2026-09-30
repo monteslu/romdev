@@ -1,7 +1,6 @@
 // Ported from the workbench's frame-ladder tests: slot decode and temp
-// classification from synthetic CDX_SYMTAB / webdetail records. The
-// operation-stream report (op_report) and the trace-frame command are not
-// on romdev's diagnose path and are not ported.
+// classification from synthetic CDX_SYMTAB / webdetail records, the itable
+// operation stream, the trace-frame command, and the symtab patch grammar.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -95,4 +94,94 @@ test("a CDX log file without records fails loudly", () => {
   fs.writeFileSync(path.join(d, "nothing.log"), "no records here\n");
   assert.throws(() => CdxLog.read(path.join(d, "nothing.log")), /\[CDX\]/);
   assert.throws(() => CdxLog.read(path.join(d, "absent.log")), /cannot read/);
+});
+
+// -- the operation stream, the trace-frame command, and the patch grammar --
+
+import { opReport, SYMTAB_RECORD_GRAMMAR } from "../src/decomp/workbench/frame-ladder.js";
+import { runCommand } from "../src/decomp/workbench/cli.js";
+
+const TRACE_FILE = path.join(FIX, "frame-ladder.trace");
+const NAMES_FILE = path.join(FIX, "frame-names.txt");
+const PATCHES = fileURLToPath(new URL("../src/decomp/workbench/data/patches/", import.meta.url));
+
+test("operands resolve to supplied names; unnamed operands fall back to class and offset", () => {
+  const names = parseSlotNames(NAMES, { frame: -216 });
+  const named = new Map(opReport(frameLadder(readLog(), { frame: -216, names }), { names }).operations.map((r) => [r.index, r]));
+  assert.equal(named.get(71).left_name, "viewx(69)");
+  assert.equal(named.get(410).opcode_name, "usub");
+  const bare = new Map(opReport(frameLadder(readLog(), { frame: -216 })).operations.map((r) => [r.index, r]));
+  assert.equal(bare.get(74).left_name, "M-140(72)");
+});
+
+test("offsets filter the stream to one slot", () => {
+  assert.deepEqual(opReport(frameLadder(readLog(), { frame: -216 }), { offsets: [-140] }).operations.map((r) => r.index), [74]);
+});
+
+test("no symtab records is an error naming the instrument", () => {
+  assert.throws(() => opReport(frameLadder(websOnly())), (e) => e instanceof CascadeError && e.message.includes("CDX_SYMTAB=1"));
+});
+
+test("the ladder prints lowest slot first", async () => {
+  const r = await runCommand(["trace-frame", TRACE_FILE, "--frame", "-216", "--pager", "never"]);
+  assert.equal(r.code, 0);
+  const offsets = r.stdout.split("\n").filter((l) => l.startsWith("    -") || l.startsWith("       ")).map((l) => parseInt(l.trim().split(/\s+/)[0], 10));
+  assert.deepEqual(offsets, [...offsets].sort((a, b) => a - b));
+  assert.ok(r.stdout.includes("76(sp)"));
+});
+
+test("summary is one sweep column", async () => {
+  const r = await runCommand(["trace-frame", TRACE_FILE, "--frame", "-216", "--names", NAMES_FILE, "--summary", "--pager", "never"]);
+  assert.equal(r.code, 0);
+  assert.ok(r.stdout.includes("named=8"));
+  assert.ok(r.stdout.includes("temps below it 2"));
+});
+
+test("trace-frame JSON carries the schema and the slots", async () => {
+  const r = await runCommand(["trace-frame", TRACE_FILE, "--frame", "-216", "--json"]);
+  assert.equal(r.code, 0);
+  const doc = JSON.parse(r.stdout);
+  assert.equal(doc.schema, "decomp-workbench-frame-ladder-v1");
+  assert.equal(doc.slot_count, 12);
+  assert.equal(doc.slots[0].offset, -144);
+});
+
+test("a log without CDX records, or an unreadable names file, fails loudly", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "romdev-wb-frame-"));
+  try {
+    const empty = path.join(dir, "nothing.log");
+    fs.writeFileSync(empty, "no records here\n");
+    const r = await runCommand(["trace-frame", empty]);
+    assert.equal(r.code, 2);
+    assert.ok(r.stderr.includes("[CDX]"));
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  const n = await runCommand(["trace-frame", TRACE_FILE, "--names", "/nonexistent/names.txt"]);
+  assert.equal(n.code, 2);
+  assert.ok(n.stderr.includes("cannot read"));
+});
+
+test("the grammar action lists the symtab records and exits", async () => {
+  const r = await runCommand(["trace-cascade", TRACE_FILE, "--grammar"]);
+  assert.equal(r.code, 0);
+  assert.ok(r.stdout.includes("[CDX] symtab"));
+});
+
+test("every field the reader reads is in the patch", () => {
+  const patch = fs.readFileSync(path.join(PATCHES, "uopt-5.3-cdx-symtab.patch"), "utf8");
+  for (const f of ["idx", "kind", "dtype", "selfidx", "ver", "off", "tag", "class", "b24", "vreg", "op"]) assert.ok(patch.includes(`${f}=%`), f);
+});
+
+test("the patch records the base it applies to, and is a unified diff against one file", () => {
+  const readme = fs.readFileSync(path.join(PATCHES, "README.md"), "utf8");
+  assert.ok(readme.includes("e465eb4b76ac001d1c94ff8bf74c378217b6ed2e674a6b73c6722edc01baf5ca"));
+  assert.ok(readme.includes("CDX_SYMTAB"));
+  const lines = fs.readFileSync(path.join(PATCHES, "uopt-5.3-cdx-symtab.patch"), "utf8").split("\n");
+  assert.ok(lines[0].startsWith("--- a/build/5.3/uopt.c"));
+  assert.ok(lines[1].startsWith("+++ b/build/5.3/uopt.c"));
+  assert.ok(lines.some((l) => l.startsWith("@@")));
+});
+
+test("both records are documented in the grammar table", () => {
+  assert.deepEqual(Object.keys(SYMTAB_RECORD_GRAMMAR).sort(), ["symtab", "symtabcount"]);
+  for (const d of Object.values(SYMTAB_RECORD_GRAMMAR)) assert.ok(d.includes("CAMPAIGN-LOCAL"));
 });

@@ -1,0 +1,93 @@
+--- a/build/5.3/uopt.c
++++ b/build/5.3/uopt.c
+@@ -154586,6 +154586,82 @@
+     fflush(dkwb_cdx_output);
+     return -2;
+ }
++
++/* --------------- CDX-SYMTAB: uopt itable (symbol table) dump --------------- */
++static int dkwb_cdx_symtab_state = -1;
++static const char *dkwb_cdx_itab_kinds[9] = {
++    "empty", "islda", "isconst", "isvar", "isop", "isilda", "issvar",
++    "dumped", "isrconst"
++};
++static const char *dkwb_cdx_itab_kind(int kind) {
++    if (kind >= 0 && kind < 9) return dkwb_cdx_itab_kinds[kind];
++    return "?";
++}
++static void dkwb_cdx_symtab_init(void) {
++    const char *v;
++    if (dkwb_cdx_symtab_state >= 0) return;
++    v = getenv("CDX_SYMTAB");
++    dkwb_cdx_symtab_state = (v != NULL && *v != '\0' && *v != '0');
++}
++/* The itable is uopt's per-procedure expression/variable table; CDX's `sym=`
++ * field (MEM_U16(record + 2)) is an index into it.  Records are reached through
++ * an 8-byte-strided array of pointers, exactly as f_printitab walks them. */
++static void dkwb_cdx_dump_symtab(uint8_t *mem, int ordinal) {
++    uint32_t count;
++    uint32_t base;
++    uint32_t i;
++    dkwb_cdx_symtab_init();
++    if (!dkwb_cdx_symtab_state || !dkwb_cdx_active(ordinal)) return;
++    count = MEM_U32(0x1001cb38);
++    base = MEM_U32(0x1001cc30);
++    if (!dkwb_cdx_emulated_pointer(base) || count == 0 || count > 0x40000u) {
++        fprintf(dkwb_cdx_output,
++            "[CDX] symtabcount proc=%d n=%u base=0x%08x UNAVAILABLE\n",
++            ordinal, (unsigned int)count, (unsigned int)base);
++        fflush(dkwb_cdx_output);
++        return;
++    }
++    fprintf(dkwb_cdx_output, "[CDX] symtabcount proc=%d n=%u base=0x%08x\n",
++        ordinal, (unsigned int)count, (unsigned int)base);
++    for (i = 0; i < count; i++) {
++        uint32_t rec = MEM_U32(base + i * 8);
++        int kind;
++        if (!dkwb_cdx_emulated_pointer(rec)) {
++            fprintf(dkwb_cdx_output,
++                "[CDX] symtab proc=%d idx=%u rec=0x%08x nil\n",
++                ordinal, (unsigned int)i, (unsigned int)rec);
++            continue;
++        }
++        kind = (int)MEM_U8(rec + 0);
++        /* names: the input ucode carries no names for locals or temps, so the
++         * identity fields are kind/dtype/class/offset/tag.  Everything the
++         * record holds is dumped, raw words included, so nothing is lost. */
++        fprintf(dkwb_cdx_output,
++            "[CDX] symtab proc=%d idx=%u kind=%d name=%s dtype=%d selfidx=%d "
++            "bit=%d ver=%d off=%d tag=%d class=%d b23=%d b24=%d vreg=%d "
++            "op=%d l=%d r=%d "
++            "raw08=0x%08x raw12=0x%08x raw16=0x%08x raw20=0x%08x raw24=0x%08x "
++            "raw28=0x%08x raw32=0x%08x raw36=0x%08x rec=0x%08x\n",
++            ordinal, (unsigned int)i, kind, dkwb_cdx_itab_kind(kind),
++            (int)MEM_U8(rec + 1), (int)MEM_U16(rec + 2),
++            (int)MEM_U16(rec + 4), (int)MEM_U16(rec + 6),
++            (int)MEM_U32(rec + 16), (int)MEM_U16(rec + 20),
++            (int)MEM_U8(rec + 22), (int)MEM_U8(rec + 23),
++            (int)MEM_U8(rec + 24), (int)MEM_U8(rec + 25),
++            (int)MEM_U8(rec + 16),
++            dkwb_cdx_emulated_pointer(MEM_U32(rec + 20)) ?
++                (int)MEM_U16(MEM_U32(rec + 20) + 2) : -1,
++            dkwb_cdx_emulated_pointer(MEM_U32(rec + 24)) ?
++                (int)MEM_U16(MEM_U32(rec + 24) + 2) : -1,
++            (unsigned int)MEM_U32(rec + 8), (unsigned int)MEM_U32(rec + 12),
++            (unsigned int)MEM_U32(rec + 16), (unsigned int)MEM_U32(rec + 20),
++            (unsigned int)MEM_U32(rec + 24), (unsigned int)MEM_U32(rec + 28),
++            (unsigned int)MEM_U32(rec + 32), (unsigned int)MEM_U32(rec + 36),
++            (unsigned int)rec);
++    }
++    fflush(dkwb_cdx_output);
++}
++/* --------------- end CDX-SYMTAB --------------- */
+ #define DKWB_CDX_LOG(ordinal, ...) do { \
+     if (dkwb_cdx_log && dkwb_cdx_active(ordinal)) \
+         fprintf(dkwb_cdx_output, __VA_ARGS__); \
+@@ -157760,6 +157836,7 @@
+ dkwb_cdx_globalcolor_ordinal++;
+ dkwb_cdx_ordinal = dkwb_cdx_globalcolor_ordinal;
+ DKWB_CDX_LOG(dkwb_cdx_ordinal, "[CDX] globalcolor proc=%d\n", dkwb_cdx_ordinal);
++dkwb_cdx_dump_symtab(mem, dkwb_cdx_ordinal);
+ L47106c:
+ //globalcolor:
+ //nop;
