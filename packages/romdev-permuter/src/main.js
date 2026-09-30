@@ -32,6 +32,7 @@ export function makeOptions(o) {
     // In-process extensions (not upstream flags):
     out: null, // (s: string) => void, receives everything upstream prints to stdout
     signal: null, // AbortSignal: stop like Ctrl+C ("Exiting.")
+    pahConfig: null, // permuter@home Config (default: pah.conf in the working directory)
     workers: null, // force worker threads even for threads == 1 (keeps the caller's event loop free)
     preprocess: null, // (filename) => string: `cpp -P -nostdinc -DPERMUTER` equivalent
     compileFn: null, // (cPath, oPath) => Promise<boolean> instead of compile.sh
@@ -247,7 +248,7 @@ export async function run(options) {
 
   let found_zero = false;
   const aborted = () => o.signal?.aborted;
-  const useWorkers = o.workers ?? (o.threads > 1);
+  const useWorkers = o.workers ?? (o.threads > 1 || o.use_network);
   if (useWorkers && o.compileFn && !o.compileModule) throw new PermuterUsageError("worker threads need options.compileModule ({url, name}); a compileFn closure cannot cross threads");
   try {
     if (!useWorkers) {
@@ -323,36 +324,133 @@ export function* cycle_seeds(permuters) {
 
 const WORKER_URL = new URL("./worker.js", import.meta.url);
 
-/** Multi-threaded evaluation: workers pull seeds from the parent, which scores and writes results. */
+/**
+ * Multi-threaded evaluation: local worker threads and permuter@home
+ * connections pull seeds from the parent, which scores and writes results.
+ */
 async function runWorkers({ o, context, configs, post_score }) {
   const seed_iterators = context.permuters.map((p) => p.seed_iterator());
   let seed_iterators_remaining = seed_iterators.length;
   let next_iterator_index = 0;
-  const get_task = () => {
+  // get_task(-1): round-robin over permuters (local workers); get_task(i): permuter i (a p@h connection).
+  const get_task = (perm_index = -1) => {
+    if (perm_index !== -1) {
+      const it = seed_iterators[perm_index];
+      if (it == null) return null;
+      const n = it.next();
+      if (n.done) { seed_iterators[perm_index] = null; seed_iterators_remaining -= 1; return null; }
+      return [perm_index, n.value];
+    }
     while (seed_iterators_remaining > 0) {
       const idx = next_iterator_index;
       next_iterator_index = (next_iterator_index + 1) % seed_iterators.length;
-      const it = seed_iterators[idx];
-      if (it == null) continue;
-      const n = it.next();
-      if (n.done) { seed_iterators[idx] = null; seed_iterators_remaining -= 1; continue; }
-      return [idx, n.value];
+      const task = get_task(idx);
+      if (task) return task;
     }
     return null;
   };
-  const threads = Math.max(1, o.threads);
+  const threads = Math.max(0, o.threads);
   const glue = {};
   for (const p of context.permuters) glue[p.scorer.arch.name] = await resolveObjdumpGlue(p.scorer.arch.name);
   let found_zero = false;
   let stopReason = null;
   let stopping = false;
   const workers = [];
-  await new Promise((resolveAll, rejectAll) => {
-    let live = 0;
-    const finishAll = () => {
+  const netConns = [];
+  // Connect to permuter@home first (upstream does, before starting workers).
+  if (o.use_network) {
+    const { connect, enable_debug_mode, EOFError } = await import("./net/core.js");
+    const { start_client } = await import("./net/client.js");
+    const print = (s) => context.printer.write(s + "\n");
+    print("Connecting to permuter@home...");
+    if (o.network_debug) enable_debug_mode();
+    let first_stats = null;
+    for (let perm_index = 0; perm_index < context.permuters.length; perm_index++) {
+      let port;
+      try {
+        port = await connect(o.pahConfig ?? null);
+      } catch (e) {
+        if (e instanceof EOFError || e.name === "ServerError") throw new PermuterUsageError(`Error: ${e.message}`);
+        throw e;
+      }
+      const conn = { queue: [], waiter: null, finished: false, done: null, outstanding: 0, exhausted: false };
+      conn.nextTask = () => new Promise((resolve) => {
+        if (conn.queue.length) resolve(conn.queue.shift());
+        else conn.waiter = resolve;
+      });
+      conn.put = (task) => {
+        if (conn.waiter) { const w = conn.waiter; conn.waiter = null; w(task); } else conn.queue.push(task);
+      };
+      conn.port = port;
+      netConns.push(conn);
+      const { done, stats } = await start_client(port, context.permuters[perm_index], perm_index, conn.nextTask,
+        (item, source, who) => onNetFeedback(item, source, who), o.network_priority);
+      conn.done = done;
+      first_stats ??= stats;
+    }
+    const plural = (n, noun) => `${n} ${noun}${n !== 1 ? "s" : ""}`;
+    print(`Connected! ${plural(first_stats[1], "server")} online (${plural(Math.trunc(first_stats[2]), "core")}, ${plural(first_stats[0], "other client")})`);
+  }
+  if (!threads && !netConns.length) throw new PermuterUsageError("No workers available! Exiting.");
+
+  let finishAll = () => {};
+  let rejectAll = () => {};
+  let resolveAll = () => {};
+  function onNetFeedback(item, source, who) {
+    try {
+      if (item.type === "need_work") {
+        if (stopping) return;
+        const conn = netConns[source];
+        if (conn.exhausted) return;
+        const task = get_task(source);
+        if (task) { conn.outstanding += 1; conn.put(task[1]); } else if (seed_iterators_remaining === 0 || seed_iterators[source] == null) {
+          // No more seeds for this connection: stop sending, but keep the
+          // connection until the work already out comes back (upstream never
+          // hangs up and waits forever; hanging up at once loses results).
+          stopReason ??= "exhausted";
+          conn.exhausted = true;
+          conn.put(null);
+          if (conn.outstanding <= 0) conn.port.shutdown();
+        }
+      } else if (item.type === "message") {
+        context.printer.print(item.text, null, who, { keep_progress: true });
+        // A server that disconnects takes its share of the outstanding work with it.
+        const conn = netConns[source];
+        if (conn.exhausted && item.text === "disconnected") conn.port.shutdown();
+      } else if (item.type === "done") {
+        const conn = netConns[source];
+        conn.outstanding -= 1;
+        if (conn.exhausted && conn.outstanding <= 0) conn.port.shutdown();
+        if (stopping && o.stop_on_zero && found_zero) return;
+        if (post_score(context.permuters[source], item.result, who)) {
+          found_zero = true;
+          if (o.stop_on_zero) { stopReason = "zero"; finishAll(); }
+        }
+      } else if (item.type === "finished") {
+        const conn = netConns[source];
+        conn.finished = true;
+        if (item.reason) context.printer.print(item.reason, context.permuters.length > 1 ? context.permuters[source] : null, null, { keep_progress: true });
+        checkDone();
+      }
+    } catch (e) {
+      finishAll();
+      rejectAll(e);
+    }
+  }
+  let live = 0;
+  const checkDone = () => {
+    if (live === 0 && (stopping || netConns.every((c) => c.finished))) resolveAll();
+  };
+  await new Promise((resolveP, rejectP) => {
+    resolveAll = resolveP;
+    rejectAll = rejectP;
+    finishAll = () => {
       if (stopping) return;
       stopping = true;
       for (const w of workers) w.postMessage({ type: "finish" });
+      // Signal the connections that no more work is coming, and hang up.
+      for (const c of netConns) { c.put(null); c.port.shutdown(); }
+      checkDone();
     };
     // Abort: let each worker finish the candidate it is on (a compile can own a
     // WASM child process that must not be orphaned mid-request), then force it.
@@ -363,10 +461,10 @@ async function runWorkers({ o, context, configs, post_score }) {
       t.unref?.();
     };
     if (o.signal) {
-      if (o.signal.aborted) { stopReason = "aborted"; resolveAll(); return; }
-      o.signal.addEventListener("abort", onAbort, { once: true });
+      if (o.signal.aborted) { stopReason = "aborted"; finishAll(); }
+      else o.signal.addEventListener("abort", onAbort, { once: true });
     }
-    for (let k = 0; k < threads; k++) {
+    for (let k = 0; k < threads && !stopping; k++) {
       const w = new Worker(WORKER_URL, { workerData: { configs, glue, keep_prob: o.keep_prob } });
       workers.push(w);
       live += 1;
@@ -377,7 +475,7 @@ async function runWorkers({ o, context, configs, post_score }) {
             // may be serving other work) does not stall the worker per candidate.
             if (stopping) { w.postMessage({ type: "finish" }); return; }
             const tasks = [];
-            for (let k = 0; k < (msg.count ?? 1); k++) {
+            for (let q = 0; q < (msg.count ?? 1); q++) {
               const task = get_task();
               if (!task) break;
               tasks.push({ perm_index: task[0], seed: task[1] });
@@ -404,12 +502,14 @@ async function runWorkers({ o, context, configs, post_score }) {
       w.on("error", (e) => { context.printer.print(`worker error: ${e.message}`, null, null, { keep_progress: true }); });
       w.on("exit", () => {
         live -= 1;
-        if (live === 0) {
+        if (live === 0 && (stopping || !netConns.length)) {
           o.signal?.removeEventListener?.("abort", onAbort);
-          resolveAll();
+          if (!netConns.length) resolveAll(); else checkDone();
         }
       });
     }
+    checkDone();
   });
+  for (const c of netConns) { c.port.close(); await c.done; }
   return { found_zero, stopReason };
 }

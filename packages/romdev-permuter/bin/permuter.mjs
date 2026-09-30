@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 // romdev-permuter CLI: decomp-permuter's permuter.py flags, run in node.
 //   romdev-permuter <dir>... [-j N] [--stop-on-zero] [--seed [i,]N] ...
-// permuter@home (-J) is not ported.
+// -J runs through permuter@home (src/net/), with no local threads unless -j is given.
 import { run, PermuterUsageError, DEFAULT_RAND_KEEP_PROB } from "../src/main.js";
 import { RANDOMIZATION_PASSES, PASS_DOCS } from "../src/randomizer.js";
 
 const usage = `usage: romdev-permuter [-h] [--help=randomization-passes] [--show-errors] [--show-timings]
        [--print-diffs] [--abort-exceptions] [--better-only] [--best-only] [--stop-on-zero] [--quiet]
-       [--stack-diffs] [--algorithm {difflib,levenshtein}] [--keep-prob PROB] [-j THREADS] [--no-context-output]
+       [--stack-diffs] [--algorithm {difflib,levenshtein}] [--keep-prob PROB] [-j THREADS] [-J] [--pah-debug]
+       [--priority PRIORITY] [--no-context-output]
        [--only-if-below N] [--debug] [--speed [1-100]] [--no-ignore-branch-targets] [--seed SEED]
        directory [directory ...]`;
 
@@ -50,7 +51,9 @@ for (let i = 0; i < argv.length; i++) {
     case "--keep-prob": opts.keep_prob = floatIn(val(), 0, 1, "--keep-prob"); break;
     case "--seed": opts.force_seed = val(); break;
     case "-j": { const v = val(); opts.threads = parseInt(v, 10); if (!Number.isInteger(opts.threads)) fail(`argument -j: invalid int value: '${v}'`); break; }
-    case "-J": case "--pah-debug": case "--priority": fail("permuter@home (-J) is not supported by the JS port"); break;
+    case "-J": opts.use_network = true; break;
+    case "--pah-debug": opts.network_debug = true; break;
+    case "--priority": opts.network_priority = floatIn(val(), 0.01, 2.0, "--priority"); break;
     case "--no-context-output": opts.no_context_output = true; break;
     case "--only-if-below": opts.score_threshold = parseInt(val(), 10); break;
     case "--debug": opts.debug_mode = true; break;
@@ -65,7 +68,7 @@ for (let i = 0; i < argv.length; i++) {
   }
 }
 if (!opts.directories.length) fail("the following arguments are required: directory");
-if (!opts.threads) opts.threads = 1;
+if (!opts.threads && !opts.use_network) opts.threads = 1;
 opts.keep_prob ??= DEFAULT_RAND_KEEP_PROB;
 
 // Each directory's compile.sh runs through romdev's toolchain adapter when one

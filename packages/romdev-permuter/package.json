@@ -10,7 +10,9 @@
   },
   "bin": {
     "romdev-permuter": "bin/permuter.mjs",
-    "romdev-permuter-import": "bin/import.mjs"
+    "romdev-permuter-import": "bin/import.mjs",
+    "romdev-pah": "bin/pah.mjs",
+    "romdev-pah-controller": "bin/pah-controller.mjs"
   },
   "files": [
     "src",
@@ -25,6 +27,7 @@
   },
   "license": "MIT",
   "dependencies": {
+    "libsodium-wrappers": "0.8.4",
     "romdev-pycparser": "0.1.0",
     "romdev-toolchain-mips-gcc": "0.1.2"
   },

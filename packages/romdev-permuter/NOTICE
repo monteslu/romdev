@@ -19,3 +19,19 @@ Arm Limited, MIT), as shipped in glibc and musl, so the permuter's weights
 equal the doubles CPython's `**` obtains from the C library; src/pow-data.js
 holds its tables, generated from musl's pow_data.c / exp_data.c by
 scripts/gen-pow-data.mjs.
+
+src/levenshtein.js ports rapidfuzz's reference Levenshtein implementation
+(Levenshtein_py.py, Editops.as_opcodes; Copyright (c) 2020 Max Bachmann, MIT),
+which the `Levenshtein` package upstream's --algorithm levenshtein uses.
+
+permuter@home (src/net/, bin/pah.mjs, bin/pah-controller.mjs) ports upstream's
+src/net/*.py and its Rust controller (src/net/controller). Its crypto is
+libsodium through libsodium.js (libsodium-wrappers, ISC; libsodium is
+Copyright (c) 2013-2025 Frank Denis, ISC), a dependency, not bundled.
+src/net/icons/*.ico are upstream's systray icons, copied unchanged. The systray
+helper itself (upstream src/net/cmd/systray, Go, MIT, Copyright (c) 2017 Zack
+Young) is not included; see src/net/systray.js.
+
+The evaluator runs jobs with romdev's WASM toolchain instead of upstream's
+Docker image: the controller's docker_image names a toolchain profile
+("romdev:ido5.3", "romdev:ido7.1" or "romdev:<name>=<program>,...").
