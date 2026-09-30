@@ -49,7 +49,7 @@ export function parseCppArgs(args) {
     else if (a === "-MP") r.deps.phony = true;
     else if (a === "-MT" || a === "-MQ") r.deps.target = next();
     else if (a === "-MF") r.deps.file = next();
-    else if (/^-(std|ansi|P|C|CC|undef|traditional|traditional-cpp|trigraphs|w|fno-|fdollars|fno-dollars|W)/.test(a)) r.flags.push(a);
+    else if (/^-(std|ansi|P|C|CC|undef|traditional|traditional-cpp|trigraphs|w|fno-|fdollars|fno-dollars|fdirectives-only|d[DMNIU]$|W)/.test(a)) r.flags.push(a);
     else if (/^-m|^-f|^-O|^-g|^-march|^-mabi|^--?target|^-G$/.test(a)) { if (a === "-G") next(); /* codegen flags: irrelevant to cpp */ }
     else if (a === "-") r.inputs.push("-");
     else if (a.startsWith("-")) r.flags.push(a);
