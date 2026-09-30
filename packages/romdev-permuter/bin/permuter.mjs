@@ -68,6 +68,13 @@ if (!opts.directories.length) fail("the following arguments are required: direct
 if (!opts.threads) opts.threads = 1;
 opts.keep_prob ??= DEFAULT_RAND_KEEP_PROB;
 
+// Each directory's compile.sh runs through romdev's toolchain adapter when one
+// is available (no bash, no host compiler); otherwise upstream's
+// `bash compile.sh`.
+const { resolveToolchainUrl } = await import("../src/import.js");
+const toolchainUrl = resolveToolchainUrl();
+if (toolchainUrl && !process.env.ROMDEV_PERMUTER_BASH_COMPILE) opts.compileModule = { url: toolchainUrl, name: "compileWithScript" };
+
 const ac = new AbortController();
 process.on("SIGINT", () => ac.abort());
 process.on("SIGTERM", () => ac.abort());

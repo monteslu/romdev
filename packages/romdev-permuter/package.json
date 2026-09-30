@@ -9,12 +9,14 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "romdev-permuter": "bin/permuter.mjs"
+    "romdev-permuter": "bin/permuter.mjs",
+    "romdev-permuter-import": "bin/import.mjs"
   },
   "files": [
     "src",
     "bin",
     "default_weights.toml",
+    "prelude.inc",
     "LICENSE",
     "NOTICE"
   ],

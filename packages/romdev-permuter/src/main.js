@@ -35,7 +35,7 @@ export function makeOptions(o) {
     workers: null, // force worker threads even for threads == 1 (keeps the caller's event loop free)
     preprocess: null, // (filename) => string: `cpp -P -nostdinc -DPERMUTER` equivalent
     compileFn: null, // (cPath, oPath) => Promise<boolean> instead of compile.sh
-    compileModule: null, // {url, name, config?}: module export fn(cPath, oPath, config) (worker threads import it)
+    compileModule: null, // {url, name, config?}: module export fn(cPath, oPath, config, compileScript) (worker threads import it)
     compileTimeoutMs: 0,
     tmpDir: null, // scratch dir for candidate .c/.o (default: <dir>/.permuter-tmp)
     objdumpGlue: null, // {mips: "/path/to/objdump.mjs", ...}
@@ -145,7 +145,7 @@ export async function run(options) {
     const tmpDir = o.tmpDir ?? path.join(d, ".permuter-tmp");
     const compilerOpts = { show_errors: o.show_errors, debug_mode: o.debug_mode, tmpDir, timeoutMs: o.compileTimeoutMs,
       log: (s) => write(s) };
-    const compiler = new Compiler(o.compileFn ? null : compile_cmd, { ...compilerOpts, compileFn: o.compileFn });
+    const compiler = new Compiler(compile_cmd, { ...compilerOpts, compileFn: o.compileFn });
     const objdump_command = json_prop(settings, "objdump_command", "str", "") || null;
     const scorerOpts = { target_o, stack_differences: o.stack_differences, algorithm: o.algorithm, debug_mode: o.debug_mode,
       ign_branch_targets: o.ign_branch_targets, objdump_command };
@@ -165,7 +165,7 @@ export async function run(options) {
       throw e;
     }
     context.permuters.push(permuter);
-    configs.push({ permOpts: { ...permOpts, fn_name: permuter.fn_name }, compile_cmd: o.compileFn ? null : compile_cmd, compileModule: o.compileModule, compilerOpts: { ...compilerOpts, log: undefined },
+    configs.push({ permOpts: { ...permOpts, fn_name: permuter.fn_name }, compile_cmd, compileModule: o.compileModule, compilerOpts: { ...compilerOpts, log: undefined },
       scorerOpts, base: { score: permuter.base_score, hash: permuter.base_hash, source: permuter.base_source } });
     name_counts.set(permuter.fn_name, (name_counts.get(permuter.fn_name) ?? 0) + 1);
   }
@@ -294,7 +294,7 @@ class PermuterAbort extends Error {}
 export async function loadCompileModule({ url, name, config = null }) {
   const fn = (await import(url))[name];
   if (typeof fn !== "function") throw new PermuterUsageError(`compile module ${url} has no function ${name}`);
-  return (cPath, oPath) => fn(cPath, oPath, config);
+  return (cPath, oPath, script) => fn(cPath, oPath, config, script);
 }
 
 export class PermuterUsageError extends Error {

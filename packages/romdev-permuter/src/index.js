@@ -24,3 +24,6 @@ export { preprocess, PreprocessorRequired } from "./preprocess.js";
 export * as ast_util from "./ast_util.js";
 export * as ast_types from "./ast_types.js";
 export { CandidateConstructionFailure } from "./error.js";
+export { importMain, parseImportArgs, ImportExit, resolveToolchain, resolveToolchainUrl, DEFAULT_ASM_PRELUDE_FILE } from "./import.js";
+export { editops as levenshteinEditops, opcodes as levenshteinOpcodes } from "./levenshtein.js";
+export { libmPow, powNeg15 } from "./pow.js";

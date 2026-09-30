@@ -28,7 +28,7 @@ export function tryRemove(p) {
 
 export class Compiler {
   /**
-   * @param {string|null} compile_cmd path to compile.sh (null when `compileFn` is given)
+   * @param {string|null} compile_cmd path to compile.sh (passed to `compileFn` as its third argument when given)
    * @param {{show_errors?: boolean, debug_mode?: boolean, tmpDir: string, compileFn?: ((cPath: string, oPath: string) => Promise<boolean>)|null, timeoutMs?: number, log?: (s: string) => void}} opts
    */
   constructor(compile_cmd, { show_errors = false, debug_mode = false, tmpDir, compileFn = null, timeoutMs = 0, log = (s) => process.stderr.write(s) }) {
@@ -63,7 +63,7 @@ export class Compiler {
     let output = "";
     try {
       if (this.compileFn) {
-        ok = await this.compileFn(c_name, o_name);
+        ok = await this.compileFn(c_name, o_name, this.compile_cmd);
       } else {
         const r = await runProcess(this._bash, [this.compile_cmd, c_name, "-o", o_name], this.timeoutMs);
         ok = r.code === 0;
