@@ -1,0 +1,15 @@
+00000000 <blockSum>:
+   0: 27bdffe8  addiu $sp,$sp,-24
+   4: afbf0014  sw $ra,20($sp)
+   8: 8c8e0000  lw $t6,0($a0)
+   c: 11c00007  beq $t6,$zero,2c <blockSum+0x2c>
+  10: 00000000  nop
+  14: 8c8f0004  lw $t7,4($a0)
+  18: 01cfc021  addu $t8,$t6,$t7
+  1c: ac980008  sw $t8,8($a0)
+  20: 8c99000c  lw $t9,12($a0)
+  24: 03197021  addu $t6,$t8,$t9
+  28: ac8e0010  sw $t6,16($a0)
+  2c: 8fbf0014  lw $ra,20($sp)
+  30: 03e00008  jr $ra
+  34: 27bd0018  addiu $sp,$sp,24
