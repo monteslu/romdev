@@ -2,10 +2,10 @@
 // around the compiler, so a project's recipe runs without them:
 //   n64crc            fix the N64 header CRC1/CRC2 (the ROM step)
 //   set_o32abi_bit    set EF_MIPS_ABI_O32 in an ELF header (libultra ll.o)
-//   iconv             UTF-8 -> EUC-JP (and identity/latin1) for asm sources
+//   iconv             UTF-8 -> SHIFT-JIS / EUC-JP (glibc's tables) and latin1/UTF-8
 //   unifiedDiff       `diff -u` for integration patches
 import { readFileSync, writeFileSync } from "node:fs";
-import { eucJpEncode } from "./euc-jp.js";
+import { iconvEncode, tableName } from "./iconv-tables.js";
 
 // -- n64crc --------------------------------------------------------------
 const CRC_TABLE = (() => {
@@ -101,7 +101,7 @@ export function iconv(input, from, to) {
   else if (f === "eucjp") text = new TextDecoder("euc-jp", { fatal: true }).decode(input);
   else if (f === "ascii" || f === "") text = Buffer.from(input).toString("latin1");
   else throw new Error(`iconv: unsupported source encoding ${from}`);
-  if (t === "eucjp") return eucJpEncode(text);
+  if (tableName(to)) return iconvEncode(text, to);
   if (t === "utf8") return Buffer.from(text, "utf8");
   if (t === "latin1" || t === "iso88591" || t === "ascii") return Buffer.from(text, "latin1");
   throw new Error(`iconv: unsupported target encoding ${to}`);

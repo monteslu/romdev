@@ -520,10 +520,12 @@ export class Makefile {
     let i = 0;
     while (i < args.length && !args[i].startsWith("-") && args[i] !== "(" && args[i] !== "!") roots.push(args[i++]);
     const preds = []; // [{neg, type?, path?, name?}]
-    let neg = false;
+    let neg = false, execCat = false;
     for (; i < args.length; i++) {
       const a = args[i];
       if (a === "-not" || a === "!") { neg = true; continue; }
+      // -exec cat {} ;  (print each match's contents)
+      if (a === "-exec" && args[i + 1] === "cat" && args[i + 2] === "{}" && /^\\?;$/.test(args[i + 3] ?? "")) { execCat = true; i += 3; continue; }
       if (a === "-type") { preds.push({ neg, type: args[++i] }); neg = false; continue; }
       if (a === "-path") { preds.push({ neg, path: args[++i].replace(/^["']|["']$/g, "") }); neg = false; continue; }
       if (a === "-name") { preds.push({ neg, name: args[++i].replace(/^["']|["']$/g, "") }); neg = false; continue; }
@@ -552,6 +554,7 @@ export class Makefile {
       }
     };
     for (const r of roots) walk(r.replace(/\/+$/, "") || "/");
+    if (execCat) return out.map((f) => { try { return fs.readFileSync(path.resolve(this.root, f), "utf8"); } catch { return ""; } }).join("").replace(/\n+$/, "").replace(/\n/g, " ");
     return out.join(" ");
   }
 
@@ -597,16 +600,23 @@ export class Makefile {
       return { target, prereqs: dedupe(extraPrereqs), orderOnly: extraOrder, recipe: r.recipe, stem: null, rule: r };
     }
     if (depth > 4) return null;
-    for (const r of this.rules) {
-      if (!r.pattern || !r.recipe.length) continue;
+    // GNU make (3.82+) tries the matching pattern rules shortest stem first
+    // (ties in makefile order), taking the first whose prerequisites exist or
+    // can be made.
+    const matches = [];
+    this.rules.forEach((r, order) => {
+      if (!r.pattern || !r.recipe.length) return;
       for (const tp of r.targets) {
         const stem = patMatch(tp, target);
-        if (stem === null) continue;
-        const prereqs = r.prereqs.map((p) => p.replace("%", stem));
-        const ok = prereqs.every((p) => exists(p) || this.rules.some((rr) => !rr.pattern && rr.targets.includes(p)) || (this.findRule(p, { exists, depth: depth + 1 }) !== null));
-        if (!ok) continue;
-        return { target, prereqs: dedupe([...prereqs, ...extraPrereqs]), orderOnly: [...r.orderOnly.map((p) => p.replace("%", stem)), ...extraOrder], recipe: r.recipe, stem, rule: r };
+        if (stem !== null) matches.push({ r, stem, order });
       }
+    });
+    matches.sort((a, b) => a.stem.length - b.stem.length || a.order - b.order);
+    for (const { r, stem } of matches) {
+      const prereqs = r.prereqs.map((p) => p.replace("%", stem));
+      const ok = prereqs.every((p) => exists(p) || this.rules.some((rr) => !rr.pattern && rr.targets.includes(p)) || (this.findRule(p, { exists, depth: depth + 1 }) !== null));
+      if (!ok) continue;
+      return { target, prereqs: dedupe([...prereqs, ...extraPrereqs]), orderOnly: [...r.orderOnly.map((p) => p.replace("%", stem)), ...extraOrder], recipe: r.recipe, stem, rule: r };
     }
     if (explicit.length) return { target, prereqs: dedupe(extraPrereqs), orderOnly: extraOrder, recipe: [], stem: null, rule: explicit[0] };
     return null;

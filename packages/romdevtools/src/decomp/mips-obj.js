@@ -208,3 +208,31 @@ export function trimToSize(stream, sizeBytes) {
   const n = Math.floor(sizeBytes / 4);
   return stream.length > n ? stream.slice(0, n) : stream;
 }
+
+/**
+ * A section's raw bytes read straight from an ELF32 relocatable (either byte
+ * order), or null when the object has no such section. Unlike
+ * `objcopy -O binary --only-section`, this does not depend on the section
+ * being SHF_ALLOC: some assemblers (binutils 2.6 for KMC gcc) emit .rodata
+ * without it, and objcopy then writes nothing.
+ */
+export async function readSectionBytes(objPath) {
+  const { readFile } = await import("node:fs/promises");
+  const b = await readFile(objPath);
+  if (b.readUInt32BE(0) !== 0x7f454c46 || b[4] !== 1) return () => null;
+  const be = b[5] === 2;
+  const u16 = (o) => (be ? b.readUInt16BE(o) : b.readUInt16LE(o));
+  const u32 = (o) => (be ? b.readUInt32BE(o) : b.readUInt32LE(o));
+  const shoff = u32(32), shentsize = u16(46), shnum = u16(48), shstrndx = u16(50);
+  const sec = (i) => { const o = shoff + i * shentsize; return { name: u32(o), type: u32(o + 4), offset: u32(o + 16), size: u32(o + 20) }; };
+  const strs = sec(shstrndx);
+  const nameOf = (off) => { const s = strs.offset + off; return b.subarray(s, b.indexOf(0, s)).toString("latin1"); };
+  return (name) => {
+    for (let i = 1; i < shnum; i++) {
+      const s = sec(i);
+      if (nameOf(s.name) !== name) continue;
+      return s.type === 8 ? Buffer.alloc(s.size) : Buffer.from(b.subarray(s.offset, s.offset + s.size)); // SHT_NOBITS
+    }
+    return null;
+  };
+}

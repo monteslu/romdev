@@ -4,6 +4,8 @@
 // dispatched to its romdev equivalent:
 //
 //   IDO cc (.../ido*/<ver>/.../cc)            -> WASM IDO (toolchain.js)
+//   KMC gcc 2.7.2 (.../2.7.2/gcc, as)       -> WASM gcc 2.7.2 + binutils 2.6
+//   armips                                  -> WASM armips
 //   mips-*-{as,ld,objcopy,objdump}         -> WASM mips-linux-gnu binutils
 //   <python> .../asm-processor/build.py      -> JS asm-processor
 //   <python> .../set_o32abi_bit.py           -> JS
@@ -18,7 +20,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { asmProcessorBuild } from "./asm-processor.js";
-import { idoCompile, binutils, toolName, armips } from "./toolchain.js";
+import { idoCompile, binutils, toolName, armips, decompGcc } from "./toolchain.js";
 import { preprocess } from "./cpp.js";
 import { iconv, parseIconvArgs, n64crcFile, setO32AbiBit, buildAssetContainer } from "./host-ports.js";
 
@@ -133,12 +135,14 @@ export function classifyCommand(argv, cwd = process.cwd()) {
   if (tn?.kind === "ido") return { kind: "ido", version: tn.version, program: tn.program };
   if (tn?.kind === "binutils") return { kind: "binutils", tool: tn.tool };
   if (tn?.kind === "armips") return { kind: "armips" };
+  if (tn?.kind === "decomp-gcc") return { kind: "decomp-gcc", family: tn.family, program: tn.program };
   if ((base === "gcc" || base === "clang" || base === "cc" || /-gcc$/.test(base)) && argv.includes("-fsyntax-only")) return { kind: "syntax-check" };
   if (base === "cpp" || /-cpp$/.test(base) || ((base === "gcc" || base === "clang" || /-gcc$/.test(base)) && argv.includes("-E"))) return { kind: "cpp" };
   if (base === "iconv") return { kind: "iconv" };
   if (base === "n64crc" || /n64crc$/.test(prog)) return { kind: "n64crc" };
   if (base === "sha1sum") return { kind: "sha1sum" };
   if (["mkdir", "rm", "cp", "touch", "mv"].includes(base)) return { kind: "fs", op: base };
+  if (base === "make" || base === "gmake") return { kind: "make" };
   return { kind: "unsupported", reason: `no WASM/JS equivalent for '${prog}'` };
 }
 
@@ -185,7 +189,9 @@ export async function runRecipeLine(line, ctx) {
         input = null;
       } else if (!last) input = out;
       else if (!redirOut) log += out.toString("latin1");
-      code = r.code;
+      // pipefail: a failing stage fails the pipeline (a truncated preprocess
+      // must never become an "ok" object).
+      if (s === 0 || code === 0) code = r.code;
       if (code !== 0 && !last) { input = Buffer.alloc(0); }
     }
   }
@@ -256,6 +262,11 @@ async function runOne(argv, cls, ctx) {
       return { code: 0, stdout: Buffer.from(n64crcFile(path.resolve(cwd, file))) };
     }
     case "sha1sum": return sha1sum(argv.slice(1), cwd);
+    case "make": return subMake(argv.slice(1), ctx);
+    case "decomp-gcc": {
+      const r = await decompGcc({ family: cls.family, argv, cwd, tmpRoot, stdin: ctx.stdin ?? undefined });
+      return { code: r.exitCode, log: r.stderr ?? r.log, stdout: r.stdout };
+    }
     case "armips": {
       const r = await armips(argv.slice(1), { cwd });
       return { code: r.exitCode, log: r.log };
@@ -369,4 +380,55 @@ async function assembleRsp(args, { cwd }) {
     fs.renameSync(generated, output);
     return { code: 0, log: r.log };
   } finally { fs.rmSync(scratch, { recursive: true, force: true }); }
+}
+
+/**
+ * A recursive `$(MAKE) [-C dir] [VAR=value ...] targets`: romdev reads that
+ * directory's Makefile with the command-line variables and builds the targets
+ * through the same WASM/JS dispatch. -j/-s/-k style flags are accepted and
+ * ignored (the outer build already schedules and reports).
+ */
+async function subMake(args, { cwd, tmpRoot, always = false }) {
+  let dir = cwd, makefile = "Makefile";
+  const overrides = {}, targets = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "-C") dir = path.resolve(dir, args[++i]);
+    else if (a.startsWith("-C")) dir = path.resolve(dir, a.slice(2));
+    else if (a === "-f") makefile = args[++i];
+    else if (/^-j\d*$/.test(a) && args[i + 1] && /^\d+$/.test(args[i + 1])) i++;
+    else if (a.startsWith("-")) continue;
+    else if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(a)) { const e = a.indexOf("="); overrides[a.slice(0, e)] = a.slice(e + 1); }
+    else targets.push(a);
+  }
+  const { loadMakefile, buildGoal } = await import("./build.js");
+  const mk = await loadMakefile(dir, { makefile, overrides });
+  let log = "";
+  for (const t of targets.length ? targets : ["all"]) {
+    // The outer build's -B (always) reaches the sub-make, as MAKEFLAGS carries it.
+    const r = await buildGoal(mk, t, { tmpRoot, jobs: 1, always });
+    log += Object.values(r.logs).join("");
+    if (!r.ok) return { code: 2, log: log + `make: ${r.failed?.message ?? "failed"}\n` + (r.failed?.log ?? "") };
+    if (r.keptPrebuilt.length) return { code: 127, log: log + r.keptPrebuilt.map((k) => `cannot rebuild ${k.target}: ${k.reason}\n`).join("") };
+  }
+  return { code: 0, log };
+}
+
+/** Quote one word for /bin/sh. */
+export function shellQuote(a) { return /^[\w@%+=:,./-]+$/.test(a) ? a : "'" + String(a).replace(/'/g, "'\\''") + "'"; }
+
+/**
+ * Rewrite every command word of a recipe line through `map(argv) -> argv`
+ * and render it back to a line (env assignments, pipes, ;/&&/|| and
+ * redirections preserved).
+ */
+export function mapRecipeLine(line, map) {
+  return parseShell(line).map(({ op, pipeline }) => {
+    const body = pipeline.map((c) => [
+      ...Object.entries(c.env).map(([k, v]) => `${k}=${shellQuote(v)}`),
+      ...map(c.argv).map(shellQuote),
+      ...c.redirects.map((r) => `${r.fd === 2 ? "2" : r.fd === 0 ? "" : ""}${r.op === ">&" ? ">&" : r.op} ${shellQuote(r.target)}`),
+    ].join(" ")).join(" | ");
+    return (op ? `${op} ` : "") + body;
+  }).join(" ");
 }

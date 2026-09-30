@@ -25,14 +25,14 @@ export async function loadMakefile(root, { makefile = "Makefile", overrides = {}
  * Run one target's recipe (not its prerequisites).
  * @returns {Promise<{ok:boolean, target:string, code:number, log:string, commands:string[], unsupported?:string, skipped?:string[]}>}
  */
-export async function runTargetRecipe(mk, target, { cwd = mk.root, tmpRoot, lines = null } = {}) {
+export async function runTargetRecipe(mk, target, { cwd = mk.root, tmpRoot, lines = null, always = false } = {}) {
   const r = lines ? { lines } : mk.recipeFor(target);
   if (!r) return { ok: false, target, code: 2, log: `no rule to make target '${target}'`, commands: [] };
   let log = "";
   const commands = [], skipped = [];
   for (const l of r.lines) {
     commands.push(l.command);
-    const x = await runRecipeLine(l.command, { cwd, tmpRoot });
+    const x = await runRecipeLine(l.command, { cwd, tmpRoot, always });
     log += x.log;
     if (x.skipped) skipped.push(...x.skipped);
     if (x.unsupported) return { ok: false, target, code: 127, log, commands, unsupported: x.unsupported, skipped };
@@ -83,7 +83,7 @@ export async function buildGoal(mk, goal, { always = false, jobs = 8, tmpRoot, o
       const tm = mtime(target);
       const need = always || phony || tm < 0 || rule.prereqs.some((d) => mtime(d) > tm) || results.some((r, i) => r.changed && i < rule.prereqs.length);
       if (!need) return { changed: false };
-      const r = await slot(() => runTargetRecipe(mk, target, { tmpRoot }));
+      const r = await slot(() => runTargetRecipe(mk, target, { tmpRoot, always }));
       if (r.unsupported) {
         if (exists(target) && !phony) { keptPrebuilt.push({ target, reason: r.unsupported }); return { changed: false }; }
         throw Object.assign(new Error(`cannot build '${target}': ${r.unsupported}`), { target, result: r });

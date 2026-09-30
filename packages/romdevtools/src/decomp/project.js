@@ -21,8 +21,8 @@ import { createHash } from "node:crypto";
 import { run } from "./mips-obj.js";
 import { Makefile } from "./makefile.js";
 import { parseShell, classifyCommand } from "./recipe.js";
-import { preprocess, parseDepsText } from "./cpp.js";
-import { idoDir, binutilsGlue } from "./toolchain.js";
+import { preprocess, parseDepsText, parseCppArgs } from "./cpp.js";
+import { idoDir, binutilsGlue, toolName, programFiles } from "./toolchain.js";
 import { loadSplatMap, loadSymbolAddrs, loadLinkerMap, findFunctionSource, parseSplatAsm, hx } from "./splat-map.js";
 import { profileFor, readRomHeader, classifyInvocation, binutilsPrefixFromAssembler } from "./platform.js";
 import { fileIdentities } from "./measurement.js";
@@ -60,7 +60,7 @@ export function projectEnv(manifest) {
  * hash, fingerprints the toolchain, captures the build adapter, and writes the
  * manifest. Never modifies the project's sources.
  */
-export async function importProject({ id, root, splatYaml, rom, expectedSha1, buildCommand, makeTarget, sourceDir, ido, notes }) {
+export async function importProject({ id, root, splatYaml, rom, expectedSha1, buildCommand, makeTarget, sourceDir, buildPath, makeVariables, ido, notes }) {
   root = path.resolve(root);
   if (!fs.existsSync(root)) throw new Error(`project root '${root}' does not exist`);
   // Find the splat yaml.
@@ -91,10 +91,10 @@ export async function importProject({ id, root, splatYaml, rom, expectedSha1, bu
     manifestVersion: MANIFEST_VERSION, id, root, platform: profile.platform, splatPlatform, endian: profile.endian, platformVerified: profile.verified,
     platformNote: profile.verified ? undefined : `the ${splatPlatform} splat path shares the MIPS code with n64 but has not been run on a real ${profile.platform} checkout yet - treat verdicts as unproven until a known-matching function compares exact here`,
     registeredAt: new Date().toISOString(),
-    splat: { yaml: path.relative(root, yamlPath), name: map.name, compiler: o.compiler ?? null, srcPath: sourceDir ?? o.src_path ?? "src", asmPath: o.asm_path ?? "asm", buildPath: o.build_path ?? "build",
+    splat: { yaml: path.relative(root, yamlPath), name: map.name, compiler: o.compiler ?? null, srcPath: sourceDir ?? o.src_path ?? "src", asmPath: o.asm_path ?? "asm", buildPath: buildPath ?? o.build_path ?? "build",
       symbolAddrs: (o.symbol_addrs_path ? [].concat(o.symbol_addrs_path) : []), elfPath: o.elf_path ?? null, ldScript: o.ld_script_path ?? null, basename: o.basename ?? null },
     rom: { path: path.relative(root, romPath), sha1: romSha1, expectedSha1: want, bytes: romBuf.length, byteOrder, header: romHeader },
-    build: { command: buildCmd, cwd: ".", finalTarget: makeTarget ?? null, env: {}, makefile: "Makefile", makeVariables: {} },
+    build: { command: buildCmd, cwd: ".", finalTarget: makeTarget ?? null, env: {}, makefile: "Makefile", makeVariables: makeVariables ?? {} },
     toolchain: null, notes: notes ?? null,
     git: await gitState(root),
   };
@@ -215,6 +215,11 @@ export async function fingerprintToolchain(manifest, idoHint) {
     try { wasm = path.join(idoDir(idoVersion ?? "5.3"), "cc.wasm"); } catch { wasm = null; }
     out.compiler = { kind: "ido", version: idoVersion, path: idoCmd, fromInvocation: !!cls, runsAs: wasm ? "wasm" : "missing",
       wasm: wasm ? { module: path.relative(path.dirname(path.dirname(path.dirname(wasm))), wasm), sha256: await sha256File(wasm) } : null };
+  } else if (cls && toolName(cls.compiler)?.kind === "decomp-gcc") {
+    const fam = toolName(cls.compiler).family;
+    const files = programFiles(cls.compiler);
+    out.compiler = { kind: "gcc", family: fam, path: cls.compiler, fromInvocation: true, runsAs: files.length ? "wasm" : "missing",
+      wasm: files.length ? { modules: files.map((f) => path.basename(f)), sha256: sha256Text((await Promise.all(files.map((f) => sha256File(f)))).join(",")) } : null };
   } else if (cls) {
     out.compiler = { kind: cls.kind, path: cls.compiler, fromInvocation: true, runsAs: "unsupported",
       note: `romdev runs IDO as WASM; a '${cls.kind}' compiler step has no WASM equivalent yet` };
@@ -281,6 +286,31 @@ export class Project {
     return this._ld;
   }
 
+  /**
+   * Where a TU's object sections live, from the splat map alone: each of the
+   * TU's subsegments (c / .data / .rodata / .bss, named like the TU) gives its
+   * section's VRAM. The fallback when the ROM has not been linked here (no
+   * linker map); a linker map, when present, always wins.
+   * @returns {Array<{section:string, va:number, from:'splat'}>}
+   */
+  async splatSectionPlacement(tuRel) {
+    if (!tuRel) return [];
+    const map = await this.map();
+    const src = this.m.splat.srcPath.replace(/\/+$/, "");
+    const name = tuRel.replace(new RegExp("^" + src.replace(/[.*+?^${}()|[\]\\]/g, "\\  /** Resolve a function by symbol name or VA to full identity + provenance. */") + "/"), "").replace(/\.c$/, "");
+    const out = [];
+    const kinds = { c: ".text", asm: ".text", hasm: ".text", ".data": ".data", data: ".data", ".rodata": ".rodata", rodata: ".rodata", ".bss": ".bss", bss: ".bss" };
+    for (const seg of map.segments ?? []) {
+      for (const sub of seg.subsegments ?? []) {
+        if (sub.name !== name || !kinds[sub.type]) continue;
+        const va = sub.vram ?? (seg.vram != null ? (seg.vram + (sub.romStart - seg.romStart)) >>> 0 : null);
+        if (va == null || out.some((o) => o.section === kinds[sub.type])) continue;
+        out.push({ section: kinds[sub.type], va, from: "splat" });
+      }
+    }
+    return out;
+  }
+
   /** Resolve a function by symbol name or VA to full identity + provenance. */
   async resolveFunction({ symbol, va, segment }) {
     const map = await this.map();
@@ -332,10 +362,21 @@ export class Project {
     }
     let asmInfo = null;
     if (targetAsm) asmInfo = parseSplatAsm(fs.readFileSync(this.abs(targetAsm.path), "utf8"));
-    const size = asmInfo?.sizeBytes ?? ldRec?.size ?? syms.get(name)?.size ?? null;
+    let size = asmInfo?.sizeBytes ?? ldRec?.size ?? syms.get(name)?.size ?? null;
+    let sizeFrom = size != null ? (asmInfo ? "asm" : ldRec ? "linker-map" : "symbol_addrs") : null;
+    if (size == null && name && src[0]?.tu) {
+      // A fully matched function in a project whose ROM is not linked here yet:
+      // the size the project's own build gave it, from the TU's built object.
+      const obj = this.abs(path.join(this.m.splat.buildPath, src[0].tu.replace(/\.c$/, ".o")));
+      if (fs.existsSync(obj)) {
+        const { symbolTable } = await import("./mips-obj.js");
+        const s = (await symbolTable({ objdump: "mips-linux-gnu-objdump", objPath: obj, cwd: this.root })).get(name);
+        if (s?.size) { size = s.size; sizeFrom = "built-object"; }
+      }
+    }
     return {
       symbol: name, va: address, vaHex: hx(address), segment: res.segment, overlay: res.overlay, romOffset: res.romOffset, romOffsetHex: res.romOffsetHex,
-      kind: res.kind, subsegment: res.subsegment, sizeBytes: size,
+      kind: res.kind, subsegment: res.subsegment, sizeBytes: size, ...(sizeFrom === "built-object" ? { sizeFrom } : {}),
       source: src.length ? { tu: src[0].tu, line: src[0].line, state: src[0].state, asmPath: src[0].asmPath, duplicates: src.length > 1 ? src.slice(1).map((s) => s.tu) : undefined } : null,
       object: ldRec ? ldRec.object : null,
       targetAsm,
@@ -398,18 +439,28 @@ export class Project {
     for (const line of lines) {
       const parsed = parseShell(line);
       const single = parsed.length === 1 && parsed[0].pipeline.length === 1 && !parsed[0].pipeline[0].redirects.length ? parsed[0].pipeline[0].argv : null;
-      if (!single) { steps.push({ argv: null, line, role: "other" }); continue; }
+      if (!single) {
+        // A compile pipeline (`gcc -E x.c | iconv ... | gcc -x c -c -o x.o -`):
+        // the step is the whole line; argv is the stage that writes the object.
+        const stages = parsed.length === 1 ? parsed[0].pipeline : null;
+        const writer = stages?.find((c) => c.argv.includes(objRel) && ["decomp-gcc", "ido", "asm-processor"].includes(classifyCommand(c.argv, this.root).kind));
+        if (writer) steps.push({ argv: writer.argv, line, role: "compile", kind: classifyCommand(writer.argv, this.root).kind, pipeline: true });
+        else steps.push({ argv: null, line, role: "other" });
+        continue;
+      }
       const argv = single;
       const cls = classifyCommand(argv, this.root);
       if (cls.kind === "print" || cls.kind === "noop") continue;
-      const isCompile = (cls.kind === "asm-processor" || cls.kind === "ido") && argv.includes(objRel);
+      const isCompile = ["asm-processor", "ido", "decomp-gcc"].includes(cls.kind) && argv.includes(objRel);
       const role = isCompile ? "compile" : cls.kind === "syntax-check" ? "syntax-check" : argv.includes(objRel) ? "post" : "other";
       steps.push({ argv, role, kind: cls.kind });
     }
     const compile = steps.find((s) => s.role === "compile");
     if (!compile) throw new Error(`could not find the compile step for ${tuRel} in its recipe (${steps.map((s) => s.argv?.[0] ?? s.line).join(", ")})`);
     return { tu: tuRel, object: objRel, steps, compile: compile.argv, post: steps.filter((s) => s.role === "post").map((s) => s.argv),
-      recipe: lines, source, fingerprint: sha256Text(JSON.stringify(compile.argv)).slice(0, 16) };
+      // A pipeline compile runs as its full line; its identity covers every stage.
+      ...(compile.pipeline ? { compileLine: compile.line } : {}),
+      recipe: lines, source, fingerprint: sha256Text(JSON.stringify(compile.pipeline ? compile.line : compile.argv)).slice(0, 16) };
   }
 
   /**
@@ -418,8 +469,10 @@ export class Project {
    * TU can reach so an unchanged tree never re-runs it.
    */
   async tuDependencies(tuRel, compileArgv) {
-    const inc = compileArgv.filter((a, i, arr) => a === "-I" ? true : arr[i - 1] === "-I").reduce((acc, a) => { if (a !== "-I") acc.push("-I", a); return acc; }, []);
-    const defs = compileArgv.filter((a) => /^-D/.test(a));
+    // -I dir / -Idir and -DX / -D X both occur in real Makefiles.
+    const cppArgs = parseCppArgs(compileArgv.slice(1));
+    const inc = cppArgs.includes.flatMap((d) => ["-I", d]);
+    const defs = cppArgs.defines;
     const args = ["-MM", "-MG", "-nostdinc", ...inc, ...defs, "-D_LANGUAGE_C", "-x", "c", "-std=gnu89", "-fno-builtin", tuRel];
     const { includeClosure } = await import("./cpp.js");
     const closure = includeClosure(this.root, [tuRel], { includes: inc.filter((a) => a !== "-I") });

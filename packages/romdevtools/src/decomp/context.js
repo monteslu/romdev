@@ -7,7 +7,7 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import fs from "node:fs";
 import path from "node:path";
-import { preprocess } from "./cpp.js";
+import { preprocess, parseCppArgs } from "./cpp.js";
 import { dependencyHash } from "./project.js";
 
 /**
@@ -24,8 +24,10 @@ export async function buildContext(project, tuRel, { force = false } = {}) {
     const st = fs.statSync(out);
     return { path: out, hash: dep.hash, cacheHit: true, deps: dep.deps.length, bytes: st.size, fingerprint: inv.fingerprint };
   }
-  const inc = inv.compile.reduce((acc, a, i, arr) => { if (arr[i - 1] === "-I") acc.push("-I", a); return acc; }, []);
-  const defs = inv.compile.filter((a) => /^-D/.test(a));
+  // -I dir / -Idir and -DX / -D X both occur in real Makefiles.
+  const cppArgs = parseCppArgs(inv.compile.slice(1));
+  const inc = cppArgs.includes.flatMap((d) => ["-I", d]);
+  const defs = cppArgs.defines;
   // The decomp-community m2ctx recipe: gcc -E with the project's flags, no host
   // headers, IDO-specific pragmas neutralized, GNU-only builtins hidden. The
   // stripped TU goes in on stdin (no scratch file beside the sources).

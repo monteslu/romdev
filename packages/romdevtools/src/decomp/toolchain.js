@@ -21,6 +21,11 @@ const HANDLER = fileURLToPath(new URL("./wasm-run.js", import.meta.url));
 export const IDO_VERSIONS = ["5.3", "7.1"];
 const IDO_PROGRAMS = ["cc", "acpp", "cfe", "uopt", "ugen", "as0", "as1", "ujoin", "uld", "umerge", "usplit"];
 const BINUTILS = ["as", "ld", "objcopy", "objdump"];
+// gcc families decomp projects pin, as shipped by romdev-toolchain-decomp-gcc.
+// Each maps the program names the driver runs to its modules.
+export const DECOMP_GCC = {
+  "kmc-2.7.2": { dir: "kmc-2.7.2", programs: ["gcc", "cpp", "cc1", "as"], aliases: { xgcc: "gcc", cccp: "cpp" } },
+};
 
 function packageDir(pkg) {
   try {
@@ -52,6 +57,43 @@ export function binutilsGlue(tool) {
   return p;
 }
 
+/**
+ * Which decomp gcc a recipe names, by its path: the N64 SDK's KMC gcc 2.7.2
+ * as projects vendor it (tools/gcc_kmc/<os>/2.7.2/gcc, .../2.7.2/as).
+ */
+export function decompGccFamily(cmd) {
+  const base = path.basename(cmd);
+  if (!/(^|\/)(gcc|xgcc|cpp|cccp|cc1|as)$/.test(base)) return null;
+  if (/(^|\/)2\.7\.2(\/|$)/.test(path.dirname(cmd)) || /(^|[/_-])kmc([/_-]|$)/i.test(path.dirname(cmd))) return "kmc-2.7.2";
+  return null;
+}
+
+export function decompGccPrograms(family) {
+  const f = DECOMP_GCC[family];
+  if (!f) throw Object.assign(new Error(`no decomp gcc '${family}' (have ${Object.keys(DECOMP_GCC).join(", ")})`), { code: "UNSUPPORTED_COMPILER" });
+  const dir = path.join(packageDir("romdev-toolchain-decomp-gcc"), "wasm", f.dir);
+  if (!existsSync(path.join(dir, "gcc.wasm"))) throw Object.assign(new Error(`${dir} missing (scripts/build-decomp-gcc.sh)`), { code: "TOOLCHAIN_MISSING" });
+  return Object.fromEntries(f.programs.map((p) => [p, path.join(dir, `${p}.mjs`)]));
+}
+
+/**
+ * Run a decomp gcc program (the driver or one of its passes) as WASM. The
+ * driver's subprograms (cpp, cc1, as) run as sibling modules; stdin feeds
+ * `gcc ... -`, stdout is returned as bytes (preprocessed text in the
+ * project's encoding). TMPDIR is a fresh directory under tmpRoot.
+ */
+export async function decompGcc({ family, argv, cwd, tmpRoot, stdin, timeoutMs, env = {} }) {
+  const programs = decompGccPrograms(family);
+  const self = DECOMP_GCC[family].aliases[path.basename(argv[0])] ?? path.basename(argv[0]);
+  const tmp = path.join(tmpRoot, `gcc-${randomUUID().slice(0, 8)}`);
+  mkdirSync(tmp, { recursive: true });
+  try {
+    return await execWasm({ argv, cwd, programs: { ...programs, [path.basename(argv[0])]: programs[self] }, env: { TMPDIR: tmp, ...env }, stdin, stdoutBinary: true, inheritStdin: true, timeoutMs });
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 /** armips (RSP/MIPS assembler) glue, shipped beside IDO. */
 export function armipsGlue() {
   const p = path.join(packageDir("romdev-toolchain-ido"), "wasm", "armips.mjs");
@@ -66,13 +108,15 @@ export function armips(args, { cwd, timeoutMs } = {}) {
 
 /**
  * Classify a program named by a build recipe.
- * @returns {{kind:'ido', version:string, program:string} | {kind:'binutils', tool:string, prefix:string} | {kind:'armips'} | null}
+ * @returns {{kind:'ido', version:string, program:string} | {kind:'binutils', tool:string, prefix:string} | {kind:'armips'} | {kind:'decomp-gcc', family:string, program:string} | null}
  */
 export function toolName(cmd) {
   const base = path.basename(cmd);
   const bin = /^(.*-)?(as|ld|objcopy|objdump)$/.exec(base);
   if (bin && bin[1] && /mips/.test(bin[1])) return { kind: "binutils", tool: bin[2], prefix: bin[1] };
   if (base === "armips") return { kind: "armips" };
+  const fam = decompGccFamily(cmd);
+  if (fam) return { kind: "decomp-gcc", family: fam, program: DECOMP_GCC[fam].aliases[base] ?? base };
   const ido = /(?:^|[/_-])(?:ido)?[/_-]?(5\.3|7\.1)(?:[/_]|$)/i.exec(cmd);
   if (ido && IDO_PROGRAMS.includes(base)) return { kind: "ido", version: ido[1], program: base };
   return null;
@@ -89,9 +133,9 @@ async function worker(job) {
  * @param {{argv:string[], cwd:string, programs:Record<string,string>, env?:Record<string,string>, stdin?:Buffer, stdoutBinary?:boolean, timeoutMs?:number, trace?:boolean}} a
  * @returns {Promise<{exitCode:number, stdout:string|Buffer, stderr:string, log:string, trace?:string[][], crash?:any}>}
  */
-export async function execWasm({ argv, cwd, programs, env = {}, stdin, stdoutBinary = false, timeoutMs = 300_000, trace = false }) {
+export async function execWasm({ argv, cwd, programs, env = {}, stdin, stdoutBinary = false, timeoutMs = 300_000, trace = false, inheritStdin = false }) {
   const r = await worker({
-    argv, cwd, programs, env, trace,
+    argv, cwd, programs, env, trace, inheritStdin,
     stdinBase64: stdin ? Buffer.from(stdin).toString("base64") : undefined,
     stdoutBase64: stdoutBinary,
     timeoutMs,
@@ -152,6 +196,7 @@ export function programFiles(argv0, argv = []) {
     }
     if (t?.kind === "binutils") return [binutilsGlue(t.tool).replace(/\.mjs$/, ".wasm")];
     if (t?.kind === "armips") return [armipsGlue().replace(/\.mjs$/, ".wasm")];
+    if (t?.kind === "decomp-gcc") return Object.values(decompGccPrograms(t.family)).map((g) => g.replace(/\.mjs$/, ".wasm"));
   } catch { return []; }
   if (argv.some((a) => /asm-processor\/build\.py$/.test(a))) return [path.join(here, "asm-processor.js"), path.join(here, "euc-jp.js")];
   return [];

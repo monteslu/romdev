@@ -109,14 +109,20 @@ function execProgram(ctx, argv0, args, { stdin, stdout, stderr }) {
     printErr: () => {},
     quit: (_status, toThrow) => { throw toThrow; },
     preRun: [(m) => { for (const k of Object.keys(m.ENV)) if (!(k in ctx.env)) delete m.ENV[k]; Object.assign(m.ENV, ctx.env); }],
-    romdevSpawn: (file, childArgv, parent) => {
+    romdevSpawn: (file, childArgv, parent, pipe = {}) => {
       const PFS = parent.FS;
       const s0 = PFS.getStream(0), s1 = PFS.getStream(1), s2 = PFS.getStream(2);
-      // A file cc dup2-ed onto fd 0 becomes the pass's stdin; the job's own stdin is not inherited.
-      const childIn = s0 && !s0.stream_ops ? drainStream(PFS, s0) : null;
+      // stdin: the previous stage of a driver pipeline (gcc -pipe), else a file
+      // the driver dup2-ed onto fd 0, else the driver's own stdin (gcc reading
+      // "-"), which is the job's input.
+      let childIn;
+      if (pipe.pipeIn) { childIn = ctx.pipeBuf ?? Buffer.alloc(0); ctx.pipeBuf = null; }
+      else if (s0 && !s0.stream_ops) childIn = drainStream(PFS, s0);
+      else childIn = ctx.inheritStdin ? ctx.stdinBuf : null;
       const out = [], err = [];
       const code = execProgram(ctx, childArgv[0] ?? file, childArgv.slice(1), { stdin: childIn, stdout: out, stderr: err });
-      if (s1 && out.length) writeToStream(PFS, s1, Buffer.concat(out));
+      if (pipe.pipeOut) ctx.pipeBuf = Buffer.concat(out);
+      else if (s1 && out.length) writeToStream(PFS, s1, Buffer.concat(out));
       if (s2 && err.length) writeToStream(PFS, s2, Buffer.concat(err));
       return (code & 0xff) << 8;
     },
@@ -199,13 +205,13 @@ export async function runWorkerJob(job) {
   for (const g of Object.values(job.programs)) await load(g);
   const prevCwd = process.cwd();
   const stdout = [], stderr = [];
-  const ctx = { programs: job.programs, env: job.env ?? {}, trace: job.trace ? [] : null };
+  const stdinBuf = job.stdinBase64 ? Buffer.from(job.stdinBase64, "base64") : null;
+  // inheritStdin: a driver's subprograms read the job's stdin (gcc ... -).
+  const ctx = { programs: job.programs, env: job.env ?? {}, trace: job.trace ? [] : null, inheritStdin: !!job.inheritStdin, stdinBuf };
   let exitCode;
   try {
     process.chdir(job.cwd);
-    exitCode = execProgram(ctx, job.argv[0], job.argv.slice(1), {
-      stdin: job.stdinBase64 ? Buffer.from(job.stdinBase64, "base64") : null, stdout, stderr,
-    });
+    exitCode = execProgram(ctx, job.argv[0], job.argv.slice(1), { stdin: stdinBuf, stdout, stderr });
   } finally {
     process.chdir(prevCwd);
   }
