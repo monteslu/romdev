@@ -40,12 +40,14 @@ test("the preflight refusal happens before the job directory exists", async () =
   // directory or a process behind.
   const { readFile } = await import("node:fs/promises");
   const src = await readFile(new URL("../src/decomp/jobs.js", import.meta.url), "utf8");
-  const body = src.match(/export async function startSearch\([\s\S]*?\n  const rec = \{/)?.[0] ?? "";
+  // The whole startSearch body: the search now runs in-process and starts at launchSearch(.
+  const body = src.match(/export async function startSearch\([\s\S]*?\n\}\n/)?.[0] ?? "";
   const iPre = body.indexOf("PREFLIGHT_FAILED");
   const iMkdir = body.indexOf("mkdir(jobDir");
-  const iSpawn = body.indexOf("spawn(");
+  const iSpawn = body.indexOf("launchSearch(");
+  assert.ok(iSpawn >= 0, "startSearch no longer starts the search through launchSearch");
   assert.ok(iPre >= 0 && iPre < iMkdir, "the job directory is created before the preflight check");
-  assert.ok(iPre < iSpawn, "the process is spawned before the preflight check");
+  assert.ok(iPre < iSpawn, "the search is launched before the preflight check");
 });
 
 test("the report accounts for what the budget bought", async () => {

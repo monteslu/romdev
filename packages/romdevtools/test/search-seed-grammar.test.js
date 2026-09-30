@@ -69,11 +69,13 @@ test("validation happens before any job directory is created", async () => {
   // startSearch, before mkdir and before spawn.
   const { readFile } = await import("node:fs/promises");
   const src = await readFile(new URL("../src/decomp/jobs.js", import.meta.url), "utf8");
-  const body = src.match(/export async function startSearch\([\s\S]*?\n  const rec = \{/)?.[0] ?? "";
+  // The whole startSearch body: the search now runs in-process and starts at launchSearch(.
+  const body = src.match(/export async function startSearch\([\s\S]*?\n\}\n/)?.[0] ?? "";
   const iSeed = body.indexOf("resolveSeed(seed)");
   const iMkdir = body.indexOf("mkdir(jobDir");
-  const iSpawn = body.indexOf("spawn(");
+  const iSpawn = body.indexOf("launchSearch(");
+  assert.ok(iSpawn >= 0, "startSearch no longer starts the search through launchSearch");
   assert.ok(iSeed >= 0, "startSearch does not validate the seed");
   assert.ok(iSeed < iMkdir, "the job directory is created before the seed is validated");
-  assert.ok(iSeed < iSpawn, "the process is spawned before the seed is validated");
+  assert.ok(iSeed < iSpawn, "the search is launched before the seed is validated");
 });
