@@ -86,7 +86,7 @@ static const char *dkwb_cdx_register_name(int color) {
 /* Both phases index the same color space, so an unqualified force key is
  * ambiguous: p1 colors callee-saved webs and p2 colors caller-saved webs
  * with disjoint web numbering. This accepts exactly
- * p[12]:w<digits>=(c<digits>|s) — the same grammar the workbench validates
+ * p[12]:w<digits>=(c<digits>|s) ${"\u2014"} the same grammar the workbench validates
  * before a campaign spends a compile. A partially-formed key that silently
  * forced nothing is the defect this check exists to prevent: it is how a
  * phase-one-only sweep once produced a wrong exoneration. */
