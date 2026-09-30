@@ -194,3 +194,70 @@ export function frameLadder(log, { frame = null, proc = null, names = null } = {
 }
 
 export function ladderReport(ladder) { return ladder.asDict(); }
+
+/** The two records `CDX_SYMTAB=1` adds, in the cascade grammar's shape. */
+export const SYMTAB_RECORD_GRAMMAR = Object.freeze({
+  symtabcount: "CAMPAIGN-LOCAL (patches/uopt-5.3-cdx-symtab.patch). The itable's size, once per procedure. proc n base.",
+  symtab: "CAMPAIGN-LOCAL (patches/uopt-5.3-cdx-symtab.patch). One itable entry. proc idx kind name dtype selfidx bit ver off tag class b23 "
+    + "b24 vreg op l r raw08..raw36 rec. `off` is the frame offset of an `isvar` and `b24` its access size in bytes; `op`/`l`/`r` belong to "
+    + "an `isop` and nothing else. `name` is the itable KIND, not a symbol name: the input ucode has no names.",
+});
+
+function operandName(index, entries, names) {
+  if (index === null || index === -1 || index === 0xFFFF) return ".";
+  const entry = entries.get(index);
+  if (!entry) return `#${index}`;
+  if (entry.is_operation) return `op${index}`;
+  if (entry.is_variable) {
+    const label = entry.storage_class_name || "?";
+    if (entry.offset !== null && names.has(entry.offset)) return `${names.get(entry.offset)}(${index})`;
+    if (entry.offset !== null) return `${label}${entry.offset}(${index})`;
+    return `${label}${index}`;
+  }
+  return `${entry.kind_name}${index}`;
+}
+
+/** The itable's operation stream, in creation (first-occurrence) order. */
+export function opReport(ladder, { names = null, offsets = null } = {}) {
+  if (!ladder.entries.length) {
+    throw new CascadeError(`${ladder.log} carries no symtab records, so it has no operation stream. The itable dump needs CDX_SYMTAB=1 from `
+      + "patches/uopt-5.3-cdx-symtab.patch.");
+  }
+  names = names ?? new Map();
+  const byIndex = new Map(ladder.entries.map((e) => [e.index, e]));
+  let wanted = null;
+  if (offsets !== null) {
+    const selected = new Set(offsets);
+    wanted = new Set(ladder.entries.filter((e) => e.is_variable && selected.has(e.offset)).map((e) => e.index));
+  }
+  const rows = [];
+  for (const e of ladder.entries) {
+    if (!e.is_operation) continue;
+    if (wanted !== null && !wanted.has(e.left) && !wanted.has(e.right)) continue;
+    rows.push({ index: e.index, opcode: e.opcode, opcode_name: e.opcode_name, dtype: e.dtype, left: e.left, right: e.right,
+      left_name: operandName(e.left, byIndex, names), right_name: operandName(e.right, byIndex, names) });
+  }
+  return { schema: OPS_SCHEMA, log: ladder.log, proc: ladder.proc, entry_count: ladder.entries.length,
+    operation_count: ladder.entries.filter((e) => e.is_operation).length, selected_count: rows.length,
+    selected_offsets: offsets === null ? null : sorted([...new Set(offsets)]), operations: rows };
+}
+
+/** Render the ladder the way a reader reads it: lowest slot first. */
+export function* ladderLines(ladder) {
+  const frame = ladder.frame === null ? "-" : String(ladder.frame);
+  const temps = new Set(ladder.below_named.map((s) => s.offset));
+  yield `frame ladder: ${ladder.log}  ${ladder.slots.length} slot(s)  frame=${frame}  source=${ladder.sources.join("+")}`;
+  for (const slot of ladder.slots) {
+    const home = slot.home === null ? "-" : `${slot.home}(sp)`;
+    const index = slot.index === null ? "-" : String(slot.index);
+    const size = slot.size === null ? "-" : String(slot.size);
+    const vreg = slot.vreg === null ? "-" : String(slot.vreg);
+    const webs = slot.webs.join(",") || "-";
+    const name = slot.name || (temps.has(slot.offset) ? "temp?" : "-");
+    yield `  ${String(slot.offset).padStart(6)} ${home.padStart(9)} idx=${index.padEnd(5)} size=${size.padEnd(3)} `
+      + `vreg=${vreg.padEnd(3)} class=${(slot.storage_class_name || "-").padEnd(2)} webs=${webs.padEnd(12)} ${name}`;
+  }
+  const floor = ladder.lowest_named_offset;
+  if (floor !== null) yield `  ${ladder.below_named.length} unnamed slot(s) below the lowest named offset ${floor}: compiler temps`;
+  for (const w of ladder.warnings) yield `warning: ${w}`;
+}
