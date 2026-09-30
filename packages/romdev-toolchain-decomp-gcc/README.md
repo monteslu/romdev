@@ -6,6 +6,13 @@ command-line tools their builds run, as WASM, for romdev's decomp domain.
 - `wasm/kmc-2.7.2/`: gcc 2.7.2 as shipped in the N64 SDK (KMC) - the driver
   `gcc`, the preprocessor `cpp` (cccp) and `cc1` - with the binutils 2.6
   assembler `as` it pairs with (including `--force-n64align`).
+- `wasm/egcs-1.1.2/`: EGCS 1.1.2 (gcc 2.91.66) for mips-linux - `gcc`, `cpp`
+  (cccp), `cc1` - with its binutils 2.9.5 assembler `as`: the compiler N64
+  decomp projects build their iQue (China) versions with. Built by
+  `build-decomp-gcc.sh egcs` from the pinned
+  [decompals/mips-gcc-egcs-2.91.66](https://github.com/decompals/mips-gcc-egcs-2.91.66)
+  and [decompals/mips-binutils-egcs-2.9.5](https://github.com/decompals/mips-binutils-egcs-2.9.5)
+  (GPL-2.0) with `egcs-1.1.2-wasm.patch` and `egcs-binutils-2.9.5-wasm.patch`.
 - `wasm/mips-linux-gnu-14.2/`: gcc 14.2.0 for target mips-linux-gnu (`gcc`,
   `cpp`, `cc1`), configured like Debian/Ubuntu's `gcc-mips-linux-gnu`: the
   modern cross gcc projects use for data-only TUs, `.s` preprocessing and

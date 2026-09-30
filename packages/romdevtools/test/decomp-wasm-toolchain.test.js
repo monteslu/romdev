@@ -496,3 +496,20 @@ test("project build scripts: JS ports by content hash, and `uv run python` resol
   assert.equal(classifyCommand(["uv", "run", "python", "inc_from_bin.py", "a", "b"], d).kind, "unsupported", "different bytes = different program");
   assert.equal(classifyCommand(["uv", "run", "--no-sync", "md5sum", "x"], d).kind, "sha1sum");
 });
+
+test("EGCS 1.1.2 (WASM driver, cccp, cc1, binutils 2.9.5 as) compiles a TU through the expanders", async () => {
+  const d = dir("egcs");
+  fs.writeFileSync(path.join(d, "t.c"), "int g;\nint f(int x) { return x * 3 + g; }\n");
+  const cc = "tools/gcc_egcs/linux/1.1.2-4/gcc";
+  assert.equal(classifyCommand([cc, "-c", "t.c"]).family, "egcs-1.1.2");
+  const r = await runRecipeLine(`${cc} -G 0 -mips3 -mabi=32 -mgp32 -mfp32 -O2 -g -c -o t.o t.c`, { cwd: d, tmpRoot: dir("egcs-tmp") });
+  assert.equal(r.code, 0, r.log);
+  const e = readElf(fs.readFileSync(path.join(d, "t.o")));
+  const text = e.section(".text");
+  // lui/lw of g, then x*3 as sll+addu: the expanders got both operands
+  // (a variadic call through insn_gen_function once dropped the second).
+  const words = [];
+  for (let i = 0; i < text.length; i += 4) words.push(text.readUInt32BE(i));
+  assert.ok(words.includes(0x00041840) || words.includes(0x00041040), words.map((w) => w.toString(16)).join(" "));
+  assert.ok(e.section(".mdebug"), "-g writes ECOFF .mdebug through as 2.9.5");
+});

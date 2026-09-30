@@ -1,0 +1,153 @@
+diff --git a/gcc/expr.c b/gcc/expr.c
+index 2f32fe3..525f2e5 100644
+--- a/gcc/expr.c
++++ b/gcc/expr.c
+@@ -161,10 +161,10 @@ static int queued_subexp_p	PROTO((rtx));
+ static void init_queue		PROTO((void));
+ static void move_by_pieces	PROTO((rtx, rtx, int, int));
+ static int move_by_pieces_ninsns PROTO((unsigned int, int));
+-static void move_by_pieces_1	PROTO((rtx (*) (rtx, ...), enum machine_mode,
++static void move_by_pieces_1	PROTO((rtx (*) GEN_FCN_PROTO, enum machine_mode,
+ 				       struct move_by_pieces *));
+ static void clear_by_pieces	PROTO((rtx, int, int));
+-static void clear_by_pieces_1	PROTO((rtx (*) (rtx, ...), enum machine_mode,
++static void clear_by_pieces_1	PROTO((rtx (*) GEN_FCN_PROTO, enum machine_mode,
+ 				       struct clear_by_pieces *));
+ static int is_zeros_p		PROTO((tree));
+ static int mostly_zeros_p	PROTO((tree));
+@@ -1551,7 +1551,7 @@ move_by_pieces_ninsns (l, align)
+ 
+ static void
+ move_by_pieces_1 (genfun, mode, data)
+-     rtx (*genfun) PROTO ((rtx, ...));
++     rtx (*genfun) GEN_FCN_PROTO;
+      enum machine_mode mode;
+      struct move_by_pieces *data;
+ {
+@@ -2245,7 +2245,7 @@ clear_by_pieces (to, len, align)
+ 
+ static void
+ clear_by_pieces_1 (genfun, mode, data)
+-     rtx (*genfun) PROTO ((rtx, ...));
++     rtx (*genfun) GEN_FCN_PROTO;
+      enum machine_mode mode;
+      struct clear_by_pieces *data;
+ {
+diff --git a/gcc/expr.h b/gcc/expr.h
+index a53a036..35e2c18 100644
+--- a/gcc/expr.h
++++ b/gcc/expr.h
+@@ -341,7 +341,16 @@ typedef struct optab
+ #define GEN_FCN(CODE) (*insn_gen_function[(int) (CODE)])
+ #endif
+ 
+-extern rtx (*const insn_gen_function[]) PROTO ((rtx, ...));
++#ifdef __EMSCRIPTEN__
++/* romdev: WebAssembly passes variadic arguments in memory, so a call through
++   an `(rtx, ...)' pointer to the (non-variadic) gen_* expanders loses every
++   argument after the first. Call them through an unprototyped pointer, as the
++   K&R callers of the day did.  */
++#define GEN_FCN_PROTO ()
++#else
++#define GEN_FCN_PROTO PROTO ((rtx, ...))
++#endif
++extern rtx (*const insn_gen_function[]) GEN_FCN_PROTO;
+ 
+ extern optab add_optab;
+ extern optab sub_optab;
+diff --git a/gcc/gcc.c b/gcc/gcc.c
+index 450fabb..5581759 100644
+--- a/gcc/gcc.c
++++ b/gcc/gcc.c
+@@ -1837,7 +1837,7 @@ clear_failure_queue ()
+    use come from an obstack, we don't have to worry about allocating
+    space for them.  */
+ 
+-#ifndef HAVE_PUTENV
++#if !defined(HAVE_PUTENV) && !defined(__EMSCRIPTEN__) /* romdev: musl provides putenv */
+ 
+ void
+ putenv (str)
+diff --git a/gcc/pexecute.c b/gcc/pexecute.c
+index 804f314..0530113 100644
+--- a/gcc/pexecute.c
++++ b/gcc/pexecute.c
+@@ -622,7 +622,77 @@ pfinish ()
+ #endif /* MPW */
+ 
+ /* include for Unix-like environments but not for Dos-like environments */
+-#if ! defined (__MSDOS__) && ! defined (OS2) && ! defined (MPW) \
++#if defined (__EMSCRIPTEN__)
++/* romdev: WASM host. There is no fork/exec in WebAssembly: each subprogram
++   (cpp, cc1, as) runs to completion synchronously as a sibling module through
++   a JS spawn hook, and pwait hands back the recorded exit statuses. A pipe
++   (-pipe) between two stages is carried by the host as a byte buffer.  */
++#include <emscripten.h>
++
++EM_JS(int, romdev_spawn_pipe, (const char *file, char **argv, int argc, int pipe_in, int pipe_out), {
++  const args = [];
++  for (let i = 0; i < argc; i++) args.push(UTF8ToString(HEAPU32[(argv >> 2) + i]));
++  if (!Module["romdevSpawn"]) {
++    err("romdev: no spawn handler installed; cannot run " + UTF8ToString(file));
++    return 127 << 8;
++  }
++  return Module["romdevSpawn"](UTF8ToString(file), args, Module, { pipeIn: !!pipe_in, pipeOut: !!pipe_out });
++});
++
++static int romdev_next_pid = 4200;
++static int romdev_done_pid[64];
++static int romdev_done_status[64];
++static int romdev_done_count;
++static int romdev_pipe_pending;
++
++int
++pexecute (program, argv, this_pname, temp_base, errmsg_fmt, errmsg_arg, flags)
++     const char *program;
++     char * const *argv;
++     const char *this_pname;
++     const char *temp_base;
++     char **errmsg_fmt, **errmsg_arg;
++     int flags;
++{
++  int argc = 0;
++  int status;
++  int not_last = ! (flags & PEXECUTE_LAST);
++  if (flags & PEXECUTE_FIRST)
++    romdev_pipe_pending = 0;
++  while (argv[argc])
++    argc++;
++  status = romdev_spawn_pipe (program, (char **) argv, argc, romdev_pipe_pending, not_last);
++  romdev_pipe_pending = not_last;
++  if (romdev_done_count >= 64)
++    {
++      *errmsg_fmt = "romdev spawn table full";
++      *errmsg_arg = NULL;
++      return -1;
++    }
++  romdev_done_pid[romdev_done_count] = ++romdev_next_pid;
++  romdev_done_status[romdev_done_count] = status;
++  romdev_done_count++;
++  return romdev_next_pid;
++}
++
++int
++pwait (pid, status, flags)
++     int pid;
++     int *status;
++     int flags;
++{
++  int i;
++  if (romdev_done_count == 0)
++    return -1;
++  *status = romdev_done_status[0];
++  i = romdev_done_pid[0];
++  romdev_done_count--;
++  memmove (romdev_done_pid, romdev_done_pid + 1, romdev_done_count * sizeof (int));
++  memmove (romdev_done_status, romdev_done_status + 1, romdev_done_count * sizeof (int));
++  return i;
++}
++
++#elif ! defined (__MSDOS__) && ! defined (OS2) && ! defined (MPW) \
+     && ! defined (_WIN32)
+ 
+ #ifdef VMS

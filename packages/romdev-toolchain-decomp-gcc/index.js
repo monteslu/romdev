@@ -2,6 +2,7 @@
 // matching-decompilation projects pin, as WASM, one directory per family, and
 // the command-line tools their builds run:
 //   wasm/kmc-2.7.2/            gcc (driver), cpp (cccp), cc1, as (binutils 2.6)
+//   wasm/egcs-1.1.2/           gcc (driver), cpp (cccp), cc1, as (binutils 2.9.5)
 //   wasm/mips-linux-gnu-14.2/  gcc (driver), cpp, cc1 (assembles with
 //                              romdev-toolchain-mips-gcc's mips-linux-gnu-as)
 //   wasm/tools/                slinky-cli, pigment64, crunch64, raw-deflate
@@ -16,6 +17,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const wasmDir = path.join(__dirname, "wasm");
 export const families = {
   "kmc-2.7.2": ["gcc", "cpp", "cc1", "as"],
+  "egcs-1.1.2": ["gcc", "cpp", "cc1", "as"],
   "mips-linux-gnu-14.2": ["gcc", "cpp", "cc1"],
 };
 export const tools = ["slinky-cli", "pigment64", "crunch64", "raw-deflate"];

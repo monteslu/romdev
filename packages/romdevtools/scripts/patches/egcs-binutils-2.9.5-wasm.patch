@@ -1,0 +1,75 @@
+diff --git a/gas/frags.h b/gas/frags.h
+index b188e33..4acf5ca 100644
+--- a/gas/frags.h
++++ b/gas/frags.h
+@@ -88,6 +88,13 @@ struct frag
+   char *fr_file;
+   unsigned int fr_line;
+ 
++#ifdef __EMSCRIPTEN__
++  /* romdev: the LP64 size of the fields above (84 bytes to fr_literal), so a
++     frag uses as much of its obstack chunk as on the reference host (see
++     include/obstack.h).  */
++  char romdev_lp64_pad[12];
++#endif
++
+   /* Data begins here.  */
+   char fr_literal[1];
+ };
+diff --git a/include/obstack.h b/include/obstack.h
+index 38e9677..4737845 100644
+--- a/include/obstack.h
++++ b/include/obstack.h
+@@ -156,6 +156,12 @@ struct _obstack_chunk		/* Lives at front of each chunk. */
+ {
+   char  *limit;			/* 1 past end of this chunk */
+   struct _obstack_chunk *prev;	/* address of prior chunk or NULL */
++#ifdef __EMSCRIPTEN__
++  /* romdev: lay chunks out as on the LP64 host the reference assembler is
++     built for, so obstack_room -- and with it where gas starts a new frag,
++     which decides whether `a - b' folds to a constant -- matches it.  */
++  char	romdev_lp64_pad[8];
++#endif
+   char	contents[4];		/* objects begin here */
+ };
+ 
+diff --git a/libiberty/obstack.c b/libiberty/obstack.c
+index bc318b3..5accfa6 100644
+--- a/libiberty/obstack.c
++++ b/libiberty/obstack.c
+@@ -58,6 +58,15 @@
+ #define POINTER char *
+ #endif
+ 
++#ifdef __EMSCRIPTEN__
++/* romdev: the reference assembler is an x86_64 Linux binary, and there its
++   obstacks are glibc's (this file is elided under glibc): default alignment
++   and rounding of 16 (long double), a 16-byte chunk header (include/obstack.h)
++   and a new-chunk size that includes the alignment mask. Where gas starts a
++   new frag depends on exactly this arithmetic, so mirror it.  */
++#define DEFAULT_ALIGNMENT 16
++#define DEFAULT_ROUNDING 16
++#else
+ /* Determine default alignment.  */
+ struct fooalign {char x; double d;};
+ #define DEFAULT_ALIGNMENT  \
+@@ -67,6 +76,7 @@ struct fooalign {char x; double d;};
+    DEFAULT_ROUNDING.  So we prepare for it to do that.  */
+ union fooround {long x; double d;};
+ #define DEFAULT_ROUNDING (sizeof (union fooround))
++#endif
+ 
+ /* When we copy a long block of data, this is the unit to do it with.
+    On some machines, copying successive ints does not work;
+@@ -284,7 +294,11 @@ _obstack_newchunk (h, length)
+   long already;
+ 
+   /* Compute size for new chunk.  */
++#ifdef __EMSCRIPTEN__
++  new_size = (obj_size + length) + h->alignment_mask + (obj_size >> 3) + 100;
++#else
+   new_size = (obj_size + length) + (obj_size >> 3) + 100;
++#endif
+   if (new_size < h->chunk_size)
+     new_size = h->chunk_size;
+ 

@@ -5,6 +5,7 @@
 //
 //   IDO cc (.../ido*/<ver>/.../cc)            -> WASM IDO (toolchain.js)
 //   KMC gcc 2.7.2 (.../2.7.2/gcc, as)       -> WASM gcc 2.7.2 + binutils 2.6
+//   EGCS 1.1.2 (.../1.1.2-4/gcc, as)        -> WASM egcs 2.91.66 + binutils 2.9.5
 //   armips                                  -> WASM armips
 //   mips-linux-gnu-gcc / -cpp                -> WASM gcc 14.2 (mips-linux-gnu)
 //   slinky-cli / pigment64 / crunch64       -> WASM builds of decompals' releases

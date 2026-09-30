@@ -336,6 +336,26 @@
       ],
       "note": "The binutils 2.6 assembler (with --force-n64align) paired with KMC gcc 2.7.2; built to WASM by build-decomp-gcc.sh."
     },
+    "egcs_gcc": {
+      "kind": "git",
+      "url": "https://github.com/decompals/mips-gcc-egcs-2.91.66.git",
+      "ref": "master",
+      "commit": "ac3419e24f024dc41a737837b3934103a58e7bbd",
+      "license": "GPL-2.0",
+      "patch": "scripts/patches/egcs-1.1.2-wasm.patch",
+      "platforms": ["n64"],
+      "note": "EGCS 1.1.2 (gcc 2.91.66) for mips-linux, the compiler N64 decomp projects build their iQue (China) versions with: driver, cccp and cc1, built to WASM by build-decomp-gcc.sh egcs into romdev-toolchain-decomp-gcc (wasm/egcs-1.1.2/)."
+    },
+    "egcs_binutils": {
+      "kind": "git",
+      "url": "https://github.com/decompals/mips-binutils-egcs-2.9.5.git",
+      "ref": "master",
+      "commit": "d31f57d600e7d35289cb5494569b64f57570b2fb",
+      "license": "GPL-2.0",
+      "patch": "scripts/patches/egcs-binutils-2.9.5-wasm.patch",
+      "platforms": ["n64"],
+      "note": "The binutils 2.9.5 assembler paired with EGCS 1.1.2; built to WASM by build-decomp-gcc.sh egcs. The reference assembler is an x86_64 Linux binary using glibc obstacks; the patch lays obstack chunks and frags out and sizes new chunks as there, so gas splits frags (and folds label differences in .mdebug stabs) at the same places."
+    },
     "slinky_cli": {
       "kind": "tarball",
       "crate": "slinky-cli",

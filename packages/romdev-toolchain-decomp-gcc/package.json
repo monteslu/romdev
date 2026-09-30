@@ -1,7 +1,7 @@
 {
   "name": "romdev-toolchain-decomp-gcc",
   "version": "0.1.0",
-  "description": "The gcc toolchains N64 matching-decompilation projects pin (KMC gcc 2.7.2 with its binutils 2.6 assembler; gcc 14.2 for mips-linux-gnu) and the build tools they run (slinky, pigment64, crunch64), bundled as WASM for romdev's decomp domain.",
+  "description": "The gcc toolchains N64 matching-decompilation projects pin (KMC gcc 2.7.2 with binutils 2.6 as; EGCS 1.1.2 with binutils 2.9.5 as; gcc 14.2 for mips-linux-gnu) and the build tools they run (slinky, pigment64, crunch64), bundled as WASM for romdev's decomp domain.",
   "type": "module",
   "main": "index.js",
   "exports": {

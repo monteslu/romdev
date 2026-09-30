@@ -26,6 +26,7 @@ const BINUTILS = ["as", "ld", "objcopy", "objdump"];
 // families assemble with romdev-toolchain-mips-gcc's mips-linux-gnu-as.
 export const DECOMP_GCC = {
   "kmc-2.7.2": { dir: "kmc-2.7.2", programs: ["gcc", "cpp", "cc1", "as"], aliases: { xgcc: "gcc", cccp: "cpp" } },
+  "egcs-1.1.2": { dir: "egcs-1.1.2", programs: ["gcc", "cpp", "cc1", "as"], aliases: { xgcc: "gcc", cccp: "cpp" } },
   "mips-linux-gnu-14.2": {
     dir: "mips-linux-gnu-14.2", programs: ["gcc", "cpp", "cc1"], binutilsAs: true,
     aliases: { "mips-linux-gnu-gcc": "gcc", "mips-linux-gnu-cpp": "cpp", "mips-linux-gnu-cc1": "cc1", xgcc: "gcc" },
@@ -68,14 +69,16 @@ export function binutilsGlue(tool) {
 
 /**
  * Which decomp gcc a recipe names, by its path: the N64 SDK's KMC gcc 2.7.2
- * as projects vendor it (tools/gcc_kmc/<os>/2.7.2/gcc, .../2.7.2/as), or the
- * distro cross compiler by its name (mips-linux-gnu-gcc, mips-linux-gnu-cpp).
+ * as projects vendor it (tools/gcc_kmc/<os>/2.7.2/gcc, .../2.7.2/as), EGCS
+ * 1.1.2 likewise (tools/gcc_egcs/<os>/1.1.2-4/gcc), or the distro cross
+ * compiler by its name (mips-linux-gnu-gcc, mips-linux-gnu-cpp).
  */
 export function decompGccFamily(cmd) {
   const base = path.basename(cmd);
   if (/^mips-linux-gnu-(gcc|cpp)$/.test(base)) return "mips-linux-gnu-14.2";
   if (!/(^|\/)(gcc|xgcc|cpp|cccp|cc1|as)$/.test(base)) return null;
   if (/(^|\/)2\.7\.2(\/|$)/.test(path.dirname(cmd)) || /(^|[/_-])kmc([/_-]|$)/i.test(path.dirname(cmd))) return "kmc-2.7.2";
+  if (/(^|\/)(1\.1\.2|2\.91\.66)(-\d+)?(\/|$)/.test(path.dirname(cmd)) || /(^|[/_-])egcs([/_-]|$)/i.test(path.dirname(cmd))) return "egcs-1.1.2";
   return null;
 }
 

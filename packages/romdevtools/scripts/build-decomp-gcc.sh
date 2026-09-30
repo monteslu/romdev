@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
-# Build the gcc toolchain N64 SDK (KMC) decomp projects compile with - gcc
-# 2.7.2 (driver, cccp, cc1) and its binutils 2.6 assembler - to WASM.
-# Ships in packages/romdev-toolchain-decomp-gcc/wasm/kmc-2.7.2/:
-#   gcc (the driver), cpp (cccp), cc1, as
+# Build the old gcc toolchains N64 decomp projects compile with to WASM:
+#   kmc   the N64 SDK's (KMC) gcc 2.7.2 (driver, cccp, cc1) + binutils 2.6 as
+#         -> packages/romdev-toolchain-decomp-gcc/wasm/kmc-2.7.2/
+#   egcs  EGCS 1.1.2 (gcc 2.91.66: driver, cccp, cc1) + binutils 2.9.5 as, the
+#         iQue (China) builds' compiler
+#         -> packages/romdev-toolchain-decomp-gcc/wasm/egcs-1.1.2/
+# Each directory holds gcc (the driver), cpp (cccp), cc1, as.
+#   build-decomp-gcc.sh [kmc|egcs|all]   (default all)
 # romdev runs `gcc` in its WASM worker; the driver's subprograms run as
-# sibling modules through a JS spawn hook (kmc-gcc-2.7.2-wasm.patch).
+# sibling modules through a JS spawn hook (kmc-gcc-2.7.2-wasm.patch,
+# egcs-1.1.2-wasm.patch).
 #
 # These 1996 sources cannot be configured for an emscripten host (the build
 # runs generators it just compiled; libiberty probes libc by linking), so
@@ -12,7 +17,7 @@
 # produces every generated source - and emcc-replay.mjs then replays the
 # logged compile/archive/link commands with emcc. Nothing native ships.
 #
-# Pins: versions.json toolchains.kmc_gcc / toolchains.kmc_binutils.
+# Pins: versions.json toolchains.kmc_gcc / kmc_binutils / egcs_gcc / egcs_binutils.
 # Host deps (build time only): gcc, make, emcc (emsdk 4.0.18).
 set -euo pipefail
 . "$(dirname "$0")/_lib.sh"
@@ -21,8 +26,10 @@ require_cmd gcc
 require_cmd make
 
 ROOT="$BUILD_DIR/decomp-gcc"
-PKG_OUT="$PROJECT_DIR/../romdev-toolchain-decomp-gcc/wasm/kmc-2.7.2"
-mkdir -p "$ROOT" "$PKG_OUT"
+WHICH="${1:-all}"
+case "$WHICH" in kmc|egcs|all) ;; *) echo "usage: $0 [kmc|egcs|all]" >&2; exit 2 ;; esac
+PKG_BASE="$PROJECT_DIR/../romdev-toolchain-decomp-gcc/wasm"
+mkdir -p "$ROOT"
 
 # Host flags that let 1990s K&R C build with a modern gcc (native phase only).
 NATIVE_CC="gcc -std=gnu89 -w -fcommon -Wno-error -Wno-implicit-function-declaration -Wno-int-conversion -Wno-incompatible-pointer-types -Wno-implicit-int -Wno-return-mismatch"
@@ -53,11 +60,14 @@ sync_glue() {
 }
 
 stage() { # <built .js> <name>
+  mkdir -p "$PKG_OUT"
   cp "$1" "$PKG_OUT/$2.mjs"
   cp "${1%.js}.wasm" "$PKG_OUT/$2.wasm"
   sync_glue "$PKG_OUT/$2.mjs"
 }
 
+build_kmc() {
+PKG_OUT="$PKG_BASE/kmc-2.7.2"
 # -- gcc 2.7.2 ----------------------------------------------------------
 GSRC="$ROOT/gcc-2.7.2"
 fetch_pinned toolchains.kmc_gcc "$GSRC"
@@ -103,4 +113,63 @@ stage gas/wasm-out/as.js as
 git -C "$GSRC" clean -qfdx
 git -C "$BSRC" clean -qfdx
 echo "KMC gcc 2.7.2 + binutils 2.6 as -> $PKG_OUT"
+}
+
+build_egcs() {
+PKG_OUT="$PKG_BASE/egcs-1.1.2"
+# -- EGCS 1.1.2 (gcc 2.91.66) ---------------------------------------------
+# Configured as decompals' release workflow does (target mips-linux).
+GSRC="$ROOT/mips-gcc-egcs-2.91.66"
+fetch_pinned toolchains.egcs_gcc "$GSRC"
+cd "$GSRC"
+require_git_toplevel
+git clean -qfdx
+apply_patch egcs_gcc
+CC="$NATIVE_CC" ./configure --target=mips-linux --prefix=/opt/cross --with-gnu-as --disable-gprof \
+  --disable-gdb --disable-werror --host=i386-pc-linux --build=i386-pc-linux > "$ROOT/egcs-configure.log"
+# Generated sources are committed; keep make from regenerating them (and
+# gcc/configure from being rebuilt by a newer autoconf).
+touch gcc/configure gcc/c-gperf.h gcc/c-parse.c gcc/cp/parse.c gcc/cexp.c
+make -C gcc CC="$NATIVE_CC" xgcc cc1 cccp > "$ROOT/egcs-native.log" 2>&1
+# The native configure found glibc's <stab.h>; emscripten has none. gcc's own
+# gstab.h defines the same N_* codes (both come from GNU's stab.def).
+# -fwrapv: EGCS folds constants with signed arithmetic that relies on
+# two's-complement wraparound (clang otherwise folds `a - -c` differently).
+mkdir -p "$ROOT/egcs-compat"
+printf '#include "gstab.h"\n' > "$ROOT/egcs-compat/stab.h"
+node "$SCRIPT_DIR/emcc-replay.mjs" --log "$ROOT/egcs-native.log" \
+  --native-cc "$NATIVE_CC" --emcc "$EMCC -fwrapv -I$ROOT/egcs-compat" \
+  --skip-source '^gen(?!rtl\.c)[a-z]*\.c$' \
+  --emcc-link "$EMLINK_BASE -sEXPORT_NAME=egcsGcc" \
+  --link "cc1=wasm-out/cc1.js" --link "cccp=wasm-out/cccp.js" --link "xgcc=wasm-out/xgcc.js"
+stage gcc/wasm-out/xgcc.js gcc
+stage gcc/wasm-out/cccp.js cpp
+stage gcc/wasm-out/cc1.js cc1
+
+# -- binutils 2.9.5 (as) ------------------------------------------------
+BSRC="$ROOT/mips-binutils-egcs-2.9.5"
+fetch_pinned toolchains.egcs_binutils "$BSRC"
+cd "$BSRC"
+require_git_toplevel
+git clean -qfdx
+apply_patch egcs_binutils
+CC="$NATIVE_CC" ./configure --target=mips-linux --prefix=/opt/cross --disable-gprof --disable-gdb \
+  --disable-werror --host=i386-pc-linux --build=i386-pc-linux > "$ROOT/egcs-binutils-configure.log"
+: > "$ROOT/egcs-binutils-native.log"
+for d in libiberty bfd opcodes intl gas; do
+  make -C "$d" CC="$NATIVE_CC" >> "$ROOT/egcs-binutils-native.log" 2>&1
+done
+node "$SCRIPT_DIR/emcc-replay.mjs" --log "$ROOT/egcs-binutils-native.log" \
+  --native-cc "$NATIVE_CC" --emcc "$EMCC -fwrapv" --skip-source '^dummy\.c$' \
+  --emcc-link "$EMLINK_BASE -sEXPORT_NAME=egcsAs" \
+  --link "as-new=wasm-out/as.js"
+stage gas/wasm-out/as.js as
+
+git -C "$GSRC" checkout -q -- . && git -C "$GSRC" clean -qfdx
+git -C "$BSRC" clean -qfdx
+echo "EGCS 1.1.2 + binutils 2.9.5 as -> $PKG_OUT"
+}
+
+[ "$WHICH" = egcs ] || build_kmc
+[ "$WHICH" = kmc ] || build_egcs
 echo "Refresh the binary manifest: node scripts/binary-manifest.mjs --write"

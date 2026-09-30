@@ -68,7 +68,8 @@ each toolchain recipe the same `PKG_OUT` copy step the core recipes have.)
 | libtonc / libgba / maxmod | `build-libtonc.sh`, `build-libgba.sh`, `build-maxmod.sh` | GBA SDK libs (linked, ship as source/lib) |
 | IDO 5.3 / 7.1 (N64 decomp compilers; ido-static-recomp C, patch `ido-static-recomp-wasm.patch`) | `build-ido.sh` | `romdev-toolchain-ido` |
 | armips (N64 decomp RSP microcode assembler; patch `armips-wasm-single-thread.patch`) | `build-armips.sh` | `romdev-toolchain-ido` |
-| KMC gcc 2.7.2 + binutils 2.6 as (N64 decomp gcc projects; patch `kmc-gcc-2.7.2-wasm.patch`, native build replayed with `emcc-replay.mjs`) | `build-decomp-gcc.sh` | `romdev-toolchain-decomp-gcc` |
+| KMC gcc 2.7.2 + binutils 2.6 as (N64 decomp gcc projects; patch `kmc-gcc-2.7.2-wasm.patch`, native build replayed with `emcc-replay.mjs`) | `build-decomp-gcc.sh kmc` | `romdev-toolchain-decomp-gcc` |
+| EGCS 1.1.2 + binutils 2.9.5 as (N64 iQue builds; patches `egcs-1.1.2-wasm.patch`, `egcs-binutils-2.9.5-wasm.patch`, native build replayed with `emcc-replay.mjs`) | `build-decomp-gcc.sh egcs` | `romdev-toolchain-decomp-gcc` |
 | mips-linux-gnu binutils (N64 decomp as/ld/objcopy/objdump) | `build-mips-linux-binutils-wasm.sh` | `romdev-toolchain-mips-gcc` |
 | mips-linux-gnu gcc 14.2 driver/cpp/cc1 (N64 decomp data TUs, `.s`/linker-script cpp; patch `gcc-14-driver-wasm-spawn.patch`; configure probes the WASM binutils through `wasm-tool-shim.mjs`) | `build-mips-linux-gcc-wasm.sh` | `romdev-toolchain-decomp-gcc` |
 | slinky-cli, pigment64, crunch64 (Rust, wasm32-unknown-emscripten) + raw-deflate (vanilla zlib) for decomp builds | `build-decomp-rust-tools.sh` | `romdev-toolchain-decomp-gcc` |
