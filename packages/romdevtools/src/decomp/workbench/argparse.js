@@ -131,6 +131,8 @@ export function parseArgs(spec, tokens, { prog, explainKeys = null, version = nu
     let flagText = tok, inline = null;
     if (tok.startsWith("--") && tok.includes("=")) { flagText = tok.slice(0, tok.indexOf("=")); inline = tok.slice(tok.indexOf("=") + 1); }
     else if (!tok.startsWith("--") && tok.length > 2 && byFlag.has(tok.slice(0, 2))) { flagText = tok.slice(0, 2); inline = tok.slice(2); }
+    // implicit -h/--help, as every argparse parser has
+    if ((flagText === "-h" || flagText === "--help") && !byFlag.has(flagText)) throw new ParserExit(0, formatHelp(spec, { prog }));
     const found = find(flagText);
     if (!found) { extras.push(tok); continue; }
     const [flag, a] = found;
