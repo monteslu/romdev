@@ -161,7 +161,7 @@ export async function sweepIngestCommand(args, io, ctx) {
   let result;
   try {
     const manifest = readManifest(args.manifest, { cwd: ctx.cwd });
-    result = ingestSweep(manifest, { objects: args.objects, target: args.target, suffix: args.object_suffix, dumps: args.dumps,
+    result = await ingestSweep(manifest, { objects: args.objects, target: args.target, suffix: args.object_suffix, dumps: args.dumps,
       target_dumps: args.target_dumps, objdump: args.objdump, symbol: args.symbol, section: args.section, slot: args.slot,
       cache_directory: args.disassembly_cache, cwd: ctx.cwd, env: ctx.env });
   } catch (e) {

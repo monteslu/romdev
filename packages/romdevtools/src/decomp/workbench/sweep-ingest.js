@@ -86,7 +86,7 @@ const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch { retu
 const isFile = (p) => { try { return fs.statSync(p).isFile(); } catch { return false; } };
 
 /** Gate and score every built variant of one sweep. */
-export function ingestSweep(manifest, { objects, target, suffix = ".o", dumps = false, target_dumps = false, objdump = null, symbol = null,
+export async function ingestSweep(manifest, { objects, target, suffix = ".o", dumps = false, target_dumps = false, objdump = null, symbol = null,
   section = ".text", slot = null, cache_directory = null, cwd = process.cwd(), env = process.env }) {
   const directory = String(objects);
   const abs = (p) => path.resolve(cwd, p);
@@ -112,7 +112,7 @@ export function ingestSweep(manifest, { objects, target, suffix = ".o", dumps = 
       continue;
     }
     const diff = buildShiftDiff(targetRows, rows);
-    const screen = buildScreenLine(rows, { label: variant.key.label, path: dumps ? null : candidate, target: targetRows, slot, cwd });
+    const screen = await buildScreenLine(rows, { label: variant.key.label, path: dumps ? null : abs(candidate), target: targetRows, slot });
     results.push(new VariantResult({ key: variant.key, description: variant.description, object_path: candidate, screen,
       rows_away: diff.rows_away, inserted: diff.inserted, deleted: diff.deleted, replaced: diff.replaced, paired_mismatches: diff.paired_mismatches }));
   }

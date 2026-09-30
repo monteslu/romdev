@@ -309,7 +309,7 @@ describe("ingest", () => {
   setup();
   let ingestSweep, ingestLines;
   beforeEach(async () => {
-    try { ({ ingestSweep, ingestLines } = await import("../src/decomp/workbench/sweep-ingest.js")); } catch { ingestSweep = null; }
+    ({ ingestSweep, ingestLines } = await import("../src/decomp/workbench/sweep-ingest.js"));
   });
   function build() {
     const directory = path.join(root, "regress");
@@ -323,20 +323,18 @@ describe("ingest", () => {
     writeFileSync(target, TARGET_DUMP);
     return { directory, objects, target };
   }
-  const ingest = () => {
+  const ingest = async () => {
     const { directory, objects, target } = build();
     return ingestSweep(readManifest(directory), { objects, target, suffix: ".objdump", dumps: true, target_dumps: true });
   };
-  test("a wrong instruction count is a column, not a rejection", (t) => {
-    if (!ingestSweep) return t.skip("screen.js not ported yet");
-    const control = ingest().control;
+  test("a wrong instruction count is a column, not a rejection", async () => {
+    const control = (await ingest()).control;
     assert.equal(control.rows_away, 1);
     assert.equal(control.inserted, 1);
     assert.equal(control.screen.instructions, 6);
   });
-  test("the price table names what each construct costs", (t) => {
-    if (!ingestSweep) return t.skip("screen.js not ported yet");
-    const result = ingest();
+  test("the price table names what each construct costs", async () => {
+    const result = await ingest();
     const prices = Object.fromEntries(result.scored.filter((r) => r.key.site !== "control").map((r) => [r.key.site, result.price(r)]));
     assert.equal(prices.L10, 1);
     assert.equal(prices.L11, 0);
@@ -344,22 +342,19 @@ describe("ingest", () => {
     assert.ok(report.includes("COSTS 1 row(s): removing it improves the base"));
     assert.ok(report.includes("free: removing it changes nothing measurable"));
   });
-  test("an unbuilt variant is a row naming the path", (t) => {
-    if (!ingestSweep) return t.skip("screen.js not ported yet");
-    const result = ingest();
+  test("an unbuilt variant is a row naming the path", async () => {
+    const result = await ingest();
     assert.deepEqual(result.missing.map((r) => r.key.site), ["L10+L11"]);
     assert.ok((result.missing[0].missing || "").includes("work.N.L10-L11.objdump"));
     assert.ok(ingestLines(result).join("\n").includes("unbuilt (1)"));
   });
-  test("coverage falls by whatever failed to build", (t) => {
-    if (!ingestSweep) return t.skip("screen.js not ported yet");
-    const result = ingest();
+  test("coverage falls by whatever failed to build", async () => {
+    const result = await ingest();
     assert.equal(result.asDict().coverage.covered, 3);
     assert.ok(ingestLines(result).join("\n").includes("coverage:"));
   });
-  test("an unbuilt point is unvisited and never an exclusion", (t) => {
-    if (!ingestSweep) return t.skip("screen.js not ported yet");
-    const result = ingest();
+  test("an unbuilt point is unvisited and never an exclusion", async () => {
+    const result = await ingest();
     const payload = result.asDict();
     assert.equal(result.missing.length, 1);
     assert.equal(payload.coverage.excluded, 0);
@@ -369,16 +364,14 @@ describe("ingest", () => {
     assert.ok(sentence.includes("never visited"));
     assert.ok(!sentence.includes("is a proof about this space"));
   });
-  test("the best variant ranks first", (t) => {
-    if (!ingestSweep) return t.skip("screen.js not ported yet");
-    const result = ingest();
+  test("the best variant ranks first", async () => {
+    const result = await ingest();
     assert.equal(result.ranked[0].key.site, "L10");
     assert.equal(result.ranked[0].rows_away, 0);
   });
-  test("an objects path that is not a directory says what it is for", (t) => {
-    if (!ingestSweep) return t.skip("screen.js not ported yet");
+  test("an objects path that is not a directory says what it is for", async () => {
     const { directory, target } = build();
-    throwsSweep(() => ingestSweep(readManifest(directory), { objects: path.join(root, "nowhere"), target, dumps: true, target_dumps: true }), /compile-one wrapper/);
+    await assert.rejects(ingestSweep(readManifest(directory), { objects: path.join(root, "nowhere"), target, dumps: true, target_dumps: true }), (e) => e instanceof SweepError && /compile-one wrapper/.test(e.message));
   });
 });
 
