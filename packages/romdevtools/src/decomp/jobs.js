@@ -453,12 +453,13 @@ async function jobProcessAlive(rec) {
   // In-process searches are alive exactly while this process runs them.
   if (rec.runner === "in-process") return liveJobs.has(rec.jobId) && rec.pid === process.pid;
   if (!rec.pid || !isAlive(rec.pid)) return false;
-  // A PID on its own is not job ownership after a restart. On Linux, require
-  // the exact owned permuter directory in the process argv before status or
-  // cancellation treats it as this search. Unknown ownership fails closed.
+  // A record from before the in-process port names a separate backend process.
+  // A PID on its own is not job ownership after a restart: on Linux, require
+  // the exact owned permuter directory in that process's argv before status
+  // or cancellation treats it as this search. Unknown ownership fails closed.
   try {
     const argv = (await readFile(`/proc/${rec.pid}/cmdline`, "utf8")).split("\0");
-    return !!rec.permuterDir && argv.includes(rec.permuterDir) && argv.some(a => a.endsWith("permuter.py"));
+    return !!rec.permuterDir && argv.includes(rec.permuterDir);
   } catch { return false; }
 }
 
@@ -471,6 +472,8 @@ export async function jobReport(project, jobId, { maxOutputs = 12 } = {}) {
   const measuredOutputs = [];
   if (outputs && s.preflight?.inputIdentity && project.resolveFunction) {
     const { compileAndCompare, extractFunction } = await import("./compile.js");
+    const { semanticGate } = await import("./semantic-gate.js");
+    const baseText = await readFile(path.join(s.dir, "base.c"), "utf8").catch(() => null);
     const fn = await project.resolveFunction({ symbol: s.function.symbol, segment: s.function.segment });
     const names = (await readdir(s.permuterDir)).filter(d => /^output-\d+-\d+$/.test(d))
       .sort((a, b) => Number(a.split("-")[1]) - Number(b.split("-")[1]));
@@ -490,10 +493,19 @@ export async function jobReport(project, jobId, { maxOutputs = 12 } = {}) {
           && r.inputIdentity?.ownerMode === s.preflight.inputIdentity.ownerMode
           && hashRecord(r.inputIdentity?.env) === hashRecord(s.preflight.inputIdentity.env)
           && hashRecord(r.inputIdentity?.invocation) === hashRecord(s.preflight.inputIdentity.invocation);
+        // A search optimises a score, so its outputs are exactly where the
+        // artificial constructs the semantic gate exists for turn up. Every
+        // verified output carries the gate's verdict; the exactness result is
+        // reported alongside, never replaced.
+        const g = semanticGate({ candidateText: text, baselineText: baseText, exactFunctionMatch: comparable && r.exactFunctionMatch === true,
+          functionLocal: r.verdict?.functionLocal ?? null });
+        const gate = { classification: g.classification, integrationEligible: g.integrationEligible, counts: g.counts,
+          findings: g.findings.slice(0, 4).map((x) => ({ id: x.id, severity: x.severity, confidence: x.confidence, message: x.message })) };
+        const usefulImprovement = comparable && linkedMismatchCount(r) != null && Number.isFinite(s.preflight.linkedMismatches)
+          ? linkedMismatchCount(r) < s.preflight.linkedMismatches : null;
         measuredOutputs.push({ sourcePath, sourceSha, compiled: r.compileSucceeded, outputIdentity: r.outputIdentity,
           comparable, exact: comparable && r.exactFunctionMatch === true, linkedMismatches: linkedMismatchCount(r),
-          usefulImprovement: comparable && linkedMismatchCount(r) != null && Number.isFinite(s.preflight.linkedMismatches)
-            ? linkedMismatchCount(r) < s.preflight.linkedMismatches : null,
+          usefulImprovement, gate, gateAccepted: usefulImprovement === true && g.counts.artificial === 0,
           artifacts: r.artifacts, inputIdentity: r.inputIdentity?.sha256 });
       } catch (e) { measuredOutputs.push({ sourcePath, error: e.message }); }
     }
@@ -517,6 +529,8 @@ export async function jobReport(project, jobId, { maxOutputs = 12 } = {}) {
     improvements: history.length,
     uniqueVerifiedOutputs: measuredOutputs.length ? new Set(measuredOutputs.map(r => r.outputIdentity?.sha256).filter(Boolean)).size : null,
     usefulResidualImprovements: measuredOutputs.length ? measuredOutputs.filter(r => r.usefulImprovement === true).length : null,
+    gateAcceptedImprovements: measuredOutputs.length ? measuredOutputs.filter(r => r.gateAccepted === true).length : null,
+    artificialOutputs: measuredOutputs.length ? measuredOutputs.filter(r => (r.gate?.counts?.artificial ?? 0) > 0).length : null,
     outputsVerified: measuredOutputs.length, outputsNotVerified: Math.max(0, outputs - measuredOutputs.length),
     allBackendUniqueOutputs: null,
     iterationsReported: Number.isFinite(iterations) ? iterations : null,

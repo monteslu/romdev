@@ -9,16 +9,18 @@
 // Nothing here executes Python: the files are Python literals, and this script
 // parses just enough of that literal syntax to read them.
 //
-// Usage: node scripts/gen-tables.mjs <path to perm_pycparser or m2c_pycparser>
+// Usage: node scripts/gen-tables.mjs <lextab module> <yacctab module> <c_ast module>
+//   (the three generated modules from perm_pycparser/ or m2c_pycparser/, given
+//   as file paths; they are read as data, never run)
 
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const src = process.argv[2];
-if (!src) {
-  console.error("usage: node scripts/gen-tables.mjs <upstream pycparser dir>");
+const [lextabFile, yacctabFile, castFile] = process.argv.slice(2);
+if (!castFile) {
+  console.error("usage: node scripts/gen-tables.mjs <lextab module> <yacctab module> <c_ast module>");
   process.exit(2);
 }
 
@@ -104,7 +106,7 @@ function assignment(py, name) {
   return parsePyLiteral(py.slice(start));
 }
 
-const lextab = readFileSync(path.join(src, "lextab.py"), "utf8");
+const lextab = readFileSync(lextabFile, "utf8");
 const lex = {
   tabversion: assignment(lextab, "_tabversion"),
   tokens: assignment(lextab, "_lextokens"),
@@ -118,7 +120,7 @@ const lex = {
   stateeoff: Object.fromEntries(assignment(lextab, "_lexstateeoff").dict),
 };
 
-const yacctab = readFileSync(path.join(src, "yacctab.py"), "utf8");
+const yacctab = readFileSync(yacctabFile, "utf8");
 const actionItems = assignment(yacctab, "_lr_action_items").dict;
 const gotoItems = assignment(yacctab, "_lr_goto_items").dict;
 const productions = assignment(yacctab, "_lr_productions");
@@ -153,7 +155,7 @@ const yacc = {
 // so the node shapes come from it: constructor fields (__slots__ minus
 // coord/__weakref__), children in children() order (single '*' or list '**'),
 // and attr_names.
-const castPy = readFileSync(path.join(src, "c_ast.py"), "utf8");
+const castPy = readFileSync(castFile, "utf8");
 const nodes = [];
 for (const m of castPy.matchAll(/^class (\w+)\(Node\):\n([\s\S]*?)(?=^class |(?![\s\S]))/gm)) {
   const [, name, body] = m;

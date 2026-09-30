@@ -16,5 +16,7 @@ import { runArgv } from "./recipe.js";
 export async function compileCandidate(cPath, oPath, { argv, cwd, tmpRoot }) {
   const a = argv.map((x) => (x === "$INPUT" ? cPath : x === "$OUTPUT" ? oPath : x));
   const r = await runArgv(a, { cwd, tmpRoot });
+  // A step romdev has no port for is an error, never a reason to try the host.
+  if (r.unsupported) throw new Error(`compile step not supported by romdev's toolchain: ${r.unsupported}`);
   return r.code === 0 && fs.existsSync(oPath);
 }
