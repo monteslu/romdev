@@ -41,6 +41,9 @@
 
 #include "shared.h"
 #include "hvc.h"
+#ifdef ROMDEV_S32
+extern unsigned char rd_sat_dirty;
+#endif
 
 extern int8 reset_do_not_clear_buffers;
 static int8 do_not_invalidate_tile_cache;
@@ -1580,6 +1583,9 @@ int vdp_68k_irq_ack(int int_level)
 
 static void vdp_reg_w(unsigned int r, unsigned int d, unsigned int cycles)
 {
+#ifdef ROMDEV_S32
+  rd_sat_dirty = 1;  /* SAT base, H32/H40 width: re-bucket sprites (vdp_render.c) */
+#endif
 #ifdef LOGVDP
   error("[%d(%d)][%d(%d)] VDP register %d write -> 0x%x (%x)\n", v_counter, (v_counter + (cycles - mcycles_vdp)/MCYCLES_PER_LINE)%lines_per_frame, cycles, cycles%MCYCLES_PER_LINE, r, d, m68k_get_reg(M68K_REG_PC));
 #endif
@@ -2265,6 +2271,9 @@ static void vdp_bus_w(unsigned int data)
       {
         /* Update internal SAT */
         *(uint16 *) &sat[index & sat_addr_mask] = data;
+#ifdef ROMDEV_S32
+        rd_sat_dirty = 1;
+#endif
       }
 
       /* Only write unique data to VRAM */
@@ -2742,6 +2751,9 @@ static void vdp_z80_data_w_m5(unsigned int data)
       {
         /* Update internal SAT */
         WRITE_BYTE(sat, index & sat_addr_mask, data);
+#ifdef ROMDEV_S32
+        rd_sat_dirty = 1;
+#endif
       }
 
       /* Only write unique data to VRAM */
@@ -3222,6 +3234,9 @@ static void vdp_dma_copy(unsigned int length)
       {
         /* Update internal SAT */
         WRITE_BYTE(sat, (addr & sat_addr_mask) ^ 1, data);
+#ifdef ROMDEV_S32
+        rd_sat_dirty = 1;
+#endif
       }
 
       /* Write byte to adjacent VRAM destination address */
@@ -3263,6 +3278,9 @@ static void vdp_dma_fill(unsigned int length)
         {
           /* Update internal SAT */
           WRITE_BYTE(sat, (addr & sat_addr_mask) ^ 1, data);
+#ifdef ROMDEV_S32
+        rd_sat_dirty = 1;
+#endif
         }
 
         /* Write byte to adjacent VRAM address */

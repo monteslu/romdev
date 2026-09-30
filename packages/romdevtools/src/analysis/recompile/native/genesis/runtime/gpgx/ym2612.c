@@ -1450,7 +1450,145 @@ INLINE signed int op_calc1(UINT32 phase, unsigned int env, unsigned int pm, unsi
   return (tl_tab[p] & opmask);
 }
 
-INLINE void chan_calc(FM_CH *CH, int num)
+#ifdef ROMDEV_S32
+/* ROMDEV_S32: chan_calc with the operator routing of each algorithm written
+   out (setup_connection's pointers become direct adds on locals). Same
+   operators in the same order, same delayed MEM sample, same phase update:
+   the output is chan_calc's, without the global m2/c1/c2/mem traffic. */
+#define RD_OP(SLOTN, PM, MASKI) \
+  ((eg = volume_calc(&CH->SLOT[SLOTN])) < ENV_QUIET ? op_calc(CH->SLOT[SLOTN].phase, eg, (PM), mask[MASKI]) : 0)
+#ifdef RD_FM_HALF
+/* audioQuality 'half': operator outputs are computed on every other sample
+   and held in between; phases, envelopes, LFO and timers still advance every
+   sample, so everything the CPUs can read (status, timers, busy) is exact and
+   only the sound is approximated (FM at 26.6 kHz, then resampled). */
+static INT32 rd_fm_held[6];
+static unsigned int rd_fm_skip;
+#endif
+INLINE void rd_chan_calc(FM_CH *CH, int num)
+{
+  do
+  {
+    INT32 out = 0, carrier = 0, rm2 = 0, rc1 = 0, rc2 = 0, rmem = 0;
+#ifdef RD_FM_HALF
+    if (rd_fm_skip)
+    {
+      out_fm[CH - &ym2612.CH[0]] = rd_fm_held[CH - &ym2612.CH[0]];
+      goto rd_phase;
+    }
+#endif
+    UINT32 AM = ym2612.OPN.LFO_AM >> CH->ams;
+    unsigned int eg = volume_calc(&CH->SLOT[SLOT1]);
+    UINT32 *mask = op_mask[CH->ALGO];
+    int ch = CH - &ym2612.CH[0];
+
+    if (eg < ENV_QUIET)
+    {
+      if (CH->FB < SIN_BITS)
+        out = (CH->op1_out[0] + CH->op1_out[1]) >> CH->FB;
+      out = op_calc1(CH->SLOT[SLOT1].phase, eg, out, mask[0]);
+    }
+    CH->op1_out[0] = CH->op1_out[1];
+    CH->op1_out[1] = out;
+
+    switch (CH->ALGO)
+    {
+      case 0: /* M1---C1---MEM---M2---C2---OUT */
+        rm2 = CH->mem_value; rc1 = out;
+        rc2 += RD_OP(SLOT3, rm2, 2);
+        rmem += RD_OP(SLOT2, rc1, 1);
+        carrier += RD_OP(SLOT4, rc2, 3);
+        CH->mem_value = rmem;
+        break;
+      case 1: /* M1------+-MEM---M2---C2---OUT, C1-+ */
+        rm2 = CH->mem_value; rmem = out;
+        rc2 += RD_OP(SLOT3, rm2, 2);
+        rmem += RD_OP(SLOT2, 0, 1);
+        carrier += RD_OP(SLOT4, rc2, 3);
+        CH->mem_value = rmem;
+        break;
+      case 2: /* M1-----------------+-C2---OUT, C1---MEM---M2-+ */
+        rm2 = CH->mem_value; rc2 = out;
+        rc2 += RD_OP(SLOT3, rm2, 2);
+        rmem += RD_OP(SLOT2, 0, 1);
+        carrier += RD_OP(SLOT4, rc2, 3);
+        CH->mem_value = rmem;
+        break;
+      case 3: /* M1---C1---MEM------+-C2---OUT, M2-+ */
+        rc2 = CH->mem_value; rc1 = out;
+        rc2 += RD_OP(SLOT3, 0, 2);
+        rmem += RD_OP(SLOT2, rc1, 1);
+        carrier += RD_OP(SLOT4, rc2, 3);
+        CH->mem_value = rmem;
+        break;
+      case 4: /* M1---C1-+-OUT, M2---C2-+ (MEM unused) */
+        rc1 = out;
+        rc2 += RD_OP(SLOT3, 0, 2);
+        carrier += RD_OP(SLOT2, rc1, 1);
+        carrier += RD_OP(SLOT4, rc2, 3);
+        break;
+      case 5: /* M1 feeds C1, MEM->M2 and C2, all to OUT */
+        rm2 = CH->mem_value; rmem = rc1 = rc2 = out;
+        carrier += RD_OP(SLOT3, rm2, 2);
+        carrier += RD_OP(SLOT2, rc1, 1);
+        carrier += RD_OP(SLOT4, rc2, 3);
+        CH->mem_value = rmem;
+        break;
+      case 6: /* M1---C1-+, M2-+, C2-+ -OUT (MEM unused) */
+        rc1 = out;
+        carrier += RD_OP(SLOT3, 0, 2);
+        carrier += RD_OP(SLOT2, rc1, 1);
+        carrier += RD_OP(SLOT4, 0, 3);
+        break;
+      default: /* 7: all four to OUT (MEM unused) */
+        carrier = out;
+        carrier += RD_OP(SLOT3, 0, 2);
+        carrier += RD_OP(SLOT2, 0, 1);
+        carrier += RD_OP(SLOT4, 0, 3);
+        break;
+    }
+    out_fm[ch] = carrier;
+#ifdef RD_FM_HALF
+    rd_fm_held[ch] = carrier;
+rd_phase:
+#endif
+
+    /* update phase counters AFTER output calculations */
+    if (CH->pms)
+    {
+      /* 3-slot mode */
+      if ((ym2612.OPN.ST.mode & 0xC0) && (CH == &ym2612.CH[2]))
+      {
+        UINT8 kc = ym2612.CH[2].kcode;
+        UINT32 pm = ym2612.CH[2].pms + ym2612.OPN.LFO_PM;
+        update_phase_lfo_slot(&ym2612.CH[2].SLOT[SLOT1], pm, kc, ym2612.OPN.SL3.block_fnum[1]);
+        update_phase_lfo_slot(&ym2612.CH[2].SLOT[SLOT2], pm, kc, ym2612.OPN.SL3.block_fnum[2]);
+        update_phase_lfo_slot(&ym2612.CH[2].SLOT[SLOT3], pm, kc, ym2612.OPN.SL3.block_fnum[0]);
+        update_phase_lfo_slot(&ym2612.CH[2].SLOT[SLOT4], pm, kc, ym2612.CH[2].block_fnum);
+      }
+      else
+      {
+        update_phase_lfo_channel(CH);
+      }
+    }
+    else
+    {
+      CH->SLOT[SLOT1].phase += CH->SLOT[SLOT1].Incr;
+      CH->SLOT[SLOT2].phase += CH->SLOT[SLOT2].Incr;
+      CH->SLOT[SLOT3].phase += CH->SLOT[SLOT3].Incr;
+      CH->SLOT[SLOT4].phase += CH->SLOT[SLOT4].Incr;
+    }
+
+    CH++;
+  } while (--num);
+}
+#define chan_calc rd_chan_calc
+#define RD_MAME_CHAN_CALC chan_calc_mame
+#else
+#define RD_MAME_CHAN_CALC chan_calc
+#endif
+
+INLINE void RD_MAME_CHAN_CALC(FM_CH *CH, int num)
 {
   do
   {
@@ -2027,6 +2165,16 @@ void YM2612Update(int *buffer, int length)
 {
   int i;
   int lt,rt;
+#ifdef ROMDEV_S32
+  /* ROMDEV_S32: update_ssg_eg_channels only acts on operators with SSG-EG
+     enabled (ssg bit 3), which only a register write can change, and writes
+     land between calls (fm_update runs the chip up to each write first). */
+  unsigned int rd_any_ssg = 0;
+  {
+    int c, s;
+    for (c = 0; c < 6; c++) for (s = 0; s < 4; s++) rd_any_ssg |= ym2612.CH[c].SLOT[s].ssg & 0x08;
+  }
+#endif
 
   /* refresh PG increments and EG rates if required */
   refresh_fc_eg_chan(&ym2612.CH[0]);
@@ -2064,9 +2212,15 @@ void YM2612Update(int *buffer, int length)
     out_fm[5] = 0;
 
     /* update SSG-EG output */
+#ifdef ROMDEV_S32
+    if (rd_any_ssg)
+#endif
     update_ssg_eg_channels(&ym2612.CH[0]);
 
     /* calculate FM */
+#ifdef RD_FM_HALF
+    rd_fm_skip ^= 1;
+#endif
     if (!ym2612.dacen)
     {
       chan_calc(&ym2612.CH[0],6);

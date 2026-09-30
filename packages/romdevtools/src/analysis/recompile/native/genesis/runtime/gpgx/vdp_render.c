@@ -314,7 +314,31 @@ INLINE void WRITE_LONG(void *address, uint32 data)
 /* This might be faster or slower than original method, depending on  */
 /* architecture (x86, PowerPC), cache size, memory access speed, etc...  */
 
-#ifdef LSB_FIRST
+#if defined(LSB_FIRST) && defined(ROMDEV_S32)
+/* ROMDEV_S32: with the normal (non shadow/highlight) layer table, four
+   pixels at once in the two common cases, which make_lut_bg decides without
+   looking at each pixel: plane A all transparent over plane B all opaque
+   (result: plane B), and plane A all opaque where plane B cannot win (plane A
+   high priority, or plane B low priority: result plane A). Any other group
+   goes through gpgx's table per pixel. Background pixels are 0PPPCCCC. */
+#define RD_OPAQUE4(X) (((((X) & 0x0F0F0F0F) + 0x0F0F0F0F) & 0x10101010) == 0x10101010)
+#define DRAW_BG_TILE(SRC_A, SRC_B) \
+  if (table == lut[0] && !((SRC_A) & 0x0F0F0F0F) && RD_OPAQUE4(SRC_B)) \
+  { \
+    WRITE_LONG(lb, SRC_B); lb += 4; \
+  } \
+  else if (table == lut[0] && RD_OPAQUE4(SRC_A) && ((((SRC_A) & 0x40404040) == 0x40404040) || !((SRC_B) & 0x40404040))) \
+  { \
+    WRITE_LONG(lb, SRC_A); lb += 4; \
+  } \
+  else \
+  { \
+    *lb++ = table[((SRC_B << 8) & 0xff00) | (SRC_A & 0xff)]; \
+    *lb++ = table[(SRC_B & 0xff00) | ((SRC_A >> 8) & 0xff)]; \
+    *lb++ = table[((SRC_B >> 8) & 0xff00) | ((SRC_A >> 16) & 0xff)]; \
+    *lb++ = table[((SRC_B >> 16) & 0xff00) | ((SRC_A >> 24) & 0xff)]; \
+  }
+#elif defined(LSB_FIRST)
 #define DRAW_BG_TILE(SRC_A, SRC_B) \
   *lb++ = table[((SRC_B << 8) & 0xff00) | (SRC_A & 0xff)]; \
   *lb++ = table[(SRC_B & 0xff00) | ((SRC_A >> 8) & 0xff)]; \
@@ -640,6 +664,38 @@ INLINE const uint8 *rd_pat(uint32 idx)
   }
   return (const uint8 *)rd_tile;
 }
+#ifndef RD_OPAQUE4
+#define RD_OPAQUE4(X) (((((X) & 0x0F0F0F0F) + 0x0F0F0F0F) & 0x10101010) == 0x10101010)
+#endif
+static inline void rd_row(uint32 attr, uint32 vl, uint32 *w0, uint32 *w1)
+{
+  uint32 y = vl >> 3, bp;
+  if (attr & 0x1000) y ^= 7;
+  bp = *(const uint32 *)&vram[((attr & 0x7FF) << 5) | (y << 2)];
+  if (attr & 0x800)
+  {
+    *w0 = rd_spread(bp >> 16);
+    *w1 = rd_spread(bp & 0xFFFF);
+  }
+  else
+  {
+    *w0 = __builtin_bswap32(rd_spread(bp & 0xFFFF));
+    *w1 = __builtin_bswap32(rd_spread(bp >> 16));
+  }
+}
+
+static inline void rd_merge4(uint8 *lb, uint32 b, const uint8 *table, int fast)
+{
+  uint32 a;
+  __builtin_memcpy(&a, lb, 4);
+  if (fast && !(a & 0x0F0F0F0F) && RD_OPAQUE4(b)) { __builtin_memcpy(lb, &b, 4); return; }
+  if (fast && RD_OPAQUE4(a) && (((a & 0x40404040) == 0x40404040) || !(b & 0x40404040))) return;
+  lb[0] = table[((b << 8) & 0xff00) | (a & 0xff)];
+  lb[1] = table[(b & 0xff00) | ((a >> 8) & 0xff)];
+  lb[2] = table[((b >> 8) & 0xff00) | ((a >> 16) & 0xff)];
+  lb[3] = table[((b >> 16) & 0xff00) | ((a >> 24) & 0xff)];
+}
+
 #else
 /* Cached and flipped patterns */
 static uint8 ALIGNED_(4) bg_pattern_cache[0x80000];
@@ -2589,11 +2645,102 @@ void render_bg_m5_im2_vs(int line)
 
 #else
 
+#ifdef ROMDEV_S32
+/* ROMDEV_S32: the ALT_RENDERER render_bg_m5 below, restated for the common
+   line (plane A across the whole line, no window, any scroll mode handled by
+   gpgx's own xscroll/yscroll fetch) with its state in locals so the
+   Cortex-M33 keeps it in registers, tile rows decoded straight from VRAM,
+   and the four-pixel fast paths of DRAW_BG_TILE. Same pixels, same order of
+   reads. Anything else (window on the line, a clipped plane A) returns 0 and
+   gpgx's function draws the line. */
+static int rd_render_bg_m5(int line)
+{
+  uint32 xscroll = *(uint32 *)&vram[hscb + ((line & hscroll_mask) << 2)];
+  uint32 yscroll = *(uint32 *)&vsram[0];
+  const uint32 colmask = playfield_col_mask, rowmask = playfield_row_mask, pshift = playfield_shift;
+  const int width = bitmap.viewport.w >> 4;
+  const uint8 *table = lut[(reg[12] & 8) >> 2];
+  const int fast = (table == lut[0]);
+  int a = (reg[18] & 0x1F) << 3, w = (reg[18] >> 7) & 1;
+  uint32 shift, index, vl, attr, w0, w1, atex;
+  const uint32 *nt;
+  uint8 *lb;
+  int column;
+
+  if (w == (line >= a)) return 0;                 /* window takes the line */
+  if (!clip[0].enable || clip[1].enable || clip[0].left != 0 || clip[0].right != width) return 0;
+
+  /* Plane A (DRAW_COLUMN) */
+  shift = xscroll & 0x0F;
+  index = colmask + 1 - ((xscroll >> 4) & colmask);
+  vl = (line + yscroll) & rowmask;
+  nt = (const uint32 *)&vram[ntab + (((vl >> 3) << pshift) & 0x1FC0)];
+  vl = (vl & 7) << 3;
+  lb = &linebuf[0][0x20 + shift];
+  if (shift)
+  {
+    lb -= 16;
+    attr = nt[(index - 1) & colmask];
+    atex = atex_table[(attr >> 13) & 7];
+    rd_row(attr, vl, &w0, &w1);
+    w0 |= atex; w1 |= atex; __builtin_memcpy(lb, &w0, 4); __builtin_memcpy(lb + 4, &w1, 4);
+    atex = atex_table[(attr >> 29) & 7];
+    rd_row(attr >> 16, vl, &w0, &w1);
+    w0 |= atex; w1 |= atex; __builtin_memcpy(lb + 8, &w0, 4); __builtin_memcpy(lb + 12, &w1, 4);
+    lb += 16;
+  }
+  for (column = 0; column < width; column++, index++, lb += 16)
+  {
+    attr = nt[index & colmask];
+    atex = atex_table[(attr >> 13) & 7];
+    rd_row(attr, vl, &w0, &w1);
+    w0 |= atex; w1 |= atex; __builtin_memcpy(lb, &w0, 4); __builtin_memcpy(lb + 4, &w1, 4);
+    atex = atex_table[(attr >> 29) & 7];
+    rd_row(attr >> 16, vl, &w0, &w1);
+    w0 |= atex; w1 |= atex; __builtin_memcpy(lb + 8, &w0, 4); __builtin_memcpy(lb + 12, &w1, 4);
+  }
+
+  /* Plane B (DRAW_BG_COLUMN) */
+  shift = (xscroll >> 16) & 0x0F;
+  index = colmask + 1 - ((xscroll >> 20) & colmask);
+  vl = (line + (yscroll >> 16)) & rowmask;
+  nt = (const uint32 *)&vram[ntbb + (((vl >> 3) << pshift) & 0x1FC0)];
+  vl = (vl & 7) << 3;
+  lb = &linebuf[0][0x20];
+  if (shift)
+  {
+    lb -= (0x10 - shift);
+    attr = nt[(index - 1) & colmask];
+    atex = atex_table[(attr >> 13) & 7];
+    rd_row(attr, vl, &w0, &w1);
+    rd_merge4(lb, w0 | atex, table, fast); rd_merge4(lb + 4, w1 | atex, table, fast);
+    atex = atex_table[(attr >> 29) & 7];
+    rd_row(attr >> 16, vl, &w0, &w1);
+    rd_merge4(lb + 8, w0 | atex, table, fast); rd_merge4(lb + 12, w1 | atex, table, fast);
+    lb += 16;
+  }
+  for (column = 0; column < width; column++, index++, lb += 16)
+  {
+    attr = nt[index & colmask];
+    atex = atex_table[(attr >> 13) & 7];
+    rd_row(attr, vl, &w0, &w1);
+    rd_merge4(lb, w0 | atex, table, fast); rd_merge4(lb + 4, w1 | atex, table, fast);
+    atex = atex_table[(attr >> 29) & 7];
+    rd_row(attr >> 16, vl, &w0, &w1);
+    rd_merge4(lb + 8, w0 | atex, table, fast); rd_merge4(lb + 12, w1 | atex, table, fast);
+  }
+  return 1;
+}
+#endif
+
 void render_bg_m5(int line)
 {
   int column, start, end;
   uint32 atex, atbuf, *src, *dst;
   uint32 shift, index, v_line, *nt;
+#ifdef ROMDEV_S32
+  if (rd_render_bg_m5(line)) return;
+#endif
   uint8 *lb;
 
   /* Scroll Planes common data */
@@ -3893,6 +4040,74 @@ void render_obj_m4(int line)
   }
 }
 
+#ifdef ROMDEV_S32
+/* ROMDEV_S32: render_obj_m5 with the pattern row decoded into two words
+   (rd_row) and the pixels drawn straight from them, four transparent pixels
+   skipped with one test and the collision bit gathered in a local. Same
+   sprites, same masking and pixel limits, same table, same flags. */
+#define RD_SPX(W, SH, K) \
+  { \
+    uint32 px_ = ((W) >> (SH)) & 0xff; \
+    if (px_) \
+    { \
+      px_ |= (lbp[K] << 8); \
+      lbp[K] = t1[px_ | atex]; \
+      st |= px_; \
+    } \
+  }
+void render_obj_m5(int line)
+{
+  int column, xpos, width, pixelcount = 0, masked = 0;
+  int max_pixels = MODE5_MAX_SPRITE_PIXELS;
+  const uint8 *s, *t1 = lut[1];
+  uint8 *lb, *lbp;
+  uint32 temp, v_line, attr, name, atex, w0, w1, st = 0;
+  object_info_t *object_info = obj_info[line];
+  int count = object_count[line];
+
+  while (count--)
+  {
+    xpos = object_info->xpos;
+    if (xpos) spr_ovr = 1;
+    else if (spr_ovr) masked = 1;
+    xpos = xpos - 0x80;
+    temp = object_info->size;
+    width = 8 + ((temp & 0x0C) << 1);
+    pixelcount += width;
+    if (((xpos + width) > 0) && (xpos < bitmap.viewport.w) && !masked)
+    {
+      attr = object_info->attr;
+      v_line = object_info->ypos;
+      atex = (attr >> 9) & 0x70;
+      name = attr & 0x07FF;
+      attr &= 0x1800;
+      s = &name_lut[((attr >> 3) & 0x300) | (temp << 4) | ((v_line & 0x18) >> 1)];
+      lb = &linebuf[0][0x20 + xpos];
+      if (pixelcount > max_pixels) width -= (pixelcount - max_pixels);
+      width = width >> 3;
+      v_line = (v_line & 7) << 3;
+      for (column = 0; column < width; column++, lb += 8)
+      {
+        temp = attr | ((name + s[column]) & 0x07FF);
+        rd_row(temp, v_line, &w0, &w1);
+        lbp = lb;
+        if (w0) { RD_SPX(w0, 0, 0) RD_SPX(w0, 8, 1) RD_SPX(w0, 16, 2) RD_SPX(w0, 24, 3) }
+        lbp = lb + 4;
+        if (w1) { RD_SPX(w1, 0, 0) RD_SPX(w1, 8, 1) RD_SPX(w1, 16, 2) RD_SPX(w1, 24, 3) }
+      }
+    }
+    if (pixelcount >= max_pixels)
+    {
+      status |= ((st & 0x8000) >> 10);
+      spr_ovr = (pixelcount >= bitmap.viewport.w);
+      return;
+    }
+    object_info++;
+  }
+  status |= ((st & 0x8000) >> 10);
+  spr_ovr = 0;
+}
+#else
 void render_obj_m5(int line)
 {
   int i, column;
@@ -4006,6 +4221,7 @@ void render_obj_m5(int line)
   /* Clear sprite masking for next line  */
   spr_ovr = 0;
 }
+#endif
 
 void render_obj_m5_ste(int line)
 {
@@ -4549,6 +4765,80 @@ void parse_satb_m4(int line)
   object_count[(line + 1) & 1] = count;
 }
 
+#ifdef ROMDEV_S32
+/* ROMDEV_S32: parse_satb_m5 walks the sprite link list for every line. The
+   walk (which sprites, in which order, where it stops) depends only on the
+   SAT cache, the SAT base and the H32/H40 width, so it is taken once per
+   change: each line's visible sprites (walk order, at most max+1 to see an
+   overflow) are bucketed, and a line then only reads name/attribute/X from
+   VRAM as gpgx does. rd_sat_dirty is raised by every SAT cache write and
+   every VDP register write. */
+unsigned char rd_sat_dirty = 1;
+#define RD_SPR_LINES 256
+#define RD_SPR_MAX 21
+static uint8 rd_spr_line[RD_SPR_LINES][RD_SPR_MAX];
+static uint8 rd_spr_count[RD_SPR_LINES];
+static int rd_spr_key_max, rd_spr_total, rd_spr_w;
+
+static void rd_sprite_buckets(int max)
+{
+  uint16 *q = (uint16 *) &sat[0];
+  int link = 0, total = max_sprite_pixels >> 2;
+  memset(rd_spr_count, 0, sizeof(rd_spr_count));
+  rd_spr_key_max = max;
+  rd_spr_total = total;
+  rd_spr_w = bitmap.viewport.w;
+  do
+  {
+    int ypos = q[link] & 0x1FF;
+    int height = 8 + (((q[link + 1] >> 8) & 3) << 3);
+    int k;
+    /* lines L (= line + 0x81) with ypos <= L < ypos + height */
+    for (k = ypos; k < ypos + height; k++)
+    {
+      int li = k - 0x80;
+      if (li < 0 || li >= RD_SPR_LINES) continue;
+      if (rd_spr_count[li] < RD_SPR_MAX) rd_spr_line[li][rd_spr_count[li]++] = link >> 2;
+    }
+    link = (q[link + 1] & 0x7F) << 2;
+    if ((link == 0) || (link >= bitmap.viewport.w)) break;
+  }
+  while (--total);
+  rd_sat_dirty = 0;
+}
+
+void parse_satb_m5(int line)
+{
+  int max = MODE5_MAX_SPRITES_PER_LINE;
+  int count = 0, li, n, j;
+  uint16 *p = (uint16 *) &vram[satb];
+  uint16 *q = (uint16 *) &sat[0];
+  object_info_t *object_info = obj_info[(line + 1) & 1];
+  if (rd_sat_dirty || rd_spr_key_max != max || rd_spr_total != (max_sprite_pixels >> 2) || rd_spr_w != bitmap.viewport.w)
+    rd_sprite_buckets(max);
+  line += 0x81;
+  li = line - 0x80;
+  n = (li >= 0 && li < RD_SPR_LINES) ? rd_spr_count[li] : 0;
+  for (j = 0; j < n; j++)
+  {
+    int link = rd_spr_line[li][j] << 2;
+    int ypos = q[link] & 0x1FF;
+    int size = q[link + 1] >> 8;
+    if (count == max)
+    {
+      status |= 0x40;
+      break;
+    }
+    object_info->attr  = p[link + 2];
+    object_info->xpos  = p[link + 3] & 0x1ff;
+    object_info->ypos  = line - ypos;
+    object_info->size  = size & 0x0f;
+    ++count;
+    object_info++;
+  }
+  object_count[line & 1] = count;
+}
+#else
 void parse_satb_m5(int line)
 {
   /* Sprite Y position */
@@ -4636,6 +4926,7 @@ void parse_satb_m5(int line)
   /* Update sprite count for next line (line value already incremented) */
   object_count[line & 1] = count;
 }
+#endif
 
 void parse_satb_m5_im2(int line)
 {
