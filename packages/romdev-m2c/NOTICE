@@ -1,0 +1,36 @@
+romdev-m2c
+==========
+
+This package is a JavaScript port of m2c, the MIPS/PowerPC/ARM/SuperH to C
+decompiler, made for romdev. It is a derivative work of m2c and is therefore
+licensed under the GNU General Public License, version 3 (see LICENSE). It is
+kept in its own package so that its GPL terms stay separate from romdev's
+MIT-licensed code, which only calls it.
+
+Components and attribution
+--------------------------
+
+1. m2c (formerly mips_to_c)
+   https://github.com/matt-kempster/m2c
+   Ported from commit 1d1c4454a445326541305f83f2b0cb680a9ecb2d.
+   Copyright the m2c contributors (Matt Kempster, Simon Lindholm, and others).
+   Licensed under the GNU General Public License v3.0 (LICENSE).
+   src/*.js are module-by-module translations of m2c/*.py; m2c_macros.h is
+   copied unchanged.
+
+2. pycparser (m2c's vendored, patched copy m2c_pycparser)
+   https://github.com/eliben/pycparser
+   Copyright (c) 2008-2022, Eli Bendersky. BSD 3-Clause (LICENSE.pycparser).
+   src/pycparser/* is a translation of it; lextab.js/yacctab.js are generated
+   from the committed lextab.py/yacctab.py tables.
+
+3. PLY (Python Lex-Yacc), as bundled with pycparser
+   Copyright (c) 2001-2017, David M. Beazley. BSD 3-Clause.
+   The LR parse driver in src/pycparser/c_parser.js follows ply/yacc.py.
+
+4. CodeWarrior demangler (src/demangle_codewarrior.js)
+   Based on demangler.cs by arookas, 3-clause BSD License
+   (notice reproduced in the source file), as incorporated in m2c.
+
+Corresponding source: this package ships its complete JavaScript source.
+The upstream Python source is available at the URL and commit above.

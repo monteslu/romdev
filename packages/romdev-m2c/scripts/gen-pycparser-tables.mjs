@@ -1,0 +1,177 @@
+#!/usr/bin/env node
+// gen-pycparser-tables.mjs - convert m2c_pycparser's generated PLY tables
+// (lextab.py, yacctab.py) into JS modules, by parsing their Python literal
+// syntax. Usage: node scripts/gen-pycparser-tables.mjs <m2c checkout>
+// Writes src/pycparser/lextab.js and src/pycparser/yacctab.js.
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const m2cDir = process.argv[2] || path.join(process.env.HOME, ".romdev", "tools", "m2c");
+const srcDir = path.join(m2cDir, "m2c_pycparser");
+const outDir = path.join(here, "..", "src", "pycparser");
+
+/** Parse one Python literal expression starting at text[pos]. */
+function parseLiteral(text, pos) {
+  let i = pos;
+  const ws = () => {
+    while (i < text.length) {
+      if (/\s/.test(text[i])) i++;
+      else if (text[i] === "#") { while (i < text.length && text[i] !== "\n") i++; }
+      else break;
+    }
+  };
+  const value = () => {
+    ws();
+    const c = text[i];
+    if (c === "{") {
+      i++;
+      const obj = [];
+      for (;;) {
+        ws();
+        if (text[i] === "}") { i++; return { dict: obj }; }
+        const k = value();
+        ws();
+        if (text[i] !== ":") throw new Error("expected : at " + i);
+        i++;
+        const v = value();
+        obj.push([k, v]);
+        ws();
+        if (text[i] === ",") i++;
+      }
+    }
+    if (c === "[" || c === "(") {
+      const close = c === "[" ? "]" : ")";
+      i++;
+      const arr = [];
+      for (;;) {
+        ws();
+        if (text[i] === close) { i++; return arr; }
+        arr.push(value());
+        ws();
+        if (text[i] === ",") i++;
+      }
+    }
+    if (c === "'" || c === '"') {
+      const q = c;
+      i++;
+      let s = "";
+      while (text[i] !== q) {
+        if (text[i] === "\\") {
+          const n = text[i + 1];
+          const map = { n: "\n", t: "\t", r: "\r", "\\": "\\", "'": "'", '"': '"', "0": "\0" };
+          if (n in map) { s += map[n]; i += 2; }
+          else if (n === "x") { s += String.fromCharCode(parseInt(text.slice(i + 2, i + 4), 16)); i += 4; }
+          else { s += "\\" + n; i += 2; }
+        } else s += text[i++];
+      }
+      i++;
+      return s;
+    }
+    if (text.startsWith("set(", i)) { i += 4; const inner = value(); ws(); i++; return inner; }
+    const m = /^(-?\d+|None|True|False)/.exec(text.slice(i, i + 30));
+    if (!m) throw new Error("unexpected literal at " + i + ": " + text.slice(i, i + 40));
+    i += m[0].length;
+    if (m[0] === "None") return null;
+    if (m[0] === "True") return true;
+    if (m[0] === "False") return false;
+    return parseInt(m[0], 10);
+  };
+  const v = value();
+  return v;
+}
+
+function assignment(text, name) {
+  const m = new RegExp(`^${name}\\s*=\\s*`, "m").exec(text);
+  if (!m) throw new Error("missing " + name);
+  return parseLiteral(text, m.index + m[0].length);
+}
+
+// Python regex (re.VERBOSE) -> JS regex source.
+function convertRegex(src, verbose) {
+  let out = "";
+  let inClass = false;
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (c === "\\") {
+      const n = src[i + 1];
+      if (n === "#" || n === " ") out += n;
+      else out += c + n;
+      i++;
+      continue;
+    }
+    if (inClass) {
+      if (c === "]") inClass = false;
+      out += c;
+      continue;
+    }
+    if (c === "[") {
+      inClass = true;
+      out += c;
+      if (src[i + 1] === "^") { out += "^"; i++; }
+      if (src[i + 1] === "]") { out += "\\]"; i++; }
+      continue;
+    }
+    if (verbose && /\s/.test(c)) continue;
+    if (verbose && c === "#") {
+      while (i < src.length && src[i] !== "\n") i++;
+      continue;
+    }
+    if (c === "(" && src.startsWith("(?P<", i)) { out += "(?<"; i += 3; continue; }
+    // Python `.` matches everything but \n (JS also excludes \r and U+2028/9).
+    if (c === ".") { out += "[^\\n]"; continue; }
+    // Python `$` without MULTILINE: end of string or before a final newline.
+    if (c === "$") { out += "(?=\\n?(?![\\s\\S]))"; continue; }
+    out += c;
+  }
+  return out;
+}
+
+const lextab = fs.readFileSync(path.join(srcDir, "lextab.py"), "utf8");
+const reflags = assignment(lextab, "_lexreflags");
+const verbose = (reflags & 64) !== 0;
+const stateinfo = assignment(lextab, "_lexstateinfo").dict;
+const statere = assignment(lextab, "_lexstatere").dict;
+const stateignore = assignment(lextab, "_lexstateignore").dict;
+const stateerrorf = assignment(lextab, "_lexstateerrorf").dict;
+const lextokens = assignment(lextab, "_lextokens");
+const lexOut = {
+  tokens: lextokens,
+  stateinfo: Object.fromEntries(stateinfo),
+  statere: Object.fromEntries(statere.map(([state, list]) => [state, list.map(([re, idx]) => ({ re: convertRegex(re, verbose), index: idx }))])),
+  stateignore: Object.fromEntries(stateignore),
+  stateerrorf: Object.fromEntries(stateerrorf),
+};
+fs.writeFileSync(
+  path.join(outDir, "lextab.js"),
+  "// lextab.js - generated by scripts/gen-pycparser-tables.mjs from m2c_pycparser/lextab.py\n" +
+    "// (PLY lexer tables for pycparser; BSD licence, see NOTICE). Do not edit.\n" +
+    "export default " + JSON.stringify(lexOut, null, 1) + ";\n",
+);
+
+const yacctab = fs.readFileSync(path.join(srcDir, "yacctab.py"), "utf8");
+const actionItems = assignment(yacctab, "_lr_action_items").dict;
+const gotoItems = assignment(yacctab, "_lr_goto_items").dict;
+const productions = assignment(yacctab, "_lr_productions");
+const action = {};
+for (const [k, [states, acts]] of actionItems) {
+  states.forEach((s, j) => { (action[s] ??= {})[k] = acts[j]; });
+}
+const goto = {};
+for (const [k, [states, gs]] of gotoItems) {
+  states.forEach((s, j) => { (goto[s] ??= {})[k] = gs[j]; });
+}
+const yaccOut = {
+  method: assignment(yacctab, "_lr_method"),
+  action,
+  goto,
+  productions: productions.map(([str, name, len, func]) => [str, name, len, func]),
+};
+fs.writeFileSync(
+  path.join(outDir, "yacctab.js"),
+  "// yacctab.js - generated by scripts/gen-pycparser-tables.mjs from m2c_pycparser/yacctab.py\n" +
+    "// (PLY LALR tables for pycparser; BSD licence, see NOTICE). Do not edit.\n" +
+    "export default " + JSON.stringify(yaccOut) + ";\n",
+);
+console.log(`lextab: ${Object.keys(lexOut.statere).length} states; yacctab: ${Object.keys(action).length} states, ${productions.length} productions`);

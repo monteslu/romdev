@@ -1,0 +1,38 @@
+{
+  "name": "romdev-m2c",
+  "version": "0.1.0",
+  "description": "m2c (MIPS/PowerPC/ARM/SuperH to C decompiler) ported to plain JavaScript ESM, for romdev. Output is byte-identical to upstream m2c at the pinned commit.",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./m2c_macros.h": "./m2c_macros.h"
+  },
+  "bin": {
+    "romdev-m2c": "src/cli.js"
+  },
+  "files": [
+    "src",
+    "m2c_macros.h",
+    "LICENSE",
+    "LICENSE.pycparser",
+    "NOTICE"
+  ],
+  "scripts": {
+    "test": "node --test 'test/**/*.test.mjs'"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "license": "GPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/monteslu/romdev.git",
+    "directory": "packages/romdev-m2c"
+  },
+  "homepage": "https://github.com/monteslu/romdev#readme",
+  "bugs": {
+    "url": "https://github.com/monteslu/romdev/issues"
+  },
+  "author": "Luis Montes"
+}
