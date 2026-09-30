@@ -2,10 +2,15 @@
 // target) with the TU's preprocessed context. Output is a CANDIDATE: stored
 // separately, never written into the project's source. The result separates
 // what the context vouched for from what m2c guessed.
+//
+// m2c runs in-process: romdev-m2c is a JS port of upstream m2c at the pinned
+// commit (byte-identical on upstream's test corpus), run in a worker thread.
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createRequire } from "node:module";
+import { decompileInWorker, UPSTREAM as M2C_UPSTREAM } from "romdev-m2c";
 import { run } from "./mips-obj.js";
 import { buildContext, scanContextDeclarations } from "./context.js";
 import { sha256Text } from "./project.js";
@@ -21,16 +26,21 @@ export function toolPaths() {
   const py = path.join(TOOLS_HOME, "venv", "bin", "python");
   return {
     python: fs.existsSync(py) ? py : "python3",
-    m2c: path.join(TOOLS_HOME, "m2c", "m2c.py"),
     permuter: path.join(TOOLS_HOME, "decomp-permuter"),
   };
+}
+
+/** Identity of the in-process m2c port (package name/version + the upstream commit it mirrors). */
+export function m2cEngine() {
+  const pkg = createRequire(import.meta.url)("romdev-m2c/package.json");
+  return { present: true, engine: "js", package: pkg.name, version: pkg.version, commit: M2C_UPSTREAM.commit, pinned: PINNED.m2c.commit, atPin: M2C_UPSTREAM.commit === PINNED.m2c.commit };
 }
 
 /** Identity + presence of the pinned backends (recorded in every result). */
 export async function backendStatus() {
   const t = toolPaths();
-  const out = { toolsHome: TOOLS_HOME, python: t.python, m2c: null, permuter: null };
-  for (const [key, dir, pin] of [["m2c", path.dirname(t.m2c), PINNED.m2c], ["permuter", t.permuter, PINNED.permuter]]) {
+  const out = { toolsHome: TOOLS_HOME, python: t.python, m2c: m2cEngine(), permuter: null };
+  for (const [key, dir, pin] of [["permuter", t.permuter, PINNED.permuter]]) {
     if (!fs.existsSync(dir)) { out[key] = { present: false, path: dir, pinned: pin.commit, setup: `git clone ${pin.repo} ${dir} && git -C ${dir} checkout ${pin.commit}` }; continue; }
     const r = await run("git", ["-C", dir, "rev-parse", "HEAD"]);
     const head = r.stdout.trim();
@@ -48,8 +58,7 @@ export async function backendStatus() {
  * @param {{contextTu?:string, extraArgs?:string[]}} opts
  */
 export async function generateCandidate(project, fn, opts = {}) {
-  const t = toolPaths();
-  if (!fs.existsSync(t.m2c)) throw Object.assign(new Error(`m2c not installed at ${t.m2c}. ${(await backendStatus()).m2c.setup}`), { code: "MISSING_BACKEND" });
+  const engine = m2cEngine();
   const asmRel = fn.targetAsm?.path ?? fn.source?.asmPath ?? null;
   if (!asmRel) throw Object.assign(new Error(`function '${fn.symbol}' has no extracted asm to decompile (state '${fn.source?.state ?? "unknown"}', nothing under ${project.m.splat.asmPath}/)`), { code: "NO_TARGET_ASM" });
   const tuRel = opts.contextTu ?? fn.source?.tu;
@@ -67,10 +76,12 @@ export async function generateCandidate(project, fn, opts = {}) {
   const profile = profileFor(project.m.splatPlatform ?? project.m.platform);
   const compilerKind = project.m.toolchain?.compiler?.kind ?? "ido";
   const m2cTarget = profile.m2cTargetByCompiler[compilerKind] ?? Object.values(profile.m2cTargetByCompiler)[0];
-  const args = [t.m2c, "--target", m2cTarget, "--context", ctxPath, ...(opts.extraArgs ?? []), asmAbs];
+  // args[0] names the engine; the rest are exactly the m2c.py flags.
+  const args = ["romdev-m2c", "--target", m2cTarget, "--context", ctxPath, ...(opts.extraArgs ?? []), asmAbs];
   const t0 = Date.now();
-  const r = await run(t.python, args, { cwd: project.root, env: project.env, timeoutMs: 120_000 });
+  const r = await decompileInWorker(args.slice(1), { timeoutMs: 120_000 });
   const ms = Date.now() - t0;
+  if (r.timedOut) throw Object.assign(new Error(`m2c timed out for ${fn.symbol} after 120 s`), { code: "GENERATION_FAILED" });
   const dir = path.join(project.ws, "candidates", fn.symbol);
   await mkdir(dir, { recursive: true });
   const raw = r.stdout;
@@ -105,7 +116,7 @@ export async function generateCandidate(project, fn, opts = {}) {
   const candPath = path.join(dir, `gen-${n}.c`);
   const candidateText = parsed.body.trim() + "\n";
   await writeFile(candPath, candidateText);
-  await writeFile(candPath.replace(/\.c$/, ".json"), JSON.stringify({ symbol: fn.symbol, asm: asmRel, context: ctx, backend: { name: "m2c", commit: (await backendStatus()).m2c?.commit, target: m2cTarget }, args, stderr: stderr.slice(-2000), declarations: parsed.declarations }, null, 2));
+  await writeFile(candPath.replace(/\.c$/, ".json"), JSON.stringify({ symbol: fn.symbol, asm: asmRel, context: ctx, backend: { name: "m2c", commit: engine.commit, engine: `${engine.package}@${engine.version}`, target: m2cTarget }, args, stderr: stderr.slice(-2000), declarations: parsed.declarations }, null, 2));
   return {
     kind: "pseudocode-candidate", note: "m2c output is a DRAFT: compile it with decomp({op:'compare'}) before believing any of it.",
     candidatePath: candPath, candidateSha256: sha256Text(candidateText).slice(0, 16), code: candidateText,
@@ -113,7 +124,7 @@ export async function generateCandidate(project, fn, opts = {}) {
     contextPrototype: contextPrototype(ctxText, fn.symbol),
     targetAsm: asmRel,
     context: { path: ctxPath, hash: ctx.hash, cacheHit: ctx.cacheHit, dependencies: ctx.deps, tu: tuRel, extraContext: opts.extraContext ? { chars: opts.extraContext.length, note: "proposed declarations were appended to the context; pass the same text as `declarations` to compare/integrate" } : undefined },
-    backend: { name: "m2c", target: m2cTarget, compilerKind, commit: (await backendStatus()).m2c?.commit, python: t.python, ms },
+    backend: { name: "m2c", target: m2cTarget, compilerKind, commit: engine.commit, engine: `${engine.package}@${engine.version}`, ms },
     warnings: stderr.trim() ? stderr.trim().split("\n").slice(-8) : [],
   };
 }

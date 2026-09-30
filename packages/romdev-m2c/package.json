@@ -6,7 +6,8 @@
   "main": "src/index.js",
   "exports": {
     ".": "./src/index.js",
-    "./m2c_macros.h": "./m2c_macros.h"
+    "./m2c_macros.h": "./m2c_macros.h",
+    "./package.json": "./package.json"
   },
   "bin": {
     "romdev-m2c": "src/cli.js"

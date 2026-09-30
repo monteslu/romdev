@@ -126,3 +126,9 @@ Bundled data  (reference-core-derived recompiler data)
   gpgx ships it) are likewise under the Genesis Plus GX license
   (NON-COMMERCIAL). SMS / Game Gear and Genesis wasmcarts built with sound
   (the default) contain code ported from them.
+
+m2c (decompiler) - romdevtools depends on the separate romdev-m2c package,
+a JavaScript port of m2c (https://github.com/matt-kempster/m2c) licensed
+GPL-3.0, with its own LICENSE and NOTICE (which also covers the pycparser and
+PLY BSD-3 code it contains). romdevtools only invokes it; the pseudocode it
+generates for the user's project is a draft of the user's own work.
