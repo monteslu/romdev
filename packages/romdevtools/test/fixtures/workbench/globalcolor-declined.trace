@@ -1,0 +1,17 @@
+# Synthetic globalcolor trace. Hand-written to exercise the two facts
+# `globalcolor.pass_evidence` reads, and nothing else: no compiler produced
+# it and no ROM is behind it. The register names, procedure and web numbers
+# are invented and are not causally related to any real compilation.
+#
+# proc=1 web=7 is the residual under test. It lost its colour at the moment
+# the allocator had none left (regsleft=0), and a force onto the colour it
+# wanted was declined -- which is the difference between a register that was
+# *taken* and one that was merely underpriced. Either fact alone settles
+# ownership; both are here so a reader can see they are the same finding
+# through two instruments.
+[CDX] p1dec proc=1 web=7 class=1 decision=no-color regsleft=0 bestreg=?
+[CDX] force_declined phase=p1 site=color proc=1 web=7 color=12
+# proc=2 web=3 is the control: a web that was coloured with registers to
+# spare. Scoping --trace-proc/--trace-web to it settles nothing, which is
+# what keeps a whole-compilation trace from being read as this residual's.
+[CDX] p1dec proc=2 web=3 class=1 decision=color regsleft=4 bestreg=8
