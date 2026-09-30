@@ -25,9 +25,9 @@ export const MERGED_DIRECTORY = "merged";
 export const RESERVED_DIRECTORY = "reserved";
 export const RESERVATION_SCHEMA = "decomp-workbench-note-reservation-v1";
 const NUMBERED_ID_RE = /^(?<prefix>[A-Za-z][A-Za-z0-9_.]*)-(?<number>\d+)$/;
-const HEADING_RE = /^#{2,}\s+(?<id>[A-Za-z][A-Za-z0-9_.]*[-_]?\d[A-Za-z0-9_.-]*)\s*(?:[-—:]+\s*)?(?<title>.*)$/;
+const HEADING_RE = /^#{2,}\s+(?<id>[A-Za-z][A-Za-z0-9_.]*[-_]?\d[A-Za-z0-9_.-]*)\s*(?:[-\u2014:]+\s*)?(?<title>.*)$/;
 const STATUS_RE = /^\s*\*{0,2}Status\*{0,2}\s*:\s*\*{0,2}\s*(?<status>.+?)\s*$/;
-const DASH = "—";
+const DASH = "\u2014";
 
 /** A note could not be written or read; every message names the file and the fix. */
 export class NoteError extends ValueError {
