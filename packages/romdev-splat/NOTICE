@@ -1,0 +1,47 @@
+romdev-splat
+============
+
+This package is a JavaScript port of splat, the binary splitting tool used by
+N64/PS1 decompilation projects, made for romdev. Its output (assembly files,
+linker scripts, dependency files, undefined symbol files, binary and image
+assets, C stubs, symbol dumps) is byte-identical to Python splat's for the
+same inputs. It is licensed under the MIT License (see LICENSE).
+
+Components and attribution
+--------------------------
+
+1. splat
+   https://github.com/ethteck/splat
+   Ported from splat64 0.37.1 (PyPI sdist / tag v0.37.1), with the behaviour
+   of splat64 0.34.1 reproduced behind a version option.
+   Copyright (c) 2021 Ethan Roseman and the splat contributors.
+   Licensed under the MIT License (LICENSE).
+   src/**/*.js are module-by-module translations of splat/**/*.py
+   (scripts/split.py, util/, segtypes/, disassembler/, platforms/).
+
+2. n64img
+   https://github.com/decompals/n64img
+   src/n64img/image.js is a translation of n64img 0.3.3 (image.py, iter.py).
+   Copyright (c) 2022 Decompals. MIT License (LICENSE).
+
+3. pypng
+   https://gitlab.com/drj11/pypng
+   src/n64img/png.js translates the Writer code paths of png.py
+   (pypng 0.20220715.0) that n64img uses.
+   Copyright (C) 2006 Johann C. Rocholl, portions (C) 2009 David Jones,
+   (C) 2006 Nicko van Someren. MIT License (LICENSE).
+
+4. zlib
+   https://zlib.net
+   src/wasm/zlib-stream.wasm is vanilla zlib (emscripten's zlib port,
+   emsdk 4.0.18: zlib 1.3.1) with a small stream API
+   (packages/romdevtools/scripts/src/zlib-stream.c in the romdev repository,
+   built by scripts/build-zlib-wasm.sh). zlib License (LICENSE).
+
+5. Project extension segtypes
+   src/ext/index.js contains JS translations of splat extension segtypes
+   (extensions_path/*.py) shipped by specific decompilation projects, each
+   identified by the sha256 of its Python source.
+
+Not contained in this package: the disassembler (romdev-spimdisasm, a port
+of spimdisasm, and romdev-rabbitizer), loaded at run time.

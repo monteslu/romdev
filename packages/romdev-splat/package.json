@@ -1,0 +1,42 @@
+{
+  "name": "romdev-splat",
+  "version": "0.1.0",
+  "description": "splat (the N64/PS1 decomp binary splitter) ported to plain JavaScript ESM, for romdev. Output is byte-identical to Python splat 0.37.1 / 0.34.1.",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "romdev-splat": "src/cli.js"
+  },
+  "files": [
+    "src",
+    "scripts",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "scripts": {
+    "test": "node --test --test-concurrency=4 'test/**/*.test.mjs'"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/monteslu/romdev.git",
+    "directory": "packages/romdev-splat"
+  },
+  "homepage": "https://github.com/monteslu/romdev#readme",
+  "bugs": {
+    "url": "https://github.com/monteslu/romdev/issues"
+  },
+  "author": "Luis Montes",
+  "dependencies": {
+    "romdev-rabbitizer": "0.1.0",
+    "romdev-spimdisasm": "0.1.0",
+    "yaml": "2.9.0"
+  }
+}
