@@ -1,0 +1,30 @@
+{
+  "name": "romdev-toolchain-decomp-gcc",
+  "version": "0.1.0",
+  "description": "The gcc toolchains N64 matching-decompilation projects pin (KMC gcc 2.7.2: driver, cccp, cc1, and its binutils 2.6 assembler), bundled as WASM for romdev's decomp domain.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./wasm/*": "./wasm/*"
+  },
+  "files": [
+    "index.js",
+    "wasm",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "license": "GPL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/monteslu/romdev.git",
+    "directory": "packages/romdev-toolchain-decomp-gcc"
+  },
+  "homepage": "https://github.com/monteslu/romdev#readme",
+  "bugs": {
+    "url": "https://github.com/monteslu/romdev/issues"
+  },
+  "author": "Luis Montes"
+}

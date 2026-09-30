@@ -313,6 +313,29 @@
       ],
       "note": "Assembler for the N64 RSP microcode a decomp project rebuilds from source. Built to WASM by build-armips.sh with std::filesystem (no ext/filesystem submodule); ships in romdev-toolchain-ido beside the other decomp build tools. The commit N64 decomp projects' armips install scripts pin."
     },
+    "kmc_gcc": {
+      "kind": "git",
+      "url": "https://github.com/decompals/mips-gcc-2.7.2.git",
+      "ref": "main",
+      "commit": "43d1cdb67ed135879869b5266f01efaaada5e35a",
+      "license": "GPL-2.0",
+      "patch": "scripts/patches/kmc-gcc-2.7.2-wasm.patch",
+      "platforms": [
+        "n64"
+      ],
+      "note": "gcc 2.7.2 as N64 SDK (KMC) decomp projects compile with: the driver, cccp and cc1, built to WASM by build-decomp-gcc.sh into romdev-toolchain-decomp-gcc (wasm/kmc-2.7.2/)."
+    },
+    "kmc_binutils": {
+      "kind": "git",
+      "url": "https://github.com/decompals/mips-binutils-2.6.git",
+      "ref": "master",
+      "commit": "54514ded39ceb32165a125ddba04ca5b551773a2",
+      "license": "GPL-2.0",
+      "platforms": [
+        "n64"
+      ],
+      "note": "The binutils 2.6 assembler (with --force-n64align) paired with KMC gcc 2.7.2; built to WASM by build-decomp-gcc.sh."
+    },
     "ido_static_recomp": {
       "kind": "git",
       "url": "https://github.com/decompals/ido-static-recomp.git",
