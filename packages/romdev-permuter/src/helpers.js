@@ -22,7 +22,8 @@ export function trim_source(source, fn_name) {
 
 /**
  * Parse the TOML subset settings.toml / default_weights.toml use: tables,
- * `key = value` with strings, integers, floats, booleans and flat arrays, and
+ * `key = value` with strings (multi-line ones included), integers, floats,
+ * booleans and flat arrays, and
  * comments. Anything else is rejected rather than guessed.
  * @returns {Record<string, any>}
  */
@@ -45,7 +46,26 @@ export function parseToml(text) {
     m = /^([A-Za-z0-9_-]+|"[^"]*")\s*=\s*(.+)$/.exec(line);
     if (!m) throw new Error(`TOML: cannot parse line ${ln + 1}: ${lines[ln]}`);
     const key = m[1].startsWith("\"") ? m[1].slice(1, -1) : m[1];
-    cur[key] = parseTomlValue(m[2].trim(), ln + 1);
+    const rest = m[2].trim();
+    const delim = rest.startsWith('"""') ? '"""' : rest.startsWith("'''") ? "'''" : null;
+    if (delim) {
+      // Multi-line string (settings.toml's compiler_command): a newline right
+      // after the opening delimiter is trimmed; basic strings take escapes.
+      let body = rest.slice(3);
+      let end = body.indexOf(delim);
+      const startLine = ln;
+      while (end < 0) {
+        if (++ln >= lines.length) throw new Error(`TOML: unterminated multi-line string on line ${startLine + 1}`);
+        body += "\n" + lines[ln];
+        end = body.indexOf(delim);
+      }
+      if (body.slice(end + 3).trim() && !body.slice(end + 3).trim().startsWith("#")) throw new Error(`TOML: text after a multi-line string on line ${ln + 1}`);
+      body = body.slice(0, end);
+      if (body.startsWith("\n")) body = body.slice(1);
+      cur[key] = delim === "'''" ? body : JSON.parse(`"${body.replace(/\\\s*\n\s*/g, "").replace(/\n/g, "\\n").replace(/"/g, (q, i, s) => (s[i - 1] === "\\" ? q : '\\"'))}"`);
+      continue;
+    }
+    cur[key] = parseTomlValue(rest, ln + 1);
   }
   return root;
 }
