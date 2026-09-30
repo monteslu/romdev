@@ -6,11 +6,16 @@
 
 /** Sequence aligner over arrays of strings (or other ===-comparable keys). */
 export class SequenceMatcher {
-  constructor(a = [], b = []) {
+  /** autojunk: drop elements of b that occur in more than 1% of a 200+ item b, as the default matcher does. */
+  constructor(a = [], b = [], { autojunk = false } = {}) {
     this.a = a; this.b = b;
     this.matchingBlocks = null; this.opcodes = null;
     const b2j = new Map();
     b.forEach((elt, i) => { let l = b2j.get(elt); if (!l) { l = []; b2j.set(elt, l); } l.push(i); });
+    if (autojunk && b.length >= 200) {
+      const ntest = Math.floor(b.length / 100) + 1;
+      for (const [elt, idxs] of [...b2j]) if (idxs.length > ntest) b2j.delete(elt);
+    }
     this.b2j = b2j;
   }
 
@@ -80,4 +85,55 @@ export class SequenceMatcher {
     this.opcodes = answer;
     return answer;
   }
+}
+
+/** get_grouped_opcodes(n): change clusters with up to n lines of context. */
+export function groupedOpcodes(matcher, n = 3) {
+  let codes = matcher.getOpcodes().map((c) => [...c]);
+  if (!codes.length) codes = [["equal", 0, 1, 0, 1]];
+  if (codes[0][0] === "equal") { const [tag, i1, i2, j1, j2] = codes[0]; codes[0] = [tag, Math.max(i1, i2 - n), i2, Math.max(j1, j2 - n), j2]; }
+  if (codes.at(-1)[0] === "equal") { const [tag, i1, i2, j1, j2] = codes.at(-1); codes[codes.length - 1] = [tag, i1, Math.min(i2, i1 + n), j1, Math.min(j2, j1 + n)]; }
+  const nn = n + n;
+  const groups = [];
+  let group = [];
+  for (let [tag, i1, i2, j1, j2] of codes) {
+    if (tag === "equal" && i2 - i1 > nn) {
+      group.push([tag, i1, Math.min(i2, i1 + n), j1, Math.min(j2, j1 + n)]);
+      groups.push(group);
+      group = [];
+      i1 = Math.max(i1, i2 - n); j1 = Math.max(j1, j2 - n);
+    }
+    group.push([tag, i1, i2, j1, j2]);
+  }
+  if (group.length && !(group.length === 1 && group[0][0] === "equal")) groups.push(group);
+  return groups;
+}
+
+function unifiedRange(start, stop) {
+  let beginning = start + 1;
+  const length = stop - start;
+  if (length === 1) return `${beginning}`;
+  if (!length) beginning -= 1;
+  return `${beginning},${length}`;
+}
+
+/** unified_diff(a, b, fromfile, tofile, lineterm="", n) with the default (autojunk) matcher. */
+export function unifiedDiff(a, b, { fromfile = "", tofile = "", fromfiledate = "", tofiledate = "", n = 3, lineterm = "\n" } = {}) {
+  const out = [];
+  let started = false;
+  for (const group of groupedOpcodes(new SequenceMatcher(a, b, { autojunk: true }), n)) {
+    if (!started) {
+      started = true;
+      out.push(`--- ${fromfile}${fromfiledate ? "\t" + fromfiledate : ""}${lineterm}`);
+      out.push(`+++ ${tofile}${tofiledate ? "\t" + tofiledate : ""}${lineterm}`);
+    }
+    const first = group[0], last = group.at(-1);
+    out.push(`@@ -${unifiedRange(first[1], last[2])} +${unifiedRange(first[3], last[4])} @@${lineterm}`);
+    for (const [tag, i1, i2, j1, j2] of group) {
+      if (tag === "equal") { for (const line of a.slice(i1, i2)) out.push(" " + line); continue; }
+      if (tag === "replace" || tag === "delete") for (const line of a.slice(i1, i2)) out.push("-" + line);
+      if (tag === "replace" || tag === "insert") for (const line of b.slice(j1, j2)) out.push("+" + line);
+    }
+  }
+  return out;
 }
