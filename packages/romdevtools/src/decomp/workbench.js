@@ -51,13 +51,16 @@ export function locateWorkbench() {
 
 /** Run one workbench command in process. Never throws on exit 1 - that is an answer. */
 export async function runWorkbench(args, { cwd, json = true, env: extraEnv } = {}) {
-  const argv = [...args, ...(json && !args.includes("--json") ? ["--json"] : [])];
+  // --json only where the command has it: a command without a JSON report
+  // (instrument globalcolor writes a file and prints one line) would reject it.
+  const wantsJson = json && !args.includes("--json") && specAcceptsFlag(args, "--json");
+  const argv = [...args, ...(wantsJson ? ["--json"] : [])];
   // The PROJECT's environment matters: a project-local binutils is built
   // against project-local shared objects, so running its objdump without the
   // project's LD_LIBRARY_PATH fails with a missing-library error.
   const r = await runCommand(argv, { cwd: cwd ?? process.cwd(), env: extraEnv ?? {} });
   let parsed = null;
-  if (json) { try { parsed = JSON.parse(r.stdout); } catch {} }
+  if (json && argv.includes("--json")) { try { parsed = JSON.parse(r.stdout); } catch {} }
   return { code: r.code, meaning: WORKBENCH_EXIT[r.code] ?? "unknown", stdout: r.stdout, stderr: r.stderr, argv: [PROG, ...argv], json: parsed };
 }
 
