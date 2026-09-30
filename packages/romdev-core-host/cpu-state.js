@@ -589,6 +589,26 @@ export function getCPUState(host, platform, cpu = "main") {
       if (bits !== 0) fpu["S" + i] = asFloat(bits);
     }
     const itstate = u32(49);
+    // Frame timing from the core's deterministic cycle model (sync32_timing,
+    // absent on older core builds): the last frame's work cycles against the
+    // ABI floor. The floor is the console's guarantee (150 MHz-equivalent);
+    // shipping boards clock core 0 at 252 or 315 MHz, so those budgets are
+    // reported too, as context.
+    const tm = readU32s(host, "sync32_timing", 10);
+    const timing = tm && tm[0] === 0x54323353 ? (() => {
+      const floor = tm[2], mhz = tm[3], fc = tm[5];
+      const budget = (m) => Math.round(floor * m / mhz);
+      return {
+        frameCycles: fc,
+        framesPresented: tm[4],
+        totalCycles: tm[6] + tm[7] * 2 ** 32,
+        floorCycles: floor,
+        floorClockMHz: mhz,
+        pctOfFloor: Math.round(fc / floor * 10000) / 100,
+        budgets: { floor150MHz: floor, mhz252: budget(252), mhz315: budget(315) },
+        note: "frameCycles = CPU cycles the cart spent between the previous present() and this one (the vblank wait excluded), from s32core's cycle model; costs are estimates until calibrated on hardware (no flash wait-state or XIP cache model).",
+      };
+    })() : null;
     return {
       pc: gprs[15],
       sp: gprs[13],
@@ -603,6 +623,7 @@ export function getCPUState(host, platform, cpu = "main") {
       // touches the FPU stays readable.
       ...(Object.keys(fpu).length ? { fpu } : {}),
       ...(itstate ? { itstate: hex32(itstate) } : {}),
+      ...(timing ? { coreInternal: timing } : {}),
       note: "Cortex-M33 is always Thumb. PC is the NEXT instruction to execute " +
         "(this is an interpreter, so there is no pipeline offset to undo). " +
         "Registers are decimal; flags.raw is the packed APSR (N|Z|C|V|Q in bits 4..0). " +

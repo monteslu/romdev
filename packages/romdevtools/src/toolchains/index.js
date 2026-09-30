@@ -1128,7 +1128,9 @@ export async function buildForPlatform(args) {
       ok: r.exitCode === 0 && r.binary !== null,
       binary: r.binary,
       listing: "",
-      symbols: "",
+      // The GNU ld map: symbols({op:resolve}) / addressToSymbol and
+      // includeSymbols:true work on a sync32 cart like on the GBA.
+      symbols: r.map ?? "",
       map: r.map ?? "",
       log: r.log,
       issues: parseBuildLog(r.log),

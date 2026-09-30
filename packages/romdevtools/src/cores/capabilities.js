@@ -261,7 +261,7 @@ export const CAPABILITIES = {
     // system_ram IS the console's 520KB SRAM at 0x20000000 - a game's globals,
     // its stack, and in ram mode its code. The sync32_* regions are the
     // debugger views the core exposes on top.
-    memoryRegions: ["system_ram", "sync32_cpu_regs", "sync32_palette", "sync32_canvas", "sync32_sheet0"],
+    memoryRegions: ["system_ram", "sync32_cpu_regs", "sync32_palette", "sync32_canvas", "sync32_sheet0", "sync32_timing", "sync32_profile"],
     renderingKind: "framebuffer", introspection: "shallow",
     // The framebuffer region the flat-renderer naReasons point at (the shared
     // text used to name `video_ram`, which this platform does not have).

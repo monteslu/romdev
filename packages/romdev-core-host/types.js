@@ -25,7 +25,7 @@
  *   | "c64_color_ram" | "c64_vic_regs" | "c64_sid_regs"
  *   | "c64_cia1_regs" | "c64_cia2_regs" | "c64_cpu_regs"
  *   | "gba_cpu_regs" | "gba_io_regs" | "gba_palette" | "gba_oam" | "gba_iwram" | "gba_audio_raw"
- *   | "sync32_cpu_regs" | "sync32_palette" | "sync32_canvas"
+ *   | "sync32_cpu_regs" | "sync32_palette" | "sync32_canvas" | "sync32_timing" | "sync32_profile"
  *   | "lynx_cpu_regs" | "lynx_hw_regs"
  *   | "pce_vdc_vram" | "pce_vdc_satb" | "pce_vdc_regs"
  *   | "pce_vce_palette" | "pce_cpu_regs" | "pce_psg_regs"
@@ -182,6 +182,18 @@ export const RetroMemory = {
   SYNC32_CPU_REGS:    0x1A0,   // Cortex-M33: r0-r15, APSR, s0-s31, ITSTATE
   SYNC32_PALETTE:     0x1A1,   // 256 entries, RGB565
   SYNC32_CANVAS:      0x1A2,   // the 320x240 8-bit indexed framebuffer
+  /** Frame timing, u32 LE: [0] 'S32T', [1] layout version, [2] ABI floor
+   *  cycles per frame, [3] floor clock MHz, [4] frames presented, [5] last
+   *  frame's work cycles, [6..7] total cycles lo/hi, [8] history capacity,
+   *  [9] frames recorded; [16..] ring of per-frame work cycles, recorded
+   *  frame k (1-based) at 16 + (k - 1) % capacity. */
+  SYNC32_TIMING:      0x1A3,
+  /** pc-sampling profiler, u32 LE, WRITABLE control block: [0] 'S32P',
+   *  [1] enable, [2] base address, [3] shift, [4] bucket count, [5] active
+   *  (core-set), [6] clear request, [7] frames profiled; [16..] buckets of
+   *  CPU cycles, bucket (pc - base) >> shift, the last one also collecting
+   *  every pc outside the window. The vblank idle snap is excluded. */
+  SYNC32_PROFILE:     0x1A4,
   // Sprite sheets 0..31 at 0x1B0+n: 8-bit indices into the palette. sync32 has
   // no OAM - a game blits from these with api->sprite() - so the sheets ARE
   // the sprite data. Only sheet0 is named here; the rest are reachable by id.
@@ -349,6 +361,8 @@ export const MemoryRegionToRetro = {
   sync32_cpu_regs: RetroMemory.SYNC32_CPU_REGS,
   sync32_palette:  RetroMemory.SYNC32_PALETTE,
   sync32_canvas:   RetroMemory.SYNC32_CANVAS,
+  sync32_timing:   RetroMemory.SYNC32_TIMING,
+  sync32_profile:  RetroMemory.SYNC32_PROFILE,
   sync32_sheet0:   RetroMemory.SYNC32_SHEET0,
   lynx_cpu_regs: RetroMemory.LYNX_CPU_REGS,
   lynx_hw_regs:  RetroMemory.LYNX_HW_REGS,
