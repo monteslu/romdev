@@ -513,3 +513,36 @@ test("EGCS 1.1.2 (WASM driver, cccp, cc1, binutils 2.9.5 as) compiles a TU throu
   assert.ok(words.includes(0x00041840) || words.includes(0x00041040), words.map((w) => w.toString(16)).join(" "));
   assert.ok(e.section(".mdebug"), "-g writes ECOFF .mdebug through as 2.9.5");
 });
+
+test("maspsx port: nops, $at expansion, gp-relative loads and div expansion as maspsx writes them", async () => {
+  const { MaspsxProcessor, maspsxMain } = await import("../src/decomp/maspsx.js");
+  const clean = (lines) => lines.map((l) => l.split("#")[0].trim()).filter((l) => l.length);
+  // maspsx tests/test_at.py
+  assert.deepEqual(clean(new MaspsxProcessor(["lh\t$2,32767($2)", "lh\t$2,32767($2)"]).processLines()), ["lh\t$2,32767($2)", "nop", "lh\t$2,32767($2)"]);
+  assert.deepEqual(clean(new MaspsxProcessor(["lh\t$2,32767($2)", "lh\t$2,32768($2)"], { nopAtExpansion: true }).processLines()),
+    ["lh\t$2,32767($2)", "nop", ".set\tnoat", "lui\t$at,%hi(32768)", "addu\t$at,$2,$at", "lh\t$2,%lo(32768)($at)", ".set\tat"]);
+  // small data: -G8 turns a load of an .sdata symbol gp-relative, and appends .sbss for small .comm
+  const g = clean(new MaspsxProcessor([".sdata", "x:", ".word\t1", ".text", "lw\t$2,x", "addu\t$3,$4,$5", ".comm\ty,4"], { sdataLimit: 8 }).processLines());
+  assert.ok(g.includes("lw\t$2,%gp_rel(x)($gp)"), g.join("|"));
+  assert.deepEqual(g.slice(-4), [".section .sbss", ".align 2", "y:", ".space 4"]);
+  // command line: --expand-div with the aspsx version gate, output framed like maspsx.py
+  const r = maspsxMain(["--expand-div", "--aspsx-version=2.34"], { stdin: Buffer.from("\tdiv\t$2,$4,$5\n\taddu\t$3,$2,$4\n") });
+  assert.equal(r.code, 0, r.stderr);
+  assert.ok(r.stdout.startsWith("\n# EXPAND_DIV START\n.set\tnoat\ndiv\t$zero,$4,$5\nbnez\t$5,.L_NOT_DIV_BY_ZERO_0\n"), r.stdout);
+  assert.ok(r.stdout.endsWith("\n"));
+  const bad = maspsxMain([], { stdin: Buffer.from("\tlw\t$2,(\n") });
+  assert.equal(bad.code, 1);
+  assert.match(bad.stderr, /MASPSX: An exception occurred: Unable to parse load\/store instruction/);
+});
+
+test("PS1 gcc 2.6.3-psx cc1 (WASM) compiles little-endian R3000 code through a cc1-psx-26 recipe step", async () => {
+  const d = dir("psx");
+  fs.mkdirSync(path.join(d, "bin"), { recursive: true });
+  fs.writeFileSync(path.join(d, "t.c"), "unsigned char lo(unsigned int *p) { return *(unsigned char *)p; }\n");
+  assert.equal(classifyCommand(["bin/cc1-psx-26"]).family, "psx-gcc-2.6.3");
+  const r = await runRecipeLine("bin/cc1-psx-26 -G0 -O2 -quiet -mcpu=3000 -msoft-float -mgas t.c -o t.s", { cwd: d, tmpRoot: dir("psx-tmp") });
+  assert.equal(r.code, 0, r.log);
+  const s = fs.readFileSync(path.join(d, "t.s"), "utf8");
+  assert.match(s, /lbu\s+\$2,0\(\$4\)/, "the low byte of a little-endian word is at offset 0");
+  assert.match(s, /Sony Playstation/);
+});

@@ -12,7 +12,9 @@
 //   mips-*-{as,ld,objcopy,objdump}         -> WASM mips-linux-gnu binutils
 //   <python> .../asm-processor/build.py      -> JS asm-processor
 //   <python> .../set_o32abi_bit.py           -> JS
-//   <python> <ported project script>.py      -> JS (PORTED_SCRIPTS, by sha256)
+//   <python> <ported project script>.py      -> JS (PORTED_SCRIPTS, by sha256;
+//                                              maspsx included)
+//   cc1-psx-26 (.../gcc-2.6.3-psx/cc1)        -> WASM gcc 2.6.3-psx
 //   uv run <command>                         -> <command>
 //   cpp / clang -E / gcc -E                -> WASM cc1 -E (cpp.js)
 //   iconv / n64crc / sha1sum / md5sum / printf / echo / mkdir / rm / cp / touch / : / true
@@ -27,6 +29,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { asmProcessorBuild } from "./asm-processor.js";
 import { idoCompile, binutils, toolName, armips, decompGcc, decompTool } from "./toolchain.js";
 import { preprocess } from "./cpp.js";
+import { maspsxMain } from "./maspsx.js";
 import { iconv, parseIconvArgs, n64crcFile, setO32AbiBit, buildAssetContainer, incFromBin, msgReencode, n64ChecksumUpdate, romCompress } from "./host-ports.js";
 
 // Project scripts with a JS port, by the exact script content ported (sha256).
@@ -39,6 +42,8 @@ const PORTED_SCRIPTS = {
   "inc_from_bin.py": { kind: "inc-from-bin", sha256: ["d403a21ce83e75870afbad867b010ede9e700c881982c5d83b850c0cbdbbe7b0"] },
   "msg_reencoder.py": { kind: "msg-reencoder", sha256: ["c3e9cce705bfd65b787f35bb199504b4d1d183f4ae8fa2849223e6779208f420"] },
   "checksummer.py": { kind: "n64-checksummer", sha256: ["c7bbf85dc06165b44af768d83f4d1926debfa02710d4afb72fcc98f80c304516"] },
+  "maspsx.py": { kind: "maspsx", sha256: ["38c090123ad707fb28c40013121c71036a763ec3b787a5c6ab6b55752d1166ae"],
+    helpers: { "maspsx/__init__.py": ["043e2480f05f9dc433eed14ad5b3ef60a379d9a988250822741fe4e15b359d33"] } },
   "rom_compressor.py": { kind: "rom-compressor", sha256: ["4ed8bab52b3d8d7fb8bf8fdb3edffd8473a436ba8917fc928be52c9b5b863d9c"],
     helpers: { "compression_common.py": ["4ae0c40605478dea0f17194f9a855d53b1d3d37d5e929e51bf39b6f906a1cb5e"] } },
 };
@@ -149,7 +154,7 @@ export function classifyCommand(argv, cwd = process.cwd()) {
   }
   const tn = toolName(prog);
   if (tn?.kind === "ido") return { kind: "ido", version: tn.version, program: tn.program };
-  if (tn?.kind === "binutils") return { kind: "binutils", tool: tn.tool };
+  if (tn?.kind === "binutils") return { kind: "binutils", tool: tn.tool, littleEndian: /^mipsel/.test(tn.prefix) };
   if (tn?.kind === "armips") return { kind: "armips" };
   if (tn?.kind === "decomp-tool") return { kind: "decomp-tool", tool: tn.tool };
   if (tn?.kind === "decomp-gcc") return { kind: "decomp-gcc", family: tn.family, program: tn.program };
@@ -230,7 +235,9 @@ async function runOne(argv, cls, ctx) {
       return { code: r.exitCode, log: r.log };
     }
     case "binutils": {
-      const r = await binutils(cls.tool, argv.slice(1), { cwd, stdin: ctx.stdin ?? undefined });
+      // mipsel-linux-gnu-* is the same toolchain defaulting to little-endian.
+      const endian = cls.littleEndian && (cls.tool === "as" || cls.tool === "ld") && !argv.includes("-EB") ? ["-EL"] : [];
+      const r = await binutils(cls.tool, [...endian, ...argv.slice(1)], { cwd, stdin: ctx.stdin ?? undefined });
       return { code: r.exitCode, log: r.stderr ?? r.log, stdout: Buffer.from(r.stdout ?? "", "latin1") };
     }
     case "asm-processor": {
@@ -303,6 +310,16 @@ async function runOne(argv, cls, ctx) {
     case "decomp-tool": {
       const r = await decompTool(cls.tool, argv.slice(1), { cwd });
       return { code: r.exitCode, log: r.log };
+    }
+    case "maspsx": {
+      const args = argv.slice(argv.indexOf(cls.script) + 1);
+      // A recipe step with no piped input reads maspsx's input file argument.
+      const r = maspsxMain(args, { stdin: ctx.stdin ?? Buffer.alloc(0), readFile: (f) => fs.readFileSync(path.resolve(cwd, f)) });
+      if (r.code !== 0 || !r.runAssembler) return { code: r.code, log: r.stderr, stdout: Buffer.from(r.stdout, "utf8") };
+      const asCls = classifyCommand([r.runAssembler.argv[0]], cwd);
+      if (asCls.kind !== "binutils" || asCls.tool !== "as") throw new Unsupported(`maspsx --gnu-as-path '${r.runAssembler.argv[0]}' has no WASM equivalent`);
+      const x = await runOne(r.runAssembler.argv, asCls, { ...ctx, stdin: Buffer.from(r.runAssembler.input, "utf8") });
+      return { code: x.code, log: r.stderr + (x.log ?? ""), stdout: x.stdout };
     }
     case "inc-from-bin": case "msg-reencoder": case "n64-checksummer": case "rom-compressor":
       return runPortedScript(cls, argv.slice(argv.indexOf(cls.script) + 1), ctx);

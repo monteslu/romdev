@@ -27,6 +27,8 @@ const BINUTILS = ["as", "ld", "objcopy", "objdump"];
 export const DECOMP_GCC = {
   "kmc-2.7.2": { dir: "kmc-2.7.2", programs: ["gcc", "cpp", "cc1", "as"], aliases: { xgcc: "gcc", cccp: "cpp" } },
   "egcs-1.1.2": { dir: "egcs-1.1.2", programs: ["gcc", "cpp", "cc1", "as"], aliases: { xgcc: "gcc", cccp: "cpp" } },
+  // PS1: projects run cc1 directly (decompals/old-gcc gcc-2.6.3-psx).
+  "psx-gcc-2.6.3": { dir: "psx-gcc-2.6.3", programs: ["cc1", "cpp"], aliases: { "cc1-psx-26": "cc1", cccp: "cpp" } },
   "mips-linux-gnu-14.2": {
     dir: "mips-linux-gnu-14.2", programs: ["gcc", "cpp", "cc1"], binutilsAs: true,
     aliases: { "mips-linux-gnu-gcc": "gcc", "mips-linux-gnu-cpp": "cpp", "mips-linux-gnu-cc1": "cc1", xgcc: "gcc" },
@@ -76,6 +78,7 @@ export function binutilsGlue(tool) {
 export function decompGccFamily(cmd) {
   const base = path.basename(cmd);
   if (/^mips-linux-gnu-(gcc|cpp)$/.test(base)) return "mips-linux-gnu-14.2";
+  if (base === "cc1-psx-26" || (/^(cc1|cpp|cccp)$/.test(base) && /(^|\/)gcc-2\.6\.3-psx(\/|$)/.test(path.dirname(cmd)))) return "psx-gcc-2.6.3";
   if (!/(^|\/)(gcc|xgcc|cpp|cccp|cc1|as)$/.test(base)) return null;
   if (/(^|\/)2\.7\.2(\/|$)/.test(path.dirname(cmd)) || /(^|[/_-])kmc([/_-]|$)/i.test(path.dirname(cmd))) return "kmc-2.7.2";
   if (/(^|\/)(1\.1\.2|2\.91\.66)(-\d+)?(\/|$)/.test(path.dirname(cmd)) || /(^|[/_-])egcs([/_-]|$)/i.test(path.dirname(cmd))) return "egcs-1.1.2";
@@ -86,7 +89,7 @@ export function decompGccPrograms(family) {
   const f = DECOMP_GCC[family];
   if (!f) throw Object.assign(new Error(`no decomp gcc '${family}' (have ${Object.keys(DECOMP_GCC).join(", ")})`), { code: "UNSUPPORTED_COMPILER" });
   const dir = path.join(packageDir("romdev-toolchain-decomp-gcc"), "wasm", f.dir);
-  if (!existsSync(path.join(dir, "gcc.wasm"))) throw Object.assign(new Error(`${dir} missing (${f.binutilsAs ? "scripts/build-mips-linux-gcc-wasm.sh" : "scripts/build-decomp-gcc.sh"})`), { code: "TOOLCHAIN_MISSING" });
+  if (!existsSync(path.join(dir, `${f.programs[0]}.wasm`))) throw Object.assign(new Error(`${dir} missing (${f.binutilsAs ? "scripts/build-mips-linux-gcc-wasm.sh" : "scripts/build-decomp-gcc.sh"})`), { code: "TOOLCHAIN_MISSING" });
   const programs = Object.fromEntries(f.programs.map((p) => [p, path.join(dir, `${p}.mjs`)]));
   if (f.binutilsAs) programs.as = binutilsGlue("as");
   return programs;

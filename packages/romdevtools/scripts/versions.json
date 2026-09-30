@@ -331,10 +331,11 @@
       "ref": "master",
       "commit": "54514ded39ceb32165a125ddba04ca5b551773a2",
       "license": "GPL-2.0",
+      "patch": "scripts/patches/kmc-binutils-2.6-wasm.patch",
       "platforms": [
         "n64"
       ],
-      "note": "The binutils 2.6 assembler (with --force-n64align) paired with KMC gcc 2.7.2; built to WASM by build-decomp-gcc.sh."
+      "note": "The binutils 2.6 assembler (with --force-n64align) paired with KMC gcc 2.7.2; built to WASM by build-decomp-gcc.sh. The reference assembler is an x86_64 glibc binary; the patch lays obstack chunks and frags out as there, so gas splits frags at the same places."
     },
     "egcs_gcc": {
       "kind": "git",
@@ -345,6 +346,24 @@
       "patch": "scripts/patches/egcs-1.1.2-wasm.patch",
       "platforms": ["n64"],
       "note": "EGCS 1.1.2 (gcc 2.91.66) for mips-linux, the compiler N64 decomp projects build their iQue (China) versions with: driver, cccp and cc1, built to WASM by build-decomp-gcc.sh egcs into romdev-toolchain-decomp-gcc (wasm/egcs-1.1.2/)."
+    },
+    "old_gcc": {
+      "kind": "git",
+      "url": "https://github.com/decompals/old-gcc.git",
+      "ref": "master",
+      "commit": "b74211c9d959e9724802f3177c8229cd67202c87",
+      "license": "GPL-2.0",
+      "platforms": ["psx"],
+      "note": "decompals' build recipes and patches for the old gccs PS1 decomp projects compile with (gcc-2.x-psx); build-decomp-gcc.sh psx applies its gcc-2.6.3-psx steps."
+    },
+    "psx_gcc_263": {
+      "kind": "tarball",
+      "url": "https://mirrors.slackware.com/slackware/slackware-2.2.0/source/d/gcc/gcc-2.6.3.tar.gz",
+      "version": "2.6.3",
+      "sha256": "66529b6ced4ccc580ec365809c1abed856d948283deff656801dec14f47d081a",
+      "license": "GPL-2.0",
+      "platforms": ["psx"],
+      "note": "gcc 2.6.3 source, the tarball old-gcc's gcc-2.6.3-psx recipe builds (the cc1 PS1 decomp projects pin as cc1-psx-26). Built to WASM (cc1, cpp) by build-decomp-gcc.sh psx into romdev-toolchain-decomp-gcc (wasm/psx-gcc-2.6.3/)."
     },
     "egcs_binutils": {
       "kind": "git",

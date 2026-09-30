@@ -1,6 +1,6 @@
 # romdev-toolchain-decomp-gcc
 
-The gcc toolchains N64 matching-decompilation projects pin, and the
+The gcc toolchains N64 and PS1 matching-decompilation projects pin, and the
 command-line tools their builds run, as WASM, for romdev's decomp domain.
 
 - `wasm/kmc-2.7.2/`: gcc 2.7.2 as shipped in the N64 SDK (KMC) - the driver
@@ -13,6 +13,12 @@ command-line tools their builds run, as WASM, for romdev's decomp domain.
   [decompals/mips-gcc-egcs-2.91.66](https://github.com/decompals/mips-gcc-egcs-2.91.66)
   and [decompals/mips-binutils-egcs-2.9.5](https://github.com/decompals/mips-binutils-egcs-2.9.5)
   (GPL-2.0) with `egcs-1.1.2-wasm.patch` and `egcs-binutils-2.9.5-wasm.patch`.
+- `wasm/psx-gcc-2.6.3/`: gcc 2.6.3 for the PlayStation (`cc1`, `cpp`), built
+  with the steps of [decompals/old-gcc](https://github.com/decompals/old-gcc)'s
+  `gcc-2.6.3-psx` recipe (the `cc1-psx-26` PS1 decomp projects run directly).
+  Built by `build-decomp-gcc.sh psx`; its generators run under node during the
+  build since everything, generators included, is compiled with emcc. The
+  projects' assembly post-processor, maspsx, is ported to JS in romdevtools.
 - `wasm/mips-linux-gnu-14.2/`: gcc 14.2.0 for target mips-linux-gnu (`gcc`,
   `cpp`, `cc1`), configured like Debian/Ubuntu's `gcc-mips-linux-gnu`: the
   modern cross gcc projects use for data-only TUs, `.s` preprocessing and

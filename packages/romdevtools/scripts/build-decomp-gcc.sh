@@ -5,8 +5,11 @@
 #   egcs  EGCS 1.1.2 (gcc 2.91.66: driver, cccp, cc1) + binutils 2.9.5 as, the
 #         iQue (China) builds' compiler
 #         -> packages/romdev-toolchain-decomp-gcc/wasm/egcs-1.1.2/
-# Each directory holds gcc (the driver), cpp (cccp), cc1, as.
-#   build-decomp-gcc.sh [kmc|egcs|all]   (default all)
+#   psx   gcc 2.6.3 for the PlayStation (decompals/old-gcc gcc-2.6.3-psx):
+#         cc1 and cpp (cccp), which PS1 decomp projects run directly
+#         -> packages/romdev-toolchain-decomp-gcc/wasm/psx-gcc-2.6.3/
+# The N64 directories hold gcc (the driver), cpp (cccp), cc1, as.
+#   build-decomp-gcc.sh [kmc|egcs|psx|all]   (default all)
 # romdev runs `gcc` in its WASM worker; the driver's subprograms run as
 # sibling modules through a JS spawn hook (kmc-gcc-2.7.2-wasm.patch,
 # egcs-1.1.2-wasm.patch).
@@ -17,7 +20,8 @@
 # produces every generated source - and emcc-replay.mjs then replays the
 # logged compile/archive/link commands with emcc. Nothing native ships.
 #
-# Pins: versions.json toolchains.kmc_gcc / kmc_binutils / egcs_gcc / egcs_binutils.
+# Pins: versions.json toolchains.kmc_gcc / kmc_binutils / egcs_gcc / egcs_binutils /
+# old_gcc / psx_gcc_263.
 # Host deps (build time only): gcc, make, emcc (emsdk 4.0.18).
 set -euo pipefail
 . "$(dirname "$0")/_lib.sh"
@@ -27,7 +31,7 @@ require_cmd make
 
 ROOT="$BUILD_DIR/decomp-gcc"
 WHICH="${1:-all}"
-case "$WHICH" in kmc|egcs|all) ;; *) echo "usage: $0 [kmc|egcs|all]" >&2; exit 2 ;; esac
+case "$WHICH" in kmc|egcs|psx|all) ;; *) echo "usage: $0 [kmc|egcs|psx|all]" >&2; exit 2 ;; esac
 PKG_BASE="$PROJECT_DIR/../romdev-toolchain-decomp-gcc/wasm"
 mkdir -p "$ROOT"
 
@@ -170,6 +174,76 @@ git -C "$BSRC" clean -qfdx
 echo "EGCS 1.1.2 + binutils 2.9.5 as -> $PKG_OUT"
 }
 
-[ "$WHICH" = egcs ] || build_kmc
-[ "$WHICH" = kmc ] || build_egcs
+build_psx() {
+PKG_OUT="$PKG_BASE/psx-gcc-2.6.3"
+# -- gcc 2.6.3 for the PlayStation (decompals/old-gcc gcc-2.6.3-psx) -------
+# The same source and patch steps as old-gcc's gcc-2.6.3-psx.Dockerfile. Its
+# reference build is a 32-bit (-m32) i386 binary; this build machine has no
+# 32-bit libc, and the generators (genflags, genattr, ...) crash as 64-bit
+# programs, so here EVERYTHING is compiled with emcc - wasm32 is the same ILP32
+# model - and the generators run under node during the build (emcc-exe gives
+# each linked program a node shebang). Then cc1 and cccp are relinked as
+# romdev modules.
+local P="$ROOT/psx"
+mkdir -p "$P"
+local OG="$P/old-gcc"
+fetch_pinned toolchains.old_gcc "$OG"
+fetch_pinned_tarball toolchains.psx_gcc_263 "$P/gcc-2.6.3.tar.gz"
+rm -rf "$P/gcc-2.6.3"
+tar -C "$P" -xzf "$P/gcc-2.6.3.tar.gz"
+chmod -R u+w "$P/gcc-2.6.3"
+cd "$P/gcc-2.6.3"
+sed -i -- 's/include <varargs.h>/include <stdarg.h>/g' ./*.c
+patch -s -u -p1 obstack.h -i "$OG/patches/obstack-2.7.2.h.patch"
+patch -s -u -p1 sdbout.c -i "$OG/patches/sdbout-2.6.3.c.patch"
+patch -s -u -p1 cp/g++.c -i "$OG/patches/g++-2.6.3.c.patch"
+patch -s -u -p1 < "$OG/patches/psx-2.5.7.patch"
+touch -c cp/parse.y cp/parse.h cp/parse.c
+touch insn-config.h
+./configure --target=mips-sony-psx --prefix=/opt/cross --with-endian-little --with-gnu-as \
+  --host=i386-pc-linux --build=i386-pc-linux > "$P/configure.log"
+
+# A linked program becomes a node script, runnable in place by make.
+cat > "$P/emcc-exe" <<'SH'
+#!/bin/sh
+out=""; link=1; prev=""
+for a in "$@"; do
+  [ "$prev" = "-o" ] && out="$a"
+  case "$a" in -c|-E|-S|-M) link=0 ;; esac
+  prev="$a"
+done
+emcc "$@" || exit $?
+if [ "$link" = 1 ] && [ -n "$out" ] && [ -f "$out" ] && [ "$(head -c 2 "$out")" != "#!" ]; then
+  { printf '#!/usr/bin/env node\n'; cat "$out"; } > "$out.tmp" && mv "$out.tmp" "$out" && chmod +x "$out"
+fi
+SH
+chmod +x "$P/emcc-exe"
+# romdevtools is "type": "module"; the generator scripts are CommonJS.
+printf '{"type":"commonjs"}\n' > "$P/package.json"
+# old-gcc's CFLAGS (-Dbsd4_4 -Dmips -DHAVE_STRERROR), plus what the i386 glibc
+# headers supplied: HZ, and __linux__ (sdbout.c then uses gcc's own gsyms.h).
+local DEFS="-Dbsd4_4 -Dmips -DHAVE_STRERROR -DHZ=100 -D__linux__=1"
+local PSXCC="-O2 -flto -fno-strict-aliasing -fwrapv -std=gnu89 -w -Wno-error -Wno-implicit-function-declaration -Wno-int-conversion -Wno-incompatible-pointer-types -Wno-implicit-int $DEFS"
+make cccp cc1 CC="$P/emcc-exe $PSXCC" CFLAGS="" \
+  LDFLAGS="-sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1 -sEMULATE_FUNCTION_POINTER_CASTS=1 -Wl,--allow-multiple-definition -sSTACK_SIZE=8388608 -sEXIT_RUNTIME=1" \
+  > "$P/build.log" 2>&1
+rm -f cc1 cc1.wasm cccp cccp.wasm
+make cccp cc1 CC="emcc $PSXCC" CFLAGS="" LDFLAGS="${EMLINK_BASE#"$EMCC"} -sEXPORT_NAME=psxGcc" >> "$P/build.log" 2>&1
+mkdir -p "$PKG_OUT"
+for t in cc1:cc1 cccp:cpp; do
+  cp "${t%%:*}" "$PKG_OUT/${t#*:}.mjs"
+  cp "${t%%:*}.wasm" "$PKG_OUT/${t#*:}.wasm"
+  sync_glue "$PKG_OUT/${t#*:}.mjs"
+done
+cd "$P"
+rm -rf "$P/gcc-2.6.3" "$P/emcc-exe" "$P/package.json"
+echo "gcc 2.6.3-psx (cc1, cpp) -> $PKG_OUT"
+}
+
+case "$WHICH" in
+  kmc) build_kmc ;;
+  egcs) build_egcs ;;
+  psx) build_psx ;;
+  all) build_kmc; build_egcs; build_psx ;;
+esac
 echo "Refresh the binary manifest: node scripts/binary-manifest.mjs --write"
