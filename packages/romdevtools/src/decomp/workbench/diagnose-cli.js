@@ -134,7 +134,7 @@ export function emit(diagnosis, args, predicates, io, ctx, warn = () => {}) {
     if (listingReport) payload.loc_boundaries = listingReport.asDict();
     io.print(dumps(payload));
   } else {
-    const painter = new Painter(resolveColor(args.color, { env: ctx.env }));
+    const painter = new Painter(resolveColor(args.color, { env: ctx.env, isatty: !!ctx.terminal?.isTTY }));
     const lines = [
       ...freshnessWarnings,
       ...freshness.provenanceLines().map((l) => `compared: ${l}`),

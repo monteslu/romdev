@@ -76,7 +76,7 @@ async function emitComparison(comparison, args, io, ctx, { predicates, show_rang
     Object.assign(payload, watchPayload);
     io.print(dumps(payload));
   } else {
-    const painter = new Painter(resolveColor(args.color ?? "never", { env: ctx.env }));
+    const painter = new Painter(resolveColor(args.color ?? "never", { env: ctx.env, isatty: !!ctx.terminal?.isTTY }));
     for (const line of freshnessWarnings) io.print(line);
     for (const line of freshness.provenanceLines()) io.print(`compared: ${line}`);
     for (const line of [...warningLines(comparison.warnings), ...alignmentCautionLines(comparison), ...relocationSymbolCautionLines(comparison)]) io.print(line);
@@ -149,7 +149,7 @@ export async function rankCommand(args, io, ctx) {
     io.print(dumps({ results, errors, ranked_by: unsafe ? "geometry-pareto" : "aligned_total", mixed_alignment: mixed,
       alignment_ranking_unsafe: unsafe, watch_row_set: watched.map((w) => w.asDict()) }));
   } else {
-    const painter = new Painter(resolveColor(args.color ?? "never", { env: ctx.env }));
+    const painter = new Painter(resolveColor(args.color ?? "never", { env: ctx.env, isatty: !!ctx.terminal?.isTTY }));
     if (unsafe) io.print(MIXED_ALIGNMENT_CAUTION);
     if (watched.length) io.print("watch rows (. healed, X broken, ? out of range): " + watched.map((w) => w.label).join(" "));
     limited.forEach((item, i) => {

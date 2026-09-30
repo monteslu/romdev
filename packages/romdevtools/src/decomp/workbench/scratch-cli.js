@@ -311,7 +311,7 @@ export async function checkScratchCommand(args, io, ctx) {
         io.print("");
         for (const line of renderView(view, { context: args.context, max_hunks: args.show_all ? 0 : args.max_hunks,
           lane_window: args.show_all ? Math.max(view.target_instructions, view.candidate_instructions) : args.lane_window,
-          report_regs: args.report_regs, painter: new Painter(resolveColor(args.color, { env: ctx.env })) })) io.print(line);
+          report_regs: args.report_regs, painter: new Painter(resolveColor(args.color, { env: ctx.env, isatty: !!ctx.terminal?.isTTY })) })) io.print(line);
       }
     }
     if (projectComparison !== null) io.print("project comparison: " + render.comparisonLine(projectComparison));

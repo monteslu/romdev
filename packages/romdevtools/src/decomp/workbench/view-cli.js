@@ -352,7 +352,7 @@ function emitView(view, args, predicates, io, ctx) {
     if (census.length) payload.census = census.map((c) => c.asDict());
     io.print(dumps(payload));
   } else {
-    const painter = new Painter(resolveColor(args.color, { env: ctx.env }));
+    const painter = new Painter(resolveColor(args.color, { env: ctx.env, isatty: !!ctx.terminal?.isTTY }));
     const lines = renderView(view, { context: args.context, max_hunks: args.show_all ? 0 : args.max_hunks,
       lane_window: args.show_all ? Math.max(view.target_instructions, view.candidate_instructions) : args.lane_window,
       report_regs: args.report_regs, painter, width: args.width, terse: args.terse });
@@ -429,7 +429,7 @@ export async function windowCommand(args, io, ctx) {
   try { ranges = parseRowRanges(args.rows); view = windowView(args, ctx); }
   catch (e) { if (!reportable(e)) throw e; io.eprint(`error: ${errText(e)}`); return 2; }
   if (args.json) { io.print(dumps(windowPayload(view, ranges))); return 0; }
-  const painter = new Painter(resolveColor(args.color, { env: ctx.env }));
+  const painter = new Painter(resolveColor(args.color, { env: ctx.env, isatty: !!ctx.terminal?.isTTY }));
   const lines = view.warnings.map((w) => `warning: ${w}`);
   lines.push(tokens([["aligned_rows", view.aligned_rows], ["target", view.target], ["candidate", view.candidate]]));
   lines.push(...renderWindow(view, ranges, { painter, budget: resolveWidth(args.width) }));

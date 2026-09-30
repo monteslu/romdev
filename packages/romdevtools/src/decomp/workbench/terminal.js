@@ -66,10 +66,21 @@ export function fitLine(line, width) {
   return parts.join("") + ELLIPSIS + (hasAnsi ? "\x1b[0m" : "");
 }
 
-/** Render lines. Output is captured, so the pager never engages. */
-export function emitLines(io, lines, { width, pager: _pager = "auto" }) {
-  const effective = width === -1 ? (process.stdout.columns || 120) : width;
-  io.write(lines.map((l) => fitLine(l, effective)).join("\n") + "\n");
+/**
+ * Render lines directly, or through the user's pager when appropriate:
+ * --pager always, or --pager auto on a terminal when the text is taller than
+ * it. Paging is done by whoever owns the terminal (io.page); a command whose
+ * output is captured (the MCP tool, a pipe) is never a terminal, so its text
+ * is written as it is, exactly as the original's pager falls back to plain
+ * output when stdout is not a TTY.
+ */
+export function emitLines(io, lines, { width, pager = "auto" }) {
+  const term = io.terminal ?? { isTTY: false, columns: 120, rows: 24 };
+  const effective = width === -1 ? (term.columns || 120) : width;
+  const text = lines.map((l) => fitLine(l, effective)).join("\n") + "\n";
+  const usePager = pager === "always" || (pager === "auto" && term.isTTY && (text.match(/\n/g) ?? []).length > (term.rows || 24));
+  if (usePager && io.page) io.page(text);
+  else io.write(text);
 }
 
 export function warnToStderr(io) { return (note) => io.eprint(`warning: ${note}`); }
