@@ -72,3 +72,234 @@ export function nextSteps(playbook, { lead_in = [] } = {}) {
   lines.push(...(Object.prototype.hasOwnProperty.call(PLAYBOOK_ONRAMPS, playbook) ? PLAYBOOK_ONRAMPS[playbook] : []));
   return lines;
 }
+
+// ---------------------------------------------------------------------------
+// The documents themselves: the field guide's numbered levers and the
+// era-scoped compiler-laws pages, read from the copies shipped under data/.
+// ---------------------------------------------------------------------------
+
+import { readFileSync as _readFileSync } from "node:fs";
+import { fileURLToPath as _fileURLToPath } from "node:url";
+import { FileNotFoundError as _FileNotFoundError } from "./py-extra.js";
+import { ValueError as _ValueError, strRepr as _strRepr, splitlines as _splitlines, strip as _strip, sorted as _sorted } from "./py.js";
+
+/** Where the guide lives inside this package. */
+export const PACKAGED_GUIDE = ["docs", "field-guide.md"];
+
+function _dataText(relative) {
+  return _readFileSync(_fileURLToPath(new URL(`./data/${relative}`, import.meta.url)), "utf8");
+}
+
+/** One numbered lever, with the family heading it sits under. */
+export class GuideSection {
+  constructor({ number, title, family, lines }) { Object.assign(this, { number, title, family, lines }); Object.freeze(this); }
+}
+
+/** A resolved `guide` argument: what the reader asked for, and which levers. */
+export class Topic {
+  constructor({ name, kind, levers, playbook }) { Object.assign(this, { name, kind, levers, playbook }); Object.freeze(this); }
+}
+
+/** One numbered law, with the pass heading it sits under. */
+export class Law {
+  constructor({ name, title, section, lines }) { Object.assign(this, { name, title, section, lines }); Object.freeze(this); }
+}
+
+export const SECTION_RE = /^###\s+(\d+)\.\s+(.+?)\s*$/;
+export const FAMILY_RE = /^##\s+(.+?)\s*$/;
+export const LAW_HEADING_RE = /^###\s+(L\d+)\.\s+(.+?)\s*$/;
+
+/** The era tokens `guide laws` accepts. */
+export function lawEras() { return _sorted(Object.keys(LAW_DOCUMENTS)); }
+
+/** The canonical era token for one of its spellings. */
+export function normalizeEra(era) {
+  const token = [..._strip(era).toLowerCase()].filter((c) => /[\p{L}\p{N}]/u.test(c)).join("");
+  return Object.prototype.hasOwnProperty.call(LAW_ERA_ALIASES, token) ? LAW_ERA_ALIASES[token] : token;
+}
+
+/** One era's compiler-laws document. */
+export function readLaws(era) {
+  const token = normalizeEra(era);
+  const entry = Object.prototype.hasOwnProperty.call(LAW_DOCUMENTS, token) ? LAW_DOCUMENTS[token] : undefined;
+  if (entry === undefined) throw new _ValueError(`unknown compiler era ${_strRepr(era)}; this package carries laws for: ${lawEras().join(", ")}`);
+  const [document] = entry;
+  try { return _dataText(document); } catch {
+    throw new _FileNotFoundError(`the ${token} compiler-laws document is not installed with this package (${document}); read it at ${document} in a checkout, or at https://github.com/akratch/n64-decomp-workbench/blob/main/${document}`);
+  }
+}
+
+/** The canonical `Ln` spelling for one of its spellings. */
+export function normalizeLaw(law) {
+  let token = _strip(law).toLowerCase();
+  if (token.startsWith("law")) token = token.slice(3);
+  token = _strip(token);
+  if (token.startsWith("l")) token = token.slice(1);
+  return /^\d+$/.test(token) ? `L${token}` : _strip(law);
+}
+
+function _splitDocument(text, headingRe, make) {
+  const found = new Map();
+  let section = "", name = null, title = "", body = [];
+  const flush = () => {
+    if (name === null) return;
+    const kept = [...body];
+    while (kept.length && ["", "---"].includes(_strip(kept[kept.length - 1]))) kept.pop();
+    found.set(name, make(name, title, section, kept));
+  };
+  for (const line of _splitlines(text)) {
+    const heading = headingRe.exec(line);
+    if (heading) { flush(); name = heading[1]; title = heading[2]; body = [line]; continue; }
+    const family = FAMILY_RE.exec(line);
+    if (family) { flush(); name = null; body = []; section = family[1]; continue; }
+    if (name !== null) body.push(line);
+  }
+  flush();
+  return found;
+}
+
+/** Split a laws document into its `### Ln. Title` sections (Map keyed by Ln). */
+export function parseLaws(text) {
+  return _splitDocument(text, LAW_HEADING_RE, (name, title, section, lines) => new Law({ name, title, section, lines }));
+}
+
+export function laws(era) { return parseLaws(readLaws(era)); }
+
+/** One law of one era; an unknown number names the range that exists. */
+export function readLaw(era, law) {
+  const available = laws(era);
+  const name = normalizeLaw(law);
+  const found = available.get(name);
+  if (found === undefined) {
+    const numbers = [...available.keys()].map((k) => parseInt(k.slice(1), 10)).sort((a, b) => a - b);
+    const span = numbers.length ? `L${numbers[0]}-L${numbers[numbers.length - 1]}` : "none";
+    throw new _ValueError(`unknown law ${_strRepr(law)} for era ${normalizeEra(era)}; that page carries ${span}`);
+  }
+  return found;
+}
+
+/** The printable form of one law, with its address and its page. */
+export function renderLaw(era, law) {
+  const [document, label] = LAW_DOCUMENTS[normalizeEra(era)];
+  return [
+    `COMPILER LAWS  ${label}  ${law.name}`,
+    `source: ${document}` + (law.section ? `  [${law.section}]` : ""),
+    "",
+    ...law.lines,
+    "", "-".repeat(72), "", "NEXT",
+    `  the whole page: decomp-workbench guide laws ${normalizeEra(era)}`,
+    "  what to change about it: decomp-workbench guide",
+  ];
+}
+
+/** The listing printed by `guide laws` with no era. */
+export function lawIndexLines() {
+  const lines = ["Compiler laws: what the compiler does, as opposed to what to do about it.", "", "eras"];
+  const width = Math.max(...Object.keys(LAW_DOCUMENTS).map((t) => t.length));
+  for (const token of _sorted(Object.keys(LAW_DOCUMENTS))) {
+    const [document, label] = LAW_DOCUMENTS[token];
+    lines.push(`  ${token.padEnd(width)}  ${label}  (${document})`);
+  }
+  lines.push("", "Example: decomp-workbench guide laws ido53", "One law: decomp-workbench guide laws ido53 L64", "Levers, as opposed to mechanism: decomp-workbench guide");
+  return lines;
+}
+
+/** The packaged field-guide Markdown. */
+export function readFieldGuide() {
+  try { return _dataText(PACKAGED_GUIDE.join("/")); } catch {
+    throw new _FileNotFoundError(`the field guide is not installed with this package (${PACKAGED_GUIDE.join("/")}); read it at ${GUIDE_DOCUMENT} in a checkout, or at https://github.com/akratch/n64-decomp-workbench/blob/main/${GUIDE_DOCUMENT}`);
+  }
+}
+
+/** Split the guide into its `### N. Title` sections (Map keyed by number). */
+export function parseSections(text) {
+  const byName = _splitDocument(text, SECTION_RE, (name, title, family, lines) => new GuideSection({ number: parseInt(name, 10), title, family, lines }));
+  return new Map([...byName.values()].map((s) => [s.number, s]));
+}
+
+/** The document reader, replaceable by tests that simulate a stripped install. */
+export const guideSeams = { readFieldGuide };
+
+/** The parsed shipped guide, keyed by lever number. */
+export function sections() { return parseSections(guideSeams.readFieldGuide()); }
+
+const _leverNumbers = () => Object.keys(LEVER_ACTIONS).map(Number).sort((a, b) => a - b);
+
+/** Every accepted topic, in the order the index prints them. */
+export function topicNames() {
+  return [
+    ...Object.keys(PLAYBOOK_LEVERS),
+    ...Object.keys(PLAYBOOK_ONRAMPS).filter((n) => !Object.prototype.hasOwnProperty.call(PLAYBOOK_LEVERS, n)),
+    ..._sorted(Object.keys(VERDICT_PLAYBOOKS)),
+    ..._leverNumbers().map(String),
+  ];
+}
+
+/** Resolve a playbook name, a verdict, or a lever number to its levers. */
+export function resolveTopic(topic) {
+  const name = _strip(topic);
+  const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+  if (/^\d+$/.test(name)) {
+    const number = parseInt(name, 10);
+    if (!has(LEVER_ACTIONS, number)) throw new _ValueError(`unknown lever ${name}; the guide numbers ${_leverNumbers().join(", ")}`);
+    return new Topic({ name, kind: "lever", levers: [number], playbook: null });
+  }
+  if (has(PLAYBOOK_LEVERS, name)) return new Topic({ name, kind: "playbook", levers: PLAYBOOK_LEVERS[name], playbook: name });
+  if (has(PLAYBOOK_ONRAMPS, name)) return new Topic({ name, kind: "playbook", levers: [], playbook: name });
+  if (has(VERDICT_PLAYBOOKS, name)) {
+    const playbook = VERDICT_PLAYBOOKS[name];
+    return new Topic({ name, kind: "verdict", levers: has(PLAYBOOK_LEVERS, playbook) ? PLAYBOOK_LEVERS[playbook] : [], playbook });
+  }
+  throw new _ValueError(`unknown guide topic ${_strRepr(topic)}; run \`decomp-workbench guide\` for the topic index`);
+}
+
+/** The `guide` listing, which never needs the document. */
+export function topicIndexLines() {
+  const lines = [`Field guide topics (${GUIDE_DOCUMENT})`, "Pass a playbook, a verdict, or a lever number.", "", "playbooks"];
+  const width = Math.max(...Object.keys(PLAYBOOK_LEVERS).map((n) => n.length));
+  for (const [playbook, levers] of Object.entries(PLAYBOOK_LEVERS)) lines.push(`  ${playbook.padEnd(width)}  levers ${levers.join(", ")}`);
+  lines.push("", "verdicts");
+  const vw = Math.max(...Object.keys(VERDICT_PLAYBOOKS).map((n) => n.length));
+  for (const verdict of _sorted(Object.keys(VERDICT_PLAYBOOKS))) lines.push(`  ${verdict.padEnd(vw)}  ${VERDICT_PLAYBOOKS[verdict]}`);
+  lines.push("", "levers");
+  for (const number of _leverNumbers()) lines.push(`  ${String(number).padStart(2)}  ${LEVER_ACTIONS[number]}`);
+  lines.push("", "Example: decomp-workbench guide forced-color-oracle", "Worked end to end: docs/from-verdict-to-edit.md",
+    `Compiler mechanism, not levers: decomp-workbench guide laws (${lawEras().join(", ")})`);
+  return lines;
+}
+
+/** One lever, degrading to its one-liner when the section is absent. */
+export function leverLines(number, available) {
+  const section = available.get(number);
+  if (section === undefined) {
+    return [`### ${number}. (not in the shipped field guide)`, "", LEVER_ACTIONS[number], "",
+      `This lever's section is not in this installation's ${GUIDE_DOCUMENT}, which is older than this command. The one-line action above is complete on its own.`];
+  }
+  return [`[${section.family}]`, ...section.lines];
+}
+
+/** Every section a topic maps to, plus the on-ramp for its playbook. */
+export function renderTopic(topic, available) {
+  const numbers = topic.levers.join(", ");
+  let header = `FIELD GUIDE  ${topic.kind}=${topic.name}`;
+  if (topic.playbook !== null && topic.kind === "verdict") header += `  playbook=${topic.playbook}`;
+  if (numbers) header += `  levers ${numbers}`;
+  const lines = [header, `source: ${GUIDE_DOCUMENT}`];
+  const caveat = PLAYBOOK_CAVEATS[topic.playbook ?? ""];
+  if (caveat !== undefined) lines.push("", caveat);
+  for (const number of topic.levers) {
+    lines.push("", "-".repeat(72), "");
+    lines.push(...leverLines(number, available));
+  }
+  const footer = [];
+  if (topic.playbook !== null) footer.push(...(PLAYBOOK_ONRAMPS[topic.playbook] ?? []));
+  else {
+    const want = new Set(topic.levers);
+    for (const [playbook, levers] of Object.entries(PLAYBOOK_LEVERS)) {
+      if (levers.some((n) => want.has(n))) footer.push(`in playbook ${playbook}: decomp-workbench guide ${playbook}`);
+    }
+  }
+  if (topic.playbook !== null) footer.push(...playbookLawSteps(topic.playbook));
+  if (footer.length) { lines.push("", "-".repeat(72), "", "NEXT"); lines.push(...footer.map((s) => `  ${s}`)); }
+  return lines;
+}
