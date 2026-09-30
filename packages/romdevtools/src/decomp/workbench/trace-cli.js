@@ -44,7 +44,7 @@ export function traceAliasCommand(args, io) {
         if (e.action !== "alias-query") continue;
         const left = e.fields.left_type ?? "?", right = e.fields.right_type ?? "?", result = e.fields.result ?? "?";
         const reg = e.register !== null ? registerName(e.register) : "-";
-        io.print(`line=${String(e.index).padEnd(5)} reg=${reg.padStart(3)} ${left.padStart(8)} ↔ ${right.padEnd(8)} ${result}`);
+        io.print(`line=${String(e.index).padEnd(5)} reg=${reg.padStart(3)} ${left.padStart(8)} \u2194 ${right.padEnd(8)} ${result}`);
       }
     }
   }

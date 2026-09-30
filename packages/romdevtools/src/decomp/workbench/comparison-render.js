@@ -8,7 +8,7 @@ import { ALIGNED_CLASS_KEYS } from "./compare.js";
 import { summaryLine } from "./schema.js";
 import { hex } from "./py.js";
 
-const EM = "—";
+const EM = "\u2014";
 export const COMMUTATIVE_SITES = 5;
 export const LAYOUT_BLOCKS = 6;
 

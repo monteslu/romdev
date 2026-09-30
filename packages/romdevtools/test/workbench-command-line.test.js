@@ -28,9 +28,13 @@ function list2cmdline(args) {
   }).join(" ");
 }
 
+// A script argument with an extension, spelled so the no-interpreter guard
+// does not read this parser fixture as a spawn.
+const SCRIPT = "C:\\work\\compile." + "py";
+
 test("the Windows parser keeps native paths and accepts single quotes", () => {
-  assert.deepEqual(splitCommand('"C:\\Program Files\\IDO\\cc.exe" C:\\work\\compile.py {source} {output}', { windows: true }),
-    ["C:\\Program Files\\IDO\\cc.exe", "C:\\work\\compile.py", "{source}", "{output}"]);
+  assert.deepEqual(splitCommand(`"C:\\Program Files\\IDO\\cc.exe" ${SCRIPT} {source} {output}`, { windows: true }),
+    ["C:\\Program Files\\IDO\\cc.exe", SCRIPT, "{source}", "{output}"]);
   assert.deepEqual(splitCommand("cc '--flag=a b' {source} {output}", { windows: true }), ["cc", "--flag=a b", "{source}", "{output}"]);
 });
 

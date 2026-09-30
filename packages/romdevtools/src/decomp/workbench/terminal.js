@@ -4,7 +4,7 @@
 // Plain JS ESM + JSDoc.
 
 export const ANSI_RE = /\x1b\[[0-9;]*m/g;
-const ELLIPSIS = "…";
+const ELLIPSIS = "\u2026";
 
 export const WEB_COLORS = ["36", "33", "35", "32", "34", "31"];
 

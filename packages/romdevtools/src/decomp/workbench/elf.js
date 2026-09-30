@@ -79,7 +79,7 @@ export function cString(table, offset) {
 /** bytes.decode("ascii", errors="replace") */
 export function asciiReplace(bytes) {
   let s = "";
-  for (const b of bytes) s += b < 0x80 ? String.fromCharCode(b) : "�";
+  for (const b of bytes) s += b < 0x80 ? String.fromCharCode(b) : "\ufffd";
   return s;
 }
 
