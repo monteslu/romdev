@@ -225,8 +225,8 @@ test("recipe shell parsing and dispatch never name a host program", () => {
   assert.equal(l[1].op, "&&");
   assert.deepEqual(l[1].pipeline[0].redirects, [{ fd: 1, op: ">", target: "/dev/null" }]);
   assert.equal(classifyCommand(["tools/ido-static-recomp/build/5.3/out/cc"]).kind, "ido");
-  assert.equal(classifyCommand([".venv/bin/python3", "tools/asm-processor/build.py"]).kind, "asm-processor");
-  assert.equal(classifyCommand(["python3", "tools/other.py"]).kind, "unsupported");
+  assert.equal(classifyCommand([".venv/bin/python3", "tools/asm-processor/build.py"]).kind, "asm-processor"); // no-python-guard: classifier fixture - recognising a project's build.py step, never launching it
+  assert.equal(classifyCommand(["python3", "tools/other.py"]).kind, "unsupported"); // no-python-guard: classifier fixture - an unported project script must classify as unsupported
   assert.equal(classifyCommand(["gcc", "-fsyntax-only", "x.c"]).kind, "syntax-check");
   assert.equal(classifyCommand(["make"]).kind, "make", "a recursive make is read by romdev, never run");
   assert.equal(classifyCommand(["bash", "tools/x.sh"]).kind, "unsupported");

@@ -24,7 +24,7 @@ test("readWord honours the profile's byte order", () => {
 });
 
 test("classifyInvocation: asm-processor+IDO form and plain gcc form", () => {
-  const ido = classifyInvocation([".venv/bin/python3", "tools/asm-processor/build.py", "--input-enc=utf-8", "tools/ido-static-recomp/build/5.3/out/cc", "--", "mips-linux-gnu-as", "-march=vr4300", "-32", "--", "-c", "-O2", "-o", "build/src/a.o", "src/a.c"]);
+  const ido = classifyInvocation([".venv/bin/python3", "tools/asm-processor/build.py", "--input-enc=utf-8", "tools/ido-static-recomp/build/5.3/out/cc", "--", "mips-linux-gnu-as", "-march=vr4300", "-32", "--", "-c", "-O2", "-o", "build/src/a.o", "src/a.c"]); // no-python-guard: a project's asm-processor step as data for the classifier; nothing is launched
   assert.equal(ido.kind, "ido"); assert.equal(ido.compiler, "tools/ido-static-recomp/build/5.3/out/cc"); assert.equal(ido.assembler, "mips-linux-gnu-as"); assert.equal(ido.ccArgv[0], ido.compiler); assert.ok(ido.ccArgv.includes("src/a.c"));
   const gcc = classifyInvocation(["mipsel-linux-gnu-gcc", "-c", "-O2", "-G0", "-EL", "-o", "build/src/main.o", "src/main.c"]);
   assert.equal(gcc.kind, "gcc"); assert.equal(gcc.assembler, null); assert.deepEqual(gcc.ccArgv.slice(0, 2), ["mipsel-linux-gnu-gcc", "-c"]);
