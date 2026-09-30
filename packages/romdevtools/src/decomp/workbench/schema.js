@@ -1,0 +1,516 @@
+// schema.js - one registry of comparison metric identities. Human output and
+// JSON output are rendered from the same entries, so a printed label can
+// never drift from the JSON key that carries the same number.
+//
+// Plain JS ESM + JSDoc.
+
+import { pyStr } from "./py.js";
+
+/** One reported value with a single name for humans and machines. */
+export class Metric {
+  constructor(key, attribute, description, { summary = false, width = 0, kind = "text" } = {}) {
+    Object.assign(this, { key, attribute, description, summary, width, kind });
+    Object.freeze(this);
+  }
+  get deprecated_keys() { return this.attribute === this.key ? [] : [this.attribute]; }
+  render(value) {
+    if (this.kind === "integer" && Number.isInteger(value) && typeof value !== "boolean") return String(value).padStart(this.width, " ");
+    return this.width ? pyStr(value).padStart(this.width, " ") : pyStr(value);
+  }
+}
+
+export const METRICS = Object.freeze([
+  new Metric("verdict", "verdict", "mechanism class that explains the residual", {summary: true}),
+  new Metric("aligned_total", "aligned_total", "LCS-aligned differing rows a source change controls; the ranking metric, and the sum of the aligned_* class counts below", {summary: true,width: 4,kind: "integer"}),
+  new Metric("words", "word_mismatches", "positional word differences after masking known linker-controlled fields; the function-level matching oracle, and the tiebreaker between two candidates of the same aligned shape", {summary: true,width: 4,kind: "integer"}),
+  new Metric("aligned_structural", "aligned_structural", "aligned rows with an opcode or operand shape difference"),
+  new Metric("aligned_schedule", "aligned_schedule", "aligned rows in a pure reordering hunk"),
+  new Metric("aligned_register", "aligned_register", "aligned rows differing only in register allocation"),
+  new Metric("aligned_constant", "aligned_constant", "aligned rows differing only in an immediate"),
+  new Metric("aligned_commutative", "aligned_commutative", "aligned rows with a swapped commutative operand pair"),
+  new Metric("pool_exact", "pool_exact", "whether the uopt-colored register lane stays exact for the full function"),
+  new Metric("pool_prefix_exact", "pool_prefix_exact", "first aligned object row where the uopt-colored register lane diverges"),
+  new Metric("temp_prefix_exact", "temp_prefix_exact", "first aligned object row where a ugen temp register lane diverges"),
+  new Metric("first_temp_divergence", "first_temp_divergence", "class, lane slot, object row, registers, and rotation at the first temp divergence"),
+  new Metric("first_divergent_row", "first_divergent_row", "first aligned object row with a source-controlled difference"),
+  new Metric("alignment_method", "alignment_method", "positional-opcode when equal-length opcode-identical streams bypass LCS; otherwise lcs"),
+  new Metric("raw", "raw_word_mismatches", "positional 32-bit word differences before masking; literal identity evidence, not a matching score", {summary: true,width: 4,kind: "integer"}),
+  new Metric("opcode_distance", "opcode_distance", "shift-tolerant opcode edit-script distance; search evidence, not exactness"),
+  new Metric("geometry_edit_distance", "geometry_edit_distance", "normalized edit-script distance used in structural Pareto ranking"),
+  new Metric("geometry_front", "geometry_front", "cohort-relative structural Pareto layer; zero is nondominated, None means this population did not use geometry ranking"),
+  new Metric("geometry", "geometry", "structural evidence vector: absolute true extent delta, normalized edit distance, and opcode edit distance"),
+  new Metric("opcodes", "opcode_mismatches", "positional mnemonic differences; the honest signal that two objects have different instruction shapes and their aligned rows count different things", {summary: true,width: 4,kind: "integer"}),
+  new Metric("gaps", "aligned_gaps", "aligned rows the aligner filled on one side only; any gap makes aligned_total incomparable with another candidate's", {summary: true,width: 4,kind: "integer"}),
+  new Metric("reloc_syms", "relocation_symbol_mismatches", "positional relocation differences where the two sides name a different symbol rather than the same symbol at a different addend; a semantic difference the link cannot resolve, and one that word masking hides from words=", {summary: true,width: 4,kind: "integer"}),
+  new Metric("norm", "normalized_distance", "edit distance after masking addresses, immediates, and stack offsets; search guidance only", {summary: true,width: 4,kind: "integer"}),
+  new Metric("regs", "register_mismatches", "positional register-operand differences", {summary: true,width: 4,kind: "integer"}),
+  new Metric("fp", "fp_register_mismatches", "positional differences involving $fN registers", {summary: true,width: 4,kind: "integer"}),
+  new Metric("insns", "candidate_instructions", "instructions compared in the candidate function", {summary: true,width: 4,kind: "integer"}),
+  new Metric("frame", "candidate_frame_size", "first addiu sp,sp,N adjustment in the candidate", {summary: true,width: 5}),
+  new Metric("sha1", "candidate_sha1", "short hash of the candidate's compared instruction words", {summary: true}),
+  new Metric("target_insns", "target_instructions", "instructions compared in the target function"),
+  new Metric("insn_delta", "instruction_delta", "candidate instruction count minus target instruction count"),
+  new Metric("target_true_insns", "target_true_instructions", "target's real instruction count, blind to .text's 16-byte padding; what `objdump -d obj.o | grep -c` measures by hand"),
+  new Metric("candidate_true_insns", "candidate_true_instructions", "candidate's real instruction count, blind to .text's 16-byte padding"),
+  new Metric("true_insn_delta", "true_instruction_delta", "candidate_true_instructions minus target_true_instructions; the padding-safe instruction_delta -- can differ from insn_delta when the padded counts agree but the real lengths do not"),
+  new Metric("insn_count_verified", "instruction_count_verified", "whether both true instruction counts were read from the objects' own ELF .text sections rather than derived from disassembly text"),
+  new Metric("aligned_insertions", "aligned_insertions", "aligned rows present only in the candidate"),
+  new Metric("aligned_deletions", "aligned_deletions", "aligned rows present only in the target"),
+  new Metric("alignment_comparable", "alignment_comparable", "whether aligned_total may be compared with another candidate's; false once the aligner inserted gaps or the opcode streams diverged"),
+  new Metric("alignment_caution", "alignment_caution", "the one-line caution printed when aligned counts are not comparable across candidates, or null"),
+  new Metric("pool_resolution", "pool_resolution", "how literal-pool accesses were resolved before classing: absolute, anchor-correspondence, unresolved, or null"),
+  new Metric("pool_matches", "pool_matches", "aligned rows reading the same pool slot through a differently named anchor; not counted as differences"),
+  new Metric("pool_layout_mismatches", "pool_layout_mismatches", "aligned rows whose pool accesses resolve to different slots or widths"),
+  new Metric("target_pool_slots", "target_pool_slots", "distinct literal-pool slots the target references"),
+  new Metric("candidate_pool_slots", "candidate_pool_slots", "distinct literal-pool slots the candidate references"),
+  new Metric("relocs", "relocation_metadata_mismatches", "positional relocation-kind differences; prevents an exact verdict"),
+  new Metric("relocation_targets", "relocation_target_mismatches", "positional relocation symbol/addend differences; required by the local decomp.me score proxy but not by linked-function exactness"),
+  new Metric("relocation_target_differences", "relocation_target_differences", "per-relocation evidence for target symbol or addend differences, including instruction and relocation positions"),
+  new Metric("unknown_relocations", "unknown_relocations", "relocation kinds without a precise field mask; prevents an exact verdict rather than guessing"),
+  new Metric("target_frame", "target_frame_size", "first addiu sp,sp,N adjustment in the target"),
+  new Metric("target_frame_layout", "target_frame_layout", "observed target save slots and the remaining non-save frame bytes"),
+  new Metric("candidate_frame_layout", "candidate_frame_layout", "observed candidate save slots and the remaining non-save frame bytes"),
+  new Metric("sha256", "candidate_sha256", "full hash of the candidate's compared instruction words; the object-basin identity"),
+  new Metric("exact", "exact", "masked words and relocation-kind layout agree for this function"),
+  new Metric("structural_exact", "structural_exact", "opcode sequence, normalized shape, registers, frame, and count agree; cross-ROM/lineage evidence only"),
+  new Metric("diff_sites", "diff_sites", "every differing site with its class; never filtered by the verdict"),
+  new Metric("diff_site_classes", "diff_site_classes", "count of differing sites per class"),
+  new Metric("aligned_diff_sites", "aligned_diff_sites", "LCS-aligned residual sites anchored to target instruction indices"),
+  new Metric("aligned_row_receipts", "aligned_row_receipts", "code-free per-row alignment receipts used by declarative signals: indices, class, and raw/relocation-aware equality only"),
+  new Metric("layout", "layout", "the shift-tolerant edit script, computed automatically when the verdict is structure-mismatch or schedule-mismatch and null otherwise: block counts, rows_away, and the blocks present in both objects at different positions. Read it before words= on that verdict -- a moved block costs one edit and thousands of positional words"),
+  new Metric("commutative_findings", "commutative_findings", "commutative operand pairs with the source edit each one names, including the pairs whose arithmetic row matches and whose two operand loads are crossed one row earlier"),
+  new Metric("raw_difference_breakdown", "raw_difference_breakdown", "why literal words differ: instruction bits, relocation layout, or relocation-controlled fields"),
+  new Metric("register_mismatch_ranges", "register_mismatch_ranges", "inclusive index ranges of register-operand differences"),
+  new Metric("fp_mismatch_ranges", "fp_mismatch_ranges", "inclusive index ranges of $fN operand differences"),
+  new Metric("register_diff", "register_diff", "register-differing sites only; a subset of diff_sites"),
+  new Metric("candidate_fp_register_uses", "candidate_fp_register_uses", "histogram of candidate $fN operands"),
+  new Metric("candidate_stack_offsets", "candidate_stack_offsets", "histogram of candidate N(sp) operands; spill and local-home evidence"),
+  new Metric("guidance", "guidance", "the next useful action for this verdict"),
+  new Metric("warnings", "warnings", "conditions that make this verdict answer a different question"),
+  new Metric("symbol", "symbol", "selected function, or null for a whole section"),
+  new Metric("target", "target", "reference object or dump"),
+  new Metric("candidate", "candidate", "candidate object, dump, or source path"),
+  new Metric("error", "error", "why this comparison could not be produced"),
+]);
+
+export const CAMPAIGN_METRICS = Object.freeze([
+  new Metric("schema", "schema", "report schema identity"),
+  new Metric("unique_candidates", "unique_candidates", "candidates that were compiled and compared in this run"),
+  new Metric("prepared_candidates", "prepared_candidates", "candidates resolved and deduplicated before the run started"),
+  new Metric("source_files", "source_files", "source paths supplied, before deduplication by cache key"),
+  new Metric("stopped_on_exact", "stopped_on_exact", "whether an exact match ended the run before every prepared candidate was submitted; candidates already running were still recorded"),
+  new Metric("timeout_seconds", "timeout_seconds", "per-candidate compiler deadline; timed-out process groups are ended"),
+  new Metric("rank_by", "rank_by", "campaign ordering policy: general comparison score, positional words, or allocator temp-prefix progress"),
+  new Metric("ranked_by", "ranked_by", "effective campaign ordering scale after alignment-safety resolution"),
+  new Metric("alignment_ranking_unsafe", "alignment_ranking_unsafe", "whether any candidate's alignment gaps made aligned totals incomparable"),
+  new Metric("object_basins", "object_basins", "distinct compared-function bytes, with the variants that reached each"),
+  new Metric("manifest", "manifest", "durable campaign identity and resume state, or null with --no-ledger"),
+  new Metric("ledger", "ledger", "append-only per-candidate evidence, or null with --no-ledger"),
+  new Metric("experiment", "experiment", "transformation family, parameter space, and selected-region invariant"),
+  new Metric("controls", "controls", "serial experiment-control preflight and its provenance receipts"),
+  new Metric("results", "results", "per-candidate records, best rank first"),
+]);
+
+export const VIEW_METRICS = Object.freeze([
+  new Metric("basis", "basis", "supplied reservation basis, not inferred trace proof"),
+  new Metric("reserved", "reserved", "conditionally withdrawn shared GP registers"),
+  new Metric("temp_ring", "temp_ring", "conditional GP ring after supplied withdrawals"),
+  new Metric("evidence", "evidence", "operator's reservation evidence description"),
+  new Metric("register_reservations", "register_reservations", "per-input supplied conditional reservations; not an inferred target trace"),
+  new Metric("symbol", "symbol", "function selected from both inputs"),
+  new Metric("target", "target", "reference input name"),
+  new Metric("candidate", "candidate", "candidate input name"),
+  new Metric("register_profile", "register_profile", "compiler era whose register class table the lanes use"),
+  new Metric("register_profile_evidence", "register_profile_evidence", "what that table is made of: a probe of a named release, or the pre-probe default carried for unmeasured ones"),
+  new Metric("ring_only_targets", "ring_only_targets", "target registers outside the supported possible-color palette; this restricts direct forcing, not indirect effects of reservations on temporary allocation"),
+  new Metric("target_instructions", "target_instructions", "instructions parsed from the target"),
+  new Metric("candidate_instructions", "candidate_instructions", "instructions parsed from the candidate"),
+  new Metric("aligned_rows", "aligned_rows", "rows in the LCS alignment"),
+  new Metric("target_frame_size", "target_frame_size", "target stack frame adjustment"),
+  new Metric("candidate_frame_size", "candidate_frame_size", "candidate stack frame adjustment"),
+  new Metric("match", "match", "aligned rows whose instructions are identical"),
+  new Metric("displacement", "displacement", "aligned rows differing only in an alignment-controlled branch offset"),
+  new Metric("structural", "structural", "aligned rows with an opcode or operand shape difference"),
+  new Metric("schedule", "schedule", "aligned rows in a pure reordering hunk"),
+  new Metric("register", "register", "aligned rows differing only in register allocation"),
+  new Metric("constant", "constant", "aligned rows differing only in an immediate"),
+  new Metric("commutative", "commutative", "aligned rows with a swapped commutative operand pair"),
+  new Metric("relocation", "relocation", "aligned rows differing only in linker-controlled fields"),
+  new Metric("pool", "pool", "aligned rows reading the same literal-pool slot through a differently named anchor"),
+  new Metric("pool_layout", "pool_layout", "aligned rows whose literal-pool accesses resolve to different slots"),
+  new Metric("pool_resolution", "pool_resolution", "how literal-pool accesses were resolved: absolute, anchor-correspondence, or unresolved"),
+  new Metric("pool_slots", "pool_slots", "distinct literal-pool slots each object references"),
+  new Metric("verdict", "verdict", "cheapest mechanism that explains the residual"),
+  new Metric("playbook", "playbook", "named lever family for the verdict"),
+  new Metric("routing", "routing", "which tool this residual belongs to: permuter-first, structural, import-fix, or none"),
+  new Metric("owning_pass", "owning_pass", "the compiler pass that took the decision behind this residual: cfe-spelling, rodata-load-form, stack-home-assignment, uopt-globalcolor, ugen-temp-ring, g0-scheduler, none, or unknown"),
+  new Metric("reachability", "reachability", "how close a source edit gets to that decision: source-reachable, permuter-target, pass-owned, or unknown"),
+  new Metric("ownership_basis", "ownership_basis", "what the owning pass and reachability were read off: trace (a compiler trace settled it), heuristic (the residual's shape), or none"),
+  new Metric("signature", "signature", "orthogonal modifiers attached to the verdict"),
+  new Metric("prefix_exact", "prefix_exact", "first aligned row whose instruction words differ"),
+  new Metric("hunks", "hunks", "contiguous runs of non-matching aligned rows"),
+  new Metric("lanes", "lanes", "per-class register assignment sequences"),
+  new Metric("webs", "webs", "consistent register substitutions, grouped"),
+  new Metric("next", "next", "lever guidance for the dominant class"),
+  new Metric("warnings", "warnings", "conditions that make this verdict answer a different question"),
+  new Metric("register_report", "register_report", "per aligned row register operands, matches included"),
+  new Metric("hunk", "hunk", "hunk number"),
+  new Metric("class", "class", "classification label"),
+  new Metric("classes", "classes", "per-class row counts inside a hunk"),
+  new Metric("rows", "rows", "aligned row range"),
+  new Metric("target_bytes", "target_bytes", "target section offsets covered"),
+  new Metric("candidate_bytes", "candidate_bytes", "candidate section offsets covered"),
+  new Metric("index", "index", "aligned row index"),
+  new Metric("slot", "slot", "first lane position where the two sides differ"),
+  new Metric("aligned_row", "aligned_row", "aligned row holding a lane divergence; the same unit as aligned_rows"),
+  new Metric("rotation", "rotation", "cyclic offset that maps the target lane tail onto the candidate"),
+  new Metric("slots", "slots", "lane slots rendered out of the total"),
+  new Metric("web", "web", "web identifier"),
+  new Metric("count", "count", "number of sites"),
+]);
+
+export const SHIFT_METRICS = Object.freeze([
+  new Metric("schema", "schema", "report schema identity"),
+  new Metric("map", "map", "the linked `ld -Map` file the report was read from"),
+  new Metric("image", "image", "the linked image the map describes"),
+  new Metric("elf", "elf", "the linked ELF the shadowing-pin check read, or null when --elf was not passed. Null and `pins_shadowing=0` are different answers: not asked, versus none found"),
+  new Metric("image_bytes", "image_bytes", "size of that image; `shift config verify` prints this same key as `pinned_image_bytes`, beside `candidate_image_bytes`"),
+  new Metric("max_placed_extent", "max_placed_extent", "`rom + size`, maximised over every region the map placed -- the last byte the map claims the image should hold"),
+  new Metric("padding_bytes", "padding_bytes", "bytes the image runs past max_placed_extent, confirmed uniform fill (null when the image is not longer than the map's placed extent); a non-uniform excess is refused before this key is ever reported"),
+  new Metric("regions_unplaced_past_eof", "regions_unplaced_past_eof", "placed regions whose claimed extent runs past the image actually handed in; more than half is refused rather than reported"),
+  new Metric("window_lo", "window_lo", "first VRAM address an insertion would move; derived from the map's own lowest movable section, never hardcoded"),
+  new Metric("window_hi", "window_hi", "one past the last VRAM address an insertion would move; the end of the map's last bss section"),
+  new Metric("window_lo_section", "window_lo_section", "the output section that set the window's low bound"),
+  new Metric("window_hi_section", "window_hi_section", "the output section that set the window's high bound"),
+  new Metric("region_count", "region_count", "regions derived from the map"),
+  new Metric("blobs", "blobs", "the output sections this run treated as opaque bytes: scanned, never split by input record, never attributed to a symbol"),
+  new Metric("blob_source", "blob_source", "where that set came from: explicit (--blob), auto (--blobs auto adopted the map's own suggestion), or none"),
+  new Metric("blobs_excluded", "blobs_excluded", "sections --no-blob kept out of the set, whatever the suggestion said"),
+  new Metric("suggested_blobs", "suggested_blobs", "sections every one of whose input objects is a raw binary; the map's own answer to which sections are opaque, adopted with --blobs auto"),
+  new Metric("blob_suggestions", "blob_suggestions", "one provenance row per suggested blob: the rule that matched and the objects that matched it"),
+  new Metric("blob_rules", "blob_rules", "the published raw-binary-object table: every path shape a blob suggestion can be based on, with the evidence behind it"),
+  new Metric("regions", "regions", "the derived region table: one row per run of like input records, plus one per section the caller declared a blob"),
+  new Metric("scanned_words", "scanned_words", "image words read by the scan; data, blob and header regions only"),
+  new Metric("text_words", "text_words", "instruction words counted and deliberately not scanned; their address arithmetic needs `shift rehearse`, not a value test"),
+  new Metric("text_regions", "text_regions", "text regions the map yielded"),
+  new Metric("scan_total", "scan_total", "scanned words holding a value inside the movable window; an upper bound on the region's hardcoded-pointer suspects, not a count of them"),
+  new Metric("scan_high", "scan_high", "hits most confidently a real address reference: compiled data pointing at a symbol's start"),
+  new Metric("scan_medium", "scan_medium", "hits with one of the two elevating signals but not both"),
+  new Metric("scan_low", "scan_low", "hits a suppressor explained away, or with neither elevating signal"),
+  new Metric("scan_rules", "scan_rules", "how many hits each rule accounted for"),
+  new Metric("scan_by_region", "scan_by_region", "hits per output section"),
+  new Metric("hits", "hits", "the ranked hit list, capped at --limit"),
+  new Metric("hits_shown", "hits_shown", "rows the hit list actually carries"),
+  new Metric("rules", "rules", "the published suppressor table: every rule a hit can name, with the evidence behind it"),
+  new Metric("residence_scores", "residence_scores", "what a hit's region kind is worth when it is scored"),
+  new Metric("symbol_start_bonus", "symbol_start_bonus", "what landing exactly on a symbol's start address is worth"),
+  new Metric("tier_thresholds", "tier_thresholds", "the score each tier needs"),
+  new Metric("pin_sources", "pin_sources", "the pin files read, in the order given"),
+  new Metric("pins_total", "pins_total", "linker assignments parsed from those files"),
+  new Metric("pins_derived", "pins_derived", "pins whose right-hand side names a symbol: healthy by construction"),
+  new Metric("pins_authentic", "pins_authentic", "absolute pins the console or the caller's whitelist fixes: hardware registers, boot globals"),
+  new Metric("pins_artifact", "pins_artifact", "absolute pins in a window the project itself owns: bare kseg0 RAM, or the cart domain"),
+  new Metric("pins_rom_offset", "pins_rom_offset", "absolute pins holding a raw offset into the cartridge image: below every run-time RAM window and inside the extent the map placed. Remediable by symbolizing against the linker's own <segment>_ROM_START/_ROM_END symbols"),
+  new Metric("pins_shadowing", "pins_shadowing", "absolute pins an object in the linked ELF already defines -- the script assignment overrode that definition silently, and the surviving absolute symbol kept the losing definition's size, which is the evidence. Deleting one is byte-identical at the current layout. Only reported when --elf was passed"),
+  new Metric("pins_unclassified", "pins_unclassified", "pins in no named window and not a ROM offset either, or whose expression did not fold; reported rather than guessed"),
+  new Metric("pins_missing_sources", "pins_missing_sources", "ELF absolute symbols inside the movable window or the map's placed ROM extent that no supplied --pins/--symbol-addrs file names and the map does not explain as its own cascade-script boundary symbol -- the inventory is missing whatever -T file pinned them. Only reported when --elf was passed"),
+  new Metric("pins_missing_sources_shown", "pins_missing_sources_shown", "rows the missing-pin-sources list actually carries"),
+  new Metric("pins_missing_sources_list", "pins_missing_sources_list", "the pins_missing_sources detail itself, name-sorted and capped at --limit: read your link's own -T list against what you passed --pins/--symbol-addrs -- splat's auto files count"),
+  new Metric("pins", "pins", "the ranked pin list, suspects first, capped at --limit"),
+  new Metric("pins_shown", "pins_shown", "rows the pin list actually carries"),
+  new Metric("limit", "limit", "the cap every detail list in this report was built with"),
+  new Metric("output_section", "output_section", "the map output section a row belongs to"),
+  new Metric("kind", "kind", "how a region's words are read: text, data, blob, header, or bss"),
+  new Metric("vram", "vram", "run-time address"),
+  new Metric("size", "size", "bytes covered"),
+  new Metric("rom", "rom", "offset into the image"),
+  new Metric("rom_source", "rom_source", "how that offset was derived: load-address, vma-as-rom, unplaced, or not-resident"),
+  new Metric("words", "words", "32-bit words covered"),
+  new Metric("scanned", "scanned", "whether the scan read this region's words"),
+  new Metric("objects", "objects", "the input object paths a suggestion rests on"),
+  new Metric("input_records", "input_records", "input-section records the map attributed to one output section"),
+  new Metric("pattern", "pattern", "the path text one published rule looks for"),
+  new Metric("match", "match", "how that pattern is applied: suffix (the object path ends with it) or directory (a path component equals it)"),
+  new Metric("name", "name", "the symbol a pin or a rule is named by"),
+  new Metric("expression", "expression", "the pin's right-hand side, as written"),
+  new Metric("form", "form", "absolute, derived, or unresolved: what the right-hand side turned out to be"),
+  new Metric("classification", "classification", "the pin class this entry landed in"),
+  new Metric("value", "value", "the 32-bit value a pin holds or a word contains"),
+  new Metric("references", "references", "symbols a derived pin's expression names"),
+  new Metric("source", "source", "the file an entry was read from"),
+  new Metric("line", "line", "the line it was written on"),
+  new Metric("comment", "comment", "prose written beside the entry"),
+  new Metric("context", "context", "the standalone comment heading the block it sits in"),
+  new Metric("attributes", "attributes", "splat `key:value` attributes from the comment"),
+  new Metric("region", "region", "the output section a hit lives in"),
+  new Metric("residence", "residence", "the kind of region a hit lives in"),
+  new Metric("resident_symbol", "resident_symbol", "the symbol a hit sits inside, or null"),
+  new Metric("resident_offset", "resident_offset", "how far into that symbol it sits"),
+  new Metric("target_symbol", "target_symbol", "the symbol the hit's value points into"),
+  new Metric("target_offset", "target_offset", "how far past that symbol's start"),
+  new Metric("alignment", "alignment", "the value modulo 4; anything but 0 rules it out"),
+  new Metric("points_at_symbol_start", "points_at_symbol_start", "whether the value lands exactly on a symbol's address"),
+  new Metric("repeats", "repeats", "how many hits share this exact value"),
+  new Metric("cluster", "cluster", "arithmetic-progression family id, or null"),
+  new Metric("window", "window", "the named address window a value falls in: cart, kseg1, kseg0, segmented, or null"),
+  new Metric("whitelisted", "whitelisted", "whether the caller declared this address authentic"),
+  new Metric("reason", "reason", "why a classification or a whitelist entry says what it says"),
+  new Metric("score", "score", "residence plus symbol-start bonus, for a scored hit"),
+  new Metric("rule", "rule", "the rule that decided this hit's tier"),
+  new Metric("tier", "tier", "high, medium, or low address-reference confidence"),
+  new Metric("evidence", "evidence", "what one published rule is based on"),
+  new Metric("count", "count", "how many entries one tally row holds"),
+  new Metric("mode", "mode", "analyze (one relink pair) or orchestrate (a driver run)"),
+  new Metric("base_map", "base_map", "the unshifted build's `ld -Map` file"),
+  new Metric("base_image", "base_image", "the unshifted build's linked image"),
+  new Metric("shifted_map", "shifted_map", "the relinked build's `ld -Map` file"),
+  new Metric("shifted_image", "shifted_image", "the relinked build's linked image"),
+  new Metric("delta", "delta", "bytes the pad inserted; also, on one movement row, how far that symbol actually moved"),
+  new Metric("base_image_bytes", "base_image_bytes", "size of the unshifted image"),
+  new Metric("shifted_image_bytes", "shifted_image_bytes", "size of the relinked image; it must exceed the base by exactly delta"),
+  new Metric("anchor_vram", "anchor_vram", "the VRAM the pad went in at: everything from here up moves"),
+  new Metric("anchor_rom", "anchor_rom", "that address as a ROM offset in the base image"),
+  new Metric("anchor_source", "anchor_source", "auto (derived from the two maps) or symbol (the caller named one)"),
+  new Metric("anchor_symbol", "anchor_symbol", "a symbol placed exactly at the anchor"),
+  new Metric("anchor_highest_unmoved", "anchor_highest_unmoved", "the highest in-window VRAM a shared symbol kept; with anchor_lowest_moved it brackets the true insertion point"),
+  new Metric("anchor_lowest_moved", "anchor_lowest_moved", "the lowest in-window VRAM a shared symbol moved delta from"),
+  new Metric("generated_spans", "generated_spans", "ROM spans a build step writes rather than the compiler: CRC header words and checksum storage, recognised before any decode or value test"),
+  new Metric("start", "start", "first ROM offset one span covers"),
+  new Metric("end", "end", "one past the last ROM offset one span covers"),
+  new Metric("label", "label", "the class or span name a row was given"),
+  new Metric("total_words", "total_words", "32-bit words the pairing compared"),
+  new Metric("differing_total", "differing_total", "paired words whose value changed; the sum of every class count"),
+  new Metric("classes", "classes", "per-class counts for every differing word"),
+  new Metric("unexplained_changed", "unexplained_changed", "changed words no class accounts for: the gate, and zero on a controlled relink"),
+  new Metric("unexplained_shown", "unexplained_shown", "rows the unexplained list carries"),
+  new Metric("unexplained", "unexplained", "the unexplained-word list, capped at --limit"),
+  new Metric("offset", "offset", "ROM offset of one differing word in the base image"),
+  new Metric("old", "old", "the word's value in the base image"),
+  new Metric("new", "new", "the word's value in the relinked image"),
+  new Metric("stale_total", "stale_total", "words that held a value inside the moved range and did not move"),
+  new Metric("stale_confirmed", "stale_confirmed", "the headline: words the audit ranked high that this relink did not move -- the strongest available evidence for a hardcoded pointer"),
+  new Metric("stale_review", "stale_review", "unmoved words at medium confidence: worth a look, not an alarm"),
+  new Metric("stale_noise", "stale_noise", "unmoved words a suppressor already explained away: the measured false-positive floor"),
+  new Metric("stale_unattributed", "stale_unattributed", "stale candidates the static scan never saw, because they sit in a region it does not scan; reported rather than absorbed"),
+  new Metric("stale_shown", "stale_shown", "rows the stale list carries"),
+  new Metric("stale", "stale", "the ranked unmoved-word list, capped at --limit"),
+  new Metric("shifted_value", "shifted_value", "what the relinked image holds there"),
+  new Metric("verdict", "verdict", "what the relink did to one word: moved, unmoved, or changed-other"),
+  new Metric("outcome", "outcome", "what that verdict means at that tier: tracks, stale-confirmed, stale-review, noise, or changed-other"),
+  new Metric("merge_tiers", "merge_tiers", "the published merge: what an unmoved word is called at each confidence tier"),
+  new Metric("tier_verdicts", "tier_verdicts", "the tier by movement matrix: every static hit inside the moved range, counted by what the relink did to it"),
+  new Metric("reconciled_total", "reconciled_total", "static hits judged against the relink"),
+  new Metric("moved_total", "moved_total", "of those, the ones that moved by delta"),
+  new Metric("unmoved_total", "unmoved_total", "of those, the ones that did not move"),
+  new Metric("changed_other_total", "changed_other_total", "of those, the ones that changed by something other than delta"),
+  new Metric("movement_shared", "movement_shared", "symbols both maps define"),
+  new Metric("movement_anomaly_total", "movement_anomaly_total", "shared symbols that moved by neither 0 nor delta; a rigid layout has none"),
+  new Metric("movement_anomaly_shown", "movement_anomaly_shown", "rows the movement-anomaly list carries"),
+  new Metric("movement", "movement", "the movement-anomaly list, capped at --limit"),
+  new Metric("movement_only_in_base", "movement_only_in_base", "symbols the base map defines and the relink lost"),
+  new Metric("movement_only_in_shifted", "movement_only_in_shifted", "symbols the relink gained"),
+  new Metric("base_address", "base_address", "one symbol's address in the base map"),
+  new Metric("shifted_address", "shifted_address", "the same symbol's address after the relink"),
+  new Metric("checksum_total", "checksum_total", "FUNCTION=VARIABLE pairs checked"),
+  new Metric("checksum_pass", "checksum_pass", "pairs the consistency rule held for"),
+  new Metric("checksum_findings", "checksum_findings", "pairs that did not hold, or could not be resolved"),
+  new Metric("checksums", "checksums", "one row per checked pair, always all of them"),
+  new Metric("checksum_rules", "checksum_rules", "the published outcome table for the checksum-consistency rule"),
+  new Metric("function", "function", "the checksum-protected function"),
+  new Metric("variable", "variable", "the variable its byte-sum is patched into"),
+  new Metric("function_vram", "function_vram", "where that function starts"),
+  new Metric("function_rom", "function_rom", "that start as a ROM offset"),
+  new Metric("function_size", "function_size", "bytes to the next symbol the map places: the same extent the project's own post-link patcher derives"),
+  new Metric("body_words", "body_words", "words compared inside that extent"),
+  new Metric("body_changed", "body_changed", "how many of them the relink changed"),
+  new Metric("variable_rom", "variable_rom", "the checksum word's ROM offset"),
+  new Metric("variable_base", "variable_base", "its value in the base image"),
+  new Metric("variable_shifted", "variable_shifted", "its value in the relinked image"),
+  new Metric("variable_changed", "variable_changed", "whether the two differ"),
+  new Metric("status", "status", "pass, checksum-stale, checksum-orphan, or unresolved"),
+  new Metric("basis", "basis", "why a pair passed: inert (nothing changed) or tracked (both did)"),
+  new Metric("note", "note", "why a pair could not be resolved, when it could not"),
+  new Metric("findings", "findings", "unexplained words plus confirmed stale words plus movement anomalies plus checksum findings"),
+  new Metric("symbol_census", "symbol_census", "whether the symbol-side census ran at all: false when no ELF pair was handed in, which is a different answer from finding nothing"),
+  new Metric("base_elf", "base_elf", "the unshifted link's ELF"),
+  new Metric("shifted_elf", "shifted_elf", "the relinked build's ELF"),
+  new Metric("symbol_range_lo", "symbol_range_lo", "the insertion VRAM; the census judges symbols strictly above it, because the insertion address itself carries both a boundary that correctly stays and content that correctly moves. The human report prints this and symbol_range_hi together as `symbol_range=(lo, hi]`"),
+  new Metric("symbol_range_hi", "symbol_range_hi", "the movable window's high bound, judged inclusively: the symbol naming the end of the last bss section moves with it. Printed as the high half of `symbol_range=(lo, hi]`"),
+  new Metric("symbol_checked", "symbol_checked", "shared symbols inside that range"),
+  new Metric("symbol_moved", "symbol_moved", "of those, the ones that moved by delta"),
+  new Metric("symbol_stale", "symbol_stale", "the symbol-side headline: symbols naming an address the shift moved that did not move with it. Every reference resolved through one now points at whatever the relink put there"),
+  new Metric("shadowing_pins", "shadowing_pins", "stale symbols with a known free remediation: an absolute symbol that overrode an object's own definition of the same name. Counted apart from symbol_stale so a plan can rank them as free wins"),
+  new Metric("symbol_boundary", "symbol_boundary", "shared symbols sitting exactly on the insertion address, excluded from the census and counted rather than absorbed: both answers are correct there at once"),
+  new Metric("symbol_only_in_base", "symbol_only_in_base", "names the base ELF defines and the relink lost"),
+  new Metric("symbol_only_in_shifted", "symbol_only_in_shifted", "names the relink gained"),
+  new Metric("symbol_findings", "symbol_findings", "the ranked symbol-side finding list, capped at --limit"),
+  new Metric("symbol_findings_shown", "symbol_findings_shown", "rows the symbol-finding list carries"),
+  new Metric("symbol_rules", "symbol_rules", "the published symbol-side rule table, with the evidence behind each class"),
+  new Metric("absolute", "absolute", "whether the ELF types this symbol SHN_ABS: a value, not a place"),
+  new Metric("symbol_section", "symbol_section", "the section the ELF says owns a symbol, or null for an absolute one"),
+  new Metric("owning_section", "owning_section", "the section whose extent actually contains a symbol's value -- the home a migration would give it"),
+  new Metric("binding", "binding", "the ELF symbol binding: local, global, or weak"),
+  new Metric("wrapper", "wrapper", "the relink script the driver invoked"),
+  new Metric("ld_script", "ld_script", "the linker script a run was linked with"),
+  new Metric("anchor_object", "anchor_object", "the object path the pad line was inserted after"),
+  new Metric("workdir", "workdir", "where the driver wrote scripts and build outputs"),
+  new Metric("image_name", "image_name", "the file name the wrapper must leave the image under"),
+  new Metric("map_name", "map_name", "the file name the wrapper must leave the map under"),
+  new Metric("deltas", "deltas", "the shift amounts the driver rehearsed"),
+  new Metric("runs", "runs", "one row per wrapper invocation, base first"),
+  new Metric("out_dir", "out_dir", "the directory one run was told to write to"),
+  new Metric("exit_status", "exit_status", "what the wrapper exited with"),
+  new Metric("analyses", "analyses", "one analyze report per delta"),
+  new Metric("classes_agree", "classes_agree", "whether every delta reported the same counts; a shift census is a property of the layout, not of how far it moved"),
+  new Metric("disagreements", "disagreements", "every count the deltas differed on"),
+  new Metric("values", "values", "that count, per delta"),
+  new Metric("pinned_map", "pinned_map", "the `ld -Map` of the link shipped today"),
+  new Metric("candidate_map", "candidate_map", "the `ld -Map` of the link the configuration edit produces"),
+  new Metric("pinned_image", "pinned_image", "the shipped link's image, when given"),
+  new Metric("candidate_image", "candidate_image", "the candidate link's image, when given"),
+  new Metric("allowed_deltas", "allowed_deltas", "the movement a pair is allowed; {0} for a faithful pair, which is the one number separating this gate from a shift rehearsal"),
+  new Metric("shared_symbols", "shared_symbols", "names both links define; the population the movement check ran over"),
+  new Metric("candidate_image_bytes", "candidate_image_bytes", "size of the candidate link's image; a faithful pair's two sizes are equal, and an unequal pair is reported rather than compared anyway"),
+  new Metric("symbols_moved", "symbols_moved", "shared symbols the two links place at different addresses; a faithful pair has none"),
+  new Metric("symbols_only_in_pinned", "symbols_only_in_pinned", "names the shipped link defines and the candidate lost"),
+  new Metric("symbols_only_in_candidate", "symbols_only_in_candidate", "names the candidate link gained"),
+  new Metric("moved_symbols", "moved_symbols", "the divergent-symbol list in the pinned map's address order, capped at --limit; the first row is the one to debug"),
+  new Metric("moved_symbols_shown", "moved_symbols_shown", "rows that list carries"),
+  new Metric("shared_sections", "shared_sections", "output sections both maps place"),
+  new Metric("sections_diverged", "sections_diverged", "sections placed at a different VMA, size, or AT() load address"),
+  new Metric("sections_only_in_pinned", "sections_only_in_pinned", "sections the shipped link places and the candidate does not"),
+  new Metric("sections_only_in_candidate", "sections_only_in_candidate", "sections the candidate link added"),
+  new Metric("section_divergences", "section_divergences", "one row per divergent section: which field differed and both values"),
+  new Metric("field", "field", "which placement field of a section differed"),
+  new Metric("pinned", "pinned", "that field's value in the shipped link"),
+  new Metric("candidate", "candidate", "that field's value in the candidate link"),
+  new Metric("image_checked", "image_checked", "whether an image pair was supplied at all: false is 'not asked', not 'identical'"),
+  new Metric("image_identical", "image_identical", "whether the two images are byte-identical; null when none was given"),
+  new Metric("image_first_difference", "image_first_difference", "the first byte offset at which the two images differ, or null"),
+  new Metric("differences", "differences", "every reason this pair is not faithful, counted once each"),
+  new Metric("faithful", "faithful", "the gate: the candidate link reproduces the shipped one exactly. Exit 0 when true, 3 when false"),
+  new Metric("faithful_checks", "faithful_checks", "the published check table: what each of the three catches that the others do not"),
+  new Metric("audit_report", "audit_report", "the `shift audit` report read"),
+  new Metric("rehearse_reports", "rehearse_reports", "the `shift rehearse` reports read, in the order given"),
+  new Metric("plan_total", "plan_total", "items in the queue; things to do, not times they were mentioned -- one subject in one class is one item"),
+  new Metric("plan_convictions", "plan_convictions", "items a real relink demonstrated rather than a static scan suspected; they lead the queue"),
+  new Metric("plan_free_wins", "plan_free_wins", "delete-redundant-pin items: an object already defines the symbol, so the fix changes no bytes at the current layout"),
+  new Metric("plan_derive_pin", "plan_derive_pin", "items whose pinned value is a boundary the linker already computes"),
+  new Metric("plan_migrate_symbol", "plan_migrate_symbol", "items needing a section home: real work, still match-preserving"),
+  new Metric("plan_investigate", "plan_investigate", "items with evidence but no remediation the reports can derive"),
+  new Metric("plan_dual_spelling", "plan_dual_spelling", "items naming what this instrumentation structurally cannot judge: references split across a lui/%lo or lui/ori pair"),
+  new Metric("plan_whitelist", "plan_whitelist", "items whose fix is a written reason rather than a code change"),
+  new Metric("plan_structural", "plan_structural", "items parked with a named reason: overlay windows and opaque blobs"),
+  new Metric("plan_by_class", "plan_by_class", "queue items per remediation class"),
+  new Metric("plan_by_source", "plan_by_source", "queue items per report source that named them"),
+  new Metric("plan_sections", "plan_sections", "working items per owning section: the locality a maintainer fixes one file at a time"),
+  new Metric("plan_capped", "plan_capped", "report lists whose --limit cut them short. A plan built from a capped report describes part of the work and says which part"),
+  new Metric("plan_items", "plan_items", "the ranked queue, capped at --limit"),
+  new Metric("plan_shown", "plan_shown", "rows the queue actually carries"),
+  new Metric("remediation_classes", "remediation_classes", "the published class table: what each fix is, and how it is gated"),
+  new Metric("plan_rules", "plan_rules", "the published routing table: every path a finding takes from a report into the queue, and why it lands in the class it does"),
+  new Metric("subject", "subject", "what one queue item is about"),
+  new Metric("title", "title", "the one-line instruction for one queue item"),
+  new Metric("remediation", "remediation", "the class one queue item belongs to"),
+  new Metric("remediation_kind", "remediation_kind", "match-preserving, conviction, declaration, or parked"),
+  new Metric("conviction", "conviction", "whether a relink demonstrated this item, rather than a scan suspecting it"),
+  new Metric("exemplar", "exemplar", "whether this item's value is exactly an address the linker already computes -- an arithmetic identity rather than an argued one. Exemplars lead their class"),
+  new Metric("sources", "sources", "the report halves that named one item"),
+  new Metric("matched_rules", "matched_rules", "the plan_rules entries that placed one item; spelled apart from the audit's own `rules` because that key already names the suppressor table and one spelling cannot mean two tables"),
+  new Metric("gates", "gates", "the exact commands to run after one item's fix; a fix with no gate is a hope"),
+  new Metric("section", "section", "the section whose extent owns one item's address"),
+  new Metric("rank", "rank", "a remediation class's position in queue order"),
+  new Metric("gate", "gate", "what to run after a class's fix, in prose"),
+]);
+
+export const COMMAND_METRICS = Object.freeze([
+  new Metric("accepted", "accepted", "whether this invocation satisfies --fail-on-mismatch"),
+  new Metric("acceptance_basis", "acceptance_basis", "function-exact, cross-rom-structural, or the local scratch-score proxy result: why the command accepted or rejected the comparison"),
+  new Metric("decomp_me_score_proxy_exact", "decomp_me_score_proxy_exact", "whether pre-link instruction words, relocation targets, and known relocation layout agree; a local proxy, not a site result"),
+  new Metric("raw_instruction_words_exact", "raw_instruction_words_exact", "whether every compared pre-link instruction word agrees"),
+  new Metric("relocation_targets_exact", "relocation_targets_exact", "whether relocation kind and symbol/addend targets agree positionally"),
+  new Metric("linked_function_exact", "linked_function_exact", "whether relocation-normalized function instructions and known relocation layout agree"),
+  new Metric("census", "census", "--census predicate results; exit 3 when any of them fails, which is distinct from the exit 1 of --fail-on-mismatch"),
+  new Metric("key", "key", "the metric one census predicate asked about"),
+  new Metric("expected", "expected", "the value a census predicate was written with"),
+  new Metric("actual", "actual", "the value the report carried for that key"),
+  new Metric("pass", "pass", "whether one census predicate held"),
+]);
+
+export const METRICS_BY_KEY = Object.freeze(Object.fromEntries([...METRICS, ...CAMPAIGN_METRICS].map((m) => [m.key, m])));
+/** The view report is a separate namespace with its own lookup. */
+export const VIEW_METRICS_BY_KEY = Object.freeze(Object.fromEntries(VIEW_METRICS.map((m) => [m.key, m])));
+export const SUMMARY_METRICS = Object.freeze(METRICS.filter((m) => m.summary));
+export const DEPRECATED_KEYS = Object.freeze(Object.fromEntries(METRICS.flatMap((m) => m.deprecated_keys.map((a) => [a, m.key]))));
+/** Spellings `--census` accepts on a comparison, mapped to the report key. */
+export const COMPARISON_CENSUS_KEYS = Object.freeze({ ...Object.fromEntries(METRICS.map((m) => [m.key, m.key])), ...DEPRECATED_KEYS });
+export const VIEW_CENSUS_KEYS = Object.freeze(Object.fromEntries(VIEW_METRICS.map((m) => [m.key, m.key])));
+export const SHIFT_METRICS_BY_KEY = Object.freeze(Object.fromEntries(SHIFT_METRICS.map((m) => [m.key, m])));
+export const SHIFT_CENSUS_KEYS = Object.freeze(Object.fromEntries(SHIFT_METRICS.map((m) => [m.key, m.key])));
+
+/** Render the one-line human summary from the registry. */
+export function summaryLine(item) {
+  const fields = SUMMARY_METRICS.map((m) => `${m.key}=${m.render(item[m.attribute])}`).join(" ");
+  return `${fields} ${item.candidate}`;
+}
+
+/** Return the canonical JSON keys whose spelling changed. */
+export function canonicalFields(item) {
+  const out = {};
+  for (const m of METRICS) if (m.deprecated_keys.length) out[m.key] = item[m.attribute];
+  return out;
+}
+
+/** Return canonical and deprecated JSON keys for selected metrics. */
+export function selectedFields(item, keys) {
+  const payload = {};
+  for (const key of keys) {
+    const m = METRICS_BY_KEY[key];
+    const value = item[m.attribute];
+    payload[m.key] = value;
+    for (const alias of m.deprecated_keys) payload[alias] = value;
+  }
+  return payload;
+}
+
+export const EXPLAIN_WIDTH = 88;
+
+/** Greedy word wrap (textwrap.wrap without hyphen splitting). */
+function wrap(text, width, indent) {
+  const words = text.split(/\s+/).filter(Boolean);
+  const lines = [];
+  let cur = indent;
+  for (const w of words) {
+    if (cur.length > indent.length && cur.length + 1 + w.length > width) { lines.push(cur); cur = indent + w; }
+    else cur = cur.length > indent.length ? `${cur} ${w}` : cur + w;
+  }
+  if (cur.length > indent.length) lines.push(cur);
+  return lines;
+}
+
+/** Return the printed registry: label, JSON key, and meaning. */
+export function explainKeysText() {
+  const header = "Comparison keys. The printed label and the JSON key are the same string.\n"
+    + "Deprecated JSON keys are still emitted beside the canonical key for one release;\n"
+    + "new consumers should read the canonical key. Every key is followed by its meaning.\n";
+  const titles = ["key", "line", "deprecated json key", ""];
+  const describe = (ms) => ms.map((m) => [m.key, m.summary ? "yes" : "-", m.deprecated_keys.join(", ") || "-", m.description]);
+  const rows = describe(METRICS), campaign = describe(CAMPAIGN_METRICS), view = describe(VIEW_METRICS), shift = describe(SHIFT_METRICS), command = describe(COMMAND_METRICS);
+  const all = [...rows, ...campaign, ...view, ...shift, ...command];
+  const widths = [0, 1, 2].map((c) => Math.max(titles[c].length, ...all.map((r) => r[c].length)));
+  const fmt = (row) => [0, 1, 2].map((c) => row[c].padEnd(widths[c])).join("  ").replace(/\s+$/, "");
+  const fmtRows = (items) => items.flatMap((row) => [fmt(row), ...wrap(row[3], EXPLAIN_WIDTH, "    ")]);
+  const sep = widths.map((w) => "-".repeat(w)).join("  ");
+  return [header, fmt(titles), sep, ...fmtRows(rows), "",
+    "Campaign report keys (campaign --json / --json-summary).", "", fmt(titles), sep, ...fmtRows(campaign), "",
+    "Aligned mechanism view keys (view / view-dumps). These count aligned rows, not",
+    "positional words, so a spelling shared with the comparison registry above is a",
+    "different number. Nested keys (hunks, lanes, webs) are listed with the rest.", "", fmt(titles), sep, ...fmtRows(view), "",
+    "Shiftability keys (shift audit and shift rehearse). A third namespace: these count",
+    "words in a linked image, pins in a linker script, and what a relink changed or left",
+    "unmoved, so a spelling shared with either registry above is a different thing. Nested",
+    "keys (regions, pins, hits, rules, checksums, runs) are listed with the rest.", "", fmt(titles), sep, ...fmtRows(shift), "",
+    "Command result keys. These describe what one invocation decided rather than what",
+    "the two inputs look like: acceptance, and the --census predicate results (exit 3",
+    "when any predicate fails, distinct from the exit 1 of --fail-on-mismatch).", "", fmt(titles), sep, ...fmtRows(command)].join("\n");
+}
