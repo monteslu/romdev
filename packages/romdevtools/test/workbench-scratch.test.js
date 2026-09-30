@@ -453,3 +453,13 @@ describe("context hardening", () => {
     assert.ok(r.stdout.includes("context lint: no undefined-identifier collapse found"));
   }));
 });
+
+describe("check-scratch grammar", () => {
+  test("accepts --show-all and says what it does without --view; symbol spellings conflict", async () => {
+    const { parseArgs, formatHelp } = await import("../src/decomp/workbench/argparse.js");
+    const spec = scratchCli.COMMAND_SPECS.find((s) => s.path[0] === "check-scratch");
+    assert.equal(parseArgs(spec, ["export.zip", "--show-all"]).show_all, true);
+    assert.ok(formatHelp(spec, { prog: "decomp-workbench check-scratch" }).split(/\s+/).join(" ").includes("with --view"));
+    assert.throws(() => parseArgs(spec, ["x.zip", "--symbol", "a", "--function", "b"]), /two spellings of one selector/);
+  });
+});

@@ -260,3 +260,28 @@ describe("law cross-links", () => {
       "overlay1FindNextAngle", "func_overlay_038_F0000000", "overlay59PrepareEntry", "levelFreeAll"]) assert.ok(text.includes(name), name);
   });
 });
+
+describe("guide command UX", () => {
+  test("every topic the index advertises resolves", async () => {
+    for (const topic of FG.topicNames()) {
+      const r = await run(["guide", topic, "--width", "100"]);
+      assert.equal(r.code, 0, topic);
+      assert.ok(r.stdout.trim(), topic);
+    }
+  });
+  test("a topic that does not exist still fails, and bare guide succeeds", async () => {
+    const r = await run(["guide", "no-such-topic"]);
+    assert.equal(r.code, 2);
+    assert.ok(r.stderr.includes("unknown guide topic"));
+    const ok = await run(["guide"]);
+    assert.equal(ok.code, 0);
+    assert.ok(ok.stdout.trim());
+  });
+  test("--width bounds each line and rejects nonsense", async () => {
+    const r = await run(["guide", "19", "--width", "40"]);
+    assert.ok(r.stdout.split("\n").every((l) => l.length <= 40));
+    const bad = await run(["guide", "19", "--width", "5"]);
+    assert.equal(bad.code, 2);
+    assert.match(bad.stderr, /width must be at least 20 columns/);
+  });
+});
