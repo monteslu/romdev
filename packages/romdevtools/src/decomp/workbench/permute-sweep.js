@@ -243,6 +243,44 @@ export function expandPermuterPragmas(source) {
   return out.join("").replace(/\s+$/, "") + "\n";
 }
 
+/**
+ * Run a permuter scratch compile.sh (`compile.sh <in> -o <out>`) through
+ * romdev's WASM toolchain: the `cd` and each command line, with "$INPUT"
+ * and "$OUTPUT" bound, dispatched by recipe.js. Diagnostics go to `log`.
+ */
+export async function runCompileScriptWasm(script, input, output, log, timeoutSeconds = null) {
+  const { runRecipeLine } = await import("../recipe.js");
+  const { DECOMP_HOME } = await import("../project.js");
+  const quote = (p) => `'${String(p).replace(/'/g, "'\\''")}'`;
+  const lines = fs.readFileSync(script, "utf8").split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+  let cwd = path.dirname(script);
+  const commands = [];
+  for (const l of lines) {
+    if (/^(set|export)\s/.test(l) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(l)) continue;
+    const cd = /^cd\s+(.+)$/.exec(l);
+    if (cd) { cwd = path.resolve(cwd, cd[1].replace(/^'(.*)'$/, "$1").replace(/^"(.*)"$/, "$1")); continue; }
+    commands.push(l.split('"$INPUT"').join(quote(path.resolve(input))).split('"$OUTPUT"').join(quote(path.resolve(output))));
+  }
+  const tmpBase = path.join(DECOMP_HOME, ".workbench-tmp");
+  fs.mkdirSync(tmpBase, { recursive: true });
+  const tmpRoot = fs.mkdtempSync(path.join(tmpBase, "scratch-"));
+  const started = Date.now();
+  try {
+    for (const c of commands) {
+      if (timeoutSeconds !== null && timeoutSeconds !== undefined && (Date.now() - started) / 1000 > timeoutSeconds) {
+        throw Object.assign(new Error("compile.sh timed out"), { name: "TimeoutExpired" });
+      }
+      const r = await runRecipeLine(c, { cwd, tmpRoot });
+      fs.appendFileSync(log, r.log ?? "");
+      if (r.unsupported) { fs.appendFileSync(log, `compile.sh step not supported by romdev's toolchain: ${r.unsupported}\n`); return { returncode: 127 }; }
+      if (r.code !== 0) return { returncode: r.code };
+    }
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+  return { returncode: 0 };
+}
+
 /** Compile the scratch's unmodified base through its own `compile.sh`. */
 export async function compileScratchBase(plan, scratch, outDir, { runner = runOwned } = {}) {
   const base = path.join(scratch, "base.c");
@@ -257,7 +295,12 @@ export async function compileScratchBase(plan, scratch, outDir, { runner = runOw
   fs.writeFileSync(log, "");
   let completed;
   try {
-    completed = await runner([script, source, "-o", obj], { cwd: plan.root, stdout: { file: log }, stderr: "stdout", timeout: plan.step_timeout, check: false });
+    // The scratch's compile.sh is run the way the permuter runs it: its cd
+    // and command lines through romdev's WASM toolchain, never a host shell
+    // and compiler. An injected runner (tests) takes the script as given.
+    completed = runner === runOwned
+      ? await runCompileScriptWasm(script, source, obj, log, plan.step_timeout)
+      : await runner([script, source, "-o", obj], { cwd: plan.root, stdout: { file: log }, stderr: "stdout", timeout: plan.step_timeout, check: false });
   } catch (e) {
     if (e?.name !== "TimeoutExpired") throw e;
     throw new PermuterError(`the scratch base did not compile within ${formatG(plan.step_timeout)}s (permuter.step_timeout_seconds); see ${log}`);

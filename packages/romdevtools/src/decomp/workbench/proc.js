@@ -35,6 +35,9 @@ const HOST_TOOLCHAIN = /(^|[-/])(gcc|g\+\+|cc|c\+\+|clang|clang\+\+|cpp|make|gma
 export function routeFor(argv, cwd = process.cwd()) {
   const prog = argv[0] ?? "";
   if ((prog === "/bin/sh" || prog === "sh" || prog === "bash" || prog === "/bin/bash") && argv[1] === "-c") return lineRoute(argv[2] ?? "", cwd);
+  // `make -n`: romdev's own Makefile reader prints the recipe (proc-child.js);
+  // it must never reach the build runner, which would build the target.
+  if (/^g?make$/.test(path.basename(prog)) && argv.some((a) => a === "-n" || a === "--dry-run" || a === "--just-print" || a === "--recon") && !isScript(resolveProgram(prog, cwd))) return { mode: "make-n" };
   const t = toolName(prog);
   if (t?.kind === "ido" || t?.kind === "binutils") return { mode: "wasm", kind: t.kind };
   const cls = classifyCommand(argv, cwd);
@@ -42,8 +45,6 @@ export function routeFor(argv, cwd = process.cwd()) {
     return { mode: "wasm", kind: cls.kind };
   }
   const base = path.basename(prog);
-  // `make -n`: romdev's own Makefile reader prints the recipe (proc-child.js).
-  if (/^g?make$/.test(base) && argv.some((a) => a === "-n" || a === "--dry-run" || a === "--just-print" || a === "--recon") && !isScript(resolveProgram(prog, cwd))) return { mode: "make-n" };
   // A script standing in for a tool (a test double, a project wrapper) runs
   // as given; a host compiler or build-driver BINARY never does.
   if (HOST_TOOLCHAIN.test(base) && !/\.(m?js|cjs)$/.test(base) && !isScript(resolveProgram(prog, cwd))) {
