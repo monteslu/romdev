@@ -1,0 +1,41 @@
+{
+  "name": "romdev-spimdisasm",
+  "version": "0.1.0",
+  "description": "spimdisasm (MIPS disassembler used by splat) ported to plain JavaScript ESM, for romdev. Reproduces spimdisasm 1.42.4, 1.39.3 and 1.35.0 output byte for byte, selectable at runtime.",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "scripts": {
+    "test": "node --test --test-concurrency=4 'test/**/*.test.mjs'"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/monteslu/romdev.git",
+    "directory": "packages/romdev-spimdisasm"
+  },
+  "homepage": "https://github.com/monteslu/romdev#readme",
+  "bugs": {
+    "url": "https://github.com/monteslu/romdev/issues"
+  },
+  "author": "Luis Montes",
+  "dependencies": {
+    "romdev-rabbitizer": "0.1.0"
+  },
+  "upstream": {
+    "url": "https://github.com/Decompollaborate/spimdisasm",
+    "license": "MIT",
+    "versions": ["1.42.4", "1.39.3", "1.35.0"]
+  }
+}
