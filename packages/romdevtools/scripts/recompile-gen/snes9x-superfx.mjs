@@ -6,13 +6,14 @@
 // The source is snes9x's fxinst.cpp (one `static void fx_xxx (void)` per
 // instruction handler, most of them built from macros in fxinst.cpp and
 // fxinst.h, plus the 1024-entry fx_OpcodeTable and the fx_PlotTable).
-// This script runs a small C preprocessor over those two files (object and
-// function-like #define with ## pasting, #if 0 / #ifdef / #ifndef / #else
-// with snes9x's own settings: CHECK_LIMITS and FX_DO_ROMBUFFER defined,
-// DEBUGGER and FX_ADDRESS_CHECK not), parses the handler bodies (a small C
-// subset: declarations, assignments and compound assignments, pre/post
-// increment, if/else, return, casts, the GSU struct's fields, register and
-// byte pointers) and emits WAT that keeps C's semantics: every expression is
+// This script runs the conditionals of those two files with snes9x's own
+// settings (#if 0 / #ifdef / #ifndef / #else; CHECK_LIMITS and
+// FX_DO_ROMBUFFER defined, DEBUGGER and FX_ADDRESS_CHECK not), collects the
+// #defines and expands them with the shared C preprocessor
+// (lib/c-preprocessor.mjs: function-like macros, ## pasting), parses the
+// handler bodies (a small C subset: declarations, assignments and compound
+// assignments, pre/post increment, if/else, return, casts, the GSU struct's
+// fields, register and byte pointers) and emits WAT that keeps C's semantics: every expression is
 // 32-bit with C's usual arithmetic conversions (a uint32 operand makes a
 // comparison, shift or division unsigned; uint8 and casts promote to int),
 // and a store truncates to the destination's C type. Anything outside the
@@ -33,6 +34,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { lex, parseDefine, expandTokens } from "./lib/c-preprocessor.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const pkg = path.resolve(here, "..", "..");
@@ -54,29 +56,14 @@ const emuC = readFileSync(path.join(srcDir, "fxemu.cpp"), "utf8");
 const emuH = readFileSync(path.join(srcDir, "fxemu.h"), "utf8");
 
 // ---------------------------------------------------------------- lexer
-const PUNCT = ["<<=", ">>=", "##", "++", "--", "<<", ">>", "<=", ">=", "==", "!=", "&&", "||", "->",
-  "+=", "-=", "*=", "/=", "%=", "|=", "&=", "^=", "{", "}", "(", ")", "[", "]", ";", ":", ",", "?",
-  "=", "+", "-", "*", "/", "%", "<", ">", "&", "|", "^", "!", "~", ".", "#"];
-
-function lex(src) {
-  const toks = [];
-  let i = 0;
-  while (i < src.length) {
-    const c = src[i];
-    if (/\s/.test(c)) { i++; continue; }
-    let m;
-    if ((m = /^0x[0-9a-fA-F]+|^[0-9]+/.exec(src.slice(i, i + 12)))) {
-      toks.push({ t: "num", v: Number(m[0]) }); i += m[0].length; continue;
-    }
-    if ((m = /^[A-Za-z_][A-Za-z0-9_]*/.exec(src.slice(i, i + 64)))) {
-      toks.push({ t: "id", v: m[0] }); i += m[0].length; continue;
-    }
-    const p = PUNCT.find((q) => src.startsWith(q, i));
-    if (!p) fail(`unexpected character '${c}' in: ${src.slice(i, i + 40)}`);
-    toks.push({ t: "p", v: p }); i += p.length;
-  }
-  return toks;
-}
+// The C lexer and macro expander are shared (lib/c-preprocessor.mjs); the
+// handler parser below wants integer tokens as numbers.
+const numeric = (toks) => toks.map((k) => {
+  if (k.t !== "num") return k;
+  const v = Number(k.v);
+  if (!Number.isInteger(v)) fail(`unsupported number '${k.v}'`);
+  return { ...k, v };
+});
 
 // ---------------------------------------------------------------- preprocessor
 const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, "");
@@ -96,7 +83,7 @@ function preprocess(src, macros) {
     if ((m = /^#\s*(ifdef|ifndef)\s+(\w+)/.exec(l))) {
       const name = m[2];
       let def;
-      if (DEFINED.has(name) || macros[name]) def = true;
+      if (DEFINED.has(name) || macros.has(name)) def = true;
       else if (UNDEFINED.has(name)) def = false;
       else if (name === "_FXINST_H_" || name === "_FXEMU_H_") def = false;
       else fail(`#${m[1]} ${name}: unknown configuration symbol`);
@@ -120,10 +107,10 @@ function preprocess(src, macros) {
     }
     if (/^#\s*endif\b/.test(l)) { if (!stack.pop()) fail("#endif without #if"); outl.push(""); continue; }
     if (!active()) { outl.push(""); continue; }
-    if ((m = /^#\s*define\s+(\w+)(\(([^)]*)\))?\s*(.*)$/.exec(l))) {
-      const [, name, , params, body] = m;
-      macros[name] = { params: params != null ? params.split(",").map((p) => p.trim()).filter(Boolean) : null, body: lex(body) };
-      DEFINED.add(name);
+    if ((m = /^#\s*define\s+(.*)$/.exec(l))) {
+      const mac = parseDefine(lex(m[1]), "in fxinst");
+      macros.set(mac.name, mac);
+      DEFINED.add(mac.name);
       outl.push("");
       continue;
     }
@@ -135,63 +122,7 @@ function preprocess(src, macros) {
   return outl.join("\n");
 }
 
-/** Expand macros in a token list (C rescanning, a macro is not expanded inside itself). */
-function expand(toks, macros, hide = new Set()) {
-  const out = [];
-  for (let i = 0; i < toks.length; i++) {
-    const t = toks[i];
-    const mac = t.t === "id" && !hide.has(t.v) ? macros[t.v] : null;
-    if (!mac) { out.push(t); continue; }
-    let body;
-    if (mac.params === null) {
-      body = mac.body.map((x) => ({ ...x }));
-    } else {
-      if (!(toks[i + 1] && toks[i + 1].v === "(")) { out.push(t); continue; }
-      // collect arguments
-      const argv = [[]];
-      let depth = 0, j = i + 2;
-      for (; j < toks.length; j++) {
-        const x = toks[j];
-        if (x.v === "(" || x.v === "[" || x.v === "{") depth++;
-        if (x.v === ")" || x.v === "]" || x.v === "}") { if (depth === 0) break; depth--; }
-        if (x.v === "," && depth === 0) { argv.push([]); continue; }
-        argv.at(-1).push(x);
-      }
-      if (j >= toks.length) fail(`unterminated call of macro ${t.v}`);
-      if (argv.length === 1 && argv[0].length === 0 && mac.params.length === 0) argv.length = 0;
-      if (argv.length !== mac.params.length) fail(`macro ${t.v} takes ${mac.params.length} arguments, got ${argv.length}`);
-      const expanded = argv.map((a) => expand(a, macros, hide));
-      // substitute (unexpanded args next to ##), then paste
-      const sub = [];
-      const b = mac.body;
-      for (let k = 0; k < b.length; k++) {
-        const x = b[k];
-        const pi = x.t === "id" ? mac.params.indexOf(x.v) : -1;
-        if (pi >= 0) {
-          const nearPaste = (b[k - 1] && b[k - 1].v === "##") || (b[k + 1] && b[k + 1].v === "##");
-          for (const y of nearPaste ? argv[pi] : expanded[pi]) sub.push({ ...y });
-        } else sub.push({ ...x });
-      }
-      body = [];
-      for (let k = 0; k < sub.length; k++) {
-        if (sub[k].v === "##" && sub[k].t === "p") {
-          const a = body.pop(), c = sub[++k];
-          if (!a || !c) fail(`## at the edge of macro ${t.v}`);
-          const s = String(a.v) + String(c.v);
-          const lt = lex(s);
-          if (lt.length !== 1) fail(`## in macro ${t.v} made '${s}', not one token`);
-          body.push(lt[0]);
-        } else body.push(sub[k]);
-      }
-      i = j;
-    }
-    const h2 = new Set(hide); h2.add(t.v);
-    out.push(...expand(body, macros, h2));
-  }
-  return out;
-}
-
-const macros = { FALSE: { params: null, body: lex("0") }, TRUE: { params: null, body: lex("1") } };
+const macros = new Map([["FALSE", parseDefine(lex("FALSE 0"))], ["TRUE", parseDefine(lex("TRUE 1"))]]);
 preprocess(instH, macros);
 const cText = preprocess(instC, macros);
 
@@ -636,7 +567,7 @@ while ((m = fnRe.exec(cText))) {
   while (depth) { if (cText[j] === "{") depth++; else if (cText[j] === "}") depth--; j++; }
   const name = m[1];
   if (functions[name]) fail(`${name} defined twice`);
-  const toks = expand(lex(cText.slice(fnRe.lastIndex, j - 1)), macros);
+  const toks = numeric(expandTokens(lex(cText.slice(fnRe.lastIndex, j - 1)), macros));
   const p = new Parser(toks);
   const body = [];
   while (!p.done()) body.push(p.stmt());
@@ -679,7 +610,7 @@ const want = {
   FX_STEP: "{ uint32 vOpcode = ( uint32 ) PIPE ; FETCHPIPE ; ( * fx_OpcodeTable [ ( GSU . vStatusReg & 0x300 ) | vOpcode ] ) ( ) ; }",
 };
 for (const [k, v] of Object.entries(want)) {
-  const got = tokText(macros[k].body).replace(/768/g, "0x300");
+  const got = tokText(macros.get(k).body).replace(/768/g, "0x300");
   if (got !== v) fail(`${k} changed: ${got}`);
 }
 // fx_run: the loop superfx.js implements

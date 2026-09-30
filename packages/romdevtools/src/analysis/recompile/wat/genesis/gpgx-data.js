@@ -1,6 +1,6 @@
 // Loader for gpgx-derived.json.gz: the Musashi / z80.c handler ASTs and the
 // reference tables the Genesis backend specialises from. Generated once by
-// scripts/recompile-gen/genesis_gpgx.py (see its header); recompile time only
+// scripts/recompile-gen/genesis-gpgx.mjs (see its header); recompile time only
 // reads this file, it never needs gpgx's C source.
 //
 // LICENSE: the data is derived from Genesis Plus GX and is NON-COMMERCIAL

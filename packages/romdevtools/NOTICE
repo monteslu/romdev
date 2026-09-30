@@ -107,7 +107,7 @@ Bundled data  (reference-core-derived recompiler data)
   src/analysis/recompile/wat/genesis/gpgx-derived.json.gz holds the parsed
   ASTs of genesis_plus_gx's Musashi 68000 opcode handlers and MAME z80.c
   handlers plus gpgx's cycle/HV tables, generated from the pinned, patched
-  gpgx tree by scripts/recompile-gen/genesis_gpgx.py (the file records the
+  gpgx tree by scripts/recompile-gen/genesis-gpgx.mjs (the file records the
   upstream commit, the patch and a sha256 of every source file it read), and
   src/analysis/recompile/wat/genesis/runtime.js is a port of gpgx's VDP,
   memory map and frame loop. Both are under the Genesis Plus GX license

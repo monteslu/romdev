@@ -2,7 +2,7 @@
 //
 // The Genesis backend does not contain a hand-written 68000 or Z80. It carries
 // the ASTs of gpgx's Musashi opcode handlers (m68kops.h) and MAME z80.c
-// handlers, extracted once by scripts/recompile-gen/genesis_gpgx.py, and
+// handlers, extracted once by scripts/recompile-gen/genesis-gpgx.mjs, and
 // partially evaluates them here:
 //
 //   68000: each handler is specialised for ONE opcode word at ONE address.
@@ -132,7 +132,7 @@ const CTYPES = {
   cpu_memory_map: I32,
 };
 
-/** pycparser type node -> int type, PTR. */
+/** C AST type node (pycparser's shape) -> int type, PTR. */
 function ctypeOf(node) {
   if (node.k === "PtrDecl") return PTR;
   if (node.k === "TypeDecl") return ctypeOf(node.type);
