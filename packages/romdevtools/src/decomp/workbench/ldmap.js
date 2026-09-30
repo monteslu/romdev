@@ -185,10 +185,10 @@ export function parseLdMap(text, { path = null } = {}) {
   return new LdMap({ path, sections, input_sections: inputSections, symbols });
 }
 
-/** Read and parse one `ld -Map` file from disk. */
-export function readLdMap(p) {
+/** Read and parse one `ld -Map` file from disk (`display`: the path as the caller named it). */
+export function readLdMap(p, { display = null } = {}) {
   const text = new TextDecoder("utf-8", { fatal: false }).decode(readFileSync(p));
-  return parseLdMap(text, { path: String(p) });
+  return parseLdMap(text, { path: display ?? String(p) });
 }
 
 /** One place two consecutive input-section extents fail to tile. */
@@ -367,7 +367,7 @@ export function parseElfSymbols(data, { path = null } = {}) {
   return new ElfSymbols({ path, sections, symbols });
 }
 
-/** Read and parse one linked ELF's symbol table from disk. */
-export function readElfSymbols(p) {
-  return parseElfSymbols(readFileSync(p), { path: String(p) });
+/** Read and parse one linked ELF's symbol table from disk (`display`: the path as named). */
+export function readElfSymbols(p, { display = null } = {}) {
+  return parseElfSymbols(readFileSync(p), { path: display ?? String(p) });
 }

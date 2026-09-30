@@ -262,10 +262,10 @@ export class PinCatalogue {
 }
 
 /** Read and classify every pin in the given files. */
-export function readPinFiles(paths, { model, rom_extent = null }) {
+export function readPinFiles(paths, { model, rom_extent = null, display = null }) {
   const entries = [], sources = [];
-  for (const p of paths) {
-    const name = String(p);
+  for (const [i, p] of [...paths].entries()) {
+    const name = display ? String(display[i]) : String(p);
     const text = new TextDecoder("utf-8", { fatal: false }).decode(readFileSync(p));
     entries.push(...parsePinText(text, { path: name, model, rom_extent }));
     sources.push(name);

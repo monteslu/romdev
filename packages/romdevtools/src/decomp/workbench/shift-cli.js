@@ -68,11 +68,9 @@ export async function shiftAuditCommand(args, io, ctx) {
   try {
     const model = whitelistModel(args, ctx);
     const pinFiles = [...args.pins, ...args.symbol_addrs];
-    const pins = pinFiles.length ? readPinFiles(pinFiles.map((p) => ctx.resolve(p)), { model }) : new PinCatalogue({ entries: [], sources: [] });
-    // Report the pin sources as the caller named them.
-    const named = pinFiles.length ? new PinCatalogue({ entries: pins.entries.map((e) => Object.freeze(Object.assign(Object.create(Object.getPrototypeOf(e)), e, { source: pinFiles[pins.sources.indexOf(e.source)] ?? e.source }))), sources: pinFiles }) : pins;
-    const elf = args.elf ? readElfSymbols(ctx.resolve(args.elf)) : null;
-    const ldmap = readLdMap(ctx.resolve(args.map));
+    const named = pinFiles.length ? readPinFiles(pinFiles.map((p) => ctx.resolve(p)), { model, display: pinFiles }) : new PinCatalogue({ entries: [], sources: [] });
+    const elf = args.elf ? readElfSymbols(ctx.resolve(args.elf), { display: args.elf }) : null;
+    const ldmap = readLdMap(ctx.resolve(args.map), { display: args.map });
     if (!ldmap.sections.length) requireParsedMap(ldmap, { path: String(args.map), sample: sniff(ctx.resolve(args.map)) });
     const image = readFileSync(ctx.resolve(args.image));
     audit = buildShiftAudit({ ldmap, image, pins: named, model, blobs: args.blob, auto_blobs: args.blobs === "auto", excluded_blobs: args.no_blob, elf,
@@ -99,9 +97,9 @@ export async function shiftRehearseCommand(args, io, ctx) {
     const model = whitelistModel(args, ctx);
     const pairs = parseMapping(args.checksum_pair);
     const crcWords = parseOffsets(args.crc_words);
-    const baseLdmap = readLdMap(ctx.resolve(args.base_map));
+    const baseLdmap = readLdMap(ctx.resolve(args.base_map), { display: args.base_map });
     const baseImage = readFileSync(ctx.resolve(args.base_image));
-    const shiftedLdmap = readLdMap(ctx.resolve(args.shifted_map));
+    const shiftedLdmap = readLdMap(ctx.resolve(args.shifted_map), { display: args.shifted_map });
     const shiftedImage = readFileSync(ctx.resolve(args.shifted_image));
     const delta = pyInt(args.delta, 0);
     if (!!args.base_elf !== !!args.shifted_elf) {
@@ -109,7 +107,7 @@ export async function shiftRehearseCommand(args, io, ctx) {
     }
     rehearsal = buildRehearsal({ base_ldmap: baseLdmap, base_image: baseImage, shifted_ldmap: shiftedLdmap, shifted_image: shiftedImage, delta,
       anchor: args.anchor === "auto" ? null : args.anchor, blobs: blobsFor(baseLdmap, args), crc_words: crcWords, checksum_pairs: pairs,
-      base_elf: args.base_elf ? readElfSymbols(ctx.resolve(args.base_elf)) : null, shifted_elf: args.shifted_elf ? readElfSymbols(ctx.resolve(args.shifted_elf)) : null,
+      base_elf: args.base_elf ? readElfSymbols(ctx.resolve(args.base_elf), { display: args.base_elf }) : null, shifted_elf: args.shifted_elf ? readElfSymbols(ctx.resolve(args.shifted_elf), { display: args.shifted_elf }) : null,
       model, base_map_path: String(args.base_map), base_image_path: String(args.base_image), shifted_map_path: String(args.shifted_map),
       shifted_image_path: String(args.shifted_image) });
   } catch (e) { guard(e); return fail(io, e); }
@@ -132,8 +130,8 @@ export async function shiftOrchestrateCommand(args, io, ctx) {
     const deltas = parseOffsets(args.deltas);
     if (!deltas.length) throw new ValueError("--deltas names no shift amount");
     const analyze = ({ base_map, base_image, shifted_map, shifted_image, delta }) => {
-      const baseLdmap = readLdMap(ctx.resolve(base_map));
-      return buildRehearsal({ base_ldmap: baseLdmap, base_image: readFileSync(ctx.resolve(base_image)), shifted_ldmap: readLdMap(ctx.resolve(shifted_map)),
+      const baseLdmap = readLdMap(ctx.resolve(base_map), { display: base_map });
+      return buildRehearsal({ base_ldmap: baseLdmap, base_image: readFileSync(ctx.resolve(base_image)), shifted_ldmap: readLdMap(ctx.resolve(shifted_map), { display: shifted_map }),
         shifted_image: readFileSync(ctx.resolve(shifted_image)), delta, anchor: args.anchor === "auto" ? null : args.anchor, blobs: blobsFor(baseLdmap, args),
         crc_words: crcWords, checksum_pairs: pairs, model, base_map_path: String(base_map), base_image_path: String(base_image),
         shifted_map_path: String(shifted_map), shifted_image_path: String(shifted_image) });
@@ -157,7 +155,7 @@ export async function shiftConfigVerifyCommand(args, io, ctx) {
     if (!!args.pinned_image !== !!args.candidate_image) {
       throw new ValueError("--pinned-image and --candidate-image go together: byte-identity is a question about two images, and one of them cannot answer it");
     }
-    verification = verifyFaithful({ pinned: readLdMap(ctx.resolve(args.pinned_map)), candidate: readLdMap(ctx.resolve(args.candidate_map)),
+    verification = verifyFaithful({ pinned: readLdMap(ctx.resolve(args.pinned_map), { display: args.pinned_map }), candidate: readLdMap(ctx.resolve(args.candidate_map), { display: args.candidate_map }),
       pinned_image: args.pinned_image ? readFileSync(ctx.resolve(args.pinned_image)) : null,
       candidate_image: args.candidate_image ? readFileSync(ctx.resolve(args.candidate_image)) : null,
       pinned_image_path: args.pinned_image, candidate_image_path: args.candidate_image });
