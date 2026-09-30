@@ -16,7 +16,7 @@
 #
 # wasip1 has no processes; the commands romdev runs (extract, extract-assets,
 # build-assets) never start one. The project's orchestration commands
-# (`sotn-assets build`, `format`, dependency download) exec git/ninja/python
+# (`sotn-assets build`, `format`, dependency download) exec git/ninja and the project interpreter
 # and fail cleanly with ENOSYS under WASI; romdev runs those steps itself.
 #
 # Ships in packages/romdev-toolchain-decomp-gcc/wasm/tools/<name>.wasm.

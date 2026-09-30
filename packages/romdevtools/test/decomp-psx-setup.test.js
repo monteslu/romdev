@@ -44,8 +44,8 @@ test("classify: the project's wrapper and scripts are recognised by content", ()
   // a script whose bytes differ from the ported one is not assumed to match it
   fs.mkdirSync(path.join(d, "tools"), { recursive: true });
   fs.writeFileSync(path.join(d, "tools/gfxstage.py"), "print('not it')\n");
-  assert.equal(classifyPsxSetup([".venv/bin/python3", "tools/gfxstage.py", "d", "a", "b"], d).kind, "unsupported");
-  assert.equal(classifyPsxSetup(["python3", "tools/unrelated.py"], d), null);
+  assert.equal(classifyPsxSetup([".venv/bin/python3", "tools/gfxstage.py", "d", "a", "b"], d).kind, "unsupported"); // no-python-guard: classifier fixture - a changed project script must classify as unsupported, never launched
+  assert.equal(classifyPsxSetup(["python3", "tools/unrelated.py"], d), null); // no-python-guard: classifier fixture - an unknown script is not this module's to classify
   // the compile pipeline's encoder is a decomp tool
   assert.deepEqual(classifyCommand(["tools/sotn_str/target/release/sotn_str", "process"], d), { kind: "decomp-tool", tool: "sotn_str" });
 });
