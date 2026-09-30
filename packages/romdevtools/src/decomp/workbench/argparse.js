@@ -119,7 +119,11 @@ export function parseArgs(spec, tokens, { prog, explainKeys = null, version = nu
     if (owners.size > 1) throw new ArgumentError(`ambiguous option: ${flag} could match ${hits.join(", ")}`, { prog });
     return null;
   };
-  const looksLikeOption = (t) => t.startsWith("-") && t !== "-" && !NEG_NUMBER.test(t) && t !== "--";
+  // As the original grammar decides: a token naming a known option is one;
+  // otherwise a negative number, or any token containing a space (a flag
+  // string such as "-O2 -mips2"), is a value.
+  const knownFlag = (t) => byFlag.has(t) || (t.startsWith("--") && t.includes("=") && byFlag.has(t.slice(0, t.indexOf("="))));
+  const looksLikeOption = (t) => t.startsWith("-") && t !== "-" && t !== "--" && (knownFlag(t) || (!NEG_NUMBER.test(t) && !t.includes(" ")));
   const posTokens = [];
   const extras = [];
   let onlyPos = false;
