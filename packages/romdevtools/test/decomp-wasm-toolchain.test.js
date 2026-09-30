@@ -173,6 +173,7 @@ test("Makefile reader: flavours, conditionals, functions, pattern and target-spe
   fs.writeFileSync(path.join(d, "src", "sub", "b.c"), "");
   fs.writeFileSync(path.join(d, "opts.mk"), "EXTRA := -DEXTRA\n");
   fs.writeFileSync(path.join(d, "Makefile"), [
+    "MAKEFLAGS += --no-builtin-rules",
     "-include missing.mk",
     "include opts.mk",
     "find-command = $(shell which $(1) 2>/dev/null)",
@@ -193,6 +194,8 @@ test("Makefile reader: flavours, conditionals, functions, pattern and target-spe
     "build/src/sub/%.o: OPT := -O1",
     "build/src/a.o: CFLAGS += -DONLY_A",
     "all: $(O_FILES)",
+    "build/special.o: src/a.c",
+    "\tcc -I $(dir $*) -o $@ $<",
     "build/%.o: %.c",
     "\t$(call banner,cc $<)",
     "\tcc $(CFLAGS) -I $(dir $*) -o $@ $<",
@@ -209,6 +212,7 @@ test("Makefile reader: flavours, conditionals, functions, pattern and target-spe
   const b = mk.recipeFor("build/src/sub/b.o");
   assert.equal(b.lines[1].command, "cc -O1 -DEXTRA -G 0 -I src/sub/ -o build/src/sub/b.o src/sub/b.c");
   assert.equal(b.lines.length, 3, "the recipe conditional is evaluated when the makefile is read");
+  assert.equal(mk.recipeFor("build/special.o").lines[0].command, "cc -I  -o build/special.o src/a.c", "$* is empty in an explicit rule once -r cleared the suffix list");
   const cl = new Makefile({ root: d, overrides: { OPT: "-O3" } });
   cl.readFile(path.join(d, "Makefile"), false);
   assert.match(cl.recipeFor("build/src/a.o").lines[1].command, /^cc -O3 /, "command-line variables win");

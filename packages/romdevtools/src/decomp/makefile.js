@@ -619,10 +619,7 @@ export class Makefile {
   recipeFor(target, found = this.findRule(target)) {
     if (!found) return null;
     const targetVars = this.targetVariables(target);
-    const stem = found.stem ?? (() => {
-      // $* for an explicit rule: the target minus its suffix
-      const d = target.lastIndexOf("."); return d > target.lastIndexOf("/") ? target.slice(0, d) : "";
-    })();
+    const stem = found.stem ?? this.explicitStem(target);
     const auto = {
       "@": target, "<": found.prereqs[0] ?? "", "^": dedupe(found.prereqs).join(" "), "+": found.prereqs.join(" "),
       "*": stem, "?": found.prereqs.join(" "), "|": found.orderOnly.join(" "),
@@ -648,6 +645,22 @@ export class Makefile {
     return { target, prereqs: found.prereqs, orderOnly: found.orderOnly, stem: found.stem, lines, targetVars: Object.fromEntries([...targetVars].map(([k, v]) => [k, v.flavor === "simple" ? v.value : this.expand(v.value, ctx)])) };
   }
 
+  /**
+   * $* in an explicit rule: the target minus a KNOWN suffix (make's
+   * .SUFFIXES list), else empty. --no-builtin-rules (-r) and a bare
+   * `.SUFFIXES:` empty that list, which is what decomp Makefiles do.
+   */
+  explicitStem(target) {
+    const flags = " " + this.lookup("MAKEFLAGS", null) + " ";
+    let suffixes = /\s(--no-builtin-rules|-r|-[a-zA-Z]*r[a-zA-Z]*)\s/.test(flags) ? [] : DEFAULT_SUFFIXES.slice();
+    for (const r of this.rules) {
+      if (!r.targets.includes(".SUFFIXES")) continue;
+      suffixes = r.prereqs.length ? [...suffixes, ...r.prereqs] : [];
+    }
+    const s = suffixes.filter((x) => target.endsWith(x)).sort((x, y) => y.length - x.length)[0];
+    return s ? target.slice(0, -s.length) : "";
+  }
+
   /** Expanded value of a variable (optionally as seen by a target). */
   value(name, target = null) {
     if (!target) return this.lookup(name, null);
@@ -656,6 +669,8 @@ export class Makefile {
 }
 
 function dedupe(a) { return [...new Set(a)]; }
+
+const DEFAULT_SUFFIXES = [".out", ".a", ".ln", ".o", ".c", ".cc", ".C", ".cpp", ".p", ".f", ".F", ".m", ".r", ".y", ".l", ".ym", ".yl", ".s", ".S", ".mod", ".sym", ".def", ".h", ".info", ".dvi", ".tex", ".texinfo", ".texi", ".txinfo", ".w", ".ch", ".web", ".sh", ".elc", ".el"];
 
 const FUNCTIONS = new Set(["subst", "patsubst", "strip", "findstring", "filter", "filter-out", "sort", "word", "wordlist", "words",
   "firstword", "lastword", "dir", "notdir", "suffix", "basename", "addsuffix", "addprefix", "join", "wildcard", "realpath",
