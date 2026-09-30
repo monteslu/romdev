@@ -75,9 +75,8 @@ uint8 *rd_unreachable_ptr(const char *what)
      - the first four distinct palettes of a frame are provisional 64-entry
        banks, a row is stored as bank*64 + colour (the common case, and all
        that happens when a frame has four palettes or fewer);
-     - a row whose palette differs from every bank but whose colours all
-       agree with one (a line drawn while CRAM is half rewritten, often blank
-       in the backdrop colour) just uses that bank;
+     - every distinct palette a row is drawn with is recorded (up to 16; past
+       that a row whose colours all agree with a recorded one uses it);
      - a frame with more than four palettes is solved at its end: the palettes
        drawn on the most rows keep whole banks, every other palette's colours
        are placed once each (by value) in the entries left, and only the rows
@@ -108,6 +107,16 @@ static void rd_frame_begin(void)
   memset(rd_row_pal, 0xff, sizeof(rd_row_pal));
 }
 
+/* 64 colours equal (word compares; the libc memcmp goes byte by byte) */
+static int rd_pal_eq(const uint16 *a, const uint16 *b)
+{
+  const uint32 *x = (const uint32 *)a, *y = (const uint32 *)b;
+  int i;
+  for (i = 0; i < 32; i += 4)
+    if ((x[i] ^ y[i]) | (x[i + 1] ^ y[i + 1]) | (x[i + 2] ^ y[i + 2]) | (x[i + 3] ^ y[i + 3])) return 0;
+  return 1;
+}
+
 static void rd_pick_pal(const uint8 *src, int width)
 {
   const uint16 *px = rd_pixel();
@@ -115,9 +124,17 @@ static void rd_pick_pal(const uint8 *src, int width)
   int k, i;
   rd_pal_dirty = 0;
   rd_adhoc = 0;
-  if (rd_nupal && !memcmp(rd_upal[rd_cur], px, 128)) return;
+  if (rd_nupal && rd_pal_eq(rd_upal[rd_cur], px)) return;
   for (k = 0; k < rd_nupal; k++)
-    if (!memcmp(rd_upal[k], px, 128)) { rd_cur = k; return; }
+    if (rd_pal_eq(rd_upal[k], px)) { rd_cur = k; return; }
+  if (rd_nupal < RD_UPAL)
+  {
+    rd_cur = rd_nupal++;
+    memcpy(rd_upal[rd_cur], px, 128);
+    return;
+  }
+  /* sixteen palettes already: a row whose colours all agree with one of
+     them uses it, anything else cannot be shown exactly */
   for (i = 0; i < width; i++) { unsigned c = src[i] & 0x3f; used[c >> 5] |= 1u << (c & 31); }
   for (k = 0; k < rd_nupal; k++)
   {
@@ -125,9 +142,8 @@ static void rd_pick_pal(const uint8 *src, int width)
       if (((used[i >> 5] >> (i & 31)) & 1) && rd_upal[k][i] != px[i]) break;
     if (i == 64) { rd_cur = k; rd_adhoc = 1; return; }
   }
-  if (rd_nupal == RD_UPAL) { rd_overflow = 1; rd_adhoc = 1; return; }
-  rd_cur = rd_nupal++;
-  memcpy(rd_upal[rd_cur], px, 128);
+  rd_overflow = 1;
+  rd_adhoc = 1;
 }
 
 void rd_canvas_line(int line, const uint8 *src, int width)
@@ -180,6 +196,8 @@ static int rd_find_colour(uint16 c, int n)
 static void rd_solve_palettes(void)
 {
   int rows[RD_UPAL], block_of[RD_UPAL], pal_in[4];
+  static uint8 xl[RD_UPAL][64];
+  uint32 have = 0;                                   /* palettes whose xl[] is built */
   int k, y, i, nblocks, used;
   memset(rows, 0, sizeof(rows));
   for (y = 0; y < 240; y++) if (rd_row_pal[y] != 0xff) rows[rd_row_pal[y]]++;
@@ -244,9 +262,13 @@ static void rd_solve_palettes(void)
     }
     else
     {
-      uint8 xl[64];
-      for (i = 0; i < 64; i++) { int s = rd_find_colour(rd_upal[p][i], 256); xl[i] = (uint8)(s < 0 ? 0 : s); }
-      for (i = 0; i < 320; i++) row[i] = xl[row[i] & 0x3f];
+      const uint8 *x = xl[p];
+      if (!(have & (1u << p)))
+      {
+        for (i = 0; i < 64; i++) { int s = rd_find_colour(rd_upal[p][i], 256); xl[p][i] = (uint8)(s < 0 ? 0 : s); }
+        have |= 1u << p;
+      }
+      for (i = 0; i < 320; i++) row[i] = x[row[i] & 0x3f];
     }
   }
   rd_stats.pal_banks = rd_nupal;
