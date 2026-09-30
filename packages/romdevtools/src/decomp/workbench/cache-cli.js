@@ -6,16 +6,16 @@
 
 import { dumps } from "./pyjson.js";
 import { isInputError } from "./py.js";
-import { resolvePath, osText, isOSError } from "./py-path.js";
+import { resolvePath, expanduser, osText, isOSError } from "./py-path.js";
 import { cacheStatus, formatBytes, parseDuration, parseSize, pruneCache, restorePrunedCache } from "./cache.js";
 import { groupListingSpec } from "./group-listing.js";
 
 export const DEFAULT_CACHE = ".decomp-workbench/cache";
 export const DEFAULT_TRASH = ".decomp-workbench/trash";
 
-export function cacheStatusCommand(args, io) {
+export function cacheStatusCommand(args, io, ctx) {
   let report;
-  try { report = cacheStatus(args.cache_dir); } catch (e) {
+  try { report = cacheStatus(ctx.resolve(expanduser(args.cache_dir))); } catch (e) {
     if (!isOSError(e)) throw e;
     io.eprint(`error: ${osText(e)}`); return 2;
   }
@@ -27,12 +27,12 @@ export function cacheStatusCommand(args, io) {
   return 0;
 }
 
-export function cachePruneCommand(args, io) {
+export function cachePruneCommand(args, io, ctx) {
   let report;
   try {
     const older_than = args.older_than ? parseDuration(args.older_than) : null;
     const max_size = args.max_size ? parseSize(args.max_size) : null;
-    report = pruneCache(args.cache_dir, { older_than, max_size, keep_recent: args.keep_recent, apply: args.apply, trash_root: args.trash_dir });
+    report = pruneCache(ctx.resolve(expanduser(args.cache_dir)), { older_than, max_size, keep_recent: args.keep_recent, apply: args.apply, trash_root: ctx.resolve(expanduser(args.trash_dir)) });
   } catch (e) {
     if (!isOSError(e) && !isInputError(e)) throw e;
     io.eprint(`error: ${isOSError(e) ? osText(e) : e.message}`); return 2;
@@ -48,14 +48,14 @@ export function cachePruneCommand(args, io) {
   return 0;
 }
 
-export function cacheRestoreCommand(args, io) {
+export function cacheRestoreCommand(args, io, ctx) {
   let restored;
-  try { restored = restorePrunedCache(args.trash_directory, args.cache_dir); } catch (e) {
+  try { restored = restorePrunedCache(ctx.resolve(expanduser(args.trash_directory)), ctx.resolve(expanduser(args.cache_dir))); } catch (e) {
     if (!isOSError(e)) throw e;
     io.eprint(`error: ${osText(e)}`); return 2;
   }
-  const payload = { schema: "decomp-workbench-cache-restore-v1", cache_directory: resolvePath(args.cache_dir),
-    trash_directory: resolvePath(args.trash_directory), restored_files: restored };
+  const payload = { schema: "decomp-workbench-cache-restore-v1", cache_directory: resolvePath(args.cache_dir, ctx.cwd),
+    trash_directory: resolvePath(args.trash_directory, ctx.cwd), restored_files: restored };
   if (args.json) io.print(dumps(payload));
   else io.print(`restored ${restored} cache file(s) into ${payload.cache_directory}`);
   return 0;
