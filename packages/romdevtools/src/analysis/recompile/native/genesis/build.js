@@ -4,7 +4,10 @@
 //
 // options:
 //   profile: 'exact' (default) | 'fast'          timing profile of the blocks
-//   audioQuality: 'fast' (default) | 'hq'         gpgx's linear or band-limited resampling
+//   audioQuality: 'fast' (default) | 'hq' | 'half'  gpgx's linear or band-limited resampling;
+//                                                 'half': fast + FM operators every other sample
+//   audioRate: 'console' (default) | 'reference'  48 kHz for the console, or the reference
+//                                                 core's 44100 Hz stream (a test build)
 //   blocks: false                                 no recompiled blocks (Musashi only)
 //   coverage: {                                   what to compile (see ../coverage.js)
 //     cart: '<exact .wasc>'                       the verified wasmcart to trace; omitted,
@@ -64,7 +67,7 @@ export async function recompileToSync32(a) {
     timings.coverage = Date.now() - t1;
   }
   const t2 = Date.now();
-  const project = await emitProject(rom, { profile: o.profile, audioQuality: o.audioQuality, ...(cov ? { blocks: { pcs: cov.pcs, pairs: cov.pairs, irqTargets: cov.irqTargets, maxInsns: o.maxBlockInsns } } : {}) });
+  const project = await emitProject(rom, { profile: o.profile, audioQuality: o.audioQuality, audioRate: o.audioRate, ...(cov ? { blocks: { pcs: cov.pcs, pairs: cov.pairs, irqTargets: cov.irqTargets, maxInsns: o.maxBlockInsns } } : {}) });
   timings.emit = Date.now() - t2;
   const coverage = cov ? { runs: cov.runs, source: cov.source, executedPcs: cov.pcs.length } : null;
   if (a.emit === "c") {

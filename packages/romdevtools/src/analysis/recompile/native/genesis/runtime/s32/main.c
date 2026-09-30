@@ -106,6 +106,16 @@ void osd_input_update(void)
    end of system_frame_gen. The console ring holds 1024 frames and drains
    continuously, so the samples wait here and are pushed in slices from the
    line hook during the next frame, as ABI 6.4 asks. */
+/* The console ring drains 48000 Hz at 60 presents a second: 800 frames each.
+   A test build can match the gpgx libretro reference's stream instead
+   (-DRD_AUDIO_RATE=44100 -DRD_AUDIO_FPS=0, its audio_init(44100, 0)) so the
+   two compare sample for sample. */
+#ifndef RD_AUDIO_RATE
+#define RD_AUDIO_RATE 48000
+#endif
+#ifndef RD_AUDIO_FPS
+#define RD_AUDIO_FPS 60.0
+#endif
 #define RD_AFIFO 2048                 /* stereo frames, power of two */
 static int16 afifo[RD_AFIFO * 2];
 static unsigned int afifo_r, afifo_w;
@@ -162,7 +172,7 @@ static void config_default(void)
   config.pcm_volume     = 100;
   config.hq_fm          = 1;
   config.hq_psg         = 1;
-  config.filter         = 1;
+  config.filter         = 0;   /* check_variables: audio_filter unset -> 0 */
   config.lp_range       = 0x9999;
   config.low_freq       = 880;
   config.high_freq      = 5000;
@@ -236,7 +246,7 @@ void game_main(const sync32_api_t *a)
   memset(canvas, 0, 320 * 240);
   config_default();
   rd_load_rom();
-  audio_init(48000, 60.0);
+  audio_init(RD_AUDIO_RATE, RD_AUDIO_FPS);
   system_init();
   system_reset();
   for (;;)

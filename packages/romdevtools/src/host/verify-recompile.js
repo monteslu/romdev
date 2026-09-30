@@ -566,6 +566,9 @@ function startAudioCapture({ a, layout, refHost, cartHost, ref, cart, off, last 
 }
 
 function cartAudioInfo(cartHost) {
+  // a console cart (sync32) has no ring of its own in wc_info: it pushes into
+  // the console's ring, which the host describes
+  if (typeof cartHost.audioInfo === "function") return cartHost.audioInfo();
   const info = cartHost.cart?.info ?? {};
   return { ring: !!(info.audioPtr && info.audioCap), rate: info.audioSampleRate || cartHost.status?.audioSampleRate || 0, f32: !!info.audioIsF32, cap: info.audioCap || 0 };
 }

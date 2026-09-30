@@ -16,7 +16,9 @@
 //
 // Plain JS ESM + JSDoc.
 
+import { readFileSync } from "node:fs";
 import { LibretroHost } from "romdev-core-host/index.js";
+import { readS32RecompileLayout } from "../analysis/recompile/native/s32-cart.js";
 import { resolveCore } from "../cores/registry.js";
 
 export const SRAM_BASE = 0x20000000;
@@ -34,6 +36,9 @@ export class S32CartHost {
     await this.inner.loadCore(r.jsPath, r.wasmPath, { noderawfs: true });
     await this.inner.loadMedia({ platform: "sync32", path: a.path, beforeSettle: a.beforeSettle });
     this._settle = this.inner.status.settleFramesUsed ?? 0;
+    let layout = null;
+    try { layout = readS32RecompileLayout(new Uint8Array(readFileSync(a.path))); } catch { layout = null; }
+    this._audioRate = layout?.audio?.sampleRate ?? 48000;
     return this;
   }
 
@@ -61,6 +66,10 @@ export class S32CartHost {
     return this.inner.writeMemory("system_ram", offset, bytes);
   }
   wasmMemorySize() { return this.inner.regionSize?.("system_ram") ?? 0; }
+
+  /** The cart's audio goes through the console ring (ABI 6.4): 1024 stereo s16 frames, at 48 kHz (or the
+      reference rate in an audioRate:"reference" test build, which the image records). */
+  audioInfo() { return { ring: true, rate: this._audioRate ?? 48000, f32: false, cap: 1024 }; }
 
   dispose() { this.inner.dispose?.(); this.inner.unloadMedia?.(); }
   destroy() { this.dispose(); }

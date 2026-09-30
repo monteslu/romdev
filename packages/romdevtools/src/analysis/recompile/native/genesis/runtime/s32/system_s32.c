@@ -98,8 +98,8 @@ int audio_update(int16 *buffer)
 
   /* resample FM/PSG mixed stream to output buffer */
   blip_read_samples(snd.blips[0], buffer, size);
-
-  /* Audio filtering (config.filter = 1: gpgx libretro's default low-pass) */
+  /* Audio filtering (off, as in the gpgx libretro reference: its
+     check_variables sets config.filter = 0 when audio_filter is unset) */
   if (config.filter & 1)
   {
     int samples = size;

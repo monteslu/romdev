@@ -107,6 +107,9 @@ export function readS32RecompileLayout(cart) {
       irqDelayAborts: { offset: st + 44, size: 4 },
     },
     vramZero: ["vram"],
+    // the console ring's 48 kHz, or the reference core's 44100 Hz in an
+    // audioRate:'reference' test build
+    audio: { sampleRate: meta.audioRate === "reference" ? 44100 : 48000 },
     conventions: meta.conventions,
     native: { target: "sync32", profile: meta.profile, blocks: meta.blocks, descriptorFileOffset: at, stats: st, vdpReg: d.vdpReg, sat: d.sat, z80: d.z80 },
     license: meta.license,
