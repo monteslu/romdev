@@ -173,3 +173,42 @@ export function movedBlocks(diff, target, candidate, { minimum_rows = MINIMUM_MO
   }
   return found;
 }
+
+function blockLine(b) {
+  const t = b.target_rows ? `${b.target_start}..${b.target_stop - 1}` : `before ${b.target_start}`;
+  const c = b.candidate_rows ? `${b.candidate_start}..${b.candidate_stop - 1}` : `before ${b.candidate_start}`;
+  return `  ${b.tag.padEnd(8)} target ${t} (${b.target_rows}) <- candidate ${c} (${b.candidate_rows})`;
+}
+
+/** Render one shift-tolerant diff for a terminal. */
+export function shiftDiffLines(diff, { blocks = 20 } = {}) {
+  const delta = diff.candidate_rows - diff.target_rows;
+  const signed = (n) => (n >= 0 ? `+${n}` : String(n));
+  const lines = [
+    `shift-tolerant diff: ${diff.candidate_name} against ${diff.target_name}` + (diff.symbol ? ` (${diff.symbol})` : ""),
+    `rows: target ${diff.target_rows} candidate ${diff.candidate_rows} (${signed(delta)})`,
+    `edit script (aligned on ${diff.granularity}): replaced ${diff.replaced} inserted ${diff.inserted} deleted ${diff.deleted}`,
+    `paired rows: ${diff.paired_rows} compared, ${diff.paired_mismatches} differing, ${diff.relocation_masked} masked as linker-controlled`,
+    `=> ${diff.rows_away} instruction(s) away (${diff.edit_distance} edit + ${diff.paired_mismatches} residual)`,
+  ];
+  if (delta && diff.positional_mismatches > diff.rows_away) {
+    lines.push(`a position-indexed comparison charges ${diff.positional_mismatches} rows for the same object: the ${Math.abs(delta)}-row shift moves every later row against its neighbour. Read the edit script.`);
+  }
+  if (diff.blocks.length) {
+    lines.push("shift shape: " + (diff.insertion_only ? "insertion-only, so a banded scorer can compensate for it"
+      : "not insertion-only, so rows inside the replaced or deleted blocks are genuinely different instructions"));
+    if (diff.cuts.length) lines.push(`cuts (target rows the candidate inserts at): [${diff.cuts.join(", ")}]`);
+    lines.push("", "edit script:");
+    for (const b of diff.blocks.slice(0, blocks)) {
+      lines.push(blockLine(b));
+      b.target_text.forEach((t, o) => lines.push(`      target    ${String(b.target_start + o).padStart(5)}  ${t}`));
+      const th = (b.target_stop - b.target_start) - b.target_text.length;
+      if (th > 0) lines.push(`      target    ... ${th} more row(s) in this block; raise --context-rows to quote them`);
+      b.candidate_text.forEach((t, o) => lines.push(`      candidate ${String(b.candidate_start + o).padStart(5)}  ${t}`));
+      const ch = (b.candidate_stop - b.candidate_start) - b.candidate_text.length;
+      if (ch > 0) lines.push(`      candidate ... ${ch} more row(s) in this block; raise --context-rows to quote them`);
+    }
+    if (diff.blocks.length > blocks) lines.push(`  ... ${diff.blocks.length - blocks} more block(s); raise --blocks to see them`);
+  } else lines.push("edit script: empty -- the two streams align exactly");
+  return lines;
+}
