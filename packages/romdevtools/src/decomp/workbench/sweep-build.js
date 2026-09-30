@@ -229,8 +229,8 @@ export async function runSweepBuild(sources, { target, template, objects, jobs =
     }
   };
   await Promise.all(Array.from({ length: Math.min(jobs, Math.max(1, queue.length)) }, worker));
-  const objdumpPath = discoverObjdump(objdump, { cwd, env: environment ?? process.env });
-  const loaded = loadTarget(targetPath, { objdump: objdumpPath, symbol, section, cwd, env: environment ?? process.env });
+  const objdumpPath = discoverObjdump(objdump, { cwd });
+  const loaded = loadTarget(targetPath, { objdump: objdumpPath, symbol, section, cwd });
   const results = [];
   for (const [s, output] of plan) {
     const [status, detail, fp] = outcomes.get(s) ?? ["failed", "not built", ""];
@@ -242,7 +242,7 @@ export async function runSweepBuild(sources, { target, template, objects, jobs =
     }
     let comparison;
     try {
-      comparison = compareCandidate(loaded, output, { objdump: objdumpPath, section, cwd, env: environment ?? process.env });
+      comparison = compareCandidate(loaded, output, { objdump: objdumpPath, section, cwd });
     } catch (e) {
       if (!isInputError(e) && e?.name !== "RuntimeError") throw e;
       const text = e.code && /^E[A-Z]+$/.test(e.code) ? osErrorText(e) : String(e.message ?? "");
