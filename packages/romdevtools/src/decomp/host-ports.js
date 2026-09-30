@@ -1,0 +1,212 @@
+// host-ports.js - JS ports of the small host programs decomp builds call
+// around the compiler, so a project's recipe runs without them:
+//   n64crc            fix the N64 header CRC1/CRC2 (the ROM step)
+//   set_o32abi_bit    set EF_MIPS_ABI_O32 in an ELF header (libultra ll.o)
+//   iconv             UTF-8 -> EUC-JP (and identity/latin1) for asm sources
+//   unifiedDiff       `diff -u` for integration patches
+import { readFileSync, writeFileSync } from "node:fs";
+import { eucJpEncode } from "./euc-jp.js";
+
+// -- n64crc --------------------------------------------------------------
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let j = 0; j < 8; j++) c = c & 1 ? (c >>> 1) ^ 0xedb88320 : c >>> 1;
+    t[i] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(buf, off, len) {
+  let c = 0xffffffff;
+  for (let i = off; i < off + len; i++) c = (c >>> 8) ^ CRC_TABLE[(c ^ buf[i]) & 0xff];
+  return (~c) >>> 0;
+}
+const CHECKSUM_START = 0x1000, CHECKSUM_LENGTH = 0x100000;
+const SEEDS = { 6101: 0xf8ca4ddc, 6102: 0xf8ca4ddc, 6103: 0xa3886759, 6105: 0xdf26f436, 6106: 0x1fea617a };
+
+/** The boot chip the IPL3 in a ROM expects (as n64crc identifies it). */
+export function n64Cic(rom) {
+  switch (crc32(rom, 0x40, 0x1000 - 0x40)) {
+    case 0x6170a4a1: return 6101;
+    case 0x90bb6cb5: return 6102;
+    case 0x0b050ee0: return 6103;
+    case 0x98bc2c86: return 6105;
+    case 0xacc8580a: return 6106;
+    default: return 6105;
+  }
+}
+
+/** [crc1, crc2] for a big-endian (z64) ROM image. */
+export function n64Checksum(rom) {
+  if (rom.length < CHECKSUM_START + CHECKSUM_LENGTH) throw new Error(`ROM too small for the N64 checksum (${rom.length} bytes)`);
+  const cic = n64Cic(rom);
+  const seed = SEEDS[cic];
+  let t1 = seed, t2 = seed, t3 = seed, t4 = seed, t5 = seed, t6 = seed;
+  const be = (o) => ((rom[o] << 24) | (rom[o + 1] << 16) | (rom[o + 2] << 8) | rom[o + 3]) >>> 0;
+  for (let i = CHECKSUM_START; i < CHECKSUM_START + CHECKSUM_LENGTH; i += 4) {
+    const d = be(i);
+    if (((t6 + d) >>> 0) < t6) t4 = (t4 + 1) >>> 0;
+    t6 = (t6 + d) >>> 0;
+    t3 = (t3 ^ d) >>> 0;
+    const s = d & 0x1f;
+    const r = s ? ((d << s) | (d >>> (32 - s))) >>> 0 : d;
+    t5 = (t5 + r) >>> 0;
+    if (t2 > d) t2 = (t2 ^ r) >>> 0;
+    else t2 = (t2 ^ t6 ^ d) >>> 0;
+    if (cic === 6105) t1 = (t1 + ((be(0x40 + 0x0710 + (i & 0xff)) ^ d) >>> 0)) >>> 0;
+    else t1 = (t1 + ((t5 ^ d) >>> 0)) >>> 0;
+  }
+  if (cic === 6103) return [(((t6 ^ t4) >>> 0) + t3) >>> 0, (((t5 ^ t2) >>> 0) + t1) >>> 0];
+  if (cic === 6106) return [((Math.imul(t6, t4) >>> 0) + t3) >>> 0, ((Math.imul(t5, t2) >>> 0) + t1) >>> 0];
+  return [(t6 ^ t4 ^ t3) >>> 0, (t5 ^ t2 ^ t1) >>> 0];
+}
+
+/** `n64crc <rom>`: rewrite CRC1/CRC2 in place. Returns the tool's report text. */
+export function n64crcFile(file) {
+  const rom = readFileSync(file);
+  const cic = n64Cic(rom);
+  const [c1, c2] = n64Checksum(rom);
+  const h = (v) => "0x" + v.toString(16).toUpperCase().padStart(8, "0");
+  let out = `BootChip: CIC-NUS-${cic}\n`;
+  const old1 = rom.readUInt32BE(0x10), old2 = rom.readUInt32BE(0x14);
+  out += `CRC 1: ${h(old1)}  Calculated: ${h(c1)} ${old1 === c1 ? "(Good)" : "(Bad, fixed)"}\n`;
+  out += `CRC 2: ${h(old2)}  Calculated: ${h(c2)} ${old2 === c2 ? "(Good)" : "(Bad, fixed)"}\n`;
+  if (old1 !== c1 || old2 !== c2) {
+    rom.writeUInt32BE(c1, 0x10);
+    rom.writeUInt32BE(c2, 0x14);
+    writeFileSync(file, rom);
+  }
+  return out;
+}
+
+// -- set_o32abi_bit ------------------------------------------------------
+/** OR EF_MIPS_ABI_O32 (0x1000) into a big-endian ELF's e_flags. */
+export function setO32AbiBit(file) {
+  const b = readFileSync(file);
+  if (b.readUInt32BE(0) !== 0x7f454c46) throw new Error("Error: Not an ELF file");
+  b.writeUInt32BE((b.readUInt32BE(36) | 0x00001000) >>> 0, 36);
+  writeFileSync(file, b);
+}
+
+// -- iconv ---------------------------------------------------------------
+function normEnc(e) { return String(e ?? "").toLowerCase().replace(/[_-]/g, ""); }
+
+/** `iconv --from-code=X --to-code=Y` over a buffer (the encodings decomp builds use). */
+export function iconv(input, from, to) {
+  const f = normEnc(from), t = normEnc(to);
+  let text;
+  if (f === "utf8") text = new TextDecoder("utf-8", { fatal: true }).decode(input);
+  else if (f === "latin1" || f === "iso88591") text = Buffer.from(input).toString("latin1");
+  else if (f === "eucjp") text = new TextDecoder("euc-jp", { fatal: true }).decode(input);
+  else if (f === "ascii" || f === "") text = Buffer.from(input).toString("latin1");
+  else throw new Error(`iconv: unsupported source encoding ${from}`);
+  if (t === "eucjp") return eucJpEncode(text);
+  if (t === "utf8") return Buffer.from(text, "utf8");
+  if (t === "latin1" || t === "iso88591" || t === "ascii") return Buffer.from(text, "latin1");
+  throw new Error(`iconv: unsupported target encoding ${to}`);
+}
+
+/** Parse iconv's argv (-f/-t, --from-code/--to-code, = or separate). */
+export function parseIconvArgs(args) {
+  let from = null, to = null;
+  const files = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    let m;
+    if ((m = /^--from-code=(.*)$/.exec(a))) from = m[1];
+    else if ((m = /^--to-code=(.*)$/.exec(a))) to = m[1];
+    else if (a === "-f" || a === "--from-code") from = args[++i];
+    else if (a === "-t" || a === "--to-code") to = args[++i];
+    else if (/^-f./.test(a)) from = a.slice(2);
+    else if (/^-t./.test(a)) to = a.slice(2);
+    else if (!a.startsWith("-")) files.push(a);
+  }
+  return { from, to, files };
+}
+
+// -- unified diff --------------------------------------------------------
+/**
+ * `diff -u --label a --label b` of two texts (Myers' O(ND) edit script, three
+ * lines of context, GNU hunk headers). Returns "" when the texts are equal.
+ */
+export function unifiedDiff(aText, bText, { labelA = "a", labelB = "b", context = 3 } = {}) {
+  const split = (t) => { const l = t.split("\n"); if (l[l.length - 1] === "") l.pop(); return l; };
+  const a = split(aText), b = split(bText);
+  const aNoNl = aText.length && !aText.endsWith("\n"), bNoNl = bText.length && !bText.endsWith("\n");
+  // A final line without its newline is a different line from the same text with one (as in GNU diff).
+  const key = (lines, noNl) => lines.map((l, i) => (noNl && i === lines.length - 1 ? l + "\u0000" : l));
+  const ops = myers(key(a, aNoNl), key(b, bNoNl)); // [{op:' '|'-'|'+', a:index|null, b:index|null}]
+  if (!ops.some((o) => o.op !== " ")) return "";
+  const out = [`--- ${labelA}`, `+++ ${labelB}`];
+  // Change runs; runs closer than 2*context lines share a hunk.
+  const changed = [];
+  for (let i = 0; i < ops.length; i++) if (ops[i].op !== " ") changed.push(i);
+  const groups = [];
+  for (const i of changed) {
+    const g = groups[groups.length - 1];
+    if (g && i - g.last - 1 <= 2 * context) g.last = i;
+    else groups.push({ first: i, last: i });
+  }
+  // Lines of each file before op index j.
+  const aBefore = [0], bBefore = [0];
+  for (const o of ops) { aBefore.push(aBefore[aBefore.length - 1] + (o.op !== "+" ? 1 : 0)); bBefore.push(bBefore[bBefore.length - 1] + (o.op !== "-" ? 1 : 0)); }
+  const range = (before, count) => (count === 0 ? `${before},0` : count === 1 ? `${before + 1}` : `${before + 1},${count}`);
+  for (const g of groups) {
+    const start = Math.max(0, g.first - context), end = Math.min(ops.length, g.last + 1 + context);
+    const aCount = aBefore[end] - aBefore[start], bCount = bBefore[end] - bBefore[start];
+    out.push(`@@ -${range(aBefore[start], aCount)} +${range(bBefore[start], bCount)} @@`);
+    for (const o of ops.slice(start, end)) {
+      out.push(o.op + (o.op === "+" ? b[o.b] : a[o.a]));
+      const lastA = o.op !== "+" && o.a === a.length - 1 && aNoNl;
+      const lastB = o.op !== "-" && o.b === b.length - 1 && bNoNl;
+      if (lastA || lastB) out.push("\\ No newline at end of file");
+    }
+  }
+  return out.join("\n") + "\n";
+}
+
+function myers(a, b) {
+  const n = a.length, m = b.length, max = n + m;
+  const v = new Map([[1, 0]]);
+  const trace = [];
+  outer: for (let d = 0; d <= max; d++) {
+    trace.push(new Map(v));
+    for (let k = -d; k <= d; k += 2) {
+      let x;
+      if (k === -d || (k !== d && (v.get(k - 1) ?? -1) < (v.get(k + 1) ?? -1))) x = v.get(k + 1) ?? 0;
+      else x = (v.get(k - 1) ?? 0) + 1;
+      let y = x - k;
+      while (x < n && y < m && a[x] === b[y]) { x++; y++; }
+      v.set(k, x);
+      if (x >= n && y >= m) break outer;
+    }
+  }
+  // Backtrack.
+  const ops = [];
+  let x = n, y = m;
+  for (let d = trace.length - 1; d >= 0; d--) {
+    const vv = trace[d];
+    const k = x - y;
+    let prevK;
+    if (k === -d || (k !== d && (vv.get(k - 1) ?? -1) < (vv.get(k + 1) ?? -1))) prevK = k + 1;
+    else prevK = k - 1;
+    const prevX = vv.get(prevK) ?? 0, prevY = prevX - prevK;
+    while (x > prevX && y > prevY) { ops.push({ op: " ", a: x - 1, b: y - 1 }); x--; y--; }
+    if (d > 0) {
+      if (x === prevX) ops.push({ op: "+", a: null, b: y - 1 });
+      else ops.push({ op: "-", a: x - 1, b: null });
+    }
+    x = prevX; y = prevY;
+  }
+  ops.reverse();
+  // GNU diff prints deletions before insertions within a change block.
+  const out = [];
+  for (let i = 0; i < ops.length;) {
+    if (ops[i].op === " ") { out.push(ops[i++]); continue; }
+    const dels = [], adds = [];
+    while (i < ops.length && ops[i].op !== " ") (ops[i].op === "-" ? dels : adds).push(ops[i++]);
+    out.push(...dels, ...adds);
+  }
+  return out;
+}
