@@ -35,7 +35,7 @@ export function makeOptions(o) {
     workers: null, // force worker threads even for threads == 1 (keeps the caller's event loop free)
     preprocess: null, // (filename) => string: `cpp -P -nostdinc -DPERMUTER` equivalent
     compileFn: null, // (cPath, oPath) => Promise<boolean> instead of compile.sh
-    compileModule: null, // {url, name}: module exporting such a function (worker threads import it)
+    compileModule: null, // {url, name, config?}: module export fn(cPath, oPath, config) (worker threads import it)
     compileTimeoutMs: 0,
     tmpDir: null, // scratch dir for candidate .c/.o (default: <dir>/.permuter-tmp)
     objdumpGlue: null, // {mips: "/path/to/objdump.mjs", ...}
@@ -106,7 +106,7 @@ export async function run(options) {
   const o = makeOptions(options);
   const write = o.out ?? ((s) => process.stdout.write(s));
   const print = (s = "") => write(s + "\n");
-  if (o.compileModule && !o.compileFn) o.compileFn = (await import(o.compileModule.url))[o.compileModule.name];
+  if (o.compileModule && !o.compileFn) o.compileFn = await loadCompileModule(o.compileModule);
   if (o.objdumpGlue) for (const [arch, glue] of Object.entries(o.objdumpGlue)) setObjdumpGlue(arch, glue);
   const context = {
     printer: new Printer(write), iteration: 0, errors: 0, internal_errors: 0,
@@ -150,7 +150,7 @@ export async function run(options) {
     const scorerOpts = { target_o, stack_differences: o.stack_differences, algorithm: o.algorithm, debug_mode: o.debug_mode,
       ign_branch_targets: o.ign_branch_targets, objdump_command };
     const scorer = await Scorer.create(scorerOpts);
-    const c_source = (o.preprocess ?? defaultPreprocess)(base_c);
+    const c_source = await (o.preprocess ?? defaultPreprocess)(base_c);
     const permOpts = {
       dir: d, fn_name, source_file: base_c, source: c_source, randomization_weights, force_seed, force_rng_seed,
       keep_prob: o.keep_prob, need_profiler: o.show_timings, need_all_sources: o.print_diffs, show_errors: o.show_errors,
@@ -290,6 +290,13 @@ export async function run(options) {
 
 class PermuterAbort extends Error {}
 
+/** Import a compile module ({url, name, config}) as a (cPath, oPath) => Promise<boolean> function. */
+export async function loadCompileModule({ url, name, config = null }) {
+  const fn = (await import(url))[name];
+  if (typeof fn !== "function") throw new PermuterUsageError(`compile module ${url} has no function ${name}`);
+  return (cPath, oPath) => fn(cPath, oPath, config);
+}
+
 export class PermuterUsageError extends Error {
   constructor(message) { super(message); this.name = "PermuterUsageError"; }
 }
@@ -347,7 +354,14 @@ async function runWorkers({ o, context, configs, post_score }) {
       stopping = true;
       for (const w of workers) w.postMessage({ type: "finish" });
     };
-    const onAbort = () => { stopReason = "aborted"; finishAll(); for (const w of workers) w.terminate(); };
+    // Abort: let each worker finish the candidate it is on (a compile can own a
+    // WASM child process that must not be orphaned mid-request), then force it.
+    const onAbort = () => {
+      stopReason = "aborted";
+      finishAll();
+      const t = setTimeout(() => { for (const w of workers) w.terminate(); }, 2000);
+      t.unref?.();
+    };
     if (o.signal) {
       if (o.signal.aborted) { stopReason = "aborted"; resolveAll(); return; }
       o.signal.addEventListener("abort", onAbort, { once: true });

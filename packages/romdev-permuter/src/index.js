@@ -16,7 +16,10 @@ export { simplify_objdump, get_arch, setObjdumpGlue, resolveObjdumpGlue, objdump
 export { SequenceMatcher, unified_diff } from "./difflib.js";
 export { runWasmTool } from "./wasm-tool.js";
 export { PyRandom } from "./pyrandom.js";
-export { get_default_randomization_weights, merge_randomization_weights, get_settings, parseToml, trim_source } from "./helpers.js";
+export { get_default_randomization_weights, merge_randomization_weights, get_settings, parseToml, trim_source, DEFAULT_WEIGHTS_FILE } from "./helpers.js";
+
+/** The upstream this package ports. */
+export const UPSTREAM = Object.freeze({ repo: "https://github.com/simonlindholm/decomp-permuter.git", commit: "41bd0bfc32aa5ea78de4cf28be603163256c2a4c" });
 export { preprocess, PreprocessorRequired } from "./preprocess.js";
 export * as ast_util from "./ast_util.js";
 export * as ast_types from "./ast_types.js";

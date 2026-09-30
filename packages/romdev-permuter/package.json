@@ -5,7 +5,8 @@
   "type": "module",
   "main": "src/index.js",
   "exports": {
-    ".": "./src/index.js"
+    ".": "./src/index.js",
+    "./package.json": "./package.json"
   },
   "bin": {
     "romdev-permuter": "bin/permuter.mjs"
@@ -22,7 +23,8 @@
   },
   "license": "MIT",
   "dependencies": {
-    "romdev-pycparser": "0.1.0"
+    "romdev-pycparser": "0.1.0",
+    "romdev-toolchain-mips-gcc": "0.1.2"
   },
   "repository": {
     "type": "git",

@@ -393,11 +393,19 @@ export async function resolveObjdumpGlue(archName) {
 export async function objdump(o_file, arch, { objdump_command = null, stack_differences = false, ign_branch_targets = false } = {}) {
   const args = objdump_command ? objdump_command.slice(1) : arch.arguments;
   const glue = await resolveObjdumpGlue(arch.name);
+  if (usesRawFs(glue)) throw new Error(`${glue} is a NODERAWFS build; the scorer runs MEMFS binutils (the object is copied in)`);
   const bytes = typeof o_file === "string" ? readFileSync(o_file) : o_file;
   const r = await runWasmTool(glue, [...args, "/work/in.o"], { "/work/in.o": bytes });
   if (r.exitCode !== 0) throw new Error(`objdump exited ${r.exitCode}: ${r.stderr.slice(0, 400)}`);
   const lines = splitlines(r.stdout);
   return simplify_objdump(lines, arch, { stack_differences, ign_branch_targets });
+}
+
+const rawFs = new Map();
+/** Was this emscripten tool built with NODERAWFS (host filesystem) rather than MEMFS? */
+function usesRawFs(glue) {
+  if (!rawFs.has(glue)) rawFs.set(glue, /NODERAWFS/.test(readFileSync(glue, "utf8")));
+  return rawFs.get(glue);
 }
 
 /** Python str.splitlines() for \n / \r\n / \r text. */

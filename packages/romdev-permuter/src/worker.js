@@ -7,6 +7,7 @@ import { Compiler } from "./compiler.js";
 import { Permuter } from "./permuter.js";
 import { Scorer } from "./scorer.js";
 import { setObjdumpGlue } from "./objdump.js";
+import { loadCompileModule } from "./main.js";
 
 const { configs, glue } = workerData;
 for (const [arch, g] of Object.entries(glue)) setObjdumpGlue(arch, g);
@@ -24,7 +25,7 @@ const silent = () => {};
 async function main() {
   const permuters = [];
   for (const cfg of configs) {
-    const compileFn = cfg.compileModule ? (await import(cfg.compileModule.url))[cfg.compileModule.name] : null;
+    const compileFn = cfg.compileModule ? await loadCompileModule(cfg.compileModule) : null;
     const compiler = new Compiler(cfg.compile_cmd, { ...cfg.compilerOpts, compileFn, log: silent });
     const scorer = await Scorer.create(cfg.scorerOpts);
     permuters.push(await Permuter.create({ ...cfg.permOpts, compiler, scorer, log: silent }, cfg.base));
