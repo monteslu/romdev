@@ -2202,15 +2202,14 @@ describe("TestCParser_whole_code", () => { const self = new TestCParser_base();
         self.assert_num_ID_refs(ps4, "i", 1);
 
     });
-    // Upstream reads these from tests/c_files; the fork vendored in
-    // decomp-permuter / m2c does not ship memmgr_with_h.c or
-    // cppd_with_stdio_h.c, so the cases skip unless the files are present.
+    // Upstream reads these from tests/c_files (copied under fixtures/ from
+    // pycparser b5c6024) with open() in text mode, i.e. universal newlines.
     const cFile = (name) => new URL("./fixtures/c_files/" + name, import.meta.url);
     const noFile = (name) => (existsSync(cFile(name)) ? false : `upstream fixture c_files/${name} is not shipped with the vendored fork`);
 
     test("whole_file", { skip: noFile("memmgr_with_h.c") }, () => {
         // See how pycparser handles a whole, real C file.
-        const code = readFileSync(cFile("memmgr_with_h.c"), "utf8");
+        const code = readFileSync(cFile("memmgr_with_h.c"), "utf8").replace(/\r\n?/g, "\n");
         const p = self.parse(code);
 
         self.assert_num_klass_nodes(p, FuncDef, 5);
@@ -2230,7 +2229,7 @@ describe("TestCParser_whole_code", () => { const self = new TestCParser_base();
 
     test("whole_file_with_stdio", { skip: noFile("cppd_with_stdio_h.c") }, () => {
         // Parse a whole file with stdio.h included by cpp
-        const code = readFileSync(cFile("cppd_with_stdio_h.c"), "utf8");
+        const code = readFileSync(cFile("cppd_with_stdio_h.c"), "utf8").replace(/\r\n?/g, "\n");
         const p = self.parse(code);
 
         self.assertIsInstance(p.ext[0], Typedef);

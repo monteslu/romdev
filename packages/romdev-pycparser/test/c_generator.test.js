@@ -3,6 +3,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { CParser, CGenerator, NodeVisitor, c_ast, AssertionError } from "../src/index.js";
 import { compareAsts } from "./helpers.js";
+import { parse_file_with_cpp, cFile } from "./cpp.js";
 
 const _c_parser = new CParser();
 const parseToAst = (src) => _c_parser.parse(src);
@@ -459,7 +460,15 @@ describe("TestCasttoC", () => {
     assert.equal(generator.visit(new c_ast.Cast(int_type, test_fun)), "(int) test_fun()");
   });
 
-  test("to type with cpp", { skip: "needs cpp (parse_file use_cpp); no JS preprocessor is committed in the repo" }, () => {});
+  test("to type with cpp", async () => {
+    const generator = new CGenerator();
+    const test_fun = new c_ast.FuncCall(new c_ast.ID("test_fun"), new c_ast.ExprList([]));
+    const ast2 = await parse_file_with_cpp(cFile("memmgr.h"));
+    const void_ptr_type = ast2.ext.at(-3).type.type;
+    const void_type = void_ptr_type.type;
+    assert.equal(generator.visit(new c_ast.Cast(void_ptr_type, test_fun)), "(void *) test_fun()");
+    assert.equal(generator.visit(new c_ast.Cast(void_type, test_fun)), "(void) test_fun()");
+  });
 
   test("nested else if line breaks", () => {
     const generator = new CGenerator();
