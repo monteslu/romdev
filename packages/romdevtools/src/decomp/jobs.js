@@ -276,6 +276,13 @@ function launchSearch({ rec, jobDir, logPath, prep, project, threads, seedInfo, 
         directories: [prep.permDir], threads: Math.max(1, threads), workers: true, quiet: true, no_context_output: true,
         stop_on_zero: stopOnZero, force_seed: seedInfo.seed ?? null, signal: controller.signal, out: write,
         compileModule, compileTimeoutMs: 120_000, tmpDir: path.join(jobDir, "tmp", "candidates"),
+        // Upstream's own pass over base.c: cpp -P -nostdinc -DPERMUTER, here the WASM cpp.
+        preprocess: async (file) => {
+          const { preprocess } = await import("./cpp.js");
+          const r = await preprocess({ cwd: path.dirname(file), args: ["-P", "-nostdinc", "-DPERMUTER", file], timeoutMs: 60_000 });
+          if (r.exitCode !== 0) throw new Error(`preprocessing ${file} failed: ${String(r.log ?? "").slice(0, 400)}`);
+          return r.output.toString("utf8");
+        },
       });
       await atomicJson(path.join(jobDir, "stats.json"), { ...r.stats, at: new Date().toISOString() });
       exit = stopReason === "time-budget" ? { code: 124, signal: null }
