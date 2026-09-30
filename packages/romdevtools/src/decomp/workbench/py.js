@@ -347,9 +347,14 @@ export function strRepr(s) {
 export function isInputError(e) { return e instanceof ValueError || e?.name === "ValueError" || (e && typeof e.code === "string" && /^E[A-Z]+$/.test(e.code)); }
 
 /** Human wording for a filesystem error, the way the original printed it. */
-export function osErrorText(e) {
-  if (e?.code === "ENOENT") return `[Errno 2] No such file or directory: '${e.path}'`;
-  if (e?.code === "EISDIR") return `[Errno 21] Is a directory: '${e.path}'`;
-  if (e?.code === "EACCES") return `[Errno 13] Permission denied: '${e.path}'`;
+export function osErrorText(e, cwd = process.cwd()) {
+  // Paths read relative to the working directory (the project root), the
+  // way a command typed in that directory names them.
+  const shown = typeof e?.path === "string" && e.path.startsWith("/") && (e.path + "/").startsWith(cwd.replace(/\/?$/, "/")) ? e.path.slice(cwd.replace(/\/?$/, "/").length) || "." : e?.path;
+  if (e?.code === "ENOENT") return `[Errno 2] No such file or directory: '${shown}'`;
+  if (e?.code === "EISDIR") return `[Errno 21] Is a directory: '${shown}'`;
+  if (e?.code === "EACCES") return `[Errno 13] Permission denied: '${shown}'`;
+  if (e?.code === "EEXIST") return `[Errno 17] File exists: '${shown}'`;
+  if (e?.code === "ENOTDIR") return `[Errno 20] Not a directory: '${shown}'`;
   return e?.message ?? String(e);
 }

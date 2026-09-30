@@ -137,6 +137,7 @@ export function registerDecompTools(server, z, sessionKey) {
       traceMode: z.enum(["scheduler", "globalcolor"]).optional().describe("op:'workbench' with artifactId: scheduler captures native IDO -Wa,-R; globalcolor explicitly opts into building a workspace-only diagnostic IDO 5.3 uopt with the workbench's pinned profile. No project compiler is replaced. Both tracing-disabled and tracing-enabled diagnostic objects must equal the compared object before allocator attribution. Baseline optimization flags stay unchanged."),
       allowDestructive: z.boolean().default(false).describe("op:'workbench' - required to run a command the workbench's OWN catalog marks destructive."),
       allowNetwork: z.boolean().default(false).describe("op:'workbench' - required to run a command the workbench's OWN catalog marks as reaching the network."),
+      timeoutMs: z.number().int().min(1000).max(3_600_000).optional().describe("op:'workbench' - per-command timeout (default 600000); the command runs in its own process and is killed, with everything it started, when it runs over."),
       force: z.boolean().default(false).describe("op:'workbench' - re-read the command catalog instead of using the cached one."),
       root: z.string().optional().describe("op:'import' - absolute path of the decompilation checkout (the dir with the splat yaml + Makefile). op:'research' action:'import' - a directory of prior research (drafts and notes) to INDEX. op:'replay' - the research root holding the replay fixtures (default: <project>/docs/research). Indexing records what exists; it never turns a note into a verified result."),
       splatYaml: z.string().optional().describe("op:'import' - splat yaml (relative to root) when auto-detection finds more than one."),
@@ -406,7 +407,7 @@ export function registerDecompTools(server, z, sessionKey) {
           const { compactWorkbenchReport } = await import("../../decomp/workbench.js");
           const res = await compactWorkbenchReport(project, await invokeWorkbench({
             group: args.wbGroup, command: args.wbCommand, args: wbArgs,
-            cwd: project.root, env: project.env,
+            cwd: project.root, env: project.env, timeoutMs: args.timeoutMs ?? 600_000,
             allowDestructive: !!args.allowDestructive, allowNetwork: !!args.allowNetwork,
           }), { outputPath: args.outputPath, detail: args.detail });
           return jsonContent({ project: project.id, ...res, ...(artifactProvenance ? { artifactProvenance } : {}), ...(traceBundle ? { traceBundle } : {}),

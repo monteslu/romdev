@@ -38,3 +38,17 @@ export async function instrumentUoptCommand(args, io, ctx) {
   io.print(`instrumented ${result.trace_points} globalcolor sites using ${result.profile} -> ${args.output}`);
   return 0;
 }
+
+export const COMMAND_SPECS = [
+  {
+    path: ["instrument-uopt-globalcolor"], handler: instrumentUoptCommand,
+    help: "instrument the pinned IDO 5.3 static-recomp uopt profile",
+    description: "Add globalcolor traces and force probes to pinned uopt C.",
+    arguments: [
+      { dest: "input", help: "pristine generated uopt.c" },
+      { dest: "output", help: "instrumented output path" },
+      { flags: ["--allow-unverified-source"], action: "store_true", help: "bypass the source hash for profile development" },
+      { flags: ["--in-place"], action: "store_true", help: "permit input and output to be the same path" },
+    ],
+  },
+];

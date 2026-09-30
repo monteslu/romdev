@@ -263,10 +263,10 @@ test("usage errors are exit 2 documents, filters narrow to a gate result", async
   assert.equal(JSON.parse(none.stdout).event_count, 0);
 });
 
-test("the catalog lists exactly the in-process commands and their flags", () => {
+test("the catalog is the whole journey map; flags come from each command grammar", async () => {
   const map = commandMapPayload();
   assert.equal(map.schema, "decomp-workbench-command-map-v1");
-  assert.deepEqual(Object.keys(map.groups).sort(), ["instrument", "object", "trace"]);
-  assert.equal(commandAcceptsFlag(["object", "diagnose"], "--objdump"), true);
-  assert.equal(commandAcceptsFlag(["trace", "scheduler"], "--objdump"), false);
+  assert.equal(Object.values(map.groups).flat().length, 128);
+  assert.equal(await commandAcceptsFlag(["object", "diagnose"], "--objdump"), true);
+  assert.equal(await commandAcceptsFlag(["trace", "scheduler"], "--objdump"), false);
 });

@@ -1,352 +1,191 @@
-// cli.js - the in-process workbench command surface: the command catalog,
-// an argument parser with the workbench's option grammar and error wording,
-// and the JSON contract (one schema-named document per run; exit 0 success,
-// 1 gate/no-result, 2 usage/capability/process, 3 census-failed).
+// cli.js - the workbench command surface: every command's grammar, the
+// journey map's grouped spellings, and the JSON contract (one schema-named
+// document per run; exit 0 success, 1 gate/no-result, 2
+// usage/capability/process, 3 census-failed).
 //
-// Commands are the late-stage mechanism diagnostics romdev drives: object
-// diagnose, trace scheduler, trace globalcolor and instrument globalcolor.
-// Every command runs inside the romdev process; the only child process any
-// of them starts is the project's own objdump.
+// Commands live in the `*-cli.js` modules beside this file; each exports
+// COMMAND_SPECS (see argparse.js for the spec shape). They are discovered
+// from the directory, so a new command module needs no edit here.
+//
+// runCommand() runs a command in the calling process. runCommandIsolated()
+// runs it in a child node process (workbench/child.js) with the project
+// directory as its working directory, and kills it on timeout.
 //
 // Plain JS ESM + JSDoc.
 
 import path from "node:path";
-import { dumps, renderJson } from "./pyjson.js";
-import { strRepr } from "./py.js";
-
-const casefold = (s) => s.toLowerCase();
+import { readdirSync } from "node:fs";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { fork } from "node:child_process";
+import { renderJson } from "./pyjson.js";
+import { errorReport, jsonEnvelope, SCHEMAS } from "./reporting.js";
+import { rewriteGroupAlias, commandMapPayload as mapPayload } from "./discovery.js";
+import { parseArgs, formatHelp, formatUsage, ArgumentError, ParserExit } from "./argparse.js";
 
 export const PROG = "decomp-workbench";
-export const ERROR_SCHEMA = "decomp-workbench-error-v1";
-export const COMMAND_MAP_SCHEMA = "decomp-workbench-command-map-v1";
+export const VERSION = "0.8.0";
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 
-/** Report schemas per flat command name. */
-export const SCHEMAS = Object.freeze({
-  "commands": "decomp-workbench-command-map-v1",
-  "diagnose": "decomp-workbench-diagnosis-v3",
-  "trace-globalcolor": "decomp-workbench-trace-globalcolor-v1",
-  "trace-scheduler": "decomp-workbench-scheduler-trace-v1",
-});
-
-export function schemaFor(command) { return SCHEMAS[command] ?? `decomp-workbench-${command}-v1`; }
-
-const REGISTER_PROFILES = ["ido53", "unverified"];
-
-const VIEW_RENDER_OPTIONS = (defaultMaxHunks) => [
-  { flags: ["--report-regs"], action: "store_true" },
-  { flags: ["--terse"], action: "store_true" },
-  { flags: ["--context"], type: "int", default: 2 },
-  { flags: ["--max-hunks"], type: "int", default: defaultMaxHunks },
-  { flags: ["--lane-window"], type: "int", default: 32 },
-  { flags: ["--show-all"], action: "store_true" },
-  { flags: ["--register-profile"], default: "ido53", choices: REGISTER_PROFILES },
-  { flags: ["--target-reservations"] },
-  { flags: ["--candidate-reservations"] },
-  { flags: ["--color"], default: "auto", choices: ["auto", "always", "never"] },
+export const WELCOME = [
+  "decomp-workbench: diagnose why an almost-matching MIPS object still differs, and what to change next.",
+  "New here? Run `decomp-workbench commands` for the compact map, or read docs/START_HERE.md",
+  "Full command list: decomp-workbench --help",
+  "Name a lever family: decomp-workbench guide <playbook|verdict|lever>",
 ];
 
-const VIEW_OUTPUT_OPTIONS = [
-  { flags: ["--width"], default: 0 },
-  { flags: ["--pager"], default: "auto", choices: ["auto", "always", "never"] },
-  { flags: ["--html"] },
-  { flags: ["--emit-force-spec"] },
-];
+let _specs = null;
 
-/**
- * The ported commands. `group`/`command` is the grouped spelling the catalog
- * lists; `name` is the flat spelling. Handlers load lazily.
- */
-export const COMMANDS = [
-  {
-    name: "diagnose", group: "object", command: "diagnose",
-    description: "one-screen exactness, mechanism, and next lever",
-    positionals: [{ dest: "target" }, { dest: "candidate" }],
-    options: [
-      { flags: ["--symbol", "--function"], dest: "symbol", action: "symbol" },
-      { flags: ["--explain-keys"], action: "explain_keys" },
-      { flags: ["--section"], default: ".text" },
-      { flags: ["--objdump"] },
-      { flags: ["--candidate-listing"] },
-      { flags: ["--trace"] },
-      { flags: ["--trace-proc"], type: "int" },
-      { flags: ["--trace-web"], type: "int" },
-      { flags: ["--ladder"] },
-      { flags: ["--force-result"] },
-      { flags: ["--ring-trace"] },
-      { flags: ["--emit-trace"] },
-      { flags: ["--as1-trace"] },
-      { flags: ["--source"] },
-      { flags: ["--lever-proc"], type: "int" },
-      { flags: ["--json"], action: "store_true" },
-      ...VIEW_RENDER_OPTIONS(1),
-      ...VIEW_OUTPUT_OPTIONS,
-      { flags: ["--show-diff"], action: "store_true" },
-      { flags: ["--cross-rom"], action: "store_true" },
-      { flags: ["--fail-on-mismatch"], action: "store_true" },
-      { flags: ["--built-from"], action: "append", default: null },
-      { flags: ["--allow-stale"], action: "store_true" },
-      { flags: ["--census"], action: "append", default: [] },
-    ],
-    safety: { default: "read-only", external_process: true, network: false, destructive: false },
-    load: async () => (await import("./diagnose-cli.js")).diagnoseCommand,
-  },
-  {
-    name: "trace-globalcolor", group: "trace", command: "globalcolor",
-    description: "inspect a focused allocator decision",
-    positionals: [{ dest: "trace" }],
-    options: [
-      { flags: ["--proc"], type: "int" },
-      { flags: ["--desired-register"] },
-      { flags: ["--web"], type: "int" },
-      { flags: ["--lineage-table"], type: "int", action: "append", default: [] },
-      { flags: ["--dtype"], type: "int" },
-      { flags: ["--top"], type: "int", default: 20 },
-      { flags: ["--json"], action: "store_true" },
-    ],
-    safety: { default: "read-only", external_process: false, network: false, destructive: false },
-    load: async () => (await import("./globalcolor-cli.js")).traceGlobalcolorCommand,
-  },
-  {
-    name: "trace-scheduler", group: "trace", command: "scheduler",
-    description: "inspect named ready-set decisions and tie-breaks",
-    positionals: [{ dest: "trace" }],
-    options: [
-      { flags: ["--against"] },
-      { flags: ["--from-as1-r"], action: "store_true" },
-      { flags: ["--emit"] },
-      { flags: ["--proc"], type: "int" },
-      { flags: ["--block"], type: "int" },
-      { flags: ["--limit"], type: "int", default: 50 },
-      { flags: ["--json"], action: "store_true" },
-    ],
-    safety: { default: "read-only", external_process: false, network: false, destructive: false },
-    load: async () => (await import("./scheduler-cli.js")).traceSchedulerCommand,
-  },
-  {
-    name: "instrument-uopt-globalcolor", group: "instrument", command: "globalcolor",
-    description: "add focused allocator color probes",
-    positionals: [{ dest: "input" }, { dest: "output" }],
-    options: [
-      { flags: ["--allow-unverified-source"], action: "store_true" },
-      { flags: ["--in-place"], action: "store_true" },
-    ],
-    safety: { default: "writes-explicit-output", external_process: false, network: false, destructive: false },
-    load: async () => (await import("./instrument-uopt-cli.js")).instrumentUoptCommand,
-  },
-];
+/** Every command spec, keyed by its argv path ("trace-scheduler", "experiment validate"). */
+export async function commandSpecs() {
+  if (_specs) return _specs;
+  const files = readdirSync(HERE).filter((f) => f.endsWith("-cli.js")).sort();
+  const map = new Map();
+  for (const f of files) {
+    const mod = await import(pathToFileURL(path.join(HERE, f)).href);
+    for (const spec of mod.COMMAND_SPECS ?? []) {
+      const key = spec.path.join(" ");
+      if (map.has(key)) throw new Error(`workbench command '${key}' is defined twice (${f})`);
+      map.set(key, { ...spec, module: f });
+    }
+  }
+  _specs = map;
+  return map;
+}
 
-const BY_NAME = new Map(COMMANDS.map((c) => [c.name, c]));
-const BY_GROUP = new Map(COMMANDS.map((c) => [`${c.group} ${c.command}`, c]));
-
-/** Resolve a flat or grouped spelling to its command spec. */
-export function resolveCommand(argv) {
-  if (argv.length >= 2 && BY_GROUP.has(`${argv[0]} ${argv[1]}`)) return { spec: BY_GROUP.get(`${argv[0]} ${argv[1]}`), rest: argv.slice(2) };
-  if (argv.length >= 1 && BY_NAME.has(argv[0])) return { spec: BY_NAME.get(argv[0]), rest: argv.slice(1) };
+/** Longest registered argv path that prefixes `argv`. */
+export async function resolveCommand(argv) {
+  const specs = await commandSpecs();
+  const rewritten = rewriteGroupAlias(argv);
+  for (let n = Math.min(3, rewritten.length); n >= 1; n--) {
+    const key = rewritten.slice(0, n).join(" ");
+    if (specs.has(key)) return { spec: specs.get(key), rest: rewritten.slice(n), argv: rewritten };
+  }
   return null;
 }
 
-/** The versioned, self-describing command map for the ported commands. */
-export function commandMapPayload() {
-  const groups = {};
-  for (const c of COMMANDS) {
-    (groups[c.group] ??= []).push({
-      command: c.command, invocation: [PROG, c.group, c.command], description: c.description,
-      report_schema: schemaFor(c.name), safety: { ...c.safety },
-    });
-  }
-  return {
-    schema: COMMAND_MAP_SCHEMA, groups,
-    automation: {
-      success: "one versioned JSON document when --json is supported",
-      failure_schema: ERROR_SCHEMA,
-      exit_codes: { 0: "success", 1: "gate/no-result", 2: "usage/capability/process", 3: "census-failed" },
-    },
-    network: { policy: [], commands: [], hosts: [] },
-    compatibility: "Grouped spellings and flat command names are both supported.",
-  };
-}
+/** The versioned command map (every catalogued command). */
+export function commandMapPayload() { return mapPayload(); }
 
-class ArgumentError extends Error {
-  /** @param {string} message @param {boolean} topLevel */
-  constructor(message, topLevel = false) { super(message); this.topLevel = topLevel; }
-}
-
-const destOf = (o) => o.dest ?? o.flags[0].replace(/^--/, "").replace(/-/g, "_");
-const isNegativeNumber = (s) => /^-\d+$|^-\d*\.\d+$/.test(s);
-
-/**
- * Parse a command's argument list with the workbench's option grammar:
- * interleaved positionals, `--opt value` and `--opt=value`, unique-prefix
- * abbreviations, `--` to end options.
- */
-export function parseArgs(spec, rest) {
-  const args = { command: spec.name };
-  for (const o of spec.options) {
-    if (o.action === "explain_keys") continue;
-    const d = destOf(o);
-    if (!(d in args)) args[d] = o.action === "store_true" ? false : o.default === undefined ? null : Array.isArray(o.default) ? [...o.default] : o.default;
-  }
-  const positionals = [];
-  const extras = [];
-  const byFlag = new Map();
-  for (const o of spec.options) for (const f of o.flags) byFlag.set(f, o);
-  const find = (flag) => {
-    if (byFlag.has(flag)) return [flag, byFlag.get(flag)];
-    const hits = [...byFlag.keys()].filter((f) => f.startsWith(flag));
-    const owners = new Set(hits.map((f) => byFlag.get(f)));
-    if (owners.size === 1) return [hits[0], byFlag.get(hits[0])];
-    if (owners.size > 1) throw new ArgumentError(`ambiguous option: ${flag} could match ${hits.join(", ")}`);
-    return null;
-  };
-  const convert = (o, flag, value) => {
-    const label = `argument ${o.flags.join("/")}`;
-    let v = value;
-    if (o.type === "int") {
-      if (!/^\s*[-+]?\d+\s*$/.test(value)) throw new ArgumentError(`${label}: invalid int value: ${strRepr(value)}`);
-      v = parseInt(value, 10);
-    }
-    if (o.choices && !o.choices.includes(v)) {
-      throw new ArgumentError(`${label}: invalid choice: ${strRepr(v)} (choose from ${o.choices.map(strRepr).join(", ")})`);
-    }
-    return v;
-  };
-  let onlyPositionals = false;
-  for (let i = 0; i < rest.length; i++) {
-    const tok = rest[i];
-    if (onlyPositionals || !tok.startsWith("-") || tok === "-" || isNegativeNumber(tok)) { positionals.push(tok); continue; }
-    if (tok === "--") { onlyPositionals = true; continue; }
-    const eq = tok.indexOf("=");
-    const flagText = tok.startsWith("--") && eq > 0 ? tok.slice(0, eq) : tok;
-    const found = find(flagText);
-    if (!found) { extras.push(tok); continue; }
-    const [flag, o] = found;
-    const d = destOf(o);
-    if (o.action === "store_true") {
-      if (eq > 0 && tok.startsWith("--")) throw new ArgumentError(`argument ${o.flags.join("/")}: ignored explicit argument ${strRepr(tok.slice(eq + 1))}`);
-      args[d] = true; continue;
-    }
-    if (o.action === "explain_keys") { args.__explain_keys = true; continue; }
-    let value;
-    if (eq > 0 && tok.startsWith("--")) value = tok.slice(eq + 1);
-    else {
-      const next = rest[i + 1];
-      if (next === undefined || (next.startsWith("-") && next !== "-" && !isNegativeNumber(next))) {
-        throw new ArgumentError(`argument ${o.flags.join("/")}: expected one argument`);
-      }
-      value = next; i++;
-    }
-    const v = convert(o, flag, value);
-    if (o.action === "append") { args[d] = [...(args[d] ?? []), v]; continue; }
-    if (o.action === "symbol") {
-      const previous = args[d];
-      if (previous !== null && previous !== undefined && previous !== v) {
-        throw new ArgumentError(`argument ${o.flags.join("/")}: conflicts with ${args.__symbol_option ?? "--symbol"} ${strRepr(previous)}; --symbol and --function are two spellings of one selector`);
-      }
-      args.__symbol_option = flag;
-    }
-    args[d] = v;
-  }
-  const needed = spec.positionals;
-  if (positionals.length < needed.length) {
-    throw new ArgumentError(`the following arguments are required: ${needed.slice(positionals.length).map((p) => p.dest).join(", ")}`);
-  }
-  needed.forEach((p, idx) => { args[p.dest] = positionals[idx]; });
-  extras.push(...positionals.slice(needed.length));
-  if (extras.length) throw new ArgumentError(`unrecognized arguments: ${extras.join(" ")}`, true);
-  delete args.__symbol_option;
-  return args;
-}
-
-/** Does this command accept `flag`? Answered from the command's own grammar. */
-export function commandAcceptsFlag(invocation, flag) {
-  const r = resolveCommand(invocation.filter((x) => x !== PROG));
+/** Does the command at `invocation` accept `flag`? From its own grammar. */
+export async function commandAcceptsFlag(invocation, flag) {
+  const r = await resolveCommand(invocation.filter((x) => x !== PROG));
   if (!r) return false;
-  return r.spec.options.some((o) => o.flags.includes(flag));
+  return r.spec.arguments.some((a) => Array.isArray(a.flags) && a.flags.includes(flag));
 }
 
-/** The shared error envelope. */
-export function errorReport(command, { status, message, stage = "command", details = null }) {
-  const lowered = casefold(message);
-  const kind = lowered.includes("timeout") || lowered.includes("exceeded --timeout") ? "timeout"
-    : lowered.includes("does not exist") || lowered.includes("no such file") ? "not-found"
-    : lowered.includes("failed with exit") || lowered.includes("objdump failed") ? "process-failed"
-    : status === 2 ? "usage" : status === 1 ? "no-result" : "command-failed";
-  const error = { kind, message };
-  if (details) error.details = details;
-  return { schema: ERROR_SCHEMA, command, stage, status, error };
-}
-
-function withSchema(command, value) {
-  if (value && typeof value === "object" && !Array.isArray(value)) return "schema" in value ? { ...value } : { ...value, schema: schemaFor(command) };
-  return { schema: schemaFor(command), results: value };
-}
-
-/** Output sink: each call is one print() line. */
 function makeIo() {
   const out = [], err = [];
-  return { out, err, print: (s = "") => out.push(`${s}\n`), eprint: (s = "") => err.push(`${s}\n`) };
+  return {
+    out, err,
+    print: (s = "") => out.push(`${s}\n`),
+    eprint: (s = "") => err.push(`${s}\n`),
+    write: (s) => out.push(String(s)),
+    ewrite: (s) => err.push(String(s)),
+  };
+}
+
+function reportCommandFor(argv) {
+  const nested = argv.length >= 2 ? `${argv[0]}-${argv[1]}` : "unknown";
+  if (SCHEMAS[nested]) return nested;
+  return argv.find((a) => SCHEMAS[a]) ?? "unknown";
 }
 
 /**
- * Run one workbench command in process.
- * @param {string[]} argv flat or grouped command followed by its arguments
- * @param {{cwd?: string, env?: Record<string,string>}} [ctx]
+ * Run one workbench command in this process.
+ * @param {string[]} argv command words then arguments (flat or grouped spelling)
+ * @param {{cwd?: string, env?: Record<string,string>}} [opts]
  * @returns {Promise<{code:number, stdout:string, stderr:string}>}
  */
-export async function runCommand(argv, { cwd = process.cwd(), env = process.env } = {}) {
-  const ctx = { cwd, env: { ...process.env, ...(env ?? {}) }, resolve: (p) => path.resolve(cwd, p) };
-  if (!argv.length) return { code: 0, stdout: "decomp-workbench: late-stage matching diagnostics. Run `commands` for the catalog.\n", stderr: "" };
-  const jsonRequested = argv.includes("--json");
-  if (argv[0] === "commands") {
-    if (jsonRequested) return { code: 0, stdout: renderJson(commandMapPayload()), stderr: "" };
-    const lines = ["Journey command map", "Grouped spellings and existing flat commands are both supported."];
-    for (const c of COMMANDS) lines.push(`  ${c.group} ${c.command}  ${c.description}`);
+export async function runCommand(argv, { cwd = process.cwd(), env = {} } = {}) {
+  const ctx = { cwd, env: { ...process.env, ...(env ?? {}) }, resolve: (p) => path.resolve(cwd, p), runCommand: (a) => runCommand(a, { cwd, env }) };
+  if (!argv.length) return { code: 0, stdout: WELCOME.join("\n") + "\n", stderr: "" };
+  if (argv[0] === "--version") return { code: 0, stdout: `${PROG} ${VERSION}\n`, stderr: "" };
+  if (argv[0] === "--help" || argv[0] === "-h") {
+    const specs = await commandSpecs();
+    const { HIDDEN_FLAT_COMMANDS } = await import("./discovery.js");
+    const names = [...specs.values()].filter((s) => s.path.length === 1 && !HIDDEN_FLAT_COMMANDS.has(s.path[0])).map((s) => s.path[0]).sort();
+    const lines = [`usage: ${PROG} [-h] [--version] [--explain-keys] COMMAND ...`, "",
+      "MIPS object diagnosis, decomp.me handoffs, candidate campaigns, compiler traces, and pass replay", "",
+      "positional arguments:", "  COMMAND               run `decomp-workbench commands` for the compact journey map",
+      ...names.map((n) => `    ${n.padEnd(20)}${specs.get(n).help ?? ""}`), "",
+      "Start with `decomp-workbench commands` for the compact journey map, or docs/START_HERE.md for the whole workflow."];
     return { code: 0, stdout: lines.join("\n") + "\n", stderr: "" };
   }
-  const r = resolveCommand(argv);
-  if (!r) {
-    const word = argv[0];
-    const message = `argument command: invalid choice: ${strRepr(word)} (choose from ${["commands", ...COMMANDS.map((c) => c.name)].map(strRepr).join(", ")})`;
-    if (jsonRequested) return { code: 2, stdout: renderJson(errorReport("unknown", { status: 2, message })), stderr: "" };
-    return { code: 2, stdout: "", stderr: `${PROG}: error: ${message}\n` };
-  }
-  const { spec, rest } = r;
-  let args;
-  try {
-    args = parseArgs(spec, rest);
-  } catch (e) {
-    if (!(e instanceof ArgumentError)) throw e;
-    const message = e.topLevel ? e.message : `${PROG} ${spec.name}: error: ${e.message}`;
-    if (jsonRequested) return { code: 2, stdout: renderJson(errorReport(spec.name, { status: 2, message })), stderr: "" };
-    return { code: 2, stdout: "", stderr: `${e.topLevel ? `${PROG}: error: ${e.message}` : message}\n` };
-  }
-  if (args.__explain_keys) {
+  if (argv[0] === "--explain-keys") {
     const { explainKeysText } = await import("./schema.js");
     return { code: 0, stdout: explainKeysText() + "\n", stderr: "" };
   }
-  const handler = await spec.load();
+  const jsonRequested = argv.includes("--json") || argv.includes("--json-summary");
+  const r = await resolveCommand(argv);
+  if (!r) {
+    const word = rewriteGroupAlias(argv)[0];
+    const lines = `${PROG}: error: '${word}' is not a ${PROG} command.\nRun \`${PROG} commands\` for the compact journey map, or \`${PROG} --help\` for every command.\n`;
+    if (jsonRequested) return { code: 2, stdout: renderJson(errorReport(reportCommandFor(rewriteGroupAlias(argv)), { status: 2, message: `'${word}' is not a ${PROG} command.` })), stderr: "" };
+    return { code: 2, stdout: "", stderr: `usage: ${PROG} [-h] [--version] [--explain-keys] COMMAND ...\n${lines}` };
+  }
+  const { spec, rest } = r;
+  const prog = `${PROG} ${spec.path.join(" ")}`;
+  let args;
+  try {
+    const { explainKeysText } = await import("./schema.js");
+    args = parseArgs(spec, rest, { prog, explainKeys: explainKeysText, version: `${PROG} ${VERSION}` });
+  } catch (e) {
+    if (e instanceof ParserExit) return { code: e.status, stdout: e.stdout, stderr: "" };
+    if (!(e instanceof ArgumentError)) throw e;
+    const line = e.topLevel ? `${PROG}: error: ${e.message}` : `${prog}: error: ${e.message}`;
+    if (jsonRequested) {
+      // The top-level parser's prefix is stripped; a subcommand's is kept.
+      const message = e.topLevel ? e.message : line;
+      return { code: 2, stdout: renderJson(errorReport(reportCommandFor(r.argv), { status: 2, message })), stderr: "" };
+    }
+    return { code: 2, stdout: "", stderr: `${formatUsage(spec, { prog })}${line}\n` };
+  }
+  args.command = spec.path[0];
   const io = makeIo();
   let status;
   try {
-    status = await handler(args, io, ctx);
+    status = await spec.handler(args, io, ctx);
   } catch (e) {
-    // A handler bug is a process failure, reported as the standard document.
     const message = String(e?.message ?? e);
-    if (jsonRequested) return { code: 2, stdout: renderJson(errorReport(spec.name, { status: 2, message })), stderr: String(e?.stack ?? "") };
+    if (jsonRequested) return { code: 2, stdout: renderJson(errorReport(String(args.report_command ?? args.command), { status: 2, message })), stderr: String(e?.stack ?? "") };
     return { code: 2, stdout: io.out.join(""), stderr: io.err.join("") + `error: ${message}\n` };
   }
+  status = status ?? 0;
   const stdout = io.out.join(""), stderr = io.err.join("");
-  if (!jsonRequested) return { code: status, stdout, stderr };
-  const output = stdout.trim(), diagnostic = stderr.trim();
-  if (output) {
-    let value;
-    try { value = JSON.parse(output); } catch {
-      return { code: 2, stdout: renderJson(errorReport(spec.name, { status: 2, message: diagnostic || "command emitted invalid JSON" })), stderr: "" };
-    }
-    return { code: status, stdout: renderJson(withSchema(spec.name, value)), stderr: "" };
-  }
-  const message = diagnostic.replace(/^error: /, "").trim() || "command produced no result";
-  return { code: status || 2, stdout: renderJson(errorReport(spec.name, { status: status || 2, message })), stderr: "" };
+  if (!jsonRequested || spec.rawJson) return { code: status, stdout, stderr };
+  const env2 = jsonEnvelope(String(args.report_command ?? args.command), status, stdout, stderr);
+  return { code: env2.code, stdout: env2.stdout, stderr: "" };
 }
 
-export { dumps };
+/** A spec for a command group with no operation: print its listing. */
+export function listingSpec(pathWords, { help, description, epilog }) {
+  return {
+    path: pathWords, help, description, epilog, arguments: [],
+    handler: (_args, io) => { io.write(formatHelp({ arguments: [], description, epilog }, { prog: `${PROG} ${pathWords.join(" ")}` })); return 0; },
+  };
+}
+
+const CHILD = fileURLToPath(new URL("./child.js", import.meta.url));
+
+/**
+ * Run one command in a child node process whose working directory is `cwd`,
+ * killed (with any process it started) when it exceeds `timeoutMs`.
+ */
+export function runCommandIsolated(argv, { cwd = process.cwd(), env = {}, timeoutMs = 600_000 } = {}) {
+  return new Promise((resolve) => {
+    let settled = false, stderrTail = "";
+    const child = fork(CHILD, [], { cwd, env: { ...process.env, ...(env ?? {}) }, stdio: ["ignore", "ignore", "pipe", "ipc"], detached: true, serialization: "advanced" });
+    child.stderr.on("data", (d) => { stderrTail = (stderrTail + d).slice(-4000); });
+    const finish = (r) => { if (settled) return; settled = true; clearTimeout(timer); resolve(r); };
+    const timer = setTimeout(() => {
+      try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch {} }
+      const message = `timeout: exceeded --timeout of ${timeoutMs} ms; the command and every process it started were killed`;
+      const jsonRequested = argv.includes("--json");
+      finish({ code: 2, stdout: jsonRequested ? renderJson(errorReport(argv[0] ?? "unknown", { status: 2, message })) : "", stderr: `error: ${message}\n`, timedOut: true });
+    }, timeoutMs);
+    child.on("message", (m) => { if (m?.type === "result") finish({ code: m.code, stdout: m.stdout, stderr: m.stderr }); });
+    child.on("error", (e) => finish({ code: 2, stdout: "", stderr: `error: ${e.message}\n` }));
+    child.on("exit", (code, signal) => finish({ code: 2, stdout: "", stderr: `error: workbench command process exited (${signal ?? code}) without a result\n${stderrTail}` }));
+    child.send({ type: "run", argv, cwd, env });
+  });
+}

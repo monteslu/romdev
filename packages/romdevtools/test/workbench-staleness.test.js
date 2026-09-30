@@ -7,7 +7,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DEFAULT_TOLERANCE_SECONDS, STALENESS_SCHEMA, StaleBuildError, chainReport, enforceFreshness, fileSha256, stalenessReport } from "../src/decomp/workbench/staleness.js";
-import { COMMANDS, parseArgs } from "../src/decomp/workbench/cli.js";
+import { parseArgs } from "../src/decomp/workbench/argparse.js";
+import { COMMAND_SPECS as DIAGNOSE_SPECS } from "../src/decomp/workbench/diagnose-cli.js";
+const DIAGNOSE_SPEC = DIAGNOSE_SPECS.find((s) => s.path[0] === "diagnose");
 import { diagnoseDumpsCommand } from "../src/decomp/workbench/diagnose-cli.js";
 
 const DUMP = "\n00000000 <animStep>:\n   0: 03e00008  jr $ra\n   4: 00000000  nop\n";
@@ -106,7 +108,7 @@ test("enforce refuses by default and warns under allow-stale", () => {
 
 // The guard where it matters: on the diagnose document.
 async function diagnose(d, extra) {
-  const spec = COMMANDS.find((c) => c.name === "diagnose");
+  const spec = DIAGNOSE_SPEC;
   const args = parseArgs(spec, [path.join(d, "target.objdump"), path.join(d, "candidate.objdump"), ...extra]);
   const out = [], err = [];
   const io = { print: (s = "") => out.push(`${s}\n`), eprint: (s = "") => err.push(`${s}\n`) };

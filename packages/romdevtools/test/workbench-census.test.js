@@ -6,7 +6,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CENSUS_FAILURE_EXIT, evaluateCensus, matches, parseCensus } from "../src/decomp/workbench/census.js";
 import { COMPARISON_CENSUS_KEYS, SHIFT_CENSUS_KEYS, VIEW_CENSUS_KEYS } from "../src/decomp/workbench/schema.js";
-import { COMMANDS, parseArgs } from "../src/decomp/workbench/cli.js";
+import { parseArgs } from "../src/decomp/workbench/argparse.js";
+import { COMMAND_SPECS as DIAGNOSE_SPECS } from "../src/decomp/workbench/diagnose-cli.js";
+const DIAGNOSE_SPEC = DIAGNOSE_SPECS.find((s) => s.path[0] === "diagnose");
 import { diagnoseDumpsCommand } from "../src/decomp/workbench/diagnose-cli.js";
 
 const FIX = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "workbench");
@@ -71,7 +73,7 @@ test("a list key and a key the report did not carry are refused", () => {
 
 // The command half, on the diagnose document (the command romdev drives).
 async function run(argv) {
-  const spec = COMMANDS.find((c) => c.name === "diagnose");
+  const spec = DIAGNOSE_SPEC;
   const args = parseArgs(spec, [...argv, "--json"]);
   const out = [], err = [];
   const io = { print: (s = "") => out.push(`${s}\n`), eprint: (s = "") => err.push(`${s}\n`) };

@@ -127,3 +127,21 @@ export function emitReport(events, { proc = null, block = null } = {}) {
     line_order_conflicts: lineOrderConflicts(sel),
   };
 }
+
+/** Render a report as the per-block emission listing an analyst reads. */
+export function formatEmitReport(report) {
+  const lines = [];
+  const pad = (v, n) => String(v).padEnd(n);
+  for (const block of report.blocks) {
+    lines.push(`proc ${block.proc} block ${block.block}  ${block.instruction_count} instruction records  lines [${block.lines.join(", ")}]`);
+    for (const row of block.records) {
+      lines.push(`  ${row.is_instruction ? "I" : "."} emit=${pad(row.emit, 6)} line=${pad(row.line, 6)} op=${pad(row.op, 6)} ${pad(row.buffer, 4)} ${row.fn}`);
+    }
+  }
+  const conflicts = report.line_order_conflicts;
+  lines.push("", `line-order conflicts: ${conflicts.length}`);
+  for (const c of conflicts) {
+    lines.push(`  proc ${c.proc} block ${c.block}: emit=${c.earlier.emit} line=${c.earlier.line} (${c.earlier.fn}) before emit=${c.later.emit} line=${c.later.line} (${c.later.fn}) -- the earlier record's lower line wins as1's line key`);
+  }
+  return lines.join("\n");
+}

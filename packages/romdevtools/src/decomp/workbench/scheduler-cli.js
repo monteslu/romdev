@@ -83,3 +83,96 @@ export async function traceSchedulerCommand(args, io, ctx) {
   }
   return selected.length ? 0 : 1;
 }
+
+// instrument-scheduler and trace-emit
+
+export async function instrumentSchedulerCommand(args, io, ctx) {
+  const { existsSync, mkdirSync, readFileSync: rf, writeFileSync: wf } = await import("node:fs");
+  const path = await import("node:path");
+  const { instrumentSchedulerSource, loadSchedulerProfile } = await import("./scheduler.js");
+  let report, outputPath;
+  try {
+    const expand = (p) => (p.startsWith("~/") ? (process.env.HOME ?? "") + p.slice(1) : p);
+    const inputPath = ctx.resolve(expand(args.input));
+    outputPath = ctx.resolve(expand(args.output));
+    if (inputPath === outputPath) throw new ValueError("scheduler input and output must be different paths");
+    if (existsSync(outputPath)) throw new ValueError(`refusing to overwrite output: ${outputPath}`);
+    const source = rf(inputPath, "utf8");
+    const profile = loadSchedulerProfile(ctx.resolve(args.profile));
+    let instrumented;
+    [instrumented, report] = instrumentSchedulerSource(source, profile);
+    mkdirSync(path.dirname(outputPath), { recursive: true });
+    wf(outputPath, instrumented, { flag: "wx" });
+    report.output = outputPath;
+  } catch (e) {
+    if (!isInputError(e) && !(e instanceof SyntaxError)) throw e;
+    io.eprint(`error: ${e.code ? osErrorText(e) : e.message}`);
+    return 2;
+  }
+  if (args.json) io.print(dumps(report));
+  else {
+    io.print(`scheduler profile: ${report.injections} injection(s) -> ${outputPath}`);
+    io.print("required gates: " + report.calibration_required.join(", "));
+  }
+  return 0;
+}
+
+export async function traceEmitCommand(args, io, ctx) {
+  const { parseEmitTrace, emitReport, formatEmitReport } = await import("./emit-provenance.js");
+  let report;
+  try {
+    for (const name of ["proc", "block"]) if (args[name] !== null && args[name] < 0) throw new ValueError(`--${name} must be non-negative`);
+    const text = readTraceText(ctx.resolve(args.trace), { warn: (n) => io.eprint(`warning: ${n}`) });
+    const [events, ignored] = parseEmitTrace(text);
+    report = emitReport(events, { proc: args.proc, block: args.block });
+    report.ignored_diagnostic_lines = ignored.length;
+  } catch (e) {
+    if (!isInputError(e)) throw e;
+    io.eprint(`error: ${e.code ? osErrorText(e) : e.message}`);
+    return 2;
+  }
+  if (args.json) io.print(dumps(report));
+  else io.print(formatEmitReport(report));
+  return 0;
+}
+
+export const COMMAND_SPECS = [
+  {
+    path: ["trace-scheduler"], handler: traceSchedulerCommand,
+    help: "read stable named as1 scheduler selection records",
+    description: "Read DKWB-SCHED-V1 records with procedure, block, cycle, word, opcode, source line, ready-set size, chosen node, and tie-break. For IDO 5.3, reach for --from-as1-r first: the assembler ships its own selection trace behind `cc -Wa,-R`, no patched compiler involved, and the traced object is byte-identical to the untraced one.",
+    epilog: "example: cc -Wa,-R -c source.c >sched.log 2>&1 && decomp-workbench trace-scheduler sched.log --from-as1-r --block 429\n\nCapture both streams: IDO 5.3's as1 prints the -R trace on stdout, other assembler builds may use stderr, and `>` alone silently produces an empty log on the ones that do.",
+    arguments: [
+      { dest: "trace" },
+      { flags: ["--against"], help: "second trace for cycle-aligned diff" },
+      { flags: ["--from-as1-r"], action: "store_true", help: "the input is a native IDO 5.3 `cc -Wa,-R` trace rather than DKWB-SCHED-V1; the deciding key is computed from the losing candidates, which the schema cannot carry" },
+      { flags: ["--emit"], metavar: "PATH", help: "also write the selections as DKWB-SCHED-V1 records" },
+      { flags: ["--proc"], type: "int" },
+      { flags: ["--block"], type: "int" },
+      { flags: ["--limit"], type: "int", default: 50 },
+      { flags: ["--json"], action: "store_true", help: "emit JSON" },
+    ],
+  },
+  {
+    path: ["trace-emit"], handler: traceEmitCommand,
+    help: "read ugen DKWB-EMIT-V1 emit-order provenance records",
+    description: "Print, per basic block, the order ugen wrote instruction records into the ibuffer and the source line each one carries into the assembler's scheduler. This is the scheduler's *input*: ugen has no ready list, no dependence DAG and no delay-slot filler, so slot, priority and delay-slot occupancy come from `trace-scheduler --from-as1-r`, not from here. What this answers is which source line each of two independent ready nodes carries -- the one scheduler key with a source lever attached.",
+    epilog: "example: DKWB_UGEN_SCHED=1 cc -c source.c 2>emit.log && decomp-workbench trace-emit emit.log --proc 0 --block 0\n\nProduce the log with an ugen instrumented by `instrument-ugen --emit-provenance`.",
+    arguments: [
+      { dest: "trace" },
+      { flags: ["--proc"], type: "int" },
+      { flags: ["--block"], type: "int" },
+      { flags: ["--json"], action: "store_true", help: "emit JSON" },
+    ],
+  },
+  {
+    path: ["instrument-scheduler"], handler: instrumentSchedulerCommand,
+    help: "apply a hash-pinned external scheduler instrumentation profile",
+    description: "Apply exact source anchors from a user-supplied profile. The output is not supported evidence until every reported fidelity gate passes. Era note: for IDO 5.3 this is usually unnecessary. `as1` already carries a richer selection trace behind `cc -Wa,-R`, with no patch and therefore no profile to pin -- read it with `trace-scheduler --from-as1-r`. Patch only when the era's assembler has no built-in trace, or when you need a field the built-in one does not print.",
+    arguments: [
+      { dest: "input" }, { dest: "output" },
+      { flags: ["--profile"], required: true },
+      { flags: ["--json"], action: "store_true", help: "emit JSON" },
+    ],
+  },
+];

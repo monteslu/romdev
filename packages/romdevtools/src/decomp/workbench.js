@@ -28,7 +28,7 @@ import { fileURLToPath } from "node:url";
 import { compilationEnvironment, fileIdentities, fileRevisions, atomicJson, instructionIdentity, hashRecord } from "./measurement.js";
 import { dumpObject, findSymbol, trimToSize, run } from "./mips-obj.js";
 import { dependencyHash } from "./project.js";
-import { runCommand, commandMapPayload, commandAcceptsFlag as specAcceptsFlag, PROG } from "./workbench/cli.js";
+import { runCommandIsolated, commandMapPayload, commandAcceptsFlag as specAcceptsFlag, PROG } from "./workbench/cli.js";
 
 /** The catalog schema this bridge understands. */
 export const SUPPORTED_COMMAND_MAP_SCHEMA = "decomp-workbench-command-map-v1";
@@ -49,16 +49,20 @@ export function locateWorkbench() {
   return { kind: "in-process", root: WORKBENCH_SOURCE_DIR };
 }
 
-/** Run one workbench command in process. Never throws on exit 1 - that is an answer. */
-export async function runWorkbench(args, { cwd, json = true, env: extraEnv } = {}) {
+/**
+ * Run one workbench command in its own node process (working directory =
+ * cwd, killed with everything it started after timeoutMs). Never throws on
+ * exit 1 - that is an answer.
+ */
+export async function runWorkbench(args, { cwd, json = true, env: extraEnv, timeoutMs = 600_000 } = {}) {
   // --json only where the command has it: a command without a JSON report
   // (instrument globalcolor writes a file and prints one line) would reject it.
-  const wantsJson = json && !args.includes("--json") && specAcceptsFlag(args, "--json");
+  const wantsJson = json && !args.includes("--json") && (await specAcceptsFlag(args, "--json"));
   const argv = [...args, ...(wantsJson ? ["--json"] : [])];
   // The PROJECT's environment matters: a project-local binutils is built
   // against project-local shared objects, so running its objdump without the
   // project's LD_LIBRARY_PATH fails with a missing-library error.
-  const r = await runCommand(argv, { cwd: cwd ?? process.cwd(), env: extraEnv ?? {} });
+  const r = await runCommandIsolated(argv, { cwd: cwd ?? process.cwd(), env: extraEnv ?? {}, timeoutMs });
   let parsed = null;
   if (json && argv.includes("--json")) { try { parsed = JSON.parse(r.stdout); } catch {} }
   return { code: r.code, meaning: WORKBENCH_EXIT[r.code] ?? "unknown", stdout: r.stdout, stderr: r.stderr, argv: [PROG, ...argv], json: parsed };
@@ -226,7 +230,7 @@ export async function captureSchedulerTrace(project, artifactPath) {
  * `object diagnose` and a usage error for commands without that option.
  */
 export async function commandAcceptsFlag(inv, flag) {
-  return specAcceptsFlag(inv, flag);
+  return await specAcceptsFlag(inv, flag);
 }
 
 /** Find one command in the catalog by "<group> <command>" or a flat name. */
@@ -247,7 +251,7 @@ export function findCommand(catalog, group, command) {
  * anything whose own safety metadata says it is destructive or networked
  * unless the caller opted in explicitly.
  */
-export async function invokeWorkbench({ group, command, args = [], cwd, env, allowDestructive = false, allowNetwork = false }) {
+export async function invokeWorkbench({ group, command, args = [], cwd, env, timeoutMs, allowDestructive = false, allowNetwork = false }) {
   const catalog = await workbenchCatalog();
   if (!catalog.available) {
     throw Object.assign(new Error(`workbench unavailable: ${catalog.reason}`), { code: "MISSING_WORKBENCH" });
@@ -271,7 +275,7 @@ export async function invokeWorkbench({ group, command, args = [], cwd, env, all
 
   // Use the catalog's own invocation, minus its program name.
   const inv = Array.isArray(spec.invocation) ? spec.invocation.slice(1) : [group, command].filter(Boolean);
-  const r = await runWorkbench([...inv, ...args], { cwd, env });
+  const r = await runWorkbench([...inv, ...args], { cwd, env, timeoutMs });
   return {
     command: `${group ?? spec.group ?? ""} ${command}`.trim(),
     reportSchema: spec.reportSchema ?? null,

@@ -17,7 +17,9 @@ import * as L from "../src/decomp/workbench/levers.js";
 import { parseDisassembly } from "../src/decomp/workbench/objdump.js";
 import { parseTrace } from "../src/decomp/workbench/trace.js";
 import { Web, buildView } from "../src/decomp/workbench/view.js";
-import { COMMANDS, parseArgs } from "../src/decomp/workbench/cli.js";
+import { parseArgs } from "../src/decomp/workbench/argparse.js";
+import { COMMAND_SPECS as DIAGNOSE_SPECS } from "../src/decomp/workbench/diagnose-cli.js";
+const DIAGNOSE_SPEC = DIAGNOSE_SPECS.find((s) => s.path[0] === "diagnose");
 import { diagnoseDumpsCommand } from "../src/decomp/workbench/diagnose-cli.js";
 
 const FIX = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "workbench");
@@ -449,7 +451,7 @@ test("a proof whose precondition is met is the verdict", () => {
 // ---- the block in the diagnose document ----
 
 async function run(files, extra, dir) {
-  const args = parseArgs(COMMANDS.find((c) => c.name === "diagnose"), [...files, "--function", "demo", "--json", ...extra]);
+  const args = parseArgs(DIAGNOSE_SPEC, [...files, "--function", "demo", "--json", ...extra]);
   const out = [], err = [];
   const io = { print: (s = "") => out.push(`${s}\n`), eprint: (s = "") => err.push(`${s}\n`) };
   const status = await diagnoseDumpsCommand(args, io, { cwd: dir, env: process.env, resolve: (p) => path.resolve(dir, p) });
@@ -480,7 +482,7 @@ test("the document namespaces the block; an exact comparison gets none", async (
 test("a ring trace reaches the document", async () => {
   const [d] = pair(read("phase-shift-target.objdump.txt"), read("phase-shift-candidate.objdump.txt"));
   fs.writeFileSync(path.join(d, "ring.log"), RING_TRACE);
-  const args = parseArgs(COMMANDS.find((c) => c.name === "diagnose"), [path.join(d, "target.objdump"), path.join(d, "candidate.objdump"), "--function", "animStep",
+  const args = parseArgs(DIAGNOSE_SPEC, [path.join(d, "target.objdump"), path.join(d, "candidate.objdump"), "--function", "animStep",
     "--ring-trace", path.join(d, "ring.log"), "--lever-proc", "3", "--json"]);
   const out = [];
   await diagnoseDumpsCommand(args, { print: (s) => out.push(s), eprint: () => {} }, { cwd: d, env: process.env, resolve: (p) => path.resolve(d, p) });

@@ -7,7 +7,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { COMMANDS, parseArgs } from "../src/decomp/workbench/cli.js";
+import { parseArgs } from "../src/decomp/workbench/argparse.js";
+import { COMMAND_SPECS as DIAGNOSE_SPECS } from "../src/decomp/workbench/diagnose-cli.js";
+const DIAGNOSE_SPEC = DIAGNOSE_SPECS.find((s) => s.path[0] === "diagnose");
 import { diagnoseDumpsCommand } from "../src/decomp/workbench/diagnose-cli.js";
 import { diagnoseInstructions, DIAGNOSIS_SCHEMA } from "../src/decomp/workbench/diagnosis.js";
 import * as LB from "../src/decomp/workbench/loc-boundaries.js";
@@ -20,7 +22,7 @@ const TARGET = "\n00000000 <demo>:\n   0: 27bdffe0  addiu $sp,$sp,-32\n   4: 012
 const CANDIDATE = "\n00000000 <demo>:\n   0: 27bdffe0  addiu $sp,$sp,-32\n   4: 012a5821  addu $t3,$t1,$t2\n   8: 03e00008  jr $ra\n   c: 00000000  nop\n";
 
 async function run(argv, cwd = FIX) {
-  const args = parseArgs(COMMANDS.find((c) => c.name === "diagnose"), argv);
+  const args = parseArgs(DIAGNOSE_SPEC, argv);
   const out = [], err = [];
   const io = { print: (s = "") => out.push(`${s}\n`), eprint: (s = "") => err.push(`${s}\n`) };
   const status = await diagnoseDumpsCommand(args, io, { cwd, env: process.env, resolve: (p) => path.resolve(cwd, p) });

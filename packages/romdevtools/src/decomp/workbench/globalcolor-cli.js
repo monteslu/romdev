@@ -173,3 +173,21 @@ export async function traceGlobalcolorCommand(args, io, ctx) {
   if (lookupError) return 1;
   return selected.length || allocatorWebs.length || decisions.length || lineage.length ? 0 : 1;
 }
+
+export const COMMAND_SPECS = [
+  {
+    path: ["trace-globalcolor"], handler: traceGlobalcolorCommand,
+    help: "summarize uopt CSAVE/CUP and CDX globalcolor traces",
+    description: "Rank live ranges and report color/split decisions.",
+    arguments: [
+      { dest: "trace", help: "captured compiler log" },
+      { flags: ["--proc"], type: "int", help: "include only CDX decisions from this procedure" },
+      { flags: ["--desired-register"], help: "measure the cost/interference barrier to this register; requires --proc and --web" },
+      { flags: ["--web"], type: "int", help: "inspect one allocator web; pair with --proc for an unambiguous lookup" },
+      { flags: ["--lineage-table"], type: "int", action: "append", default: [], help: "show pre-globalcolor formation for this ICHAIN table; repeat for more tables and pair with --proc" },
+      { flags: ["--dtype"], type: "int", help: "include only this data type" },
+      { flags: ["--top"], type: "int", default: 20, help: "maximum live ranges to show" },
+      { flags: ["--json"], action: "store_true", help: "emit JSON" },
+    ],
+  },
+];
