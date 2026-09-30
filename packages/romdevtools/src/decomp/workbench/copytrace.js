@@ -1,49 +1,48 @@
-// copytrace.js - parse and compare IDO copy/coalescing decision traces.
-// The producer's `rhstable` field is a hash-table bucket, not an expression
-// identity, so it is kept as an observation while final decisions align by
-// the LHS stack home and assignment ordinal.
+// copytrace.js - parse and compare IDO copy/coalescing decision traces
+// (COPYDEC records). The producer's rhstable field is a hash-table bucket,
+// not an expression identity, so it is kept as an observation while final
+// decisions are aligned by the LHS stack home and assignment ordinal.
 //
 // Plain JS ESM + JSDoc.
 
-import { splitlines, strip, sorted, hex, pyInt } from "./py.js";
+import { splitlines, strip, sorted, hex, counter, pyInt } from "./py.js";
 
 export const COPYTRACE_SCHEMA = "decomp-workbench-copy-decisions-v1";
 export const COPYDEC_STAGE_ORDER = Object.freeze(["pre-makelivranges", "post-makelivranges", "pre-localcolor", "post-localcolor", "post-globalcolor", "pre-reemit"]);
-export const COPYDEC_RE = new RegExp(String.raw`^CDXW\s+\d+\s+p(?<proc>-?\d+)\s+d\d+\s+COPYDEC\s+`
-  + String.raw`tag=(?<tag>\S+)\s+stmt=(?<stmt>-?\d+)\s+`
-  + String.raw`lhs=(?<lhs>-?\d+)\s+rhs=(?<rhs>-?\d+)\s+`
-  + String.raw`rhsop=(?<rhsop>[0-9a-fA-F]+)\s+`
-  + String.raw`rhstable=(?<bucket>\d+)\s+rhschain=(?<chain>\d+)\s+`
-  + String.raw`occ=(?<formed_occurrences>\d+)/(?<bucket_occupancy>\d+)\s+`
-  + String.raw`rhsformed=(?<rhsformed>-?\d+)\s+bbwit=(?<bbwit>-?\d+)\s+`
-  + String.raw`lhscolor=(?<lhscolor>-?\d+)\s+rhscolor=(?<rhscolor>-?\d+)\s+`
-  + String.raw`lhsframe=(?<lhsframe>[0-9a-fA-F]+)\s+->\s+`
-  + String.raw`(?<decision>COALESCE|TEMPCOPY)$`);
+export const COPYDEC_RE = new RegExp(
+  "^CDXW\\s+\\d+\\s+p(?<proc>-?\\d+)\\s+d\\d+\\s+COPYDEC\\s+"
+  + "tag=(?<tag>\\S+)\\s+stmt=(?<stmt>-?\\d+)\\s+"
+  + "lhs=(?<lhs>-?\\d+)\\s+rhs=(?<rhs>-?\\d+)\\s+"
+  + "rhsop=(?<rhsop>[0-9a-fA-F]+)\\s+"
+  + "rhstable=(?<bucket>\\d+)\\s+rhschain=(?<chain>\\d+)\\s+"
+  + "occ=(?<formed_occurrences>\\d+)/(?<bucket_occupancy>\\d+)\\s+"
+  + "rhsformed=(?<rhsformed>-?\\d+)\\s+bbwit=(?<bbwit>-?\\d+)\\s+"
+  + "lhscolor=(?<lhscolor>-?\\d+)\\s+rhscolor=(?<rhscolor>-?\\d+)\\s+"
+  + "lhsframe=(?<lhsframe>[0-9a-fA-F]+)\\s+->\\s+"
+  + "(?<decision>COALESCE|TEMPCOPY)$");
 
-function signedU32(value) {
-  const parsed = BigInt(pyInt(value, 16));
-  return Number(parsed & 0x80000000n ? parsed - 0x100000000n : parsed);
-}
+function signedU32(value) { const v = parseInt(value, 16); return v >= 0x80000000 ? v - 0x100000000 : v; }
 
-const FIELDS = ["proc", "tag", "stmt", "lhs", "rhs", "rhs_opcode", "rhs_hash_bucket", "rhs_hash_chain", "bucket_formed_entries", "bucket_occupancy",
-  "rhs_formed", "basic_block_witnesses", "lhs_color", "rhs_color", "lhs_frame", "decision", "home_ordinal"];
+/** `{value:+#x}` */
+const signedHex = (v) => (v < 0 ? "-" : "+") + "0x" + Math.abs(v).toString(16);
 
 /** One trace-local assignment decision at an optimizer census point. */
 export class CopyDecision {
-  constructor(f) { for (const k of FIELDS) this[k] = f[k] ?? (k === "home_ordinal" ? 0 : null); Object.freeze(this); }
+  constructor(f) {
+    const { proc, tag, stmt, lhs, rhs, rhs_opcode, rhs_hash_bucket, rhs_hash_chain, bucket_formed_entries, bucket_occupancy, rhs_formed,
+      basic_block_witnesses, lhs_color, rhs_color, lhs_frame, decision, home_ordinal = 0 } = f;
+    Object.assign(this, { proc, tag, stmt, lhs, rhs, rhs_opcode, rhs_hash_bucket, rhs_hash_chain, bucket_formed_entries, bucket_occupancy,
+      rhs_formed, basic_block_witnesses, lhs_color, rhs_color, lhs_frame, decision, home_ordinal });
+    Object.freeze(this);
+  }
   get stable_key() { return [this.proc, this.lhs_frame, this.home_ordinal]; }
   asDict() {
-    const out = {};
-    for (const k of FIELDS) out[k] = this[k];
-    out.rhs_opcode = `0x${hex(this.rhs_opcode, 2)}`;
-    out.lhs_frame_hex = `0x${hex(Number(BigInt(this.lhs_frame) & 0xFFFFFFFFn), 8)}`;
-    const f = this.lhs_frame;
-    out.alignment_key = `proc${this.proc}:home${f < 0 ? "-" : "+"}0x${Math.abs(f).toString(16)}:#${this.home_ordinal}`;
-    return out;
+    return { ...this, rhs_opcode: `0x${hex(this.rhs_opcode, 2)}`, lhs_frame_hex: `0x${hex((this.lhs_frame >>> 0), 8)}`,
+      alignment_key: `proc${this.proc}:home${signedHex(this.lhs_frame)}:#${this.home_ordinal}` };
   }
 }
 
-/** Parse one COPYDEC snapshot stage and retain malformed records. */
+/** Parse one COPYDEC snapshot and retain malformed records. */
 export function parseCopyDecisions(text, { tag = "pre-reemit", proc = null } = {}) {
   const selected = [], malformed = [];
   const ordinals = new Map();
@@ -58,21 +57,21 @@ export function parseCopyDecisions(text, { tag = "pre-reemit", proc = null } = {
     const key = `${itemProc},${lhsFrame}`;
     const ordinal = ordinals.get(key) ?? 0;
     ordinals.set(key, ordinal + 1);
-    selected.push(new CopyDecision({ proc: itemProc, tag: v.tag, stmt: pyInt(v.stmt), lhs: pyInt(v.lhs), rhs: pyInt(v.rhs),
-      rhs_opcode: pyInt(v.rhsop, 16), rhs_hash_bucket: pyInt(v.bucket), rhs_hash_chain: pyInt(v.chain),
-      bucket_formed_entries: pyInt(v.formed_occurrences), bucket_occupancy: pyInt(v.bucket_occupancy), rhs_formed: pyInt(v.rhsformed),
-      basic_block_witnesses: pyInt(v.bbwit), lhs_color: pyInt(v.lhscolor), rhs_color: pyInt(v.rhscolor), lhs_frame: lhsFrame,
+    selected.push(new CopyDecision({ proc: itemProc, tag: v.tag, stmt: pyInt(v.stmt), lhs: pyInt(v.lhs), rhs: pyInt(v.rhs), rhs_opcode: parseInt(v.rhsop, 16),
+      rhs_hash_bucket: pyInt(v.bucket), rhs_hash_chain: pyInt(v.chain), bucket_formed_entries: pyInt(v.formed_occurrences), bucket_occupancy: pyInt(v.bucket_occupancy),
+      rhs_formed: pyInt(v.rhsformed), basic_block_witnesses: pyInt(v.bbwit), lhs_color: pyInt(v.lhscolor), rhs_color: pyInt(v.rhscolor), lhs_frame: lhsFrame,
       decision: v.decision, home_ordinal: ordinal }));
   }
   return [selected, malformed];
 }
 
 function summary(items) {
-  return { decision_count: items.length, coalesced: items.filter((i) => i.decision === "COALESCE").length,
-    temporary_copies: items.filter((i) => i.decision === "TEMPCOPY").length,
+  const outcomes = counter(items.map((i) => i.decision));
+  return { decision_count: items.length, coalesced: outcomes.get("COALESCE") ?? 0, temporary_copies: outcomes.get("TEMPCOPY") ?? 0,
     stack_homes: new Set(items.map((i) => `${i.proc},${i.lhs_frame}`)).size };
 }
 
+/** Name a pass only when snapshots directly bracket that same pass. */
 function ownerPass(before, after) {
   if (before.startsWith("pre-") && after === `post-${before.slice(4)}`) return before.slice(4);
   return null;
@@ -106,14 +105,15 @@ function transitionTimeline(text, { proc }) {
   return { observed_stages: observed, decision_transition_count: transitions.length, transitions };
 }
 
-const TRUSTED_FIELDS = ["decision", "rhs_formed", "basic_block_witnesses", "lhs_color", "rhs_color", "rhs_opcode"];
+const TRUSTED = ["decision", "rhs_formed", "basic_block_witnesses", "lhs_color", "rhs_color", "rhs_opcode"];
 
 /** Report one trace or compare two final copy-decision snapshots. */
 export function copyDecisionReport(text, { against = null, tag = "pre-reemit", proc = null } = {}) {
   const [baseline, malformed] = parseCopyDecisions(text, { tag, proc });
   const report = {
-    schema: COPYTRACE_SCHEMA, stage: tag, proc, claim_scope: "allocator-copy-decision", summary: summary(baseline),
-    decisions: baseline.map((i) => i.asDict()), timeline: transitionTimeline(text, { proc }), malformed_copydec_lines: malformed,
+    schema: COPYTRACE_SCHEMA, stage: tag, proc, claim_scope: "allocator-copy-decision",
+    summary: summary(baseline), decisions: baseline.map((i) => i.asDict()), timeline: transitionTimeline(text, { proc }),
+    malformed_copydec_lines: malformed,
     warnings: [
       "rhs_hash_bucket/rhs_hash_chain are collision-prone hash-table observations, not expression identity or CSE multiplicity.",
       "stmt, lhs, and rhs numbers are trace-local; comparison aligns by LHS stack home and assignment ordinal.",
@@ -121,7 +121,7 @@ export function copyDecisionReport(text, { against = null, tag = "pre-reemit", p
       "A basic-block witness is correlated formation evidence, not by itself proof that the observed set is the pass's causal input.",
     ],
   };
-  if (against === null) return report;
+  if (against === null || against === undefined) return report;
   const [candidate, candidateMalformed] = parseCopyDecisions(against, { tag, proc });
   const byKey = (list) => new Map(list.map((i) => [i.stable_key.join(","), i]));
   const b = byKey(baseline), c = byKey(candidate);
@@ -130,14 +130,15 @@ export function copyDecisionReport(text, { against = null, tag = "pre-reemit", p
   for (const key of sorted([...keys.values()])) {
     const k = key.join(",");
     const before = b.get(k) ?? null, after = c.get(k) ?? null;
-    const changed = before === null || after === null ? ["presence"] : TRUSTED_FIELDS.filter((f) => before[f] !== after[f]);
+    const changed = before === null || after === null ? ["presence"] : TRUSTED.filter((f) => before[f] !== after[f]);
     if (!changed.length) continue;
     const aligned = before ?? after;
-    differences.push({ alignment_key: aligned.asDict().alignment_key, changed, baseline: before === null ? null : before.asDict(),
-      candidate: after === null ? null : after.asDict() });
+    differences.push({ alignment_key: aligned.asDict().alignment_key, changed, baseline: before ? before.asDict() : null, candidate: after ? after.asDict() : null });
   }
-  Object.assign(report, { candidate_summary: summary(candidate), candidate_timeline: transitionTimeline(against, { proc }),
+  Object.assign(report, {
+    candidate_summary: summary(candidate), candidate_timeline: transitionTimeline(against, { proc }),
     candidate_malformed_copydec_lines: candidateMalformed, difference_count: differences.length, differences,
-    proof: "COPYDEC outcomes and formation witnesses are direct producer observations; alignment and source causality remain hypotheses." });
+    proof: "COPYDEC outcomes and formation witnesses are direct producer observations; alignment and source causality remain hypotheses.",
+  });
   return report;
 }
