@@ -267,6 +267,9 @@ void vdp_reset(void)
   if (!reset_do_not_clear_buffers)
   {
     memset((char *)sat, 0, sizeof(sat));
+#ifdef ROMDEV_S32
+    rd_sat_dirty = 1;
+#endif
     memset((char *)vram, 0, sizeof(vram));
     memset((char *)cram, 0, sizeof(cram));
     memset((char *)vsram, 0, sizeof(vsram));
@@ -1584,7 +1587,10 @@ int vdp_68k_irq_ack(int int_level)
 static void vdp_reg_w(unsigned int r, unsigned int d, unsigned int cycles)
 {
 #ifdef ROMDEV_S32
-  rd_sat_dirty = 1;  /* SAT base, H32/H40 width: re-bucket sprites (vdp_render.c) */
+  /* the sprite walk depends on the SAT cache (dirtied where it is written),
+     the H32/H40 width and the mode (keyed in parse_satb_m5); a mode or width
+     register write re-buckets anyway, other registers leave it alone */
+  if (r == 1 || r == 12) rd_sat_dirty = 1;
 #endif
 #ifdef LOGVDP
   error("[%d(%d)][%d(%d)] VDP register %d write -> 0x%x (%x)\n", v_counter, (v_counter + (cycles - mcycles_vdp)/MCYCLES_PER_LINE)%lines_per_frame, cycles, cycles%MCYCLES_PER_LINE, r, d, m68k_get_reg(M68K_REG_PC));

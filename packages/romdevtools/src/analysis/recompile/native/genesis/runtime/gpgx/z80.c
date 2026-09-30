@@ -129,6 +129,12 @@
 
 /* execute main opcodes inside a big switch statement */
 #define BIG_SWITCH 1
+#if defined(ROMDEV_S32) && defined(RD_Z80_BLOCKS)
+/* ROMDEV_S32: the recompiled driver (rd_z80_blocks.h) calls the opcode
+   functions one by one; inline every one of them there */
+#undef INLINE
+#define INLINE static __inline__ __attribute__((always_inline))
+#endif
 
 #define VERBOSE 0
 

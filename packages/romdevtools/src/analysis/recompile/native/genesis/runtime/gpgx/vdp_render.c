@@ -4829,7 +4829,8 @@ unsigned char rd_sat_dirty = 1;
 #define RD_SPR_MAX 21
 static uint8 rd_spr_line[RD_SPR_LINES][RD_SPR_MAX];
 static uint8 rd_spr_count[RD_SPR_LINES];
-static int rd_spr_key_max, rd_spr_total, rd_spr_w;
+static int rd_spr_key_max, rd_spr_total, rd_spr_w, rd_spr_last_line = 0x7fff, rd_spr_rebuilds;
+static void rd_parse_satb_m5_walk(int line);
 
 static void rd_sprite_buckets(int max)
 {
@@ -4865,8 +4866,21 @@ void parse_satb_m5(int line)
   uint16 *p = (uint16 *) &vram[satb];
   uint16 *q = (uint16 *) &sat[0];
   object_info_t *object_info = obj_info[(line + 1) & 1];
+  if (line < rd_spr_last_line) rd_spr_rebuilds = 0;    /* a new frame */
+  rd_spr_last_line = line;
   if (rd_sat_dirty || rd_spr_key_max != max || rd_spr_total != (max_sprite_pixels >> 2) || rd_spr_w != bitmap.viewport.w)
+  {
+    /* a game writing the SAT during the display would re-bucket every line:
+       after four rebuilds in a frame, a changed cache is walked the way
+       gpgx does it (the buckets stay stale until the next frame) */
+    if (rd_spr_rebuilds >= 4)
+    {
+      rd_parse_satb_m5_walk(line);
+      return;
+    }
     rd_sprite_buckets(max);
+    rd_spr_rebuilds++;
+  }
   line += 0x81;
   li = line - 0x80;
   n = (li >= 0 && li < RD_SPR_LINES) ? rd_spr_count[li] : 0;
@@ -4889,8 +4903,13 @@ void parse_satb_m5(int line)
   }
   object_count[line & 1] = count;
 }
+#endif
+#ifdef ROMDEV_S32
+/* gpgx's own walk, for a line whose SAT cache changed since the last line */
+static void rd_parse_satb_m5_walk(int line)
 #else
 void parse_satb_m5(int line)
+#endif
 {
   /* Sprite Y position */
   int ypos;
@@ -4977,7 +4996,7 @@ void parse_satb_m5(int line)
   /* Update sprite count for next line (line value already incremented) */
   object_count[line & 1] = count;
 }
-#endif
+
 
 void parse_satb_m5_im2(int line)
 {
