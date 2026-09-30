@@ -15,7 +15,7 @@
 //                 default?, choices?, required?, help?, metavar? }
 //   action: store | store_true | store_false | store_const | append |
 //           append_const | count | extend | version | help | symbol |
-//           explain_keys | list_file | print_exit (prints output() and exits 0)
+//           explain_keys | list_file (a positional with nargs "..." takes the rest verbatim) | print_exit (prints output() and exits 0)
 //   type: "int" | "float" | "str" | function(text) -> value (throw
 //         ArgumentTypeError(message) to reject)
 //
@@ -100,7 +100,7 @@ function initialValue(a) {
 export function parseArgs(spec, tokens, { prog, explainKeys = null, version = null } = {}) {
   const args = {};
   const options = spec.arguments.filter(isOption);
-  const positionals = spec.arguments.filter((a) => !isOption(a));
+  const positionals = spec.arguments.filter((a) => !isOption(a) && a.nargs !== "...");
   for (const a of spec.arguments) {
     const v = initialValue(a);
     const d = destOf(a);
@@ -123,8 +123,12 @@ export function parseArgs(spec, tokens, { prog, explainKeys = null, version = nu
   const posTokens = [];
   const extras = [];
   let onlyPos = false;
+  // nargs "..." (REMAINDER): from the first positional token or "--" on,
+  // every remaining token is the remainder, verbatim.
+  const remainder = spec.arguments.find((x) => !isOption(x) && x.nargs === "...");
   for (let i = 0; i < tokens.length; i++) {
     const tok = tokens[i];
+    if (remainder && !onlyPos && (tok === "--" || !looksLikeOption(tok))) { args[destOf(remainder)] = tokens.slice(i); break; }
     if (onlyPos) { posTokens.push(tok); continue; }
     if (tok === "--") { onlyPos = true; continue; }
     if (!looksLikeOption(tok)) { posTokens.push(tok); continue; }
