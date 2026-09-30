@@ -412,7 +412,7 @@ export function makeScopeChecker(shape, toolName) {
       noCache: ["compare", "variants", "context"],
       verifyTu: ["compare", "variants"],
       declarations: ["compare", "integrate", "variants", "generate"],
-      root: ["import", "research", "replay"],
+      root: ["setup", "import", "research", "replay"],
       tracePath: ["diagnose"],
       baselineText: ["gate", "experiment"],
       exactFunctionMatch: ["gate", "experiment"],
