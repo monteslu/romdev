@@ -473,7 +473,9 @@ export async function jobReport(project, jobId, { maxOutputs = 12 } = {}) {
   if (outputs && s.preflight?.inputIdentity && project.resolveFunction) {
     const { compileAndCompare, extractFunction } = await import("./compile.js");
     const { semanticGate } = await import("./semantic-gate.js");
-    const baseText = await readFile(path.join(s.dir, "base.c"), "utf8").catch(() => null);
+    // The gate compares like with like: the base candidate's function against the output's.
+    const baseFile = await readFile(path.join(s.dir, "base.c"), "utf8").catch(() => null);
+    const baseText = baseFile == null ? null : extractFunction(baseFile, s.function.symbol) ?? baseFile;
     const fn = await project.resolveFunction({ symbol: s.function.symbol, segment: s.function.segment });
     const names = (await readdir(s.permuterDir)).filter(d => /^output-\d+-\d+$/.test(d))
       .sort((a, b) => Number(a.split("-")[1]) - Number(b.split("-")[1]));
@@ -487,12 +489,18 @@ export async function jobReport(project, jobId, { maxOutputs = 12 } = {}) {
         if (seen.has(sourceSha)) { measuredOutputs.push({ sourcePath, duplicateSourceOf: seen.get(sourceSha) }); continue; }
         seen.set(sourceSha, sourcePath);
         const r = await compileAndCompare(project, fn, { candidateText: text, candidatePath: sourcePath, label: `search-verification:${jobId}` });
-        const comparable = r.measurementValidity?.state === "valid" && r.inputIdentity?.dependencyHash === s.preflight.inputIdentity.dependencyHash
-          && r.referenceHash === s.preflight.referenceHash && hashRecord(r.inputIdentity?.toolchain) === hashRecord(s.preflight.inputIdentity.toolchain)
-          && r.inputIdentity?.ownerSha256 === s.preflight.inputIdentity.ownerSha256
-          && r.inputIdentity?.ownerMode === s.preflight.inputIdentity.ownerMode
-          && hashRecord(r.inputIdentity?.env) === hashRecord(s.preflight.inputIdentity.env)
-          && hashRecord(r.inputIdentity?.invocation) === hashRecord(s.preflight.inputIdentity.invocation);
+        const pi = s.preflight.inputIdentity;
+        const drift = [
+          r.measurementValidity?.state !== "valid" && "measurement",
+          r.inputIdentity?.dependencyHash !== pi.dependencyHash && "dependencies",
+          r.referenceHash !== s.preflight.referenceHash && "reference-files",
+          hashRecord(r.inputIdentity?.toolchain) !== hashRecord(pi.toolchain) && "toolchain",
+          r.inputIdentity?.ownerSha256 !== pi.ownerSha256 && "owner-source",
+          r.inputIdentity?.ownerMode !== pi.ownerMode && "owner-mode",
+          hashRecord(r.inputIdentity?.env) !== hashRecord(pi.env) && "environment",
+          hashRecord(r.inputIdentity?.invocation) !== hashRecord(pi.invocation) && "invocation",
+        ].filter(Boolean);
+        const comparable = drift.length === 0;
         // A search optimises a score, so its outputs are exactly where the
         // artificial constructs the semantic gate exists for turn up. Every
         // verified output carries the gate's verdict; the exactness result is
@@ -505,6 +513,7 @@ export async function jobReport(project, jobId, { maxOutputs = 12 } = {}) {
           ? linkedMismatchCount(r) < s.preflight.linkedMismatches : null;
         measuredOutputs.push({ sourcePath, sourceSha, compiled: r.compileSucceeded, outputIdentity: r.outputIdentity,
           comparable, exact: comparable && r.exactFunctionMatch === true, linkedMismatches: linkedMismatchCount(r),
+          ...(comparable ? {} : { notComparableBecause: drift }),
           usefulImprovement, gate, gateAccepted: usefulImprovement === true && g.counts.artificial === 0,
           artifacts: r.artifacts, inputIdentity: r.inputIdentity?.sha256 });
       } catch (e) { measuredOutputs.push({ sourcePath, error: e.message }); }
