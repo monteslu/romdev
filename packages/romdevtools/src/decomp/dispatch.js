@@ -34,7 +34,7 @@ export const WORKER_CLASSES = Object.freeze({
   generate: { label: "m2c generation", startMiB: 400 },
   compare: { label: "candidate compile + compare", startMiB: 600 },
   instrumented: { label: "instrumented IDO", startMiB: 1500 },
-  permuter: { label: "decomp-permuter", startMiB: 1200 },
+  permuter: { label: "romdev-permuter (decomp-permuter port)", startMiB: 1200 },
   emulator: { label: "emulator/runtime", startMiB: 800 },
 });
 
