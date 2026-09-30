@@ -160,3 +160,20 @@ test("joins FIFO events to emitted rows and source, never inferring a row", () =
   assert.ok(bare.asDict().emission_join.calibration_required);
   assert.throws(() => parseEmissionMap({ schema: EMISSION_MAP_SCHEMA, entries: [{ emitted_index: 1, object_row: 2 }, { emitted_index: 1, object_row: 3 }] }), /duplicated/);
 });
+
+test("an absent explicit procedure is refused", () => {
+  const events = parseTrace("DKWB-FREELIST ADD proc=2 reg=14\nDKWB-FREELIST ALLOC_GP_RESULT proc=2 reg=14\n");
+  assert.throws(() => replayFifo(events, { procedure: 3 }), /no FIFO events for procedure 3/);
+});
+
+test("an emitted index is not inferred to be an object row", () => {
+  const report = replayFifo(parseTrace("DKWB-FREELIST ADD reg=14 emitted=257\nDKWB-FREELIST ALLOC reg=14 emitted=258\n"));
+  const event = report.logical_events[0];
+  assert.equal(event.emitted_index, 258);
+  assert.equal(event.object_row, null);
+  assert.equal(report.asDict().emission_join.calibration_required, true);
+});
+
+test("the emission map refuses duplicate ordinals", () => {
+  assert.throws(() => parseEmissionMap({ schema: EMISSION_MAP_SCHEMA, entries: [{ emitted_index: 1, object_row: 2 }, { emitted_index: 1, object_row: 3 }] }), /duplicated/);
+});
