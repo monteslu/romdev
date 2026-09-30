@@ -18,6 +18,7 @@ import { SweepError, readManifest } from "./sweep.js";
 import { evaluateWatchRows, watchRowPayload } from "./watch-rows.js";
 import { sorted, splitlines, strip, strRepr, pyStr, isInputError, osErrorText } from "./py.js";
 import { dumps } from "./pyjson.js";
+import { isReportedError } from "./py-extra.js";
 
 export const BUILD_SCHEMA = "decomp-workbench-sweep-build-v1";
 export const DEFAULT_JOBS = 4;
@@ -244,7 +245,7 @@ export async function runSweepBuild(sources, { target, template, objects, jobs =
     try {
       comparison = compareCandidate(loaded, output, { objdump: objdumpPath, section, cwd });
     } catch (e) {
-      if (!isInputError(e) && e?.name !== "RuntimeError") throw e;
+      if (!isInputError(e) && !isReportedError(e)) throw e;
       const text = e.code && /^E[A-Z]+$/.test(e.code) ? osErrorText(e) : String(e.message ?? "");
       results.push(new BuildResult({ label, source: displayPath(s, cwd), object_path: displayPath(output, cwd), status: "unreadable",
         detail: text ? splitlines(text)[0] : "" }));

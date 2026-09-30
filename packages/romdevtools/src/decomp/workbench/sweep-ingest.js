@@ -17,6 +17,7 @@ import { buildScreenLine } from "./screen.js";
 import { buildShiftDiff } from "./shift-align.js";
 import { INGEST_SCHEMA, SweepError } from "./sweep.js";
 import { sorted, splitlines, isInputError, osErrorText } from "./py.js";
+import { isReportedError } from "./py-extra.js";
 
 export const CONTROL_SITE = "control";
 
@@ -105,7 +106,7 @@ export function ingestSweep(manifest, { objects, target, suffix = ".o", dumps = 
     try {
       rows = load(candidate, { dumps, objdump, symbol, section, cache, cwd, env });
     } catch (e) {
-      if (!isInputError(e) && e?.name !== "RuntimeError") throw e;
+      if (!isInputError(e) && !isReportedError(e)) throw e;
       results.push(new VariantResult({ key: variant.key, description: variant.description, object_path: candidate,
         missing: `unreadable: ${e.code && /^E[A-Z]+$/.test(e.code) ? osErrorText(e) : e.message}` }));
       continue;

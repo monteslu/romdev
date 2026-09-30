@@ -14,12 +14,13 @@ import { emitLines } from "./terminal.js";
 import { WatchRowError, parseWatchRows } from "./watch-rows.js";
 import * as O from "./cli-options.js";
 import { dumps } from "./pyjson.js";
+import { isReportedError } from "./py-extra.js";
 import { sorted, strip, isInputError, osErrorText } from "./py.js";
 
 /** Errors a sweep command reports as `error: ...` with exit 2 (including a failed objdump). */
 function isSweepError(e) {
   return e instanceof SweepError || e instanceof ComposeError || e instanceof CSourceError || e instanceof WatchRowError
-    || isInputError(e) || e?.name === "RuntimeError" || e?.name === "OSError";
+    || isInputError(e) || isReportedError(e);
 }
 
 function fail(io, e) {
