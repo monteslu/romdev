@@ -1,0 +1,143 @@
+--- a/gcc.c
++++ b/gcc.c
+@@ -165,12 +165,30 @@
+ extern int errno;
+ #endif
+ 
++#ifdef __EMSCRIPTEN__
++/* romdev: WASM host. musl (emscripten's libc) has no sys_errlist/sys_nerr
++   (glibc dropped them too); the driver's error messages index them. Build the
++   table once from strerror, which yields the same texts.  */
++#include <string.h>
++#define ROMDEV_NERR 256
++static int sys_nerr;
++static const char *sys_errlist[ROMDEV_NERR];
++__attribute__((constructor)) static void
++romdev_init_sys_errlist (void)
++{
++  int i;
++  for (i = 0; i < ROMDEV_NERR; i++)
++    sys_errlist[i] = strerror (i);
++  sys_nerr = ROMDEV_NERR;
++}
++#else
+ extern int sys_nerr;
+ #if defined(bsd4_4) || defined(__NetBSD__)
+ extern const char *const sys_errlist[];
+ #else
+ extern char *sys_errlist[];
+ #endif
++#endif
+ 
+ extern int execv (), execvp ();
+ 
+@@ -1596,7 +1614,7 @@
+    use come from an obstack, we don't have to worry about allocating
+    space for them.  */
+ 
+-#ifndef HAVE_PUTENV
++#if !defined(HAVE_PUTENV) && !defined(__EMSCRIPTEN__) /* romdev: musl provides putenv */
+ 
+ void
+ putenv (str)
+@@ -1995,7 +2013,68 @@
+ 
+ #endif
+ 
+-#if !defined(__MSDOS__) && !defined(OS2) && !defined(WINNT)
++#if defined(__EMSCRIPTEN__)
++/* romdev: WASM host. There is no fork/exec in WebAssembly: each subprogram
++   (cpp, cc1, as) runs to completion synchronously as a sibling module through
++   a JS spawn hook, and wait() hands back the recorded exit statuses. A pipe
++   (-pipe) between two stages is carried by the host as a byte buffer.  */
++#include <emscripten.h>
++
++EM_JS(int, romdev_spawn_pipe, (const char *file, char **argv, int argc, int pipe_in, int pipe_out), {
++  const args = [];
++  for (let i = 0; i < argc; i++) args.push(UTF8ToString(HEAPU32[(argv >> 2) + i]));
++  if (!Module["romdevSpawn"]) {
++    err("romdev: no spawn handler installed; cannot run " + UTF8ToString(file));
++    return 127 << 8;
++  }
++  return Module["romdevSpawn"](UTF8ToString(file), args, Module, { pipeIn: !!pipe_in, pipeOut: !!pipe_out });
++});
++
++static int romdev_next_pid = 4200;
++static int romdev_done_pid[64];
++static int romdev_done_status[64];
++static int romdev_done_count;
++static int romdev_pipe_pending;
++
++static int
++pexecute (search_flag, program, argv, not_last)
++     int search_flag;
++     char *program;
++     char *argv[];
++     int not_last;
++{
++  int argc = 0;
++  int status;
++  while (argv[argc])
++    argc++;
++  status = romdev_spawn_pipe (program, argv, argc, romdev_pipe_pending, not_last);
++  romdev_pipe_pending = not_last;
++  if (romdev_done_count < 64)
++    {
++      romdev_done_pid[romdev_done_count] = ++romdev_next_pid;
++      romdev_done_status[romdev_done_count] = status;
++      romdev_done_count++;
++    }
++  return romdev_next_pid;
++}
++
++static int
++romdev_wait (statusp)
++     int *statusp;
++{
++  int i;
++  if (romdev_done_count == 0)
++    return -1;
++  *statusp = romdev_done_status[0];
++  i = romdev_done_pid[0];
++  romdev_done_count--;
++  memmove (romdev_done_pid, romdev_done_pid + 1, romdev_done_count * sizeof (int));
++  memmove (romdev_done_status, romdev_done_status + 1, romdev_done_count * sizeof (int));
++  return i;
++}
++#define wait(s) romdev_wait (s)
++
++#elif !defined(__MSDOS__) && !defined(OS2) && !defined(WINNT)
+ 
+ static int
+ pexecute (search_flag, program, argv, not_last)
+--- a/config/mips/psx.h
++++ b/config/mips/psx.h
+@@ -106,3 +106,28 @@
+ #define DEFAULT_SIGNED_CHAR 0
+ 
+ #include "mips/mips.h"
++
++/* romdev: the driver's assembler is romdev's mips-linux-gnu-as (WASM), which
++   defaults to big-endian, where this target's assembler is a mipsel one. Pass
++   -EL unless the command line picks an endianness (a no-op for a mipsel as).
++   The rest is mips.h's GAS ASM_SPEC unchanged.  */
++#ifdef __EMSCRIPTEN__
++#undef ASM_SPEC
++#define ASM_SPEC "\
++%{!EB:%{!EL:-EL}} \
++%{mmips-as: \
++	%{!.s:-nocpp} %{.s: %{cpp} %{nocpp}} \
++	%{pipe: %e-pipe is not supported.} \
++	%{K}} \
++%{!mmips-as: \
++	%{mcpu=*}} \
++%{G*} %{EB} %{EL} %{mips1} %{mips2} %{mips3} %{v} \
++%{noasmopt:-O0} \
++%{!noasmopt:%{O:-O2} %{O1:-O2} %{O2:-O2} %{O3:-O3}} \
++%{g} %{g0} %{g1} %{g2} %{g3} \
++%{ggdb:-g} %{ggdb0:-g0} %{ggdb1:-g1} %{ggdb2:-g2} %{ggdb3:-g3} \
++%{gstabs:-g} %{gstabs0:-g0} %{gstabs1:-g1} %{gstabs2:-g2} %{gstabs3:-g3} \
++%{gstabs+:-g} %{gstabs+0:-g0} %{gstabs+1:-g1} %{gstabs+2:-g2} %{gstabs+3:-g3} \
++%{gcoff:-g} %{gcoff0:-g0} %{gcoff1:-g1} %{gcoff2:-g2} %{gcoff3:-g3} \
++%{membedded-pic}"
++#endif
