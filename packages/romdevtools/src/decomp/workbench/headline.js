@@ -72,7 +72,7 @@ export function buildHeadline(item) {
 
 /** The single line a reader is meant to quote. */
 export function headlineLine(report) {
-  if (report.matched) return "score: 0 words differ — MATCH";
+  if (report.matched) return "score: 0 words differ \u2014 MATCH";
   return `score: ${report.words} word${report.words === 1 ? "" : "s"} differ (0 = match)`;
 }
 
