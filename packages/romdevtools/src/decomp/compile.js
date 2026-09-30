@@ -758,7 +758,8 @@ function wordsWithRelocs(buf, base, relocs, funcOff, endian = "big") {
     const off = base + i;
     const rel = relocs.find((r) => r.offset === off);
     const w = endian === "big" ? buf.readUInt32BE(i) : buf.readUInt32LE(i);
-    if (rel && rel.type === "R_MIPS_32" && rel.symbol === ".text") out.push("text+0x" + (((rel.addend ?? 0) || w) - funcOff).toString(16));
+    // Unsigned, as the ROM side renders it: an entry may point before the function.
+    if (rel && rel.type === "R_MIPS_32" && rel.symbol === ".text") out.push("text+0x" + ((((rel.addend ?? 0) || w) - funcOff) >>> 0).toString(16));
     else if (rel && rel.type === "R_MIPS_32") out.push(`${rel.symbol}+0x${((rel.addend ?? 0) || w).toString(16)}`);
     else out.push("0x" + w.toString(16).padStart(8, "0"));
   }
