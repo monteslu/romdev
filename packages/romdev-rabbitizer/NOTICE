@@ -1,0 +1,26 @@
+romdev-rabbitizer
+=================
+
+This package ships rabbitizer, the MIPS instruction decoder, compiled from its
+C library to WebAssembly, plus a JavaScript binding for it made for romdev.
+
+Components and attribution
+--------------------------
+
+1. rabbitizer
+   https://github.com/Decompollaborate/rabbitizer
+   Copyright (c) 2022 Decompollaborate.
+   Licensed under the MIT License (LICENSE).
+   wasm/rabbitizer-<version>.wasm is built from the library's include/,
+   tables/ and src/ C sources at these commits:
+     1.16.2  724a49a5b4dbfb99f1a9e6992e63964fd29c90c8
+     1.14.3  d5804fa488474830a47fbf9f3693048ec1e45589
+     1.13.0  1df4709dcc927d9d9cc5859a6e7eb98e864f8468
+   The JS binding (src/) mirrors the API of rabbitizer's Python extension
+   module (the rabbitizer/ directory of the same repository); the enum tables
+   in csrc/rabbitizer_wasm.c follow that module's table macros. The upstream
+   C sources are available at the URL and commits above; the build recipe is
+   scripts/build-rabbitizer.sh in the romdev repository.
+
+2. romdev binding (src/, csrc/, test/)
+   Copyright (c) Luis Montes. Licensed under the MIT License.

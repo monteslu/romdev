@@ -1,0 +1,47 @@
+{
+  "name": "romdev-rabbitizer",
+  "version": "0.1.0",
+  "description": "rabbitizer (MIPS instruction decoder) built from its C library to WASM, with a synchronous JS binding that mirrors the Python rabbitizer module API. Ships rabbitizer 1.16.2, 1.14.3 and 1.13.0.",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./1.16.2": "./src/v1.16.2.js",
+    "./1.14.3": "./src/v1.14.3.js",
+    "./1.13.0": "./src/v1.13.0.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "wasm",
+    "csrc",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "scripts": {
+    "test": "node --test --test-concurrency=4 'test/**/*.test.mjs'"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/monteslu/romdev.git",
+    "directory": "packages/romdev-rabbitizer"
+  },
+  "homepage": "https://github.com/monteslu/romdev#readme",
+  "bugs": {
+    "url": "https://github.com/monteslu/romdev/issues"
+  },
+  "author": "Luis Montes",
+  "upstream": {
+    "url": "https://github.com/Decompollaborate/rabbitizer",
+    "license": "MIT",
+    "versions": {
+      "1.16.2": "724a49a5b4dbfb99f1a9e6992e63964fd29c90c8",
+      "1.14.3": "d5804fa488474830a47fbf9f3693048ec1e45589",
+      "1.13.0": "1df4709dcc927d9d9cc5859a6e7eb98e864f8468"
+    }
+  }
+}
