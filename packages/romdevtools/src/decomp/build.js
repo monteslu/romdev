@@ -47,8 +47,9 @@ export async function runTargetRecipe(mk, target, { cwd = mk.root, tmpRoot, line
  *   always: rebuild every target that has a runnable recipe (make --always-make)
  * @returns {Promise<{ok:boolean, goal:string, built:string[], keptPrebuilt:Array<{target:string, reason:string}>, providedByRomdev:Array<{target:string, runsAs:string}>, failed:object|null, ms:number, logs:Record<string,string>}>}
  */
-export async function buildGoal(mk, goal, { always = false, jobs = 8, tmpRoot, onProgress } = {}) {
+export async function buildGoal(mkIn, goal, { always = false, jobs = 8, tmpRoot, onProgress } = {}) {
   const t0 = Date.now();
+  let mk = mkIn;
   const root = mk.root;
   const exists = (p) => fs.existsSync(path.resolve(root, p));
   const mtime = (p) => { try { return fs.statSync(path.resolve(root, p)).mtimeMs; } catch { return -1; } };
@@ -72,7 +73,7 @@ export async function buildGoal(mk, goal, { always = false, jobs = 8, tmpRoot, o
         throw Object.assign(new Error(`no rule to make target '${target}'`), { target });
       }
       const tool = classifyCommand([target], root);
-      if (["armips", "binutils", "ido", "n64crc", "iconv", "cpp"].includes(tool.kind)) {
+      if (["armips", "binutils", "ido", "n64crc", "iconv", "cpp", "decomp-tool", "decomp-gcc"].includes(tool.kind)) {
         providedByRomdev.push({ target, runsAs: tool.kind });
         return { changed: false };
       }
@@ -98,7 +99,21 @@ export async function buildGoal(mk, goal, { always = false, jobs = 8, tmpRoot, o
     return p;
   };
 
-  try { await make(goal); }
+  try {
+    // GNU make's "remaking makefiles": an included makefile with an explicit
+    // rule (a dependency file a generator writes, say) is brought up to date
+    // first, and the Makefile is read again if any was remade.
+    const remakable = [...new Set(mk.includes ?? [])].filter((f) => mk.rules.some((r) => !r.pattern && r.targets.includes(f) && r.recipe.length));
+    if (remakable.length) {
+      const res = await Promise.all(remakable.map((f) => make(f)));
+      if (res.some((r) => r.changed)) {
+        const { makefile, overrides, env } = mk.loadOptions;
+        // Targets already brought up to date stay done.
+        mk = await Makefile.load(root, { makefile, overrides, env });
+      }
+    }
+    await make(goal);
+  }
   catch (e) {
     failed = { target: e.target ?? goal, message: e.message, code: e.result?.code ?? null, log: (e.result?.log ?? "").slice(-4000), commands: e.result?.commands ?? [] };
   }

@@ -2,8 +2,11 @@
 // around the compiler, so a project's recipe runs without them:
 //   n64crc            fix the N64 header CRC1/CRC2 (the ROM step)
 //   set_o32abi_bit    set EF_MIPS_ABI_O32 in an ELF header (libultra ll.o)
-//   iconv             UTF-8 -> SHIFT-JIS / EUC-JP (glibc's tables) and latin1/UTF-8
+//   iconv             UTF-8 -> SHIFT-JIS / EUC-JP / EUC-CN (glibc's tables) and latin1/UTF-8
 //   unifiedDiff       `diff -u` for integration patches
+//   incFromBin / msgReencode / n64ChecksumUpdate / romCompress
+//                     decompals-style build scripts (inc_from_bin.py,
+//                     msg_reencoder.py, checksummer.py, rom_compressor.py)
 import { readFileSync, writeFileSync } from "node:fs";
 import { iconvEncode, tableName } from "./iconv-tables.js";
 
@@ -269,4 +272,222 @@ export async function buildAssetContainer(layoutPath) {
   }
   if (len !== manifest.size) throw new Error("Incorrect container size");
   return Buffer.concat(parts);
+}
+
+// -- Dr. Mario 64-style N64 build scripts (decompals tooling) --------------
+
+/** inc_from_bin.py: bytes as a C initializer, 8 per line with offsets. */
+export function incFromBin(bytes) {
+  let out = "";
+  for (let i = 0; i < bytes.length; i++) {
+    const off = i.toString(16).toUpperCase().padStart(6, "0");
+    if (i === 0) out += `    /* 0x${off} */`;
+    else if (i % 8 === 0) out += `\n    /* 0x${off} */`;
+    out += ` 0x${bytes[i].toString(16).toUpperCase().padStart(2, "0")},`;
+  }
+  return out;
+}
+
+/**
+ * msg_reencoder.py: re-encode the contents of every C string literal in cpp
+ * output to `encoding` (glibc's table for the Japanese/Chinese charsets),
+ * writing non-printable bytes as "\xNN""" escapes. The first line and cpp's
+ * `# line` markers pass through untouched.
+ */
+export function msgReencode(inputText, encoding) {
+  let prev = inputText.indexOf("\n") + 1;
+  let out = inputText.slice(0, prev);
+  for (;;) {
+    let index = inputText.indexOf('"', prev);
+    if (index === -1) break;
+    const lineInfo = inputText.slice(prev, index).indexOf("\n# ");
+    if (lineInfo !== -1) {
+      index = inputText.indexOf("\n", index + 1) + 1;
+      out += inputText.slice(prev, index);
+      prev = index;
+      continue;
+    }
+    out += inputText.slice(prev, index);
+    prev = index + 1;
+    index = inputText.indexOf('"', prev);
+    if (index === -1) break;
+    const contents = inputText.slice(prev, index);
+    out += '"';
+    for (const c of encodeText(contents, encoding)) {
+      out += c >= 0x20 && c <= 0x7e ? String.fromCharCode(c) : `\\x${c.toString(16).toUpperCase().padStart(2, "0")}""`;
+    }
+    out += '"';
+    prev = index + 1;
+  }
+  out += inputText.slice(prev);
+  for (let i = 0; i < out.length; i++) if (out.charCodeAt(i) > 0x7f) throw new Error(`msg_reencoder: output is not ASCII at offset ${i}`);
+  return out;
+}
+
+function encodeText(text, encoding) {
+  if (tableName(encoding)) return iconvEncode(text, encoding);
+  const n = String(encoding).toLowerCase().replace(/[_-]/g, "");
+  if (n === "utf8") return Buffer.from(text, "utf8");
+  if (n === "ascii") {
+    for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) > 0x7f) throw new Error(`cannot encode U+${text.charCodeAt(i).toString(16)} as ASCII`);
+    return Buffer.from(text, "latin1");
+  }
+  throw new Error(`no encoder for ${encoding}`);
+}
+
+// The IPL3s romdev's checksum implements (n64Cic's table without its default).
+const KNOWN_IPL3 = new Set([0x6170a4a1, 0x90bb6cb5, 0x0b050ee0, 0x98bc2c86, 0xacc8580a]);
+
+/**
+ * checksummer.py (ipl3checksum): write CRC1/CRC2 for the ROM's IPL3 at 0x10.
+ * The script falls back to 6102 for an IPL3 ipl3checksum does not know; an
+ * IPL3 outside the five this port knows is refused rather than guessed, since
+ * ipl3checksum recognises more kinds (7102, 8303, ...) than the five here.
+ */
+export function n64ChecksumUpdate(rom) {
+  if (rom.length < 0x101000) throw new Error(`ROM is too small: 0x${rom.length.toString(16).toUpperCase()}`);
+  if (!KNOWN_IPL3.has(crc32(rom, 0x40, 0x1000 - 0x40))) throw new Error("checksummer: this ROM's IPL3 is not one of CIC 6101/6102/6103/6105/6106 (the kinds romdev's port implements)");
+  const [c1, c2] = n64Checksum(rom);
+  const out = Buffer.from(rom);
+  out.writeUInt32BE(c1, 0x10);
+  out.writeUInt32BE(c2, 0x14);
+  return out;
+}
+
+function elf32(buf) {
+  if (buf.readUInt32BE(0) !== 0x7f454c46 || buf[4] !== 1 || buf[5] !== 2) throw new Error("not a 32-bit big-endian ELF");
+  const shoff = buf.readUInt32BE(0x20), shentsize = buf.readUInt16BE(0x2e), shnum = buf.readUInt16BE(0x30), shstrndx = buf.readUInt16BE(0x32);
+  const sections = [];
+  for (let i = 0; i < shnum; i++) {
+    const o = shoff + i * shentsize;
+    sections.push({ nameOff: buf.readUInt32BE(o), type: buf.readUInt32BE(o + 4), flags: buf.readUInt32BE(o + 8), addr: buf.readUInt32BE(o + 12), offset: buf.readUInt32BE(o + 16), size: buf.readUInt32BE(o + 20) });
+  }
+  const cstr = (base, off) => { let e = base + off; while (buf[e]) e++; return buf.toString("latin1", base + off, e); };
+  const shstr = sections[shstrndx];
+  for (const s of sections) s.name = cstr(shstr.offset, s.nameOff);
+  const symtab = sections.find((s) => s.name === ".symtab" && s.type === 2);
+  const strtab = sections.find((s) => s.name === ".strtab" && s.type === 3);
+  return { sections, symtab, strtab, cstr };
+}
+
+/** compression_common.readSegmentsCsv */
+export function readSegmentsCsv(text, version) {
+  const dict = new Map();
+  const rows = text.split(/\r?\n/).map((l) => (l.length ? l.split(",") : []));
+  let header = true;
+  for (const row of rows) {
+    if (header) { header = false; continue; }
+    if (row.length === 0) continue;
+    if (row.length !== 6) throw new Error(`segments csv: expected 6 columns, got ${row.length}`);
+    const [name, start, end, hash, level, tool] = row;
+    dict.set(`.${name}`, { segmentName: name, compressedRomOffset: Number(start), compressedRomOffsetEnd: Number(end), uncompressedHash: hash, compressionLevel: parseInt(level, 10), compressionTool: tool, compressedPath: `bin/${version}/compressed_segments/${name}_compressed.bin` });
+  }
+  return dict;
+}
+
+/**
+ * rom_compressor.py: rebuild the compressed ROM from the uncompressed one and
+ * its ELF. `gzip(bytes, level, smallMem)` is crunch64's gzip and
+ * `zlibRaw(bytes, level)` vanilla zlib's raw deflate (romdev runs both as
+ * WASM); each returns (a promise of) the compressed bytes.
+ */
+export async function romCompress({ inRom, elf, segmentsCsv, version, padRom, cwd, gzip, zlibRaw }) {
+  const { createHash } = await import("node:crypto");
+  const md5 = (b) => createHash("md5").update(b).digest("hex");
+  const segs = readSegmentsCsv(segmentsCsv, version);
+  const e = elf32(elf);
+  if (!e.symtab || !e.strtab) throw new Error("The elf->z64 process and compression algorithm requires a symtab and a strtab");
+  const out = [];
+  let outLen = 0, offset = 0, sizeWrote = 0;
+  const segmentOffsets = new Map(), rels = new Map(), romOffsetValues = new Map();
+  const align = (v, n) => (v + (n - 1)) & ~(n - 1);
+  const log = [];
+  for (const sec of e.sections) {
+    if (sec.type === 9 /* REL */) {
+      if (!segs.has(sec.name)) {
+        const referenced = sec.name.replace(".rel.", ".");
+        for (let o = sec.offset; o < sec.offset + sec.size; o += 8) {
+          const rOffset = elf.readUInt32BE(o), info = elf.readUInt32BE(o + 4);
+          const sym = e.symtab.offset + (info >>> 8) * 16;
+          const symName = e.cstr(e.strtab.offset, elf.readUInt32BE(sym));
+          if (symName.endsWith("_ROM_START") || symName.endsWith("_ROM_END")) {
+            const seg = segmentOffsets.get(referenced);
+            if (!seg) throw new Error(`relocation in ${sec.name} against ${symName} before its segment`);
+            rels.set(rOffset - seg[1] + seg[0], [symName, info & 0xff]);
+          }
+        }
+      }
+    }
+    if (sec.type !== 1 /* PROGBITS */) continue;
+    if (!(sec.flags & 2) /* ALLOC */) continue;
+    segmentOffsets.set(sec.name, [offset, sec.addr]);
+    const romStart = `${sec.name.slice(1)}_ROM_START`, romEnd = `${sec.name.slice(1)}_ROM_END`;
+    const offsetStart = sizeWrote;
+    let offsetEnd;
+    const entry = segs.get(sec.name);
+    const bytes = inRom.subarray(offset, offset + sec.size);
+    if (bytes.length !== sec.size) throw new Error(`'${sec.name}': 0x${bytes.length.toString(16)} 0x${sec.size.toString(16)}`);
+    if (!entry) {
+      offsetEnd = sec.size + offsetStart;
+      out.push(Buffer.from(bytes)); outLen += bytes.length;
+      sizeWrote += sec.size;
+    } else {
+      let comp;
+      if (entry.compressionTool === "reuse_original") {
+        const h = md5(bytes);
+        if (h === entry.uncompressedHash) comp = [...fs_read(cwd, entry.compressedPath)];
+        else {
+          log.push(`Segment '${sec.name}' doesn't match, should have hash '${entry.uncompressedHash}' but has hash '${h}'.\nCompressing...\n`);
+          comp = [...(await zlibFramed(bytes, entry.compressionLevel, zlibRaw))];
+        }
+      } else if (entry.compressionTool === "gzip" || entry.compressionTool === "gzip_smallmem") {
+        comp = [...(await gzip(bytes, entry.compressionLevel, entry.compressionTool === "gzip_smallmem"))];
+      } else if (entry.compressionTool === "zlib") {
+        comp = [...(await zlibFramed(bytes, entry.compressionLevel, zlibRaw))];
+      } else throw new Error(`Unknown compression tool: ${entry.compressionTool}`);
+      while (comp.length % 0x10 !== 0) {
+        const i = comp.length - 0x2000;
+        comp.push(i > 0 && version !== "cn" ? comp[i] : 0);
+      }
+      offsetEnd = offsetStart + comp.length;
+      const b = Buffer.from(comp);
+      out.push(b); outLen += b.length;
+      sizeWrote += comp.length;
+    }
+    romOffsetValues.set(romStart, offsetStart);
+    romOffsetValues.set(romEnd, offsetEnd);
+    offset += align(sec.size, 0x10);
+  }
+  if (padRom) {
+    const [aligned, fill] = version === "cn" ? [align(sizeWrote, 0x2000), 0x00] : [align(sizeWrote, 0x100000), 0xff];
+    out.push(Buffer.alloc(aligned - sizeWrote, fill));
+  }
+  const rom = Buffer.concat(out);
+  for (const [relRomOffset, [symName, rType]] of rels) {
+    const value = romOffsetValues.get(symName);
+    if (value === undefined) throw new Error(`no ROM offset for ${symName}`);
+    let hi = value >>> 16;
+    const lo = value & 0xffff;
+    if (lo >= 0x8000) hi += 1;
+    if (rType === 5) rom.writeUInt16BE(hi & 0xffff, relRomOffset + 2);
+    else if (rType === 6) rom.writeUInt16BE(lo, relRomOffset + 2);
+    else if (rType === 2) rom.writeUInt32BE(value >>> 0, relRomOffset);
+    else throw new Error(`relocation type ${rType} against ${symName}`);
+  }
+  return { rom, log: log.join("") };
+}
+
+function fs_read(cwd, rel) {
+  const b = readFileSync(cwd ? `${cwd}/${rel}` : rel);
+  if (!b.length) throw new Error(`'${rel}' could not be opened`);
+  return b;
+}
+
+/** compression_common.compressZlib: raw deflate + crc32 + size, little-endian. */
+async function zlibFramed(bytes, level, zlibRaw) {
+  const d = await zlibRaw(bytes, level);
+  const tail = Buffer.alloc(8);
+  tail.writeUInt32LE(crc32(bytes, 0, bytes.length), 0);
+  tail.writeUInt32LE(bytes.length >>> 0, 4);
+  return Buffer.concat([d, tail]);
 }

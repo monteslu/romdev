@@ -1,0 +1,108 @@
+diff --git a/libiberty/pex-unix.c b/libiberty/pex-unix.c
+index f3a1cc9..e151571 100644
+--- a/libiberty/pex-unix.c
++++ b/libiberty/pex-unix.c
+@@ -122,7 +122,49 @@ to_ptr32 (char **ptr64)
+ 
+ static pid_t pex_wait (struct pex_obj *, pid_t, int *, struct pex_time *);
+ 
+-#ifdef HAVE_WAIT4
++#if defined(__EMSCRIPTEN__)
++/* romdev: WASM host. WebAssembly has no fork/exec: each subprogram (cc1, as,
++   collect2) runs to completion synchronously as a sibling module through a JS
++   spawn hook, with its stdin/stdout/stderr wired to the fds the driver hands
++   over here, and pex_wait returns the recorded exit status.  */
++#include <emscripten.h>
++
++EM_JS(int, romdev_spawn_fds, (const char *file, char *const *argv, int argc, int fd_in, int fd_out, int fd_err), {
++  const args = [];
++  for (let i = 0; i < argc; i++) args.push(UTF8ToString(HEAPU32[(argv >> 2) + i]));
++  if (!Module["romdevSpawn"]) {
++    err("romdev: no spawn handler installed; cannot run " + UTF8ToString(file));
++    return 127 << 8;
++  }
++  return Module["romdevSpawn"](UTF8ToString(file), args, Module, { inFd: fd_in, outFd: fd_out, errFd: fd_err });
++});
++
++static pid_t romdev_next_pid = 4200;
++static pid_t romdev_done_pid[64];
++static int romdev_done_status[64];
++static int romdev_done_count;
++
++static pid_t
++pex_wait (struct pex_obj *obj ATTRIBUTE_UNUSED, pid_t pid, int *status,
++	  struct pex_time *time)
++{
++  int i;
++  if (time != NULL)
++    memset (time, 0, sizeof (struct pex_time));
++  for (i = 0; i < romdev_done_count; i++)
++    if (romdev_done_pid[i] == pid)
++      {
++	*status = romdev_done_status[i];
++	romdev_done_count--;
++	memmove (romdev_done_pid + i, romdev_done_pid + i + 1, (romdev_done_count - i) * sizeof (pid_t));
++	memmove (romdev_done_status + i, romdev_done_status + i + 1, (romdev_done_count - i) * sizeof (int));
++	return pid;
++      }
++  errno = ECHILD;
++  return -1;
++}
++
++#elif defined (HAVE_WAIT4)
+ 
+ static pid_t
+ pex_wait (struct pex_obj *obj ATTRIBUTE_UNUSED, pid_t pid, int *status,
+@@ -369,7 +411,40 @@ pex_unix_close (struct pex_obj *obj ATTRIBUTE_UNUSED, int fd)
+ 
+ /* Execute a child.  */
+ 
+-#if defined(HAVE_SPAWNVE) && defined(HAVE_SPAWNVPE)
++#if defined(__EMSCRIPTEN__)
++
++static pid_t
++pex_unix_exec_child (struct pex_obj *obj ATTRIBUTE_UNUSED,
++		     int flags ATTRIBUTE_UNUSED, const char *executable,
++		     char * const * argv, char * const * env ATTRIBUTE_UNUSED,
++		     int in, int out, int errdes,
++		     int toclose ATTRIBUTE_UNUSED, const char **errmsg, int *err)
++{
++  int argc = 0;
++  int status;
++  while (argv[argc])
++    argc++;
++  status = romdev_spawn_fds (executable, argv, argc, in, out, errdes);
++  if (romdev_done_count >= 64)
++    {
++      *err = EAGAIN;
++      *errmsg = "romdev spawn table full";
++      return (pid_t) -1;
++    }
++  romdev_done_pid[romdev_done_count] = ++romdev_next_pid;
++  romdev_done_status[romdev_done_count] = status;
++  romdev_done_count++;
++  /* The parent's copies of redirected fds are closed, as after a fork.  */
++  if (in != STDIN_FILE_NO)
++    close (in);
++  if (out != STDOUT_FILE_NO)
++    close (out);
++  if (errdes != STDERR_FILE_NO)
++    close (errdes);
++  return romdev_next_pid;
++}
++
++#elif defined(HAVE_SPAWNVE) && defined(HAVE_SPAWNVPE)
+ /* Implementation of pex->exec_child using the Cygwin spawn operation.  */
+ 
+ /* Subroutine of pex_unix_exec_child.  Move OLD_FD to a new file descriptor
+@@ -943,8 +1018,10 @@ pex_unix_wait (struct pex_obj *obj, pid_t pid, int *status,
+ {
+   /* If we are cleaning up when the caller didn't retrieve process
+      status for some reason, encourage the process to go away.  */
++#ifndef __EMSCRIPTEN__
+   if (done)
+     kill (pid, SIGTERM);
++#endif
+ 
+   if (pex_wait (obj, pid, status, time) < 0)
+     {

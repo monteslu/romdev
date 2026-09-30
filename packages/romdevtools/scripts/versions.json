@@ -336,6 +336,36 @@
       ],
       "note": "The binutils 2.6 assembler (with --force-n64align) paired with KMC gcc 2.7.2; built to WASM by build-decomp-gcc.sh."
     },
+    "slinky_cli": {
+      "kind": "tarball",
+      "crate": "slinky-cli",
+      "url": "https://crates.io/api/v1/crates/slinky-cli/0.5.0/download",
+      "version": "0.5.0",
+      "sha256": "98da2e6f564251e800cc8e4bd7fc813b61a71c4f4f117b7b84e0032ab921ec5f",
+      "license": "MIT",
+      "platforms": ["n64"],
+      "note": "decompals' linker-script generator, the release N64 decomp projects download as tools/slinky/slinky-cli. Built to WASM (wasm32-unknown-emscripten) by build-decomp-rust-tools.sh; ships in romdev-toolchain-decomp-gcc (wasm/tools/)."
+    },
+    "pigment64": {
+      "kind": "tarball",
+      "crate": "pigment64",
+      "url": "https://crates.io/api/v1/crates/pigment64/0.6.3/download",
+      "version": "0.6.3",
+      "sha256": "e2b2365687c1d80398066f0cd6db8ef586644218b4727efe067d1958a2e75e9b",
+      "license": "MIT",
+      "platforms": ["n64"],
+      "note": "decompals' PNG to N64 texture converter (tools/pigment64/pigment64 in decomp projects). Built to WASM by build-decomp-rust-tools.sh; ships in romdev-toolchain-decomp-gcc (wasm/tools/)."
+    },
+    "crunch64_cli": {
+      "kind": "git",
+      "url": "https://github.com/decompals/crunch64.git",
+      "ref": "0.6.1",
+      "commit": "223aefbf5ef83009f143c843a10eb3c5e086778c",
+      "version": "0.6.1",
+      "license": "MIT",
+      "platforms": ["n64"],
+      "note": "decompals' N64 compression library (gzip/yay0/yaz0/mio0) behind a CLI; the same crunch64 release decomp projects' Python ROM compressors call. Built to WASM by build-decomp-rust-tools.sh; ships in romdev-toolchain-decomp-gcc (wasm/tools/)."
+    },
     "ido_static_recomp": {
       "kind": "git",
       "url": "https://github.com/decompals/ido-static-recomp.git",
@@ -358,6 +388,15 @@
       "sha256": "d75a94f4d73e7a4086f7513e67e439e8fcdcbb726ffe63f4661744e6256b2cf2",
       "license": "GPL-3.0",
       "note": "binutils for target mips-linux-gnu (the traditional-MIPS ELF vectors N64 decomp projects assemble, link and objcopy with). Built to WASM by build-mips-linux-binutils-wasm.sh; ships as mips-linux-gnu-{as,ld,objcopy,objdump} in romdev-toolchain-mips-gcc. The mips-elf tools cannot stand in: their IRIX-compatible vector names section symbols in .strtab and reorders symbols, so objects differ byte-for-byte."
+    },
+    "gcc_mips_linux": {
+      "kind": "tarball",
+      "url": "https://ftp.gnu.org/gnu/gcc/gcc-14.2.0/gcc-14.2.0.tar.xz",
+      "version": "14.2.0",
+      "sha256": "a7b39bc69cbf9e25826c5a60ab26477001f7c08d85cec04bc0e29cabed6f3cc9",
+      "license": "GPL-3.0",
+      "patch": "scripts/patches/gcc-14-driver-wasm-spawn.patch",
+      "note": "gcc for target mips-linux-gnu (driver, cpp, cc1), the modern cross gcc N64 decomp projects compile data-only TUs and preprocess .s files and linker scripts with. Built to WASM by build-mips-linux-gcc-wasm.sh with Debian/Ubuntu's target configuration; ships in romdev-toolchain-decomp-gcc (wasm/mips-linux-gnu-14.2/). Same gcc release as romdev-toolchain-mips-gcc's cc1."
     },
     "binutils": {
       "kind": "tarball",

@@ -22,7 +22,7 @@ import path from "node:path";
 /** Program names romdev provides as WASM, which `which`/`type` probes should find. */
 export const EMULATED_PROGRAMS = [
   ...["as", "ld", "objcopy", "objdump", "ar", "nm", "strip", "readelf"].map((t) => "mips-linux-gnu-" + t),
-  "cpp", "sha1sum", "printf", "echo", "true", ":", "mkdir", "rm", "cp", "iconv",
+  "cpp", "sha1sum", "md5sum", "printf", "echo", "true", ":", "mkdir", "rm", "cp", "iconv",
 ];
 
 class MakeError extends Error {}
@@ -97,6 +97,8 @@ export class Makefile {
 
   static async load(root, { makefile = "Makefile", overrides = {}, env = {} } = {}) {
     const mk = new Makefile({ root, overrides, env });
+    mk.loadOptions = { makefile, overrides, env };
+    mk.includes = [];
     mk.readFile(path.resolve(root, makefile), false);
     return mk;
   }
@@ -104,6 +106,9 @@ export class Makefile {
   // -- reading ---------------------------------------------------------
   readFile(file, optional) {
     let text;
+    // Every makefile read (or -included and missing) is a candidate for
+    // GNU make's "remaking makefiles" step (build.js remakeMakefiles).
+    if (this.includes && file !== path.resolve(this.root, this.loadOptions.makefile)) this.includes.push(path.relative(this.root, file));
     try { text = fs.readFileSync(file, "utf8"); }
     catch (e) { if (optional) return; throw new MakeError(`${path.relative(this.root, file)}: ${e.message}`); }
     const cur = this.vars.get("MAKEFILE_LIST");
@@ -240,7 +245,24 @@ export class Makefile {
         let inlineRecipe = null;
         const semi = rhs.indexOf(";");
         if (semi >= 0) { inlineRecipe = rhs.slice(semi + 1); rhs = rhs.slice(0, semi); }
-        const [normal, orderOnly = ""] = this.expand(rhs).split("|");
+        const expanded = this.expand(rhs);
+        // static pattern rule: `targets: target-pattern: prereq-patterns`
+        const sp = /^([^:]*):(?!:)([^]*)$/.exec(expanded);
+        if (sp && !colon.double) {
+          const tpat = sp[1].trim();
+          const [sNormal, sOrder = ""] = sp[2].split("|");
+          const recipe = [];
+          if (inlineRecipe !== null && inlineRecipe.trim()) recipe.push(inlineRecipe.trim());
+          for (const tgt of targets) {
+            const stem = patMatch(tpat, tgt);
+            if (stem === null) throw new MakeError(`${where}: target '${tgt}' doesn't match the target pattern '${tpat}'`);
+            const sub = (w) => w.replace("%", stem);
+            this.rules.push({ targets: [tgt], prereqs: splitWords(sNormal).map(sub), orderOnly: splitWords(sOrder).map(sub), recipe, pattern: false, staticStem: stem, double: false, where });
+          }
+          rule = { recipe };
+          continue;
+        }
+        const [normal, orderOnly = ""] = expanded.split("|");
         rule = { targets, prereqs: splitWords(normal), orderOnly: splitWords(orderOnly), recipe: [], pattern: targets.some((x) => x.includes("%")), double: colon.double, where };
         if (inlineRecipe !== null && inlineRecipe.trim()) rule.recipe.push(inlineRecipe.trim());
         if (targets.includes(".PHONY")) for (const p of rule.prereqs) this.phony.add(p);
@@ -597,7 +619,7 @@ export class Makefile {
     const withRecipe = explicit.filter((r) => r.recipe.length);
     if (withRecipe.length) {
       const r = withRecipe[withRecipe.length - 1];
-      return { target, prereqs: dedupe(extraPrereqs), orderOnly: extraOrder, recipe: r.recipe, stem: null, rule: r };
+      return { target, prereqs: dedupe(extraPrereqs), orderOnly: extraOrder, recipe: r.recipe, stem: r.staticStem ?? null, rule: r };
     }
     if (depth > 4) return null;
     // GNU make (3.82+) tries the matching pattern rules shortest stem first

@@ -6,11 +6,15 @@
 //   IDO cc (.../ido*/<ver>/.../cc)            -> WASM IDO (toolchain.js)
 //   KMC gcc 2.7.2 (.../2.7.2/gcc, as)       -> WASM gcc 2.7.2 + binutils 2.6
 //   armips                                  -> WASM armips
+//   mips-linux-gnu-gcc / -cpp                -> WASM gcc 14.2 (mips-linux-gnu)
+//   slinky-cli / pigment64 / crunch64       -> WASM builds of decompals' releases
 //   mips-*-{as,ld,objcopy,objdump}         -> WASM mips-linux-gnu binutils
 //   <python> .../asm-processor/build.py      -> JS asm-processor
 //   <python> .../set_o32abi_bit.py           -> JS
+//   <python> <ported project script>.py      -> JS (PORTED_SCRIPTS, by sha256)
+//   uv run <command>                         -> <command>
 //   cpp / clang -E / gcc -E                -> WASM cc1 -E (cpp.js)
-//   iconv / n64crc / sha1sum / printf / echo / mkdir / rm / cp / touch / : / true
+//   iconv / n64crc / sha1sum / md5sum / printf / echo / mkdir / rm / cp / touch / : / true
 //
 // Anything else is UNSUPPORTED: the step is not run and the caller decides
 // (a build keeps an existing output and reports the gap; it never falls back
@@ -18,11 +22,11 @@
 // warnings pass) produces nothing and is skipped with a note.
 import fs from "node:fs";
 import path from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { asmProcessorBuild } from "./asm-processor.js";
-import { idoCompile, binutils, toolName, armips, decompGcc } from "./toolchain.js";
+import { idoCompile, binutils, toolName, armips, decompGcc, decompTool } from "./toolchain.js";
 import { preprocess } from "./cpp.js";
-import { iconv, parseIconvArgs, n64crcFile, setO32AbiBit, buildAssetContainer } from "./host-ports.js";
+import { iconv, parseIconvArgs, n64crcFile, setO32AbiBit, buildAssetContainer, incFromBin, msgReencode, n64ChecksumUpdate, romCompress } from "./host-ports.js";
 
 // Project scripts with a JS port, by the exact script content ported (sha256).
 // A script whose bytes differ is a different program: it is reported
@@ -31,6 +35,11 @@ const PORTED_SCRIPTS = {
   "build_font_container.py": { kind: "asset-container", sha256: ["45c9d8af2f4dce095da093411641cba59016711cdd2e2b8cefd68cc7c7936b24"],
     helpers: { "font_texture.py": ["7f778618cf4aedc5d232a515b2fd0d2ecb62402db6c276f642094cbed599618d"] } },
   "assemble_rsp.py": { kind: "assemble-rsp", sha256: ["782936f3b533bb9c91d000f3797bc1f28d0a74a75e67df73e7c79e345824de54"] },
+  "inc_from_bin.py": { kind: "inc-from-bin", sha256: ["d403a21ce83e75870afbad867b010ede9e700c881982c5d83b850c0cbdbbe7b0"] },
+  "msg_reencoder.py": { kind: "msg-reencoder", sha256: ["c3e9cce705bfd65b787f35bb199504b4d1d183f4ae8fa2849223e6779208f420"] },
+  "checksummer.py": { kind: "n64-checksummer", sha256: ["c7bbf85dc06165b44af768d83f4d1926debfa02710d4afb72fcc98f80c304516"] },
+  "rom_compressor.py": { kind: "rom-compressor", sha256: ["4ed8bab52b3d8d7fb8bf8fdb3edffd8473a436ba8917fc928be52c9b5b863d9c"],
+    helpers: { "compression_common.py": ["4ae0c40605478dea0f17194f9a855d53b1d3d37d5e929e51bf39b6f906a1cb5e"] } },
 };
 
 function portedScript(script, cwd) {
@@ -123,6 +132,12 @@ export function classifyCommand(argv, cwd = process.cwd()) {
   if (prog === ":" || prog === "true") return { kind: "noop" };
   if (prog === "false") return { kind: "false" };
   if (base === "printf" || base === "echo") return { kind: "print" };
+  // `uv run [--opts] cmd ...` (a project's PYTHON = uv run python) runs cmd.
+  if (base === "uv" && argv[1] === "run") {
+    let k = 2;
+    while (k < argv.length && argv[k].startsWith("-")) k++;
+    return classifyCommand(argv.slice(k), cwd);
+  }
   if (PYTHON_RE.test(prog)) {
     const script = argv.find((a, i) => i > 0 && !a.startsWith("-")) ?? "";
     if (/asm-processor\/build\.py$/.test(script)) return { kind: "asm-processor", script };
@@ -135,12 +150,13 @@ export function classifyCommand(argv, cwd = process.cwd()) {
   if (tn?.kind === "ido") return { kind: "ido", version: tn.version, program: tn.program };
   if (tn?.kind === "binutils") return { kind: "binutils", tool: tn.tool };
   if (tn?.kind === "armips") return { kind: "armips" };
+  if (tn?.kind === "decomp-tool") return { kind: "decomp-tool", tool: tn.tool };
   if (tn?.kind === "decomp-gcc") return { kind: "decomp-gcc", family: tn.family, program: tn.program };
   if ((base === "gcc" || base === "clang" || base === "cc" || /-gcc$/.test(base)) && argv.includes("-fsyntax-only")) return { kind: "syntax-check" };
   if (base === "cpp" || /-cpp$/.test(base) || ((base === "gcc" || base === "clang" || /-gcc$/.test(base)) && argv.includes("-E"))) return { kind: "cpp" };
   if (base === "iconv") return { kind: "iconv" };
   if (base === "n64crc" || /n64crc$/.test(prog)) return { kind: "n64crc" };
-  if (base === "sha1sum") return { kind: "sha1sum" };
+  if (base === "sha1sum" || base === "md5sum") return { kind: "sha1sum", algo: base === "md5sum" ? "md5" : "sha1" };
   if (["mkdir", "rm", "cp", "touch", "mv"].includes(base)) return { kind: "fs", op: base };
   if (base === "make" || base === "gmake") return { kind: "make" };
   return { kind: "unsupported", reason: `no WASM/JS equivalent for '${prog}'` };
@@ -261,7 +277,7 @@ async function runOne(argv, cls, ctx) {
       const file = argv[1];
       return { code: 0, stdout: Buffer.from(n64crcFile(path.resolve(cwd, file))) };
     }
-    case "sha1sum": return sha1sum(argv.slice(1), cwd);
+    case "sha1sum": return sha1sum(argv.slice(1), cwd, cls.algo);
     case "make": return subMake(argv.slice(1), ctx);
     case "decomp-gcc": {
       const r = await decompGcc({ family: cls.family, argv, cwd, tmpRoot, stdin: ctx.stdin ?? undefined });
@@ -283,9 +299,71 @@ async function runOne(argv, cls, ctx) {
       } catch (e) { return { code: 1, log: `${e.message}\n` }; }
     }
     case "assemble-rsp": return assembleRsp(argv.slice(argv.indexOf(cls.script) + 1), ctx);
+    case "decomp-tool": {
+      const r = await decompTool(cls.tool, argv.slice(1), { cwd });
+      return { code: r.exitCode, log: r.log };
+    }
+    case "inc-from-bin": case "msg-reencoder": case "n64-checksummer": case "rom-compressor":
+      return runPortedScript(cls, argv.slice(argv.indexOf(cls.script) + 1), ctx);
     case "fs": return fsOp(cls.op, argv.slice(1), cwd);
     default: throw new Unsupported(`no runner for ${cls.kind}`);
   }
+}
+
+/** The ported project scripts (argparse-shaped command lines). */
+async function runPortedScript(cls, args, { cwd, tmpRoot }) {
+  const pos = args.filter((a) => !a.startsWith("-"));
+  const flag = (...names) => args.some((a) => names.includes(a));
+  const abs = (p) => path.resolve(cwd, p);
+  const usage = (n) => ({ code: 2, log: `${cls.script}: expected ${n} arguments, got ${pos.length}\n` });
+  try {
+    switch (cls.kind) {
+      case "inc-from-bin": {
+        if (pos.length !== 2) return usage(2);
+        fs.writeFileSync(abs(pos[1]), incFromBin(fs.readFileSync(abs(pos[0]))));
+        return { code: 0 };
+      }
+      case "msg-reencoder": {
+        if (pos.length !== 3) return usage(3);
+        const text = new TextDecoder("utf-8", { fatal: true }).decode(fs.readFileSync(abs(pos[0])));
+        fs.writeFileSync(abs(pos[1]), msgReencode(text, pos[2]), "latin1");
+        return { code: 0 };
+      }
+      case "n64-checksummer": {
+        if (pos.length !== 2) return usage(2);
+        const out = n64ChecksumUpdate(fs.readFileSync(abs(pos[0])));
+        fs.mkdirSync(path.dirname(abs(pos[1])), { recursive: true });
+        fs.writeFileSync(abs(pos[1]), out);
+        return { code: 0 };
+      }
+      case "rom-compressor": {
+        if (pos.length !== 5) return usage(5);
+        const [inRom, outRom, elf, segments, version] = pos;
+        const scratch = path.join(tmpRoot, `romc-${randomUUID().slice(0, 8)}`);
+        fs.mkdirSync(scratch, { recursive: true });
+        let n = 0;
+        // crunch64's gzip and vanilla zlib's raw deflate, as WASM, over files.
+        const viaTool = async (tool, argsFor, input) => {
+          const i = path.join(scratch, `in${n}`), o = path.join(scratch, `out${n++}`);
+          fs.writeFileSync(i, input);
+          const r = await decompTool(tool, argsFor(i, o), { cwd: scratch });
+          if (r.exitCode !== 0) throw new Error(`${tool} failed: ${r.log ?? ""}`);
+          return fs.readFileSync(o);
+        };
+        try {
+          const r = await romCompress({
+            inRom: fs.readFileSync(abs(inRom)), elf: fs.readFileSync(abs(elf)), segmentsCsv: fs.readFileSync(abs(segments), "utf8"),
+            version, padRom: flag("-p", "--pad-rom"), cwd,
+            gzip: (bytes, level, smallMem) => viaTool("crunch64", (i, o) => ["compress", "gzip", i, o, "--level", String(level), ...(smallMem ? ["--small-mem"] : [])], bytes),
+            zlibRaw: (bytes, level) => viaTool("raw-deflate", (i, o) => [String(level), i, o], bytes),
+          });
+          fs.writeFileSync(abs(outRom), r.rom);
+          return { code: 0, log: r.log };
+        } finally { fs.rmSync(scratch, { recursive: true, force: true }); }
+      }
+    }
+  } catch (e) { return { code: 1, log: `${cls.script}: ${e.message}\n` }; }
+  throw new Unsupported(`no runner for ${cls.kind}`);
 }
 
 function cprintf(args) {
@@ -295,7 +373,9 @@ function cprintf(args) {
   return esc(fmt).replace(/%([-0-9.]*)([sdxX%])/g, (m, w, t) => (t === "%" ? "%" : String(args[k++] ?? "")));
 }
 
-function sha1sum(args, cwd) {
+/** sha1sum / md5sum, including -c / --check / --status. */
+function sha1sum(args, cwd, algo = "sha1") {
+  const hexLen = algo === "md5" ? 32 : 40;
   const status = args.includes("--status");
   const checkIdx = args.indexOf("-c");
   const files = args.filter((a) => !a.startsWith("-"));
@@ -303,10 +383,10 @@ function sha1sum(args, cwd) {
     let ok = true, out = "";
     for (const list of files) {
       for (const l of fs.readFileSync(path.resolve(cwd, list), "utf8").split("\n")) {
-        const m = /^([0-9a-fA-F]{40})\s+\*?(.+)$/.exec(l.trim());
+        const m = new RegExp("^([0-9a-fA-F]{" + hexLen + "})\\s+\\*?(.+)$").exec(l.trim());
         if (!m) continue;
         let got = null;
-        try { got = createHash("sha1").update(fs.readFileSync(path.resolve(cwd, m[2]))).digest("hex"); } catch { got = null; }
+        try { got = createHash(algo).update(fs.readFileSync(path.resolve(cwd, m[2]))).digest("hex"); } catch { got = null; }
         const pass = got === m[1].toLowerCase();
         ok &&= pass;
         if (!status) out += `${m[2]}: ${pass ? "OK" : "FAILED"}\n`;
@@ -314,7 +394,7 @@ function sha1sum(args, cwd) {
     }
     return { code: ok ? 0 : 1, stdout: Buffer.from(out) };
   }
-  const out = files.map((f) => `${createHash("sha1").update(fs.readFileSync(path.resolve(cwd, f))).digest("hex")}  ${f}\n`).join("");
+  const out = files.map((f) => `${createHash(algo).update(fs.readFileSync(path.resolve(cwd, f))).digest("hex")}  ${f}\n`).join("");
   return { code: 0, stdout: Buffer.from(out) };
 }
 

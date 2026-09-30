@@ -111,12 +111,16 @@ function execProgram(ctx, argv0, args, { stdin, stdout, stderr }) {
     preRun: [(m) => { for (const k of Object.keys(m.ENV)) if (!(k in ctx.env)) delete m.ENV[k]; Object.assign(m.ENV, ctx.env); }],
     romdevSpawn: (file, childArgv, parent, pipe = {}) => {
       const PFS = parent.FS;
-      const s0 = PFS.getStream(0), s1 = PFS.getStream(1), s2 = PFS.getStream(2);
+      // A driver built on libiberty's pex (modern gcc) names the parent fds
+      // the child's stdio goes to; the others use the parent's own 0/1/2.
+      const inFd = pipe.inFd ?? 0, outFd = pipe.outFd ?? 1, errFd = pipe.errFd ?? 2;
+      const s0 = PFS.getStream(inFd), s1 = PFS.getStream(outFd), s2 = PFS.getStream(errFd);
       // stdin: the previous stage of a driver pipeline (gcc -pipe), else a file
-      // the driver dup2-ed onto fd 0, else the driver's own stdin (gcc reading
-      // "-"), which is the job's input.
+      // or pipe the driver handed over / dup2-ed onto fd 0, else the driver's
+      // own stdin (gcc reading "-"), which is the job's input.
       let childIn;
       if (pipe.pipeIn) { childIn = ctx.pipeBuf ?? Buffer.alloc(0); ctx.pipeBuf = null; }
+      else if (inFd !== 0 && s0) childIn = drainStream(PFS, s0);
       else if (s0 && !s0.stream_ops) childIn = drainStream(PFS, s0);
       else childIn = ctx.inheritStdin ? ctx.stdinBuf : null;
       const out = [], err = [];

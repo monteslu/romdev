@@ -427,3 +427,72 @@ test("Makefile reader: shortest-stem pattern rule wins; recursive $(MAKE) -C run
   assert.equal(b.ok, true, JSON.stringify(b.failed));
   assert.equal(fs.readFileSync(path.join(d, "build", "lib", "x.o"), "utf8"), "sub ../build/lib/x.o\n");
 });
+
+test("Makefile reader: static pattern rules, and an -included makefile with a rule is remade and re-read", async () => {
+  const d = dir("remake");
+  fs.writeFileSync(path.join(d, "Makefile"), [
+    "OBJS :=", "-include deps.mk",
+    "all: $(OBJS)", "",
+    "deps.mk: list.txt", "\tprintf 'OBJS := a.o b.o\\n' > $@", "",
+    "$(OBJS): %.o: %.src", "\techo $* > $@", "",
+    "$(filter c.o,$(OBJS)): %.o: %.src", "\techo never > $@", "",
+  ].join("\n"));
+  for (const f of ["list.txt", "a.src", "b.src"]) fs.writeFileSync(path.join(d, f), "");
+  const mk = await loadMakefile(d);
+  assert.deepEqual(mk.includes, ["deps.mk"]);
+  const b = await buildGoal(mk, "all", { tmpRoot: dir("remake-tmp") });
+  assert.equal(b.ok, true, JSON.stringify(b.failed));
+  assert.equal(fs.readFileSync(path.join(d, "a.o"), "utf8"), "a\n", "$* is the static pattern's stem");
+  assert.equal(fs.readFileSync(path.join(d, "b.o"), "utf8"), "b\n");
+});
+
+test("mips-linux-gnu-gcc 14.2 (WASM driver, cc1 and as as sibling modules) compiles a data TU", async () => {
+  const d = dir("modern-gcc");
+  fs.writeFileSync(path.join(d, "t.c"), "int tbl[3] = {1, 2, 3};\nconst char msg[] = \"hi\";\nint f(int x) { return x * 3; }\n");
+  const flags = "-G 0 -nostdinc -march=vr4300 -mfix4300 -mabi=32 -mno-abicalls -fno-PIC -O2";
+  assert.equal(classifyCommand(["mips-linux-gnu-gcc", "-c", "t.c"]).kind, "decomp-gcc");
+  const r = await runRecipeLine(`mips-linux-gnu-gcc ${flags} -c t.c -o t.o`, { cwd: d, tmpRoot: dir("modern-gcc-tmp") });
+  assert.equal(r.code, 0, r.log);
+  const o = fs.readFileSync(path.join(d, "t.o"));
+  const e = readElf(o);
+  assert.deepEqual([...e.section(".data").subarray(0, 12)], [0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3]);
+  assert.match(e.section(".comment").toString("latin1"), /GCC: \(GNU\) 14\.2\.0/);
+  assert.equal(e.section(".text").readUInt32BE(0), 0x00041040, "f: sll v0,a0,1 (x*3 as shift+add)");
+  // Target macros are mips-linux-gnu's own.
+  const m = await runRecipeLine("mips-linux-gnu-gcc -E -dM -nostdinc -x c t.c", { cwd: d, tmpRoot: dir("modern-gcc-tmp") });
+  assert.match(m.log, /#define __linux__ 1/);
+  assert.match(m.log, /#define _MIPS_SIM _ABIO32/);
+});
+
+test("decomp build tools as WASM: pigment64, crunch64 gzip, vanilla raw deflate", async () => {
+  const zlib = await import("node:zlib");
+  const { decompTool } = await import("../src/decomp/toolchain.js");
+  const d = dir("rust-tools");
+  const { PNG } = await import("pngjs");
+  const png = new PNG({ width: 2, height: 1 });
+  png.data = Buffer.from([255, 0, 0, 255, 0, 0, 255, 0]);
+  fs.writeFileSync(path.join(d, "t.png"), PNG.sync.write(png));
+  let r = await decompTool("pigment64", ["to-bin", "--format", "rgba16", "-o", "t.bin", "t.png"], { cwd: d });
+  assert.equal(r.exitCode, 0, r.log);
+  assert.deepEqual([...fs.readFileSync(path.join(d, "t.bin"))], [0xf8, 0x01, 0x00, 0x3e], "red opaque, blue transparent");
+  const input = Buffer.from("romdev ".repeat(500));
+  fs.writeFileSync(path.join(d, "in.bin"), input);
+  r = await decompTool("crunch64", ["compress", "gzip", "in.bin", "out.gz", "--level", "9", "--small-mem"], { cwd: d });
+  assert.equal(r.exitCode, 0, r.log);
+  assert.deepEqual(zlib.inflateRawSync(fs.readFileSync(path.join(d, "out.gz"))), input, "crunch64's gzip is a raw deflate stream");
+  r = await decompTool("raw-deflate", ["6", "in.bin", "out.raw"], { cwd: d });
+  assert.equal(r.exitCode, 0, r.log);
+  assert.deepEqual(zlib.inflateRawSync(fs.readFileSync(path.join(d, "out.raw"))), input);
+});
+
+test("project build scripts: JS ports by content hash, and `uv run python` resolves to them", async () => {
+  const { incFromBin, msgReencode } = await import("../src/decomp/host-ports.js");
+  assert.equal(incFromBin(Buffer.from([1, 2, 3, 4, 5, 6, 7, 8, 0xab])), "    /* 0x000000 */ 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,\n    /* 0x000008 */ 0xAB,");
+  const i = '# 1 "m.msg"\nconst char a[] = "A\u3042";\n# 2 "m.msg" "x"\nb = "\u4e2d";\n';
+  assert.equal(msgReencode(i, "Shift-JIS"), '# 1 "m.msg"\nconst char a[] = "A\\x82""\\xA0""";\n# 2 "m.msg" "x"\nb = "\\x92""\\x86""";\n');
+  assert.equal(msgReencode('#\nx = "\u4e2d";', "EUC-CN"), '#\nx = "\\xD6""\\xD0""";');
+  const d = dir("ported");
+  fs.writeFileSync(path.join(d, "inc_from_bin.py"), "print('not the ported script')\n");
+  assert.equal(classifyCommand(["uv", "run", "python", "inc_from_bin.py", "a", "b"], d).kind, "unsupported", "different bytes = different program");
+  assert.equal(classifyCommand(["uv", "run", "--no-sync", "md5sum", "x"], d).kind, "sha1sum");
+});
