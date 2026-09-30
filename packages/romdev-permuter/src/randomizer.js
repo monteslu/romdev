@@ -9,6 +9,7 @@ import {
   same_type, set_decl_name, pointer_decay, AssertionError as TypesAssertionError,
 } from "./ast_types.js";
 import { PyRandom } from "./pyrandom.js";
+import { powNeg15 as libmPowNeg15 } from "./pow.js";
 
 // Randomize the type of introduced temporary variable with this probability
 const PROB_RANDOMIZE_TYPE = 0.3;
@@ -62,8 +63,8 @@ function bisect_left(a, x) {
   return lo;
 }
 
-/** Python's (x) ** -1.5 for a positive int x. */
-const powNeg15 = (x) => x ** -1.5;
+/** Python's (x) ** -1.5: the C library pow CPython calls (see pow.js). */
+const powNeg15 = (x) => libmPowNeg15(x);
 
 class Region {
   constructor(start, end, indices) {

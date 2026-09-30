@@ -13,3 +13,9 @@ src/pyrandom.js reimplements the documented algorithms of CPython's random
 module (MT19937 and the random.py sampling methods) and src/difflib.js those of
 difflib's SequenceMatcher and unified_diff, so seeds and scores replay
 upstream's; no CPython code is included.
+
+src/pow.js ports the pow() of the ARM optimized-routines (Copyright (c) 2018,
+Arm Limited, MIT), as shipped in glibc and musl, so the permuter's weights
+equal the doubles CPython's `**` obtains from the C library; src/pow-data.js
+holds its tables, generated from musl's pow_data.c / exp_data.c by
+scripts/gen-pow-data.mjs.
