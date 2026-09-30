@@ -373,10 +373,18 @@ async function runWorkers({ o, context, configs, post_score }) {
       w.on("message", (msg) => {
         try {
           if (msg.type === "need") {
+            // Hand out a batch, so a busy parent event loop (the host process
+            // may be serving other work) does not stall the worker per candidate.
             if (stopping) { w.postMessage({ type: "finish" }); return; }
-            const task = get_task();
-            if (task) w.postMessage({ type: "task", perm_index: task[0], seed: task[1] });
-            else { stopReason ??= "exhausted"; w.postMessage({ type: "finish" }); }
+            const tasks = [];
+            for (let k = 0; k < (msg.count ?? 1); k++) {
+              const task = get_task();
+              if (!task) break;
+              tasks.push({ perm_index: task[0], seed: task[1] });
+            }
+            // An empty, exhausted batch means: drain what you hold, then stop.
+            if (!tasks.length) stopReason ??= "exhausted";
+            w.postMessage({ type: "tasks", tasks, exhausted: !tasks.length });
           } else if (msg.type === "done") {
             if (stopping && o.stop_on_zero && found_zero) return;
             if (post_score(context.permuters[msg.perm_index], msg.result, null)) {

@@ -12,13 +12,33 @@ import { loadCompileModule } from "./main.js";
 const { configs, glue } = workerData;
 for (const [arch, g] of Object.entries(glue)) setObjdumpGlue(arch, g);
 
+// Seeds arrive in batches; ask for more before the local queue runs dry.
+const BATCH = 8;
 let finishing = false;
-let pending = null;
+let exhausted = false;
+let requested = false;
+const queue = [];
+let wake = null;
 parentPort.on("message", (msg) => {
   if (msg.type === "finish") finishing = true;
-  if (pending) { const p = pending; pending = null; p(msg); }
+  else if (msg.type === "tasks") { queue.push(...msg.tasks); requested = false; if (msg.exhausted) exhausted = true; }
+  if (wake) { const p = wake; wake = null; p(); }
 });
-const nextMessage = () => new Promise((resolve) => { pending = resolve; });
+function topUp() {
+  if (!requested && !finishing && !exhausted && queue.length < BATCH / 2) {
+    requested = true;
+    parentPort.postMessage({ type: "need", count: BATCH - queue.length });
+  }
+}
+async function nextTask() {
+  for (;;) {
+    if (finishing) return null;
+    topUp();
+    if (queue.length) return queue.shift();
+    if (exhausted) return null;
+    await new Promise((resolve) => { wake = resolve; });
+  }
+}
 
 const silent = () => {};
 
@@ -31,10 +51,8 @@ async function main() {
     permuters.push(await Permuter.create({ ...cfg.permOpts, compiler, scorer, log: silent }, cfg.base));
   }
   for (;;) {
-    if (finishing) break;
-    parentPort.postMessage({ type: "need" });
-    const msg = await nextMessage();
-    if (msg.type !== "task") break;
+    const msg = await nextTask();
+    if (!msg) break;
     const permuter = permuters[msg.perm_index];
     const start = performance.now();
     const result = await permuter.try_eval_candidate(msg.seed);
