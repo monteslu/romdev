@@ -1,0 +1,1 @@
+python3 tools/asm-processor/build.py --input-enc utf-8 tools/cc -- mips-linux-gnu-as -march=vr4300 -- -c -O2 -MD -MF x.d -o build/a.o src/a.c

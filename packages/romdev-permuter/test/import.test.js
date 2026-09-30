@@ -15,8 +15,10 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const toolchain = resolveToolchainUrl();
 
 test("fixup_build_command drops deps flags, the output and the source, and unwraps asm-processor", () => {
-  const [cmd, asm] = fixup_build_command(["python3", "tools/asm-processor/build.py", "--input-enc", "utf-8", "tools/cc", "--",
-    "mips-linux-gnu-as", "-march=vr4300", "--", "-c", "-O2", "-MD", "-MF", "x.d", "-o", "build/a.o", "src/a.c"], "src/a.c");
+  // A recorded build line that wraps the compiler in asm-processor (data read
+  // from a fixture: the command is parsed, never run).
+  const recorded = readFileSync(path.join(here, "fixtures", "asm-processor-build-line.txt"), "utf8").trim().split(/\s+/);
+  const [cmd, asm] = fixup_build_command(recorded, "src/a.c");
   assert.deepEqual(cmd, ["tools/cc", "-c", "-O2"]);
   assert.deepEqual(asm, ["mips-linux-gnu-as", "-march=vr4300"]);
   assert.equal(finalize_compile_command(["cc", "-c", "|", "iconv"]), 'cc -c "$INPUT" | iconv -o "$OUTPUT"');

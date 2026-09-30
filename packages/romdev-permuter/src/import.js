@@ -193,7 +193,9 @@ export function fixup_build_command(parts, ignore_part) {
     if (part === ignore_part) return;
     res.push(part);
   });
-  const idx = res.findIndex((arg) => ["asm_processor", "asm-processor", "build.py", "preprocess.py"].some((c) => arg.includes(c)));
+  // An asm-processor wrapper in the recorded command (upstream matches these
+  // four substrings); only its argv is read, nothing is run.
+  const idx = res.findIndex((arg) => /asm_processor|asm-processor|build\.py|preprocess\.py/.test(arg));
   if (idx >= 0) {
     const ind1 = res.indexOf("--", idx + 1);
     const ind2 = ind1 >= 0 ? res.indexOf("--", ind1 + 1) : -1;
