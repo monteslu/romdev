@@ -26,7 +26,8 @@ import { readFile, mkdir, copyFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { compilationEnvironment, fileIdentities, fileRevisions, atomicJson, instructionIdentity, hashRecord } from "./measurement.js";
-import { dumpObject, findSymbol, trimToSize, run } from "./mips-obj.js";
+import { dumpObject, findSymbol, trimToSize } from "./mips-obj.js";
+import { runArgv } from "./recipe.js";
 import { dependencyHash } from "./project.js";
 import { runCommandIsolated, commandMapPayload, commandAcceptsFlag as specAcceptsFlag, PROG } from "./workbench/cli.js";
 
@@ -201,15 +202,20 @@ export async function captureSchedulerTrace(project, artifactPath) {
   const argv = r.compiler.invocation.map(a => a === r.compileContext.source ? source : a === r.compileContext.object ? object : a);
   // asm-processor treats its final argument as the input filename.
   argv.splice(argv.indexOf(source), 0, "-Wa,-R");
-  const result = await run(argv[0], argv.slice(1), { cwd: project.root, env: project.env, timeoutMs: 180_000 });
+  // The measured recipe runs through romdev's WASM toolchain (recipe.js);
+  // its log carries every pass's stderr and stdout, and as1 prints the -R
+  // trace on stdout.
+  const tmpRoot = path.join(work, ".tmp");
+  const result = await runArgv(argv, { cwd: project.root, tmpRoot });
   const tracePath = path.join(work, "scheduler.log");
-  await writeFile(tracePath, result.stdout + "\n" + result.stderr);
+  await writeFile(tracePath, result.log ?? "");
+  if (result.unsupported) return { tracePath, equivalent: false, reason: `compile step has no WASM/JS equivalent: ${result.unsupported}`, exitCode: result.code };
   if (result.code !== 0) return { tracePath, equivalent: false, reason: "instrumented compile failed", exitCode: result.code };
   const originalObj = path.join(project.m.splat.buildPath, r.function.tu.replace(/\.c$/, ".o"));
   for (const post of inv.post) {
     const args = post.map(a => a === originalObj ? object : a === r.function.tu ? source : a);
-    const step = await run(args[0], args.slice(1), { cwd: project.root, env: project.env });
-    if (step.code !== 0) throw new Error("instrumented compile post-processing failed");
+    const step = await runArgv(args, { cwd: project.root, tmpRoot });
+    if (step.unsupported || step.code !== 0) throw new Error(`instrumented compile post-processing failed${step.unsupported ? `: ${step.unsupported}` : ""}`);
   }
   const afterDep = await dependencyHash(project, r.artifacts.translationUnit, inv);
   if (afterDep.hash !== dep.hash || hashRecord(before) !== hashRecord(await fileRevisions(watched))) return { tracePath, equivalent: false, reason: "inputs changed during trace capture" };
