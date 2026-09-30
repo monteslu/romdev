@@ -653,8 +653,7 @@ function runArguments({ campaign }) {
     { flags: ["--limit"], type: "int", default: 20, help: "maximum results to show" },
     rank, ...O.processOutputArguments(), ...commonCompare(),
     { flags: ["--json-summary"], action: "store_true", help: "emit compact JSON without compiler streams or instruction-level diffs" },
-    { flags: ["--stop-on-exact"], dest: "stop_on_exact", action: "store_true", default: true, help: "stop submitting candidates once one compares exact (default: enabled; pass --no-stop-on-exact to sweep every candidate)" },
-    { flags: ["--no-stop-on-exact"], dest: "stop_on_exact", action: "store_false" },
+    { flags: ["--stop-on-exact"], dest: "stop_on_exact", action: "boolean_optional", default: true, help: "stop submitting candidates once one compares exact (default: enabled; pass --no-stop-on-exact to sweep every candidate)" },
     { flags: ["--show-basins"], action: "store_true", help: "show source variants that compiled to each identical object basin" },
   ];
 }

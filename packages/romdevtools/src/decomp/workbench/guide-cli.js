@@ -55,7 +55,7 @@ function lawsCommand(args, io) {
 
 export const COMMAND_SPECS = [
   {
-    path: ["guide"], handler: guideCommand,
+    path: ["guide"], handler: guideCommand, formatter: "raw_description",
     help: "print the field-guide levers, or one era's compiler laws",
     description: "Expand the lever family named by a `next:` footer into the field guide's own text. Run without a topic for the index.\n\n`guide laws ERA` prints something different in kind: not what to change, but what the compiler does about it -- each law with the evidence tier that established it and the earlier claim it corrected. Run `guide laws` for the eras that ship, and `guide laws ERA LAW` for the one law a verdict footer cited.",
     arguments: [

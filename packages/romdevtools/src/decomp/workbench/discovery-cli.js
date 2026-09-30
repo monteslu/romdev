@@ -179,6 +179,7 @@ export const COMMAND_SPECS = [
       path: [group], help: `${group} journey commands; run without arguments for a map`,
       description: "Grouped spellings and existing flat commands are both supported.",
       epilog: entries.map(([c, d]) => `  ${group} ${c.padEnd(width)}  ${d}`).join("\n"),
+      formatter: "raw_description",
       arguments: [],
       handler: (_args, io) => { io.print(renderCommandMap({ group }).join("\n")); return 0; },
     };

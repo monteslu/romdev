@@ -296,9 +296,7 @@ const SHIFT_DESCRIPTION = "Matching proves the bytes at one layout; shiftability
   + "and its neighbours.";
 
 export const COMMAND_SPECS = [
-  listingSpec(["shift"], { help: "inventory and rehearse a project's shiftability", description: SHIFT_DESCRIPTION,
-    epilog: "operations:\n  audit     report where a linked project's addresses come from\n  rehearse  explain a real shifted relink, word by word\n"
-      + "  config    check a linker-configuration change against the build it must not move\n  plan      merge the audit and rehearsal reports into one ranked queue" }),
+  listingSpec(["shift"], { help: "inventory and rehearse a project's shiftability", description: SHIFT_DESCRIPTION }),
   {
     path: ["shift", "audit"], handler: shiftAuditCommand, defaults: { report_command: "shift-audit" },
     help: "report where a linked project's addresses come from", description: AUDIT_DESCRIPTION,
@@ -334,8 +332,7 @@ export const COMMAND_SPECS = [
       ...commonTail(),
     ],
   },
-  listingSpec(["shift", "rehearse"], { help: "explain a real shifted relink, word by word", description: REHEARSE_DESCRIPTION,
-    epilog: "operations:\n  analyze      explain the difference between two prebuilt links\n  orchestrate  relink once per delta through your own script, then analyze each" }),
+  listingSpec(["shift", "rehearse"], { help: "explain a real shifted relink, word by word", description: REHEARSE_DESCRIPTION }),
   {
     path: ["shift", "rehearse", "analyze"], handler: shiftRehearseCommand, defaults: { report_command: "shift-rehearse" },
     help: "explain the difference between two prebuilt links", description: ANALYZE_DESCRIPTION,
@@ -376,8 +373,7 @@ export const COMMAND_SPECS = [
       ...rehearsalArguments(),
     ],
   },
-  listingSpec(["shift", "config"], { help: "check a linker-configuration change against the build it must not move", description: CONFIG_DESCRIPTION,
-    epilog: "operations:\n  verify  prove a config edit changed the script and nothing else" }),
+  listingSpec(["shift", "config"], { help: "check a linker-configuration change against the build it must not move", description: CONFIG_DESCRIPTION }),
   {
     path: ["shift", "config", "verify"], handler: shiftConfigVerifyCommand, defaults: { report_command: "shift-config-verify" },
     help: "prove a config edit changed the script and nothing else", description: VERIFY_DESCRIPTION,

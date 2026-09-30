@@ -390,17 +390,19 @@ export async function frameCommand(args, io, ctx) {
 export function intBase0(value) { return pyInt(value, 0); }
 intBase0.displayName = "<lambda>";
 
+/** The "site" argument group: exactly one site, by frame offset if possible. */
+const SITE_GROUP = { title: "site", description: "Name exactly one site. Prefer the frame offset: it is the only identity in the grammar that a rebase does not move." };
 const SITE_ARGUMENTS = [
-  { flags: ["--frame-offset"], metavar: "OFFSET", help: "the web's frame offset, as the trace prints it (0xfffffdf8) or signed (-520)" },
-  { flags: ["--slot"], type: intBase0, metavar: "OFFSET", help: "sp-relative slot offset; needs --frame to become a frame offset" },
-  { flags: ["--frame"], type: intBase0, metavar: "SIZE", help: "the frame size, signed, as the prologue's addiu sp,sp,-N writes it" },
-  { flags: ["--web"], type: "int", metavar: "N", help: "a trace-local web number (changes with any edit that adds a live range)" },
-  { flags: ["--symbol-id"], type: "int", metavar: "N", help: "a trace-local symbol number. Accepted, and cautioned: one campaign's sym=1042 became sym=1039 on a rebase and the script that grepped the old number reported a kill that never happened" },
+  { group: "site", flags: ["--frame-offset"], metavar: "OFFSET", help: "the web's frame offset, as the trace prints it (0xfffffdf8) or signed (-520)" },
+  { group: "site", flags: ["--slot"], type: intBase0, metavar: "OFFSET", help: "sp-relative slot offset; needs --frame to become a frame offset" },
+  { group: "site", flags: ["--frame"], type: intBase0, metavar: "SIZE", help: "the frame size, signed, as the prologue's addiu sp,sp,-N writes it" },
+  { group: "site", flags: ["--web"], type: "int", metavar: "N", help: "a trace-local web number (changes with any edit that adds a live range)" },
+  { group: "site", flags: ["--symbol-id"], type: "int", metavar: "N", help: "a trace-local symbol number. Accepted, and cautioned: one campaign's sym=1042 became sym=1039 on a rebase and the script that grepped the old number reported a kill that never happened" },
 ];
 
 export const COMMAND_SPECS = [
   {
-    path: ["trace-cascade"], handler: cascadeCommand, defaults: { report_command: "trace-cascade" },
+    path: ["trace-cascade"], handler: cascadeCommand, defaults: { report_command: "trace-cascade" }, groups: [SITE_GROUP],
     help: "every round of one allocator site's decision cascade",
     description: "Print the whole decision trail for one web family from a CDX log: every round of an f_split cascade, not just the last; the "
       + "colour the web actually received, not the pre-resolution `bestcolor`; and the decision as the one inequality it is. "

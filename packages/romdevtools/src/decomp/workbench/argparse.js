@@ -23,6 +23,7 @@
 
 import { readFileSync } from "node:fs";
 import { strRepr, splitlines, strip } from "./py.js";
+import { formatParserHelp, formatParserUsage, SUPPRESS as HELP_SUPPRESS } from "./help-format.js";
 
 export class ArgumentTypeError extends Error {}
 
@@ -108,7 +109,7 @@ export function parseArgs(spec, tokens, { prog, explainKeys = null, version = nu
   }
   Object.assign(args, spec.defaults ?? {});
   const byFlag = new Map();
-  for (const o of options) for (const f of o.flags) byFlag.set(f, o);
+  for (const o of options) for (const f of optionStrings(o)) byFlag.set(f, o);
   const seen = new Set();
   const find = (flag) => {
     if (byFlag.has(flag)) return [flag, byFlag.get(flag)];
@@ -148,10 +149,11 @@ export function parseArgs(spec, tokens, { prog, explainKeys = null, version = nu
     const label = optLabel(a);
     seen.add(a);
     const action = a.action ?? "store";
-    const noValue = ["store_true", "store_false", "store_const", "append_const", "count", "help", "version", "explain_keys", "print_exit"].includes(action);
+    const noValue = ["store_true", "store_false", "store_const", "append_const", "count", "help", "version", "explain_keys", "print_exit", "boolean_optional"].includes(action);
     if (noValue) {
       if (inline !== null) throw new ArgumentError(`${label}: ignored explicit argument ${strRepr(inline)}`, { prog });
-      if (action === "store_true") args[d] = true;
+      if (action === "boolean_optional") args[d] = !flag.startsWith("--no-");
+      else if (action === "store_true") args[d] = true;
       else if (action === "store_false") args[d] = false;
       else if (action === "store_const") args[d] = a.const;
       else if (action === "append_const") args[d] = [...(args[d] ?? []), a.const];
@@ -246,67 +248,82 @@ export function parseArgs(spec, tokens, { prog, explainKeys = null, version = nu
   return args;
 }
 
-function metavarOf(a) {
-  if (a.metavar) return a.metavar;
-  if (!isOption(a)) return a.dest;
-  if (a.choices) return `{${a.choices.join(",")}}`;
-  return destOf(a).toUpperCase();
+const NO_VALUE = new Set(["store_true", "store_false", "store_const", "append_const", "count", "help", "version", "explain_keys", "print_exit", "boolean_optional"]);
+
+/** An option's strings; a boolean_optional "--x" also answers to "--no-x". */
+function optionStrings(o) {
+  if (o.action !== "boolean_optional") return o.flags;
+  return o.flags.flatMap((f) => (f.startsWith("--") ? [f, `--no-${f.slice(2)}`] : [f]));
 }
 
-function argUsage(a) {
-  const mv = metavarOf(a);
-  const vals = a.nargs === "?" ? `[${mv}]` : a.nargs === "*" ? `[${mv} ...]` : a.nargs === "+" ? `${mv} [${mv} ...]` : typeof a.nargs === "number" ? Array(a.nargs).fill(mv).join(" ") : mv;
-  if (!isOption(a)) return vals;
-  const noValue = ["store_true", "store_false", "store_const", "append_const", "count", "help", "version", "explain_keys", "print_exit"].includes(a.action);
-  const f = a.flags[0];
-  return noValue ? f : `${f} ${vals}`;
+/** The value a store/append option holds when it is not given, as the original parser saw it. */
+function defaultOf(a) {
+  if (a.action === "store_true") return a.default ?? false;
+  if (a.action === "store_false") return a.default ?? true;
+  if (a.action === "explain_keys" || a.action === "help" || a.action === "version" || a.action === "print_exit") return HELP_SUPPRESS;
+  return a.default === undefined ? null : a.default;
 }
 
-/** The usage line. */
-export function formatUsage(spec, { prog }) {
-  const parts = ["[-h]"];
-  for (const a of spec.arguments.filter(isOption)) parts.push(a.required ? argUsage(a) : `[${argUsage(a)}]`);
-  for (const a of spec.arguments.filter((x) => !isOption(x))) parts.push(argUsage(a));
-  return `usage: ${prog} ${parts.join(" ")}\n`;
+/** One argument as the help formatter's Action. */
+function toAction(a) {
+  const option = isOption(a);
+  const nargs = NO_VALUE.has(a.action) ? 0 : a.nargs === "..." ? "..." : a.nargs ?? null;
+  const dest = a.action === "explain_keys" || a.action === "help" || a.action === "version" ? HELP_SUPPRESS : destOf(a);
+  const help = a.help === SUPPRESS || a.help === HELP_SUPPRESS ? HELP_SUPPRESS : a.help ?? null;
+  const strings = option ? optionStrings(a) : [];
+  return { usage_text: a.action === "boolean_optional" ? strings.join(" | ") : undefined, option_strings: [...strings], dest: dest === HELP_SUPPRESS ? (option ? destOf(a) : dest) : dest,
+    nargs, const: a.const ?? null, default: defaultOf(a), type: a.type ?? null, choices: a.choices ?? null,
+    required: option ? !!a.required : !(a.nargs === "?" || a.nargs === "*" || a.nargs === "..."),
+    help, metavar: a.metavar ?? null };
 }
 
-function wrap(text, width, indent) {
-  const words = String(text).split(/\s+/).filter(Boolean);
-  const lines = [];
-  let line = "";
-  for (const w of words) {
-    if (line && line.length + 1 + w.length > width - indent) { lines.push(line); line = w; } else line = line ? `${line} ${w}` : w;
+/**
+ * The formatter model of a command spec: -h first among the options, the
+ * positional and option groups, any titled argument groups (arguments carry
+ * `group: title`, spec.groups orders them and gives descriptions), and the
+ * mutually exclusive groups.
+ */
+export function specToParser(spec, { prog }) {
+  const actions = [];
+  const byDest = new Map();
+  const helpAction = spec.addHelp === false ? null : { option_strings: ["-h", "--help"], dest: HELP_SUPPRESS, nargs: 0, const: null, default: HELP_SUPPRESS, type: null, choices: null, required: false, help: "show this help message and exit", metavar: null };
+  if (helpAction) actions.push(helpAction);
+  const positionals = { title: "positional arguments", actions: [] }, optionals = { title: spec.optionsTitle ?? "options", actions: helpAction ? [helpAction] : [] };
+  const titled = new Map((spec.groups ?? []).map((g) => [g.title, { title: g.title, description: g.description ?? null, actions: [] }]));
+  for (const a of spec.arguments) {
+    const act = toAction(a);
+    actions.push(act);
+    byDest.set(a, act);
+    if (a.group) {
+      if (!titled.has(a.group)) titled.set(a.group, { title: a.group, description: null, actions: [] });
+      titled.get(a.group).actions.push(act);
+    } else (isOption(a) ? optionals : positionals).actions.push(act);
   }
-  if (line) lines.push(line);
-  return lines;
+  // Subcommands (a group word, or the top level): one PARSER-nargs
+  // positional listing each child that has help, as add_subparsers does.
+  const children = spec.children ?? [];
+  if (children.length) {
+    const sub = spec.subparsers ?? {};
+    const hidden = sub.unlisted ?? new Set();
+    const act = { option_strings: [], dest: sub.dest ?? HELP_SUPPRESS, nargs: "A...", const: null, default: null, type: null,
+      choices: children.map((c) => c.path.at(-1)), required: !!sub.required, help: sub.help ?? null, metavar: sub.metavar ?? null,
+      subactions: children.filter((c) => !hidden.has(c.path.at(-1)) && c.help !== undefined && c.listed !== false)
+        .map((c) => ({ option_strings: [], dest: c.path.at(-1), nargs: null, const: null, default: null, type: null, choices: null, required: true, help: c.help ?? null, metavar: c.path.at(-1) })) };
+    actions.push(act);
+    positionals.actions.push(act);
+  }
+  const mutex = (spec.mutex ?? []).map((m) => ({ required: !!m.required,
+    actions: spec.arguments.filter((a) => m.dests.includes(destOf(a))).map((a) => byDest.get(a)) }));
+  return { prog, usage: spec.usage ?? null, description: spec.description ?? null, epilog: spec.epilog ?? null,
+    formatter: spec.formatter ?? null, actions, mutex, groups: [positionals, optionals, ...titled.values()] };
 }
 
-/** argparse-style help: usage, description, positionals, options, epilog. */
-export function formatHelp(spec, { prog }) {
-  const width = 78;
-  let out = formatUsage(spec, { prog });
-  if (spec.description) out += "\n" + wrap(spec.description, width, 0).join("\n") + "\n";
-  const section = (title, list) => {
-    if (!list.length) return;
-    out += `\n${title}:\n`;
-    for (const [head, help] of list) {
-      const helpText = help ? String(help).replace(/%\(default\)s/g, "") : "";
-      if (head.length <= 22 && helpText) {
-        const lines = wrap(helpText, width, 24);
-        out += `  ${head.padEnd(22)}${lines[0] ?? ""}\n` + lines.slice(1).map((l) => " ".repeat(24) + l + "\n").join("");
-      } else {
-        out += `  ${head}\n`;
-        if (helpText) out += wrap(helpText, width, 24).map((l) => " ".repeat(24) + l + "\n").join("");
-      }
-    }
-  };
-  section("positional arguments", spec.arguments.filter((a) => !isOption(a)).map((a) => [metavarOf(a), a.help]));
-  const opts = [["-h, --help", "show this help message and exit"]];
-  for (const a of spec.arguments.filter(isOption)) {
-    const noValue = ["store_true", "store_false", "store_const", "append_const", "count", "help", "version", "explain_keys", "print_exit"].includes(a.action);
-    opts.push([a.flags.map((f) => (noValue ? f : `${f} ${metavarOf(a)}`)).join(", "), a.help]);
-  }
-  section("options", opts);
-  if (spec.epilog) out += "\n" + String(spec.epilog) + "\n";
-  return out;
+/** parser.format_usage(): "usage: ...\n". */
+export function formatUsage(spec, { prog, width } = {}) {
+  return formatParserUsage(specToParser(spec, { prog }), width ? { width } : {});
+}
+
+/** parser.format_help(). */
+export function formatHelp(spec, { prog, width } = {}) {
+  return formatParserHelp(specToParser(spec, { prog }), width ? { width } : {});
 }

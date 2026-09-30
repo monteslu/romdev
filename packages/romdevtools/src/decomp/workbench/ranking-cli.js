@@ -79,8 +79,7 @@ const shared = () => [
 export const COMMAND_SPECS = [
   listingSpec(["ranking"], {
     help: "stamp a closeness ranking with its tree, and check its freshness",
-    description: "A closeness ranking is a measurement of one tree and decays as soon as that tree moves. Stamp it when it is produced, check it before ordering work by it.",
-    epilog: "  stamp  record the tree hash a ranking was measured against\n  check  report whether a ranking still describes the current tree",
+    description: "A closeness ranking is a measurement of one tree and decays as soon as that tree moves. Stamp it when it is produced, check it before ordering work by it."
   }),
   { path: ["ranking", "stamp"], handler: rankingStampCommand, help: "record the tree hash a ranking was measured against",
     description: STAMP_DESCRIPTION, epilog: "example: decomp-workbench ranking stamp config/ranking.json",

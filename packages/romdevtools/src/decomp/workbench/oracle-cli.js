@@ -382,9 +382,7 @@ export const COMMAND_SPECS = [
   listingSpec(["oracle"], {
     help: "plan and compare calibrated allocator decision probes",
     description: "Oracle evidence bounds a compiler decision; it never proves source originality or an acceptable final match.",
-    epilog: "  plan    build a phase-complete force grid from one allocator trace\n  diff    compare two traces by stable web provenance\n"
-      + "  sweep   compile the complete measured force grid through the campaign engine\n  force   run one measured force set plus its unforced baseline\n"
-      + "  status  render the latest persisted sweep without recompiling\n  export  write a self-contained persisted oracle report",
+    required: true,
   }),
   { path: ["oracle", "plan"], handler: oraclePlanCommand, help: "build a phase-complete force grid from one allocator trace", defaults: { report_command: "oracle-plan" },
     arguments: [

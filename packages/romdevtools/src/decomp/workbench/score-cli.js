@@ -125,7 +125,7 @@ export async function scoreCommand(args, io, ctx) {
 const BETWEEN_SUFFIX = "IDO strips local (static) function symbols, so --function cannot find them; --between finds the bytes between two symbols IDO did keep.";
 
 export const COMMAND_SPECS = [
-  { path: ["score"], handler: scoreCommand, help: "how far is this candidate from the target, in one number",
+  { path: ["score"], handler: scoreCommand, formatter: "raw_description", help: "how far is this candidate from the target, in one number",
     description: "Two forms, one number.\n\n  score TARGET.o CANDIDATE.o\n    Compare two objects and print one headline: the positional word delta, which is the function-level matching oracle. The other two counts the workbench reports (aligned_total, raw) are printed beneath it, labelled with what each is for, and any disagreement between them is stated with its cause. Start here.\n\n  score CANDIDATE.o --target-object T.o --symbol NAME\n  score CANDIDATE.o --rom game.z64 --rom-offset 0x1234 --symbol NAME\n    Window one function out of the candidate and compare its bytes against target bytes that live outside the pair -- a ROM image, or an object whose symbol names differ. Repeatable --control functions catch a lever that changed something it must not touch.",
     arguments: [
       { dest: "target", metavar: "TARGET", help: "target object, in the same TARGET CANDIDATE order as compare, diagnose, and view. With no second positional argument this is the CANDIDATE instead, and target bytes come from --target-object or --rom" },

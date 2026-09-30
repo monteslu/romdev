@@ -102,7 +102,7 @@ export const COMMAND_SPECS = [
     mutex: [{ required: true, dests: ["compile_command", "compare"] }],
     arguments: [
       { flags: ["--compile-command"], help: "wrapper template containing {source} and {output}" },
-      { flags: ["--compare"], nargs: 2, metavar: "TARGET_JSON CANDIDATE_JSON" },
+      { flags: ["--compare"], nargs: 2, metavar: ["TARGET_JSON", "CANDIDATE_JSON"] },
       { flags: ["--compile-cwd"], default: "." },
       { flags: ["--env"], action: "append", default: [] },
       { flags: ["--objdump"] },

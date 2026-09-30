@@ -19,7 +19,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { fork } from "node:child_process";
 import { renderJson } from "./pyjson.js";
 import { errorReport, jsonEnvelope, SCHEMAS } from "./reporting.js";
-import { rewriteGroupAlias, commandMapPayload as mapPayload } from "./discovery.js";
+import { rewriteGroupAlias, commandMapPayload as mapPayload, TOP_LEVEL_ORDER, HIDDEN_FLAT_COMMANDS } from "./discovery.js";
 import { parseArgs, formatHelp, formatUsage, ArgumentError, ParserExit } from "./argparse.js";
 
 export const PROG = "decomp-workbench";
@@ -35,6 +35,19 @@ export const WELCOME = [
 
 let _specs = null;
 
+/** The top-level parser: --version, --explain-keys and the command words. */
+export const TOP_SPEC = {
+  path: [],
+  description: "MIPS object diagnosis, decomp.me handoffs, candidate campaigns, compiler traces, and pass replay",
+  epilog: "Start with `decomp-workbench commands` for the compact journey map, or docs/START_HERE.md for the whole workflow.",
+  arguments: [
+    { flags: ["--version"], action: "version", help: "show program's version number and exit" },
+    { flags: ["--explain-keys"], action: "explain_keys", help: "print the metric registry (label, JSON key, meaning) and exit" },
+  ],
+  subparsers: { dest: "command", required: true, metavar: "COMMAND", help: "run `decomp-workbench commands` for the compact journey map", unlisted: HIDDEN_FLAT_COMMANDS },
+  children: [],
+};
+
 /** Every command spec, keyed by its argv path ("trace-scheduler", "experiment validate"). */
 export async function commandSpecs() {
   if (_specs) return _specs;
@@ -48,6 +61,18 @@ export async function commandSpecs() {
       map.set(key, { ...spec, module: f });
     }
   }
+  // Each spec knows its subcommands (specs one word longer), in the order
+  // the parser registers them.
+  for (const spec of map.values()) spec.children = [];
+  const rank = new Map(TOP_LEVEL_ORDER.map((n, i) => [n, i]));
+  for (const spec of map.values()) {
+    if (spec.path.length < 2) continue;
+    const parent = map.get(spec.path.slice(0, -1).join(" "));
+    if (parent) parent.children.push(spec);
+  }
+  const top = [...map.values()].filter((s) => s.path.length === 1)
+    .sort((x, y) => (rank.get(x.path[0]) ?? 1e9) - (rank.get(y.path[0]) ?? 1e9));
+  TOP_SPEC.children = top;
   _specs = map;
   return map;
 }
@@ -73,15 +98,17 @@ export async function commandAcceptsFlag(invocation, flag) {
   return r.spec.arguments.some((a) => Array.isArray(a.flags) && a.flags.includes(flag));
 }
 
-function makeIo() {
+function makeIo(terminal = null) {
   const out = [], err = [];
-  return {
-    out, err,
+  const io = {
+    out, err, terminal, paged: false,
+    page: (text) => { io.paged = true; out.push(String(text)); },
     print: (s = "") => out.push(`${s}\n`),
     eprint: (s = "") => err.push(`${s}\n`),
     write: (s) => out.push(String(s)),
     ewrite: (s) => err.push(String(s)),
   };
+  return io;
 }
 
 function reportCommandFor(argv) {
@@ -96,20 +123,13 @@ function reportCommandFor(argv) {
  * @param {{cwd?: string, env?: Record<string,string>}} [opts]
  * @returns {Promise<{code:number, stdout:string, stderr:string}>}
  */
-export async function runCommand(argv, { cwd = process.cwd(), env = {} } = {}) {
-  const ctx = { cwd, env: { ...process.env, ...(env ?? {}) }, resolve: (p) => path.resolve(cwd, p), runCommand: (a) => runCommand(a, { cwd, env }) };
+export async function runCommand(argv, { cwd = process.cwd(), env = {}, terminal = null } = {}) {
+  const ctx = { terminal, cwd, env: { ...process.env, ...(env ?? {}) }, resolve: (p) => path.resolve(cwd, p), runCommand: (a) => runCommand(a, { cwd, env }), spec: null };
   if (!argv.length) return { code: 0, stdout: WELCOME.join("\n") + "\n", stderr: "" };
   if (argv[0] === "--version") return { code: 0, stdout: `${PROG} ${VERSION}\n`, stderr: "" };
   if (argv[0] === "--help" || argv[0] === "-h") {
-    const specs = await commandSpecs();
-    const { HIDDEN_FLAT_COMMANDS } = await import("./discovery.js");
-    const names = [...specs.values()].filter((s) => s.path.length === 1 && !HIDDEN_FLAT_COMMANDS.has(s.path[0])).map((s) => s.path[0]).sort();
-    const lines = [`usage: ${PROG} [-h] [--version] [--explain-keys] COMMAND ...`, "",
-      "MIPS object diagnosis, decomp.me handoffs, candidate campaigns, compiler traces, and pass replay", "",
-      "positional arguments:", "  COMMAND               run `decomp-workbench commands` for the compact journey map",
-      ...names.map((n) => `    ${n.padEnd(20)}${specs.get(n).help ?? ""}`), "",
-      "Start with `decomp-workbench commands` for the compact journey map, or docs/START_HERE.md for the whole workflow."];
-    return { code: 0, stdout: lines.join("\n") + "\n", stderr: "" };
+    await commandSpecs();
+    return { code: 0, stdout: formatHelp(TOP_SPEC, { prog: PROG }), stderr: "" };
   }
   if (argv[0] === "--explain-keys") {
     const { explainKeysText } = await import("./schema.js");
@@ -141,7 +161,8 @@ export async function runCommand(argv, { cwd = process.cwd(), env = {} } = {}) {
     return { code: 2, stdout: "", stderr: `${formatUsage(spec, { prog })}${line}\n` };
   }
   args.command = spec.path[0];
-  const io = makeIo();
+  ctx.spec = spec;
+  const io = makeIo(terminal);
   let status;
   try {
     status = await spec.handler(args, io, ctx);
@@ -152,16 +173,27 @@ export async function runCommand(argv, { cwd = process.cwd(), env = {} } = {}) {
   }
   status = status ?? 0;
   const stdout = io.out.join(""), stderr = io.err.join("");
-  if (!jsonRequested || spec.rawJson) return { code: status, stdout, stderr };
+  if (!jsonRequested || spec.rawJson) return { code: status, stdout, stderr, ...(io.paged ? { page: true } : {}) };
   const env2 = jsonEnvelope(String(args.report_command ?? args.command), status, stdout, stderr);
   return { code: env2.code, stdout: env2.stdout, stderr: "" };
 }
 
 /** A spec for a command group with no operation: print its listing. */
-export function listingSpec(pathWords, { help, description, epilog }) {
+export function listingSpec(pathWords, { help, description, epilog, required = false, dest = null }) {
+  const prog = `${PROG} ${pathWords.join(" ")}`;
+  const subDest = dest ?? `${pathWords.at(-1)}_command`;
   return {
     path: pathWords, help, description, epilog, arguments: [],
-    handler: (_args, io) => { io.write(formatHelp({ arguments: [], description, epilog }, { prog: `${PROG} ${pathWords.join(" ")}` })); return 0; },
+    subparsers: { dest: subDest, required },
+    handler: (_args, io, ctx) => {
+      if (required) {
+        io.ewrite(formatUsage(ctx.spec, { prog }));
+        io.eprint(`${prog}: error: the following arguments are required: ${subDest}`);
+        return 2;
+      }
+      io.write(formatHelp(ctx.spec, { prog }));
+      return 0;
+    },
   };
 }
 
