@@ -1,5 +1,5 @@
 // Port of m2c/types.py
-import * as ca from "./pycparser/c_ast.js";
+import { c_ast as ca } from "romdev-pycparser";
 import { UndefinedStructError, is_unk_type, parse_constant_int, parse_function, parse_struct, primitive_size, resolve_typedefs, set_decl_name, to_c } from "./c_types.js";
 import { CxxSymbol, CxxTerm } from "./demangle_codewarrior.js";
 import { DecompFailure, assert_never } from "./error.js";

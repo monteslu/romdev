@@ -97,10 +97,12 @@ Decompilation tools  (dev instruments; they never touch the built ROM)
 ----------------------------------------------------------------------
   m2c               MIPS/PPC/ARM/SH -> C    GPL-3.0, packaged separately as
                                             romdev-m2c (a JS port; its own
-                                            LICENSE + NOTICE, incl. pycparser
-                                            BSD-3 and PLY BSD-3). romdevtools
+                                            LICENSE + NOTICE). Its C parser is
+                                            romdev-pycparser (BSD-3). romdevtools
                                             only calls it; its output is the
                                             user's draft, not covered by the GPL.
+  Graphviz (WASM)   m2c --visualize SVG     EPL-1.0, via the @viz-js/viz npm
+                                            package (MIT wrapper).
 
 Full license texts for the bundled SDK libraries live alongside their source
 under packages/romdev/src/platforms/*/lib/. Emulator-core and compiler license

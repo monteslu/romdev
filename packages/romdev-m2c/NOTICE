@@ -19,18 +19,20 @@ Components and attribution
    copied unchanged.
 
 2. pycparser (m2c's vendored, patched copy m2c_pycparser)
-   https://github.com/eliben/pycparser
-   Copyright (c) 2008-2022, Eli Bendersky. BSD 3-Clause (LICENSE.pycparser).
-   src/pycparser/* is a translation of it; lextab.js/yacctab.js are generated
-   from the committed lextab.py/yacctab.py tables.
+   Not contained in this package: romdev-m2c depends on the separate
+   romdev-pycparser package (BSD 3-Clause, Eli Bendersky; PLY by David M.
+   Beazley), which is the shared JS port also used by romdev-permuter.
 
-3. PLY (Python Lex-Yacc), as bundled with pycparser
-   Copyright (c) 2001-2017, David M. Beazley. BSD 3-Clause.
-   The LR parse driver in src/pycparser/c_parser.js follows ply/yacc.py.
-
-4. CodeWarrior demangler (src/demangle_codewarrior.js)
+3. CodeWarrior demangler (src/demangle_codewarrior.js)
    Based on demangler.cs by arookas, 3-clause BSD License
    (notice reproduced in the source file), as incorporated in m2c.
 
 Corresponding source: this package ships its complete JavaScript source.
 The upstream Python source is available at the URL and commit above.
+
+Graphviz (used only for --visualize SVG output)
+   Not contained in this package: the @viz-js/viz npm dependency (MIT
+   wrapper, https://github.com/mdaines/viz-js) ships Graphviz compiled to
+   WebAssembly. Graphviz is licensed under the Eclipse Public License 1.0
+   (https://graphviz.org/license/). It runs as a separate program on the dot
+   text m2c produces; no Graphviz code is part of romdev-m2c.

@@ -2,10 +2,7 @@
 // This file handles variable types, function signatures and struct layouts
 // based on a C AST. Based on the pycparser library.
 import fs from "node:fs";
-import * as ca from "./pycparser/c_ast.js";
-import { CGenerator } from "./pycparser/c_generator.js";
-import { CParser } from "./pycparser/c_parser.js";
-import { ParseError } from "./pycparser/plyparser.js";
+import { c_ast as ca, CGenerator, CParser, ParseError } from "romdev-pycparser";
 import { DecompFailure } from "./error.js";
 import { DefaultMap, ValueError, band, bnot, bor, bxor, count, deepcopy, floordiv, hex, int_, pyassert, pymod, rstrip, shl, shr } from "./py.js";
 import { print, popts } from "./io.js";
@@ -583,11 +580,11 @@ export function parse_c(source, initial_scope) {
   c_parser._last_yielded_token = null;
   let ast;
   try {
-    ast = c_parser.cparser.parse({ input: source, lexer: c_parser.clex });
+    ast = c_parser.cparser.parse(source, c_parser.clex);
   } catch (e) {
     if (e instanceof ParseError) {
       let msg = String(e.message);
-      const coord = e.args[1];
+      const coord = e.coord;
       const i = msg.indexOf(": ");
       msg = msg.slice(i + 2);
       let posstr;
@@ -604,9 +601,22 @@ export function parse_c(source, initial_scope) {
 }
 
 /**
- * Build the TypeMap for the given context files. Upstream memoizes per arch
- * object and keeps a pickle cache beside each context file; both only save
- * time, so the port always parses (use_cache is accepted and ignored).
+ * Build the TypeMap for the given context files.
+ *
+ * Upstream has two caches, and neither changes the output, so the port parses
+ * every time (`--no-cache` / use_cache is accepted and ignored):
+ * - an lru_cache on _build_typemap keyed by (paths, arch object, use_cache).
+ *   main.run() makes a fresh arch object per run, so it never hits across runs.
+ * - a pickle of the finished TypeMap beside each context ("foo.c.m2c"), reused
+ *   when sha256(parent hash + source) matches. A hit returns the same TypeMap a
+ *   fresh parse builds (object identity inside it is preserved by pickle), and
+ *   upstream's own test runner relies on this: it runs the gba cases with
+ *   --no-cache and the rest with the cache, against the same expected outputs,
+ *   all of which the port reproduces without a cache. The one observable side
+ *   effect, a "Warning: Unable to write cache file" line when the context's
+ *   directory is read-only, exists only because of the file write, so it is not
+ *   reproduced. Parsing a 160 KB decomp context takes about 0.15 s in the port,
+ *   and Python's .m2c pickles cannot be read from JS anyway.
  */
 export function build_typemap(source_paths, arch, use_cache) {
   void use_cache;

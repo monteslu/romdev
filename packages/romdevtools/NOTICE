@@ -129,6 +129,6 @@ Bundled data  (reference-core-derived recompiler data)
 
 m2c (decompiler) - romdevtools depends on the separate romdev-m2c package,
 a JavaScript port of m2c (https://github.com/matt-kempster/m2c) licensed
-GPL-3.0, with its own LICENSE and NOTICE (which also covers the pycparser and
-PLY BSD-3 code it contains). romdevtools only invokes it; the pseudocode it
+GPL-3.0, with its own LICENSE and NOTICE; its C parser is the separate
+romdev-pycparser package (BSD-3). romdevtools only invokes it; the pseudocode it
 generates for the user's project is a draft of the user's own work.

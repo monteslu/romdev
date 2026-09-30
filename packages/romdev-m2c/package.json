@@ -16,7 +16,6 @@
     "src",
     "m2c_macros.h",
     "LICENSE",
-    "LICENSE.pycparser",
     "NOTICE"
   ],
   "scripts": {
@@ -35,5 +34,9 @@
   "bugs": {
     "url": "https://github.com/monteslu/romdev/issues"
   },
-  "author": "Luis Montes"
+  "author": "Luis Montes",
+  "dependencies": {
+    "romdev-pycparser": "0.1.0",
+    "@viz-js/viz": "3.31.0"
+  }
 }

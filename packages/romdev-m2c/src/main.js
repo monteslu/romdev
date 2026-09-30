@@ -13,6 +13,13 @@ import { MipsArch, MipseeArch } from "./arch_mips.js";
 import { ValueError, int_ } from "./py.js";
 import { capture, print, write } from "./io.js";
 
+let graphviz = null;
+/** Graphviz compiled to WASM, loaded only when --visualize is used. */
+async function loadGraphviz() {
+  if (!graphviz) graphviz = (await import("@viz-js/viz")).instance();
+  return graphviz;
+}
+
 let archModules = null;
 async function loadArchModules() {
   if (archModules) return archModules;
@@ -206,8 +213,11 @@ export function run(options, mods = archModules ?? {}) {
     try {
       if (isError(decomp.state)) throw decomp.state;
       const dot_source = visualize_flowgraph(decomp.state.flow_graph, options.visualize_flowgraph);
-      if (options.visualize_format === Options.VisualizeFormatEnum.SVG) throw new DecompFailure("SVG visualization requires graphviz; use --visualize-format=dot");
-      write(dot_source);
+      if (options.visualize_format === Options.VisualizeFormatEnum.SVG) {
+        // Upstream pipes the dot source through graphviz; here graphviz runs as WASM (@viz-js/viz).
+        if (!mods.viz) throw new DecompFailure("SVG visualization: graphviz WASM not loaded (call decompile(), which loads it)");
+        write(mods.viz.renderString(dot_source, { format: "svg" }));
+      } else write(dot_source);
       return 0;
     } catch (e) {
       print_exception_as_comment(e, options, null);
@@ -504,7 +514,8 @@ export function parse_flags(flags) {
  * Asm inputs may be file paths, or {name, text} objects mixed into `flags`.
  */
 export async function decompile(flags) {
-  const mods = await loadArchModules();
+  const mods = { ...(await loadArchModules()) };
+  if (flags.some((f) => typeof f === "string" && f.startsWith("--visualize"))) mods.viz = await loadGraphviz();
   let options;
   try {
     options = parse_flags(flags);
