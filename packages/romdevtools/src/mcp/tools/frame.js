@@ -52,7 +52,7 @@ async function runS32Cycles(sessionKey, args) {
   const map = args.map ? readFileSyncCycles(args.map, "utf8") : cartPath ? mapBeside(cartPath) : null;
   let groups = args.groups ?? null;
   if (!groups && cartPath) { try { if (readS32RecompileLayout(cartPath)) groups = GENESIS_NATIVE_GROUPS; } catch { /* not a native cart */ } }
-  const r = await measureCycles({ host, from, to, input: args.input, profile: !!args.profile, map, groups, top: args.top, series: !!args.series });
+  const r = await measureCycles({ host, from, to, input: args.input, profile: !!args.profile, map, groups, top: args.top, series: !!args.series, perFrame: !!args.perFrame });
   return { cart: cartPath, ...r };
 }
 
@@ -1036,6 +1036,7 @@ export function registerFrameTools(server, z, sessionKey) {
       groups: z.record(z.string(), z.array(z.string())).optional().describe("op=cycles: profile groups, name -> object-file names or '/regex/' (a native Genesis cart gets 68000/VDP/Z80/YM2612/PSG/mix/host groups by default)."),
       top: z.number().int().min(1).max(200).optional().describe("op=cycles: how many functions to list (default 25)."),
       series: z.boolean().optional().describe("op=cycles: include every frame's cycle count."),
+      perFrame: z.boolean().optional().describe("op=cycles with profile:true: split EVERY frame by subsystem group (min/mean/p95/max per group, the worst frame's split; with series:true the per-frame group series)."),
       atFrames: z.array(z.number().int().min(1)).min(1).max(64).optional().describe("op=verifyRecompile: REFERENCE frames (frames stepped after loadMedia on the reference core) to score, ascending. Pick late frames with real, moving pictures: a title screen proves little."),
       input: z.union([z.string(), z.array(z.object({ frame: z.number().int().min(0), buttons: z.union([z.string(), z.array(z.string()), z.record(z.string(), z.boolean())]), hold: z.number().int().min(1).optional() }))]).optional().describe("op=verifyRecompile/findDiverge/fuzzRecompile/cycles: ONE input schedule (op=cycles: frames counted since loadMedia) applied to both sides, in REFERENCE frames: 'frame:buttons:hold,...' (e.g. '700:start:10,900:right+b:15') or [{frame, buttons:'a+right'|['a']|{a:true}, hold}]. libretro names (a,b,x,y,l,r,start,select,up,down,left,right) or spatial names (south,east,west,north); the cart gets each press at frame+offset, by physical position."),
       wrongInput: z.union([z.string(), z.array(z.object({ frame: z.number().int().min(0), buttons: z.union([z.string(), z.array(z.string()), z.record(z.string(), z.boolean())]), hold: z.number().int().min(1).optional() }))]).optional().describe("op=verifyRecompile: schedule for the wrong-input control (default: withhold ALL input; if the picture still matches, a perturbed script with the start/select presses kept and every other press replaced). The control must FAIL."),

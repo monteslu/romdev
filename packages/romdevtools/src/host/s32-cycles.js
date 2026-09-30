@@ -26,6 +26,21 @@ export const BUDGETS = { floor150MHz: 2500000, mhz252: 4200000, mhz315: 5250000 
 const XIP_BASE = 0x10100000;
 const PROF_HDR = 16;
 const PROF_MAX = 1 << 20;
+const OUTSIDE = "(outside the image: RAM code, console)";
+
+/** object-file name -> group name ("other" when no pattern matches) */
+function groupMatcher(groups) {
+  const cache = new Map();
+  return (o) => {
+    if (cache.has(o)) return cache.get(o);
+    let hit = "other";
+    outer: for (const [name, pats] of Object.entries(groups)) for (const p of pats) {
+      if (p.startsWith("/") ? new RegExp(p.slice(1, p.lastIndexOf("/"))).test(o) : p === o) { hit = name; break outer; }
+    }
+    cache.set(o, hit);
+    return hit;
+  };
+}
 
 function u32s(host, region, offWords, n) {
   const b = host.readMemory(region, offWords * 4, n * 4);
@@ -121,6 +136,8 @@ function stats(xs) {
  * @param {Record<string,string[]>} [a.groups] group name -> object-file names (or /regex/)
  * @param {number} [a.top=25]
  * @param {boolean} [a.series]   include the whole per-frame series
+ * @param {boolean} [a.perFrame] with profile+map+groups: each group's cycles
+ *                               frame by frame (min/mean/max per group)
  */
 export async function measureCycles(a) {
   const host = a.host;
@@ -137,6 +154,34 @@ export async function measureCycles(a) {
     const ctl = new Uint32Array([0x50323353, 1, XIP_BASE, 2, n, 0, 1, 0]);
     host.writeMemory("sync32_profile", 0, new Uint8Array(ctl.buffer));
     prof = { base: XIP_BASE, shift: 2, n };
+  }
+  // per-frame group split: the buckets accumulate, so each frame's share is
+  // the difference of the group sums before and after it
+  let pf = null;
+  if (prof && a.perFrame) {
+    if (!a.map || !a.groups) throw new Error("cycles: perFrame needs the build's linker map and groups (a native cart built by romdev has both)");
+    const { objs } = parseLdMap(a.map);
+    const names = [...Object.keys(a.groups), "other"];
+    const match = groupMatcher(a.groups);
+    const idx = new Uint8Array(prof.n);
+    let oi = 0;
+    for (let b = 0; b < prof.n - 1; b++) {
+      const addr = prof.base + (b << prof.shift);
+      while (oi + 1 < objs.length && objs[oi + 1].addr <= addr) oi++;
+      const o = objs[oi];
+      idx[b] = names.indexOf(match(o && addr >= o.addr && addr < o.addr + o.size ? o.object : "(other)"));
+    }
+    idx[prof.n - 1] = names.indexOf(match(OUTSIDE));
+    const prev = new Float64Array(names.length);
+    const rows = names.map(() => []);
+    drv.observe((f) => {
+      if (f < a.from || f > a.to) return;
+      const buckets = u32s(host, "sync32_profile", PROF_HDR, prof.n);
+      const cur = new Float64Array(names.length);
+      for (let b = 0; b < prof.n; b++) { const v = buckets[b]; if (v) cur[idx[b]] += v; }
+      for (let g = 0; g < names.length; g++) { rows[g].push(cur[g] - prev[g]); prev[g] = cur[g]; }
+    });
+    pf = { names, rows };
   }
   await drv.to(a.to);
   const t1 = readTiming(host);
@@ -180,22 +225,28 @@ export async function measureCycles(a) {
         const on = o && addr >= o.addr && addr < o.addr + o.size ? o.object : "(other)";
         ob.set(on, (ob.get(on) ?? 0) + v);
       }
-      ob.set("(outside the image: RAM code, console)", (ob.get("(outside the image: RAM code, console)") ?? 0) + outside);
+      ob.set(OUTSIDE, (ob.get(OUTSIDE) ?? 0) + outside);
       const perFrame = (v) => Math.round(v / count);
       res.byFunction = [...fn].sort((x, y) => y[1] - x[1]).slice(0, a.top ?? 25).map(([name, v]) => ({ name, cyclesPerFrame: perFrame(v), pct: pct(v, total) }));
       res.byObject = [...ob].sort((x, y) => y[1] - x[1]).map(([name, v]) => ({ object: name, cyclesPerFrame: perFrame(v), pct: pct(v, total) }));
       if (a.groups) {
         const g = new Map();
-        const match = (o) => {
-          for (const [name, pats] of Object.entries(a.groups)) for (const p of pats) {
-            if (p.startsWith("/") ? new RegExp(p.slice(1, p.lastIndexOf("/"))).test(o) : p === o) return name;
-          }
-          return "other";
-        };
+        const match = groupMatcher(a.groups);
         for (const [o, v] of ob) g.set(match(o), (g.get(match(o)) ?? 0) + v);
         res.byGroup = [...g].sort((x, y) => y[1] - x[1]).map(([group, v]) => ({ group, cyclesPerFrame: perFrame(v), pct: pct(v, total) }));
       }
       if (unattributed) res.unattributedCycles = unattributed;
+      if (pf) {
+        const sumFrames = pf.rows[0].map((_, i) => pf.rows.reduce((s, r) => s + r[i], 0));
+        res.perFrameMatchesSeries = sumFrames.every((v, i) => v === series[i]);
+        res.byGroupPerFrame = pf.names.map((group, g) => {
+          const st = stats(pf.rows[g]);
+          return { group, min: st.min, mean: st.mean, p95: st.p95, max: st.max };
+        }).filter((r) => r.max > 0).sort((x, y) => y.mean - x.mean);
+        const worst = series.indexOf(Math.max(...series));
+        res.worstFrameByGroup = { frame: a.from + worst, cycles: series[worst], groups: Object.fromEntries(pf.names.map((n, g) => [n, pf.rows[g][worst]]).filter(([, v]) => v)) };
+        if (a.series) res.groupSeries = Object.fromEntries(pf.names.map((n, g) => [n, pf.rows[g]]));
+      }
     } else {
       res.note = "pass `map` (the build's linker map, e.g. <cart>.s32.map) to attribute the cycles to functions, objects and groups";
     }
