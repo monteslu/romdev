@@ -159,3 +159,13 @@ test("regression check refuses a seed mismatch up front (not as hash noise)", { 
     await rm(golden, { force: true });
   }
 });
+
+test("deterministic stepMs reaches the cart's clock (integer-ms engines)", { skip }, async () => {
+  // A native engine run with a fixed 16 ms frame and a cart replayed at the
+  // default 16.667 ms drift apart; deterministicStepMs pins the cart to 16.
+  const host = new WasmcartHost();
+  await host.loadMedia({ platform: "wasmcart", path: DETRNG, deterministic: { seed: 5, stepMs: 16 } });
+  assert.equal(host.cart._fixedStepMs, 16);
+  const dflt = await loadDet(5);
+  assert.ok(Math.abs(dflt.cart._fixedStepMs - 1000 / 60) < 1e-9, "default stays 60 fps");
+});

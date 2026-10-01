@@ -32,11 +32,14 @@ export function registerLifecycleTools(server, z, sessionKey) {
   // slot:'b' targets the secondary comparison host (for frame sideBySide);
   // it gets its own fresh host and does NOT overwrite slot A's recovery
   // breadcrumb, since B is transient scratch, not the session's main ROM.
-  async function doLoadMedia({ platform, path, base64, mediaKind, virtualName, cheats, slot, deterministicSeed, coreOptions, presentWindow, useActiveBezel, activeBezelPath, activeBezelConfig, activeBezelForce, activeBezelRenderer }) {
+  async function doLoadMedia({ platform, path, base64, mediaKind, virtualName, cheats, slot, deterministicSeed, deterministicStepMs, coreOptions, presentWindow, useActiveBezel, activeBezelPath, activeBezelConfig, activeBezelForce, activeBezelRenderer }) {
     if (!path && !base64) throw new Error("loadMedia: provide either `path` (file on disk) or `base64` (ROM bytes).");
     if (path && base64) throw new Error("loadMedia: provide `path` OR `base64`, not both.");
     if (deterministicSeed !== undefined && !NATIVE_RUNTIME_HOSTS[platform]) {
       throw new Error("deterministicSeed is a wasmcart option (seeded replay via wc_set_seed). Emulator cores are already deterministic from power-on - just replay the same input script.");
+    }
+    if (deterministicStepMs !== undefined && deterministicSeed === undefined) {
+      throw new Error("deterministicStepMs sets the virtual clock step of a deterministic replay; pass deterministicSeed with it.");
     }
 
     // Native-runtime kinds (wasmcart, jsgame) bypass the libretro core path: build
@@ -61,7 +64,7 @@ export function registerLifecycleTools(server, z, sessionKey) {
       await host.loadMedia({
         platform,
         ...(bytes ? { bytes } : { path }),
-        ...(deterministicSeed !== undefined ? { deterministic: { seed: deterministicSeed } } : {}),
+        ...(deterministicSeed !== undefined ? { deterministic: { seed: deterministicSeed, ...(deterministicStepMs !== undefined ? { stepMs: deterministicStepMs } : {}) } } : {}),
         // presentWindow gives a GL cart its OWN GL context so a later
         // playtest window can bind it and present by GPU swap instead of
         // reading every frame back to the CPU. It has to be decided here
@@ -229,6 +232,7 @@ export function registerLifecycleTools(server, z, sessionKey) {
       activeBezelConfig: z.record(z.string(), z.any()).optional().describe("Per-package settings, validated against the manifest's settings schema (e.g. {show_map:true})."),
       activeBezelForce: z.boolean().default(false).describe("Load the package even when the ROM hash does not match what it declares support for. The composite may be meaningless - a map keyed to another revision's RAM layout draws confidently wrong things - so this is for development, not for trusting the output."),
       activeBezelRenderer: z.enum(["software", "gpu"]).optional().describe("Force the compositor. Default: GPU when the package requests it and a GL context is available, else the CPU compositor. 'software' pins the CPU path, which is fully featured and deterministic - the right choice for golden-frame comparisons."),
+      deterministicStepMs: z.number().positive().max(1000).optional().describe("wasmcart only, with deterministicSeed: the virtual clock step in ms per frame (default 1000/60). Use a whole number (e.g. 16) to match an engine that runs on integer milliseconds, such as a native build run with a fixed frame time, so the two can be compared frame for frame."),
       deterministicSeed: z.number().int().min(0).optional().describe("wasmcart only: load as a DETERMINISTIC REPLAY - fixed virtual clock + this u32 RNG seed delivered to the cart's wc_set_seed before init. Same seed + same input script = an identical frame sequence (airtight frameHash regression goldens). Only meaningful for carts that declare WC_FLAG_DETERMINISTIC (check capabilities.hasDeterministic after load); other carts get the fixed clock but keep their own entropy."),
       coreOptions: z.record(z.string(), z.string()).optional().describe("Libretro core options applied before the ROM loads, overriding the core's defaults (e.g. {\"snes9x_layer_3\":\"disabled\"} hides a layer at the RENDERER so an Active Bezel can own it - game state and VRAM are untouched). Keys/values are core-specific and unvalidated: a wrong key is silently ignored by the core, so verify the effect visually."),
       presentWindow: z.boolean().optional().describe("wasmcart GL carts only: load this cart on its OWN GL context so a later playtest({op:'open'}) can present it by GPU blit+swap instead of reading every frame back to the CPU. Measured on a 1080p 3D cart: convertMs 3.52 -> 0, window cost ~7.45ms -> ~2.0ms at a steady 60fps. Pass it when you intend to open a window for a HUMAN to play a 3D/GL cart; skip it for headless work, where the readback is what you want anyway. MUST be set at load time - the GL context binds when the cart's wasm loads and cannot be swapped afterward, so a cart already loaded without it keeps the readback path until reloaded. CAPTURES ARE UNAFFECTED BY CONTRACT: frame({op:'screenshot'}) and playtest({op:'framebuffer'}) return the full cart frame at the cart's resolution, byte-identical to a plain load, and capture dimensions are a function of the CART only - nothing a human does to the window (drag, F11) changes them. Costs one extra GL context per loaded cart; a cart loaded WITHOUT it shares the process-wide offscreen context, which can never be attached to a window (doing so would drag every other session's cart into that window). No effect on 2D carts or emulator cores."),
