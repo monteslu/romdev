@@ -78,7 +78,7 @@ emcc "$CORE_LIB" \
   -s MODULARIZE=1 \
   -s EXPORT_ES6=1 \
   -s EXPORT_NAME=create_mgba \
-  -s ENVIRONMENT=node \
+  -s ENVIRONMENT=node,web,worker \
   -s ALLOW_MEMORY_GROWTH=1 \
   -s INITIAL_MEMORY=67108864 \
   -s MAXIMUM_MEMORY=536870912 \

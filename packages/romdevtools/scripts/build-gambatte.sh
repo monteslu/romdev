@@ -19,11 +19,14 @@ OUT="$PROJECT_DIR/src/cores/wasm"
 fetch_pinned cores.gambatte "$GAMBATTE_DIR"
 
 cd "$GAMBATTE_DIR"
+git checkout -- libgambatte/src/video/ppu.cpp libgambatte/src/initstate.cpp libgambatte/src/mem/rtc.cpp libgambatte/src/mem/huc3.cpp libgambatte/libretro/blipper.h libgambatte/libretro/blipper.c libgambatte/libretro/libretro.cpp 2>/dev/null || true
 # Reset the files the patch touches so re-runs are idempotent.
 git checkout -- \
   libgambatte/src/cpu.h \
   libgambatte/src/cpu.cpp \
   libgambatte/src/video/ppu.cpp \
+  libgambatte/src/video/sprite_mapper.h \
+  libgambatte/src/video/sprite_mapper.cpp \
   libgambatte/src/video.cpp \
   libgambatte/src/video_libretro.cpp \
   libgambatte/src/gambatte-memory.h \
@@ -46,6 +49,13 @@ else
   git apply --recount "$PATCH_FILE"
   echo "Applied $PATCH_FILE"
 fi
+
+# Versioned multiplayer state extension, applied after the debug/memory patch.
+MP_PATCH="$PROJECT_DIR/scripts/patches/gambatte-multiplayer-state.patch"
+# The pinned HuC3 file uses CRLF; normalize before applying the LF patch.
+sed -i 's/\r$//' "$GAMBATTE_DIR/libgambatte/src/mem/huc3.cpp"
+git apply --recount "$MP_PATCH"
+cp "$PROJECT_DIR/scripts/multiplayer/romdev_multiplayer.h" "$GAMBATTE_DIR/libgambatte/src/"
 
 # ── romdev shared debug lib (0.80.0) ────────────────────────────────────────
 # The watchpoint/readwatch/range/coverage/pcbreak/watchdog machinery + exports now
@@ -130,7 +140,7 @@ RDBG_OBJ="$GAMBATTE_DIR/libgambatte/src/romdev_debug.o"
 emcc -c -O2 "$GAMBATTE_DIR/libgambatte/src/romdev_debug.c" -o "$RDBG_OBJ"
 emar rcs "$CORE_LIB" "$RDBG_OBJ"
 
-EXPORTED_FUNCTIONS='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_watchpoint_set","_romdev_watchpoint_set_cond","_romdev_watchpoint_get","_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_watchdog_set","_romdev_regsnap_get","_romdev_irqblock_set","_romdev_setreg","_romdev_getreg","_romdev_range_set","_romdev_range_get","_romdev_cov_set","_romdev_cov_get","_romdev_covbits_set","_romdev_covbits_get","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
+EXPORTED_FUNCTIONS='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_watchpoint_set","_romdev_watchpoint_set_cond","_romdev_watchpoint_get","_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_watchdog_set","_romdev_regsnap_get","_romdev_irqblock_set","_romdev_setreg","_romdev_getreg","_romdev_range_set","_romdev_range_get","_romdev_observe_set","_romdev_observe_add","_romdev_observe_arm","_romdev_observe_get","_romdev_cov_set","_romdev_cov_get","_romdev_covbits_set","_romdev_covbits_get","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_romdev_deterministic_boot","_romdev_deterministic_disable","_romdev_state_schema","_romdev_state_digest","_malloc","_free"]'
 EXPORTED_RUNTIME='["ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","FS"]'
 
 mkdir -p "$OUT"
@@ -140,7 +150,7 @@ emcc "$CORE_LIB" \
   -s MODULARIZE=1 \
   -s EXPORT_ES6=1 \
   -s EXPORT_NAME=create_gambatte \
-  -s ENVIRONMENT=node \
+  -s ENVIRONMENT=node,web,worker \
   -s ALLOW_MEMORY_GROWTH=1 \
   -s INITIAL_MEMORY=33554432 \
   -s MAXIMUM_MEMORY=268435456 \

@@ -133,7 +133,7 @@ emcc "$CORE_LIB" \
   -O3 \
   -s WASM=1 -s MODULARIZE=1 -s EXPORT_ES6=1 \
   -s 'EXPORT_NAME=create_vice_x64' \
-  -s ENVIRONMENT=node \
+  -s ENVIRONMENT=node,web,worker \
   -s ALLOW_MEMORY_GROWTH=1 \
   -s INITIAL_MEMORY=67108864 -s MAXIMUM_MEMORY=536870912 \
   -s ALLOW_TABLE_GROWTH=1 \

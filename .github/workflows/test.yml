@@ -3,9 +3,9 @@ name: test
 # The FULL test suite on a clean checkout.
 #
 # The binary packages gitignore their wasm/share payloads; the published npm
-# tarballs carry them, and a unit test pins the in-tree versions to what npm
-# has. scripts/fetch-payloads.mjs closes the loop: it fills each workspace
-# package's missing payload files from its own published tarball (tracked
+# tarballs carry them, and a unit test checks sibling dependency versions.
+# This fork pins its five browser packages to a hashed GitHub release; other
+# packages still use npm. scripts/fetch-payloads.mjs closes the loop (tracked
 # sources always win), after which the suite that boots cores and builds real
 # ROMs runs the same way it does on a dev box.
 #
@@ -22,10 +22,8 @@ name: test
 # tests for real - verified both ways: 45 pass / 0 skip with it, 30 pass /
 # 15 skip / 0 fail without.
 #
-# Sharp edge, deliberate: a commit whose dependency pins reference versions
-# not yet on npm (the short window between push and publish-all) fails the
-# install or the payload fetch. That red is honest - it means the release is
-# half out - and it turns green the moment the publish lands.
+# Payload fetch fails closed on a missing/checksum-mismatched browser release
+# or an unpublished unrelated npm package. No unverified payload is accepted.
 
 on:
   push:
@@ -55,7 +53,7 @@ jobs:
           path: |
             packages/*/wasm
             packages/*/sleigh
-          key: payloads-${{ hashFiles('package-lock.json') }}
+          key: payloads-${{ hashFiles('package-lock.json', 'browser-payloads.json') }}
 
       # --ignore-scripts skips romdevtools' postinstall (SDL prebuilt fetch for
       # the playtest window; no window opens in CI and the runtime self-heals).
@@ -63,7 +61,7 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Fetch binary payloads
-        run: node scripts/fetch-payloads.mjs
+        run: node scripts/fetch-payloads.mjs --browser-payloads
 
       - name: Test
         # Runners have no GPU device nodes, and native EGL init BLOCKS there

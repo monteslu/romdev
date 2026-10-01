@@ -1,0 +1,14 @@
+--- a/sdas/asgb/gbmch.c
++++ b/sdas/asgb/gbmch.c
+@@ -748,7 +748,9 @@
+         hilo = 0;
+ 
+         /*
+-         * Address Space
++         * Address Space: 32 bits, so a switchable ROM bank n can be linked at
++         * n << 16 | 0x4000 for every MBC5 bank (0-511). With 24 bits, banks
++         * 256 and up wrapped onto 0-255.
+          */
+-        exprmasks(3);
++        exprmasks(4);
+ }

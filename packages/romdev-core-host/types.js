@@ -382,6 +382,8 @@ export const MemoryRegionToRetro = {
 
 /**
  * @typedef {Object} LoadMediaArgs
+ * @property {{kind: "nes", playerMask: number}} [controllerTopology] Native controller slots, fixed across restore.
+ * @property {{rtcEpochSeconds: number}} [deterministic] Explicit deterministic bootstrap, before ROM load.
  * @property {string} platform
  * @property {string} path
  * @property {MediaKind} [mediaKind]

@@ -93,8 +93,10 @@ share one process without drawing into each other's contexts.
 ## Browser / bytes-only use
 
 Everything the index exports is browser-bundleable (enforced by a gate
-test: no top-level `node:` imports, no pngjs in the static closure). The
-browser contract is "the caller does the I/O":
+test: no top-level `node:` imports, no pngjs in the static closure), and the
+2D cores' glue is linked for `node,web,worker`, so the same `.js` + `.wasm`
+pair loads in a page or a Web Worker. The browser contract is "the caller
+does the I/O":
 
 ```js
 import { LibretroHost } from "romdev-core-host";
@@ -165,3 +167,34 @@ reports the shift it recorded at; `exact` is false only when a caller asked for
 a granularity coarser than the CPU's instruction alignment. `logPCRange` is
 the older 8192-entry distinct ring (`romdev_cov_set/get`), still exported by
 every core. Every romdev core carries the bitmap.
+
+## Deterministic GB/GBC/NES sessions
+
+`loadMedia({…, deterministic: {rtcEpochSeconds: 0}})` enables the versioned causal
+snapshot schema on supported cores. `stateDigest()` returns `{schema, bytes}` with
+a 32-byte SHA-256; unsupported/non-deterministic cores reject the request.
+NES additionally accepts `controllerTopology: {kind: "nes", playerMask: 1..15}`
+for native 1–4 controllers (Four Score only when slot 3/4 is present), preserving
+slot numbers across gaps. Deterministic input accepts the eight native buttons.
+See `romdevtools/scripts/multiplayer/README.md` for the fixed session identities,
+frame-boundary restrictions, compiler records, reproducible builds and tests.
+
+## Logical world observation (0.16.0)
+
+`startWorldObservation({trigger, tick, fields, value: 0xa5})` binds an explicit
+ROM publication write on GB/GBC/NES. After updating the world, the engine writes
+a four-byte little-endian logical tick to stable RAM, then writes `value` to
+`trigger` before rendering its view. `tick` and each field are
+`{region: "system_ram" | "save_ram", offset, length}` physical RAM spans; the
+tick must be unbanked and have length 4. The trigger is a stable writable CPU
+address. The observer copies the selected physical bytes at that bus write,
+without pausing the CPU, stepping clocks or modifying emulated state.
+
+`drainWorldObservation()` returns owned `{tick, pc, bytes}` records in publication
+order, plus `total` and `truncated`, then clears the diagnostic buffer. Drain once
+per native frame. The buffer holds eight publications, at most 32 fields and
+1024 field bytes; truncation must fail the logical-world check rather than be
+treated as agreement. Instrumentation is outside savestates and causal digests.
+`stopWorldObservation()`, restore, reset, unload and load disarm it. Rebind after
+those lifecycle changes. Older cores do not advertise these optional exports.
+This is a diagnostic hook; it does not synchronize consoles or certify a room.

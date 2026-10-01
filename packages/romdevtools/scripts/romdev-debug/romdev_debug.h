@@ -79,6 +79,19 @@ unsigned char romdev_cheat_read(unsigned addr, unsigned char realByte);
 void romdev_range_set(unsigned lo, unsigned hi, int mode, int enabled);
 unsigned romdev_range_get(unsigned *out, unsigned max, unsigned *out2);
 
+/* Nonintrusive world observations. The host supplies live RAM pointers; the ROM
+ * publishes by writing trigger after the four-byte LE tick and world update,
+ * before view rendering. No CPU freeze, clock advance, or emulated write.
+ * set resets/disarms; add registers up to 32 spans / 1024 bytes; arm validates.
+ * get copies at most 8 records: [tick LE32, PC LE32, concatenated span bytes].
+ * out3 = [total publications, stored publications, record byte size]. A caller
+ * must reject truncation. Observation buffers are frontend diagnostics, never
+ * serialized causal state. Disarm before restore/reset/media replacement. */
+void romdev_observe_set(unsigned trigger, const unsigned char *tick, unsigned char value);
+int romdev_observe_add(const unsigned char *data, unsigned size);
+int romdev_observe_arm(int enabled);
+unsigned romdev_observe_get(unsigned char *out, unsigned capacity, unsigned *out3, int clear);
+
 /* PC breakpoint + single-step + watchdog. set(addr,enabled,step); a hit freezes the
  * CPU (the core's dispatch checks the freeze via romdev_on_dispatch). watchdog_set
  * arms a no-hit timeout. out is 11 words:

@@ -25,6 +25,7 @@
 //   node scripts/fetch-payloads.mjs             # fill every workspace package
 //   node scripts/fetch-payloads.mjs --dry-run   # report what would be copied
 //   node scripts/fetch-payloads.mjs --allow-missing
+//   node scripts/fetch-payloads.mjs --browser-payloads  # fork: pinned browser binaries; npm for other packages
 
 import { execFileSync } from "node:child_process";
 import {
@@ -39,6 +40,17 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PKGS = path.join(ROOT, "packages");
 const DRY = process.argv.includes("--dry-run");
 const ALLOW_MISSING = process.argv.includes("--allow-missing");
+const BROWSER_PAYLOADS = process.argv.includes("--browser-payloads");
+const BROWSER_PACKAGES = new Set([
+  "romdev-core-host", "romdev-core-fceumm", "romdev-core-gambatte",
+  "romdev-toolchain-cc65", "romdev-toolchain-sdcc",
+]);
+// The fork's browser packages are built by its pinned native recipes, not published to npm.
+// Verify and fetch the complete content-addressed release before filling unrelated packages.
+if (BROWSER_PAYLOADS) {
+  if (DRY) console.log("would fetch the pinned browser-payloads.json release");
+  else execFileSync("bash", [path.join(ROOT, "scripts/browser-payloads.sh"), "fetch"], { cwd: ROOT, stdio: "inherit" });
+}
 
 /** Every file in the tarball, extracted to `dir`, relative paths. */
 function walk(dir, base = dir) {
@@ -67,6 +79,7 @@ for (const name of readdirSync(PKGS).sort()) {
   // legitimately runs AHEAD of npm between publishes - fetching it would both
   // fail spuriously and risk testing published code instead of the checkout.
   if (meta.name === "romdevtools") continue;
+  if (BROWSER_PAYLOADS && BROWSER_PACKAGES.has(meta.name)) continue;
 
   const spec = `${meta.name}@${meta.version}`;
   const tmp = mkdtempSync(path.join(os.tmpdir(), "romdev-payload-"));

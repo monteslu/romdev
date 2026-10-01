@@ -86,4 +86,13 @@ export default [
       },
     },
   },
+  {
+    files: ["packages/romdevtools/scripts/multiplayer/harness/main.js"],
+    languageOptions: { globals: { ...globals.browser } },
+  },
+  {
+    files: ["packages/romdevtools/scripts/multiplayer/harness/worker.js"],
+    languageOptions: { globals: { ...globals.worker } },
+  },
+
 ];

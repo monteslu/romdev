@@ -4,6 +4,28 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 -
 the `romdev-mcp` bin is kept as an alias.)
 
+## Unreleased
+
+### Browser-capable glue for the 2D cores and the CLI toolchains
+
+`romdev-core-host` documents a bytes-only browser path (`loadCore({ factory,
+wasmBinary })`), but the glue it would load could not run there: every 2D
+libretro core and every tool linked with `EM_CLI_FLAGS` was built with
+`-s ENVIRONMENT=node`, which makes emcc hard-code `ENVIRONMENT_IS_NODE=true`.
+The glue's first statement is then `await import("module")`, so a browser or
+Web Worker fails before the wasm is even instantiated, although neither the
+cores nor the tools use anything but MEMFS.
+
+These recipes now link with `-s ENVIRONMENT=node,web,worker`: the 13 2D cores
+(fceumm, fake08, bluemsx, geargrafx, gametank, gambatte, genesis_plus_gx,
+handy, mgba, prosystem, snes9x, stella2014, vice) and `EM_CLI_FLAGS` (sdcc +
+sdas*/sdld, mcpp, rgbds, cc65, asar, dasm, sjasm, tcc816, wla-dx, vasm).
+Runtime detection picks node under Node, so server behaviour is unchanged,
+and the `.wasm` binaries are unaffected (the flag only changes the JS glue).
+`verify-wasm.mjs` now refuses to publish those glue files if they regress to
+node-only. NODERAWFS builds, the GPU cores and the gcc-family wraps are left
+as they were.
+
 ## 0.149.1 - 2026-09-16
 
 ### Version bumps for the punctuation pass

@@ -34,12 +34,19 @@ require_cmd() {
 }
 
 # Common Emscripten link flags for a tool that's invoked as a CLI via callMain.
+#
+# ENVIRONMENT lists web + worker as well as node: these tools only ever touch
+# MEMFS (inputs are written in, outputs read back), so the same glue runs in a
+# browser Web Worker when the caller supplies the wasm bytes. With node alone
+# emcc hard-codes ENVIRONMENT_IS_NODE=true and the glue's first act is
+# `await import("module")` - unusable in a browser even though nothing in the
+# tool needs Node. Node behavior is unchanged (runtime detection picks node).
 EM_CLI_FLAGS=(
   -O2
   -s WASM=1
   -s MODULARIZE=1
   -s EXPORT_ES6=1
-  -s ENVIRONMENT=node
+  -s ENVIRONMENT=node,web,worker
   -s ALLOW_MEMORY_GROWTH=1
   -s INITIAL_MEMORY=67108864
   -s STACK_SIZE=8388608

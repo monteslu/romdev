@@ -1,0 +1,202 @@
+diff --git a/src/sound.c b/src/sound.c
+--- a/src/sound.c
++++ b/src/sound.c
+@@ -1256,6 +1256,7 @@
+ }
+
+ 
++extern uint32_t mrindex, romdev_clock_enabled;
+ SFORMAT FCEUSND_STATEINFO[] = {
+ 	{ &fhcnt, 4 | FCEUSTATE_RLSB, "FHCN" },
+ 	{ &fcnt, 1, "FCNT" },
+@@ -1346,6 +1347,30 @@
+ 	{ 0 }
+ };
+
++/* Ordinary on-disk states keep the pinned core's original fields and sizes.
++ * Rollback alone needs every FIR history and the fractional resampling index. */
++SFORMAT *romdev_sound_stateinfo(void) {
++ size_t i, n = sizeof(FCEUSND_STATEINFO) / sizeof(FCEUSND_STATEINFO[0]);
++ static SFORMAT complete[sizeof(FCEUSND_STATEINFO) / sizeof(FCEUSND_STATEINFO[0]) + 2];
++ SFORMAT index = { &mrindex, sizeof(mrindex) | FCEUSTATE_RLSB, "MRIX" };
++ if (!romdev_clock_enabled) return FCEUSND_STATEINFO;
++ complete[0] = index;
++ for (i = 0; i < n; i++) {
++  complete[i + 1] = FCEUSND_STATEINFO[i];
++#ifndef MSB_FIRST
++  if (!strcmp(complete[i + 1].desc, "WAVE")) complete[i + 1].s = sizeof(Wave);
++#endif
++ }
++#ifndef MSB_FIRST
++ {
++  SFORMAT high = { &WaveHi, sizeof(WaveHi), "WVHI" };
++  complete[n] = high;
++  complete[n + 1] = FCEUSND_STATEINFO[n - 1];
++ }
++#endif
++ return complete;
++}
++
+ void FCEUSND_SaveState(void) {
+ }
+
+diff --git a/src/input.c b/src/input.c
+--- a/src/input.c
++++ b/src/input.c
+@@ -406,6 +406,18 @@
+ 	{ 0 }
+ };
+
++extern uint32_t romdev_clock_enabled;
++SFORMAT *romdev_controller_stateinfo(void) {
++ size_t i, n = sizeof(FCEUCTRL_STATEINFO) / sizeof(FCEUCTRL_STATEINFO[0]);
++ static SFORMAT complete[sizeof(FCEUCTRL_STATEINFO) / sizeof(FCEUCTRL_STATEINFO[0]) + 1];
++ SFORMAT four_score = { &FSDisable, sizeof(FSDisable) | FCEUSTATE_RLSB, "FSDI" };
++ if (!romdev_clock_enabled) return FCEUCTRL_STATEINFO;
++ complete[0] = FCEUCTRL_STATEINFO[0];
++ complete[1] = four_score;
++ for (i = 1; i < n; i++) complete[i + 1] = FCEUCTRL_STATEINFO[i];
++ return complete;
++}
++
+ void FCEU_DoSimpleCommand(int cmd)
+ {
+    switch (cmd)
+diff --git a/src/state.c b/src/state.c
+--- a/src/state.c
++++ b/src/state.c
+@@ -192,8 +192,8 @@
+ #endif
+
+ extern SFORMAT FCEUPPU_STATEINFO[];
+-extern SFORMAT FCEUSND_STATEINFO[];
+-extern SFORMAT FCEUCTRL_STATEINFO[];
++extern SFORMAT *romdev_sound_stateinfo(void);
++extern SFORMAT *romdev_controller_stateinfo(void);
+
+ SFORMAT SFCPU[] = {
+    { &X.PC, 2 | RLSB, "PC\0" },
+@@ -393,11 +393,11 @@
+                ret = 0;
+             break;
+          case 4:
+-            if (!ReadStateChunk(st, FCEUCTRL_STATEINFO, size))
++            if (!ReadStateChunk(st, romdev_controller_stateinfo(), size))
+                ret = 0;
+             break;
+          case 5:
+-            if (!ReadStateChunk(st, FCEUSND_STATEINFO, size))
++            if (!ReadStateChunk(st, romdev_sound_stateinfo(), size))
+                ret = 0;
+             break;
+          case 0x10:
+@@ -435,8 +435,8 @@
+    totalsize  = WriteStateChunk(mem, 1, SFCPU);
+    totalsize += WriteStateChunk(mem, 2, SFCPUC);
+    totalsize += WriteStateChunk(mem, 3, FCEUPPU_STATEINFO);
+-   totalsize += WriteStateChunk(mem, 4, FCEUCTRL_STATEINFO);
+-   totalsize += WriteStateChunk(mem, 5, FCEUSND_STATEINFO);
++   totalsize += WriteStateChunk(mem, 4, romdev_controller_stateinfo());
++   totalsize += WriteStateChunk(mem, 5, romdev_sound_stateinfo());
+
+    if (SPreSave)
+       SPreSave();
+diff --git a/src/drivers/libretro/libretro.c b/src/drivers/libretro/libretro.c
+--- a/src/drivers/libretro/libretro.c
++++ b/src/drivers/libretro/libretro.c
+@@ -1,3 +1,4 @@
++#include "romdev_multiplayer.h"
+ #include <stdio.h>
+ #include <stdint.h>
+ #include <stdlib.h>
+@@ -3138,7 +3139,7 @@
+    audio_batch_cb((const int16_t*)sound, ssize);
+ }
+
+-size_t retro_serialize_size(void)
++static size_t mp_nes_core_size(void)
+ {
+    if (serialize_size == 0)
+    {
+@@ -3156,14 +3157,14 @@
+    return serialize_size;
+ }
+
+-bool retro_serialize(void *data, size_t size)
++static bool mp_nes_core_write(void *data, size_t size)
+ {
+    /* Cannot save state while Game Genie
+     * screen is open */
+    if (geniestage == 1)
+       return false;
+
+-   if (!data || size != retro_serialize_size())
++   if (!data || size != mp_nes_core_size())
+       return false;
+
+    memstream_set_buffer((uint8_t*)data, size);
+@@ -3171,14 +3172,14 @@
+    return true;
+ }
+
+-bool retro_unserialize(const void * data, size_t size)
++static bool mp_nes_core_read(const void * data, size_t size)
+ {
+    /* Cannot load state while Game Genie
+     * screen is open */
+    if (geniestage == 1)
+       return false;
+
+-   if (!data || size != retro_serialize_size())
++   if (!data || size != mp_nes_core_size())
+       return false;
+
+    memstream_set_buffer((uint8_t*)data, size);
+@@ -4470,3 +4471,35 @@
+
+    return size;
+ }
++
++uint32_t romdev_clock_enabled=0, romdev_clock_epoch=0;
++uint64_t romdev_clock_ticks=0;
++unsigned romdev_deterministic_boot(unsigned epoch) {
++ if(epoch>0x7fffffffU)return 0;
++ romdev_clock_enabled=1;romdev_clock_epoch=epoch;serialize_size=0;return 1;
++}
++void romdev_deterministic_disable(void) { romdev_clock_enabled=0;serialize_size=0; }
++unsigned romdev_state_schema(void) { return 0x4e450101; }
++size_t retro_serialize_size(void) { return mp_nes_core_size() + (romdev_clock_enabled?40:0); }
++bool retro_serialize(void *data, size_t size) {
++ unsigned i;unsigned char *p=(unsigned char *)data;
++ if(!data || size!=retro_serialize_size())return false;
++ if(!romdev_clock_enabled)return mp_nes_core_write(data,size);
++ memset(p,0,40);mp_w32(p,0x31534e4d);mp_w32(p+4,size-40);mp_w32(p+8,romdev_clock_epoch);mp_w32(p+12,romdev_state_schema());
++ for(i=0;i<5;i++)mp_w32(p+16+i*4,nes_input.type[i]);
++ return mp_nes_core_write(p+40,size-40);
++}
++bool retro_unserialize(const void *data, size_t size) {
++ unsigned i;const unsigned char *p=(const unsigned char *)data;
++ if(!data || size!=retro_serialize_size())return false;
++ if(!romdev_clock_enabled)return mp_nes_core_read(data,size);
++ if(mp_r32(p)!=0x31534e4d || mp_r32(p+4)!=size-40 || mp_r32(p+8)!=romdev_clock_epoch || mp_r32(p+12)!=romdev_state_schema())return false;
++ for(i=0;i<5;i++)if(mp_r32(p+16+i*4)!=nes_input.type[i])return false;
++ return mp_nes_core_read(p+40,size-40);
++}
++unsigned romdev_state_digest(unsigned char *out, unsigned len) {
++ size_t size=retro_serialize_size();unsigned char *p;bool ok;
++ if(!out || !romdev_clock_enabled || len!=32 || !size || size>1048576 || current_stereo_filter!=STEREO_FILTER_NULL)return 0;
++ p=(unsigned char *)malloc(size);if(!p)return 0;
++ ok=retro_serialize(p,size);if(ok)mp_sha256(p,size,out);free(p);return ok;
++}
+diff --git a/src/filter.c b/src/filter.c
+--- a/src/filter.c
++++ b/src/filter.c
+@@ -7,7 +7,7 @@
+
+ #include "fcoeffs.h"
+
+-static uint32_t mrindex;
++uint32_t mrindex;
+ static uint32_t mrratio;
+
+ int64_t sexyfilter_acc1 = 0, sexyfilter_acc2 = 0;

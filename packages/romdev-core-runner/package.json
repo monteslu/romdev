@@ -23,7 +23,7 @@
     "url": "git+https://github.com/monteslu/romdev.git"
   },
   "dependencies": {
-    "romdev-core-host": "0.14.0"
+    "romdev-core-host": "0.16.0"
   },
   "optionalDependencies": {
     "@kmamal/sdl": "^0.11.13"

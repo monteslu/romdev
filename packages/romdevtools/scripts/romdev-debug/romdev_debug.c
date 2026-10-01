@@ -46,6 +46,65 @@ static unsigned      range_addr[ROMDEV_RANGE_CAP];
 static unsigned char range_val[ROMDEV_RANGE_CAP];
 static unsigned      range_count = 0, range_stored = 0;
 
+/* Diagnostic-only snapshots at an engine's completed logical world tick. */
+#define OBSERVE_CAP 8
+#define OBSERVE_BYTES 1024
+#define OBSERVE_SPANS 32
+static unsigned observe_trigger = 0, observe_bytes = 0, observe_spans = 0;
+static unsigned observe_total = 0, observe_stored = 0;
+static int observe_enabled = 0;
+static unsigned char observe_value = 0;
+static const unsigned char *observe_tick = 0;
+static const unsigned char *observe_data[OBSERVE_SPANS];
+static unsigned observe_sizes[OBSERVE_SPANS];
+static unsigned char observe_records[OBSERVE_CAP][8 + OBSERVE_BYTES];
+
+EMSCRIPTEN_KEEPALIVE
+void romdev_observe_set(unsigned trigger, const unsigned char *tick, unsigned char value) {
+    observe_enabled = 0;
+    observe_trigger = trigger; observe_tick = tick; observe_value = value;
+    observe_bytes = observe_spans = observe_total = observe_stored = 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int romdev_observe_add(const unsigned char *data, unsigned size) {
+    if (observe_enabled || !data || !size || observe_spans >= OBSERVE_SPANS || size > OBSERVE_BYTES - observe_bytes) return 0;
+    observe_data[observe_spans] = data; observe_sizes[observe_spans++] = size;
+    observe_bytes += size;
+    return 1;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int romdev_observe_arm(int enabled) {
+    observe_enabled = 0;
+    if (enabled && (!observe_tick || !observe_spans)) return 0;
+    observe_enabled = enabled ? 1 : 0;
+    return 1;
+}
+
+EMSCRIPTEN_KEEPALIVE
+unsigned romdev_observe_get(unsigned char *out, unsigned capacity, unsigned *out3, int clear) {
+    unsigned i, j, stride = 8 + observe_bytes, n = observe_stored;
+    if (out3) { out3[0] = observe_total; out3[1] = observe_stored; out3[2] = stride; }
+    if (!out) n = 0;
+    else if (n > capacity / stride) n = capacity / stride;
+    for (i = 0; i < n; i++) for (j = 0; j < stride; j++) out[i * stride + j] = observe_records[i][j];
+    if (clear) observe_total = observe_stored = 0;
+    return n;
+}
+
+static void observe_write(unsigned addr, unsigned pc, unsigned char value) {
+    unsigned i, j, at;
+    unsigned char *record;
+    if (!observe_enabled || addr != observe_trigger || value != observe_value) return;
+    if (observe_total != 0xFFFFFFFFu) observe_total++;
+    if (observe_stored == OBSERVE_CAP) return;
+    record = observe_records[observe_stored++];
+    for (i = 0; i < 4; i++) { record[i] = observe_tick[i]; record[i + 4] = (unsigned char)(pc >> (8 * i)); }
+    at = 8;
+    for (i = 0; i < observe_spans; i++) for (j = 0; j < observe_sizes[i]; j++) record[at++] = observe_data[i][j];
+}
+
 /* coverage (distinct-PC ring + dedup) */
 static unsigned      cov_lo = 0, cov_hi = 0;
 static int           cov_enabled = 0;
@@ -260,7 +319,7 @@ int romdev_wp_wants_old(void) { return wp_enabled && wp_cond; }
 
 int romdev_any_armed(void) {
     return wp_enabled || rd_enabled || range_enabled || cov_enabled || covb_enabled
-        || pc_enabled || pc_step || wd_limit || pc_hit;
+        || pc_enabled || pc_step || wd_limit || pc_hit || observe_enabled;
 }
 
 static int wp_cond_ok(unsigned char oldv, unsigned char v) {
@@ -275,6 +334,7 @@ static int wp_cond_ok(unsigned char oldv, unsigned char v) {
 int romdev_on_write(unsigned addr, unsigned char oldv, unsigned char newv,
                     unsigned pc, unsigned rom_off) {
     int hit = 0;
+    observe_write(addr, pc, newv);
     if (wp_enabled && addr == wp_addr && wp_cond_ok(oldv, newv)) {
         wp_last_pc = pc; wp_last_val = newv; wp_last_old = oldv;
         wp_last_rom_off = rom_off; wp_hits++;

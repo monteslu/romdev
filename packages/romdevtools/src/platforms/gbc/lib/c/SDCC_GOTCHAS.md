@@ -69,6 +69,24 @@ Scan backwards from the reported line for code-then-decl mixing.
 The pre-flight linter (`src/toolchains/sdcc/preflight-lint.js`) catches
 mid-block decls with the correct file:line before SDCC runs.
 
+## ROM banks (MBC5): data and code past 32 KB
+
+A cart's first 32 KB are always mapped; anything more lives in switchable 16 KB banks, one at a time at
+`$4000-$7FFF`. The bundled runtime supports it:
+
+- **Data:** a file that starts with `#pragma constseg CODE_<n>` (n = 2-511) keeps every constant in it (strings and
+  pointer tables too) in bank n. Read it after `SWITCH_ROM(n)` and switch back to the bank you came from
+  (`current_rom_bank`, saved before). Reading it without switching reads whatever bank is mapped.
+- **Code:** a file with `#pragma codeseg CODE_<n>` (n = 2-255) and the same `constseg` puts its functions in bank
+  n. Declare the ones other files call `__banked` (prototype and definition): SDCC calls them through
+  `___sdcc_bcall_ehl` in `gb_crt0.s`, which maps bank n, calls, and maps the caller's bank back. Everything else in
+  that file should be `static` - a plain call from another bank would land in whatever bank is mapped. Interrupt
+  handlers and callbacks called from bank 0 code (function pointers) must not live in a bank.
+- Switch banks only with `SWITCH_ROM`, never by writing `$2000` yourself: the trampoline and nested switches rely on
+  `current_rom_bank`. Code that switches must itself sit in the first 16 KB (link it before the rest).
+- The build links bank n at `n << 16 | $4000` (sdasgb with 32-bit addresses; see
+  `scripts/patches/sdcc-sdasgb-32bit-addresses.patch`) and the header must declare an MBC5 cart and the ROM size.
+
 ## Found a new crash?
 
 If you hit a build failure that isn't C89-related and isn't an obvious

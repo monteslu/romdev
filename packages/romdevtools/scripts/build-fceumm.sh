@@ -18,6 +18,7 @@ OUT="$PROJECT_DIR/src/cores/wasm"
 fetch_pinned cores.fceumm "$FCEUMM_DIR"
 
 cd "$FCEUMM_DIR"
+git checkout -- src/sound.c src/input.c src/drivers/libretro/libretro.c src/filter.c src/filter.h src/state.c 2>/dev/null || true
 # Reset the files the patch touches - libretro.c (memory regions + watchpoint
 # exports), sound.c (drop `static` on the APU register holders), and x6502.c
 # (the write-watchpoint hook + state) - so a clean re-apply always works.
@@ -41,6 +42,11 @@ fi
 
 # fceumm's Makefile.libretro is at the repo root.
 cd "$FCEUMM_DIR"
+
+# Versioned multiplayer state extension, applied after the debug/memory patch.
+MP_PATCH="$PROJECT_DIR/scripts/patches/fceumm-multiplayer-state.patch"
+git apply --recount "$MP_PATCH"
+cp "$PROJECT_DIR/scripts/multiplayer/romdev_multiplayer.h" "$FCEUMM_DIR/src/"
 
 # ── romdev shared debug lib (0.80.0) ────────────────────────────────────────
 # Stage romdev_debug.{h,c} into the tree so x6502.c/libretro.c's #include resolves,
@@ -115,7 +121,7 @@ RDBG_OBJ="$FCEUMM_DIR/src/romdev_debug.o"
 emcc -c -O2 "$FCEUMM_DIR/src/romdev_debug.c" -o "$RDBG_OBJ"
 emar rcs "$CORE_LIB" "$RDBG_OBJ"
 
-EXPORTED_FUNCTIONS='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_watchpoint_set","_romdev_watchpoint_set_cond","_romdev_watchpoint_get","_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_watchdog_set","_romdev_regsnap_get","_romdev_irqblock_set","_romdev_vramwatch_set","_romdev_vramwatch_get","_romdev_setreg","_romdev_getreg","_romdev_range_set","_romdev_range_get","_romdev_cov_set","_romdev_cov_get","_romdev_covbits_set","_romdev_covbits_get","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_malloc","_free"]'
+EXPORTED_FUNCTIONS='["_retro_api_version","_retro_init","_retro_deinit","_retro_set_environment","_retro_set_video_refresh","_retro_set_audio_sample","_retro_set_audio_sample_batch","_retro_set_input_poll","_retro_set_input_state","_retro_get_system_info","_retro_get_system_av_info","_retro_load_game","_retro_unload_game","_retro_run","_retro_reset","_retro_serialize_size","_retro_serialize","_retro_unserialize","_retro_cheat_reset","_retro_cheat_set","_romdev_watchpoint_set","_romdev_watchpoint_set_cond","_romdev_watchpoint_get","_romdev_readwatch_set","_romdev_readwatch_get","_romdev_pcbreak_set","_romdev_pcbreak_get","_romdev_watchdog_set","_romdev_regsnap_get","_romdev_irqblock_set","_romdev_vramwatch_set","_romdev_vramwatch_get","_romdev_setreg","_romdev_getreg","_romdev_range_set","_romdev_range_get","_romdev_observe_set","_romdev_observe_add","_romdev_observe_arm","_romdev_observe_get","_romdev_cov_set","_romdev_cov_get","_romdev_covbits_set","_romdev_covbits_get","_retro_get_memory_data","_retro_get_memory_size","_retro_get_region","_retro_set_controller_port_device","_romdev_deterministic_boot","_romdev_deterministic_disable","_romdev_state_schema","_romdev_state_digest","_malloc","_free"]'
 EXPORTED_RUNTIME='["ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAPU16","HEAPU32","HEAP16","HEAP32","HEAPF32","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","FS"]'
 
 mkdir -p "$OUT"
@@ -125,7 +131,7 @@ emcc "$CORE_LIB" \
   -s MODULARIZE=1 \
   -s EXPORT_ES6=1 \
   -s EXPORT_NAME=create_fceumm \
-  -s ENVIRONMENT=node \
+  -s ENVIRONMENT=node,web,worker \
   -s ALLOW_MEMORY_GROWTH=1 \
   -s INITIAL_MEMORY=33554432 \
   -s MAXIMUM_MEMORY=268435456 \

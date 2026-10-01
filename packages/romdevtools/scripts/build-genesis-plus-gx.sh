@@ -120,7 +120,7 @@ emcc "$CORE_LIB" \
   -s MODULARIZE=1 \
   -s EXPORT_ES6=1 \
   -s EXPORT_NAME=create_genesis_plus_gx \
-  -s ENVIRONMENT=node \
+  -s ENVIRONMENT=node,web,worker \
   -s ALLOW_MEMORY_GROWTH=1 \
   -s INITIAL_MEMORY=33554432 \
   -s MAXIMUM_MEMORY=268435456 \

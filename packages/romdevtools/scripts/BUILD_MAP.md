@@ -52,12 +52,13 @@ Toolchain recipes fetch `toolchains.<name>`, build to WASM, and stage into
 `src/toolchains/<name>/wasm/`. ⚠ **Known asymmetry:** unlike the core recipes,
 most toolchain recipes do NOT yet copy into their shipping package automatically -
 the `romdev-toolchain-*/wasm/` copy is synced separately. (Worth unifying: give
-each toolchain recipe the same `PKG_OUT` copy step the core recipes have.)
+each toolchain recipe the same `PKG_OUT` copy step the core recipes have;
+`build-sdcc.sh` has it.)
 
 | Toolchain | Recipe | Ships in |
 |---|---|---|
 | cc65 (ca65/cc65/ld65/da65) | `build-cc65.sh` | `romdev-toolchain-cc65` |
-| SDCC | `build-sdcc.sh` (+ `build-z80-binutils-wasm.sh`) | `romdev-toolchain-sdcc` |
+| SDCC | `build-sdcc.sh` (+ `build-z80-binutils-wasm.sh`), patch `sdcc-sdasgb-32bit-addresses.patch` | `romdev-toolchain-sdcc` |
 | RGBDS | `build-rgbds.sh` | `romdev-toolchain-rgbds` |
 | vasm (m68k) | `build-vasm68k.sh` | `romdev-toolchain-vasm` |
 | m68k GCC + sjasm | `build-m68k-wasm-tools.sh`, `build-sjasm.sh` (toolchain built by `build-m68k-toolchain.sh`) | `romdev-toolchain-m68k-gcc` |
@@ -90,5 +91,13 @@ Built once, consumed by the recipes above - they have no satellite package:
 script's header. To re-pin an upstream, edit [`versions.json`](./versions.json) -
 never a `build-*.sh`. Emscripten itself is pinned in `build-image/Dockerfile`
 (WASM isn't bit-reproducible across emcc versions, so an emsdk bump is deliberate).
+
+## Browser payloads (this fork)
+
+The packages romdev-browser builds from (`romdev-core-fceumm`, `romdev-core-gambatte`, `romdev-core-host`,
+`romdev-toolchain-cc65`, `romdev-toolchain-sdcc`) differ from their npm tarballs here, so a clean checkout takes their
+`wasm/` from a release of this fork instead: after rebuilding any of them, `scripts/browser-payloads.sh publish`
+(uploads `browser-payloads-<content hash>` from the pushed HEAD, writes `browser-payloads.json`; commit it), and
+`scripts/browser-payloads.sh fetch` on the clean checkout.
 
 _This map is hand-maintained; if you add a core/toolchain recipe, add its row._

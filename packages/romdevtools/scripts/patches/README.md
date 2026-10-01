@@ -83,6 +83,14 @@ rizin bump fixes the cast, retest and delete this note.
 
 ---
 
+## Family 4 - SDCC (1 patch, GB / GBC toolchain)
+
+- **`sdcc-sdasgb-32bit-addresses.patch`** - `sdasgb` sets 24-bit addresses (`exprmasks(3)`), and a switchable ROM
+  bank n is linked at `n << 16 | 0x4000`, so from bank 256 up the linker wrapped banks onto 0-255 (data for bank 300
+  landed in bank 44, bank 511 overwrote 255). MBC5 has 512 banks (8 MB). The patch makes the gb assembler use
+  32-bit addresses (`XL4` objects); the recipe rebuilds the sm83 runtime libraries with it. Without it, GB games
+  cannot use more than 4 MB. Drop it if upstream SDCC widens sdasgb.
+
 ## Rules for this directory
 
 - A patch with no entry in this README is a bug - add the justification or

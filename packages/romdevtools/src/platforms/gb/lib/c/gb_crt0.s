@@ -124,6 +124,10 @@ init::
         call    ___sdcc_external_startup
         or      a, a
         call    Z, gsinit
+        ld      a, #1                   ; bank 1 is at $4000 at power-on
+        ld      (_current_rom_bank), a
+        xor     a, a
+        ld      (_current_rom_bank + 1), a
         call    _main
 1$:
         halt
@@ -139,6 +143,50 @@ init::
         .area   _BSEG
         .area   _BSS
         .area   _HEAP
+
+;; ─── ROM banks: the bank at $4000-$7FFF, and SDCC's banked calls ─────
+;; A cart with switchable banks (MBC5: up to 512 x 16 KB) maps one bank at
+;; $4000-$7FFF. _current_rom_bank remembers which; C switches through
+;; SWITCH_ROM (gb_runtime.h), which keeps it. SDCC calls a `__banked`
+;; function (its file has `#pragma codeseg CODE_<n>`) as
+;;     ld e, #<bank>  ;  ld hl, #<function>  ;  call ___sdcc_bcall_ehl
+;; with the arguments on the stack, where the function looks for them 4
+;; bytes further up: our return address and the caller's bank. Code banks
+;; are 1-255 (the bank travels in e). The return value (a, bc or debc)
+;; passes through untouched. This code must stay in bank 0, which it does
+;; as part of crt0.
+        .area   _DATA
+_current_rom_bank::
+        .ds     2
+
+        .area   _CODE
+___sdcc_bcall_ehl::
+        ld      a, (_current_rom_bank)
+        ld      c, a
+        ld      a, (_current_rom_bank + 1)
+        ld      b, a
+        push    bc                      ; the caller's bank
+        ld      a, e
+        ld      (_current_rom_bank), a
+        ld      (0x2000), a             ; MBC5 ROM bank, low 8 bits
+        xor     a, a
+        ld      (_current_rom_bank + 1), a
+        ld      (0x3000), a             ; MBC5 ROM bank, bit 8
+        call    ___sdcc_call_hl
+        push    af                      ; keep an 8-bit return value
+        ldhl    sp, #2                  ; -> the caller's bank
+        ld      a, (hl+)
+        ld      (_current_rom_bank), a
+        ld      (0x2000), a
+        ld      a, (hl)
+        ld      (_current_rom_bank + 1), a
+        ld      (0x3000), a
+        pop     af
+        pop     hl                      ; drop the saved bank (hl is free)
+        ret
+___sdcc_call_hl:
+        jp      (hl)
+
 
         .area   _GSINIT
 gsinit::

@@ -1,0 +1,9 @@
+diff --git a/src/SDCCmain.c b/src/SDCCmain.c
+--- a/src/SDCCmain.c
++++ b/src/SDCCmain.c
+@@ -1731,7 +1731,7 @@
+   /* if debug option is set then open the cdbFile */
+-  if (options.debug && fullSrcFileName)
++  if (options.debug && (fullSrcFileName || options.c1mode))
+     {
+       struct dbuf_s adbFile;
