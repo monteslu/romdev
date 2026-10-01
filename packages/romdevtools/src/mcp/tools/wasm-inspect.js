@@ -13,10 +13,24 @@ import { jsonContent, safeTool, parseHexBytes } from "../util.js";
 
 const INLINE_HEX_LIMIT = 4096;
 
+/** A bytes field comes back from CartHost as a Uint8Array, which JSON turns
+ *  into an object with one key per byte (a 256-byte command buffer printed
+ *  as 256 lines). Render it as hex, plus the text up to the first NUL when
+ *  that prefix is printable: most byte fields are strings. */
+function renderBytes(v) {
+  if (!v || !(v.bytes instanceof Uint8Array)) return v;
+  const b = Buffer.from(v.bytes);
+  const nul = b.indexOf(0);
+  const head = b.subarray(0, nul < 0 ? b.length : nul);
+  const printable = head.every((c) => c === 9 || c === 10 || c === 13 || (c >= 32 && c < 127));
+  const { bytes: _b, ...rest } = v;
+  return { ...rest, length: b.length, hex: b.toString("hex"), ...(printable ? { text: head.toString("latin1") } : {}) };
+}
+
 /** Decode a named debug field to {value} or {values}/{bytes}, dropping the
  *  redundant name/type the caller already has from the field descriptor. */
 function decodeName(host, fieldName) {
-  const v = host.readDebugValue(fieldName);
+  const v = renderBytes(host.readDebugValue(fieldName));
   const { name: _n, type: _t, ...rest } = v;
   return rest;
 }
@@ -51,7 +65,7 @@ export function registerWasmInspectTools(server, z, sessionKey) {
     "BY NAME (player_x, hp, ...), each with type + current value. The source-level view an emulator can't give - reading " +
     "`player_x` instead of a raw offset. Only present when the cart set WC_FLAG_DEBUG + exports wc_debug_state(); " +
     "otherwise says so.\n" +
-    "• 'read' {name} OR {offset,length} / 'write' {name,value} OR {offset,hex|base64} - with `name`, resolves a debug " +
+    "• 'read' {name} OR {offset,length} / 'write' {name,value} OR {name,hex} (a bytes field) OR {offset,hex|base64} - with `name`, resolves a debug " +
     "field to its offset+type and reads/writes it DECODED (the preferred path when the cart exposes debug state). With " +
     "`offset`, peeks/pokes the RAW heap byte-wise (the fallback: raw offsets are opaque without the debug table, and " +
     "you own the source, so prefer `name`).\n" +
@@ -131,10 +145,25 @@ export function registerWasmInspectTools(server, z, sessionKey) {
       }
 
       if (op === "read" && name != null) {
-        return jsonContent({ ...host.readDebugValue(name) });
+        return jsonContent({ ...renderBytes(host.readDebugValue(name)) });
+      }
+      if (op === "write" && name != null && value == null && (hex != null || base64 != null)) {
+        // A bytes field written by name: the descriptor bounds the write, so a
+        // harness never needs the raw offset (which moves on every rebuild).
+        const field = (host.readDebugState?.() ?? []).find((f) => f.name === name);
+        if (!field) throw new Error(`wasm({op:'write', name}): the cart has no debug field '${name}'.`);
+        if (field.type !== 8) {
+          throw new Error(`wasm({op:'write', name:'${name}'}): hex/base64 writes need a bytes field; '${name}' is ${field.typeName ?? field.type}, so pass \`value\`.`);
+        }
+        const buf = hex != null ? parseHexBytes(hex, "wasm write: hex") : new Uint8Array(Buffer.from(base64, "base64"));
+        if (buf.length > field.len) {
+          throw new Error(`wasm({op:'write', name:'${name}'}): ${buf.length} bytes exceeds the field's ${field.len}.`);
+        }
+        const n = host.writeMemory(field.valuePtr, buf);
+        return jsonContent({ name, wrote: n, atOffset: field.valuePtr, note: "wrote the named bytes field; step a frame to see it take effect." });
       }
       if (op === "write" && name != null) {
-        if (value == null) throw new Error("wasm({op:'write', name}): `value` is required for a named scalar write.");
+        if (value == null) throw new Error("wasm({op:'write', name}): `value` is required for a named scalar write (or `hex`/`base64` for a bytes field).");
         const at = host.writeDebugValue(name, value);
         return jsonContent({ name, wrote: value, atOffset: at, note: "wrote the named debug field; step a frame to see it take effect." });
       }

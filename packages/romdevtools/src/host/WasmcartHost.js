@@ -544,12 +544,21 @@ export class WasmcartHost {
     for (const [name, wc] of Object.entries(RETROPAD_TO_WASMCART)) {
       if (src[name] && BUTTON[wc] != null) buttons |= BUTTON[wc];
     }
+    // The validated analog channel is `axes` ({lx,ly,rx,ry} in -1..1, {lt,rt}
+    // in 0..1). It used to be accepted by input({op:'set'}) and then dropped
+    // here, so every stick move a harness sent a wasmcart cart was a silent
+    // no-op. The raw leftX..rightTrigger keys (wasmcart units) still win when
+    // given, for callers that already speak the pad struct.
+    const ax = src.axes && typeof src.axes === "object" ? src.axes : {};
+    const stick = (v) => Math.max(-32768, Math.min(32767, Math.round((Number(v) || 0) * 32767)));
+    const trigger = (v) => Math.max(0, Math.min(255, Math.round((Number(v) || 0) * 255)));
+    const pick = (raw, scaled) => (raw !== undefined ? raw | 0 : scaled);
     return {
       connected: true,
       buttons,
-      leftX: src.leftX | 0, leftY: src.leftY | 0,
-      rightX: src.rightX | 0, rightY: src.rightY | 0,
-      leftTrigger: src.leftTrigger | 0, rightTrigger: src.rightTrigger | 0,
+      leftX: pick(src.leftX, stick(ax.lx)), leftY: pick(src.leftY, stick(ax.ly)),
+      rightX: pick(src.rightX, stick(ax.rx)), rightY: pick(src.rightY, stick(ax.ry)),
+      leftTrigger: pick(src.leftTrigger, trigger(ax.lt)), rightTrigger: pick(src.rightTrigger, trigger(ax.rt)),
     };
   }
 

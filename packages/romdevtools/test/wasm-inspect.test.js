@@ -193,3 +193,41 @@ test("WasmcartHost.framebufferHash is stable per frame + shifts on change", asyn
   // static hello cart - assert only determinism + type, not content).
   assert.equal(typeof host.framebufferHash(), "number");
 });
+
+// A bytes field is rendered as hex (+ text when printable), not as a JSON
+// object with one key per byte, and can be written by name.
+function bytesHost() {
+  const store = new Uint8Array(32);
+  store.set(Buffer.from("oa_dm1"), 0);
+  const fields = [{ name: "mapname", type: 8, typeName: "bytes", valuePtr: 0x300, len: 16 },
+    { name: "hp", type: 0, typeName: "u8", valuePtr: 0x320, len: 1 }];
+  return {
+    getCapabilities: () => ({ kind: "wasmcart", hasWasmIntrospection: true, hasDebugState: true }),
+    readDebugState: () => fields,
+    readDebugValue: (name) => {
+      const f = fields.find((x) => x.name === name);
+      if (f.type === 8) return { name, type: "bytes", bytes: store.slice(f.valuePtr - 0x300, f.valuePtr - 0x300 + f.len) };
+      return { name, type: "u8", value: 1 };
+    },
+    writeMemory: (offset, bytes) => { store.set(bytes, offset - 0x300); return bytes.length; },
+  };
+}
+
+test("wasm({op:'read', name}) renders a bytes field as hex + text", async () => {
+  _setHostForTest("dbgbytes1", bytesHost());
+  const r = parse(await getWasmHandler("dbgbytes1")({ op: "read", name: "mapname" }));
+  assert.equal(r.text, "oa_dm1");
+  assert.equal(r.length, 16);
+  assert.equal(r.hex.slice(0, 12), Buffer.from("oa_dm1").toString("hex"));
+  assert.equal(r.bytes, undefined);
+});
+
+test("wasm({op:'write', name, hex}) writes a bytes field within its length", async () => {
+  _setHostForTest("dbgbytes2", bytesHost());
+  const h = getWasmHandler("dbgbytes2");
+  const w = parse(await h({ op: "write", name: "mapname", hex: Buffer.from("q3dm17\0").toString("hex") }));
+  assert.equal(w.atOffset, 0x300);
+  assert.equal(parse(await h({ op: "read", name: "mapname" })).text, "q3dm17");
+  assert.match(errText(await h({ op: "write", name: "mapname", hex: "00".repeat(17) })), /exceeds the field's 16/);
+  assert.match(errText(await h({ op: "write", name: "hp", hex: "01" })), /need a bytes field/);
+});

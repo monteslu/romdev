@@ -93,3 +93,20 @@ test("wasmcart: emulator-only ops are absent (cheats unsupported)", async () => 
   assert.equal(host.cheatsSupported(), false);
   host.destroy();
 });
+
+test("wasmcart: input axes reach the pad as stick/trigger values", () => {
+  // input({op:'set'}) validates {axes:{lx..rt}}; the wasmcart host used to drop
+  // them, so a harness's stick input never reached the cart.
+  const host = new WasmcartHost();
+  const pad = host._padFromInput({ a: true, axes: { lx: 1, ly: -0.5, rx: -1, ry: 0.25, lt: 1, rt: 0.5 } });
+  assert.equal(pad.leftX, 32767);
+  assert.equal(pad.leftY, -16383);   // -0.5 * 32767 rounds toward +inf
+  assert.equal(pad.rightX, -32767);
+  assert.equal(pad.rightY, 8192);
+  assert.equal(pad.leftTrigger, 255);
+  assert.equal(pad.rightTrigger, 128);
+  // raw pad-struct keys still win when given
+  assert.equal(host._padFromInput({ leftX: 123, axes: { lx: 1 } }).leftX, 123);
+  // no axes = centered
+  assert.equal(host._padFromInput({}).leftX, 0);
+});
