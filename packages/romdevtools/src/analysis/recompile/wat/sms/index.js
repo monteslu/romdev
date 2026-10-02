@@ -30,6 +30,7 @@ import { smsSoundWat, smsSoundInfo } from "./psg.js";
 import { hwWat, renderWat, psgWat, miscWat, cramBody, startBody, pauseNmiWat, ggLutBytes, hcounterBytes, hcolBytes, hlatchBytes, VRAM, CRAM, VREG, GGLUT, PROBE, PCWATCH, SMSFB, LINEPROBE, HCTAB, HCOLTAB, HLATTAB } from "./hw.js";
 import { watBytes } from "../cart-abi.js";
 import { emitFlatWat } from "./flat.js";
+import { z80Templates, z80InterpWat } from "./interp.js";
 
 export const platforms = ["sms", "gg"];
 export const REFERENCE_CORE = "genesis_plus_gx";
@@ -121,7 +122,7 @@ function segaHeader(img) {
  *                negative runs the wrong bank's code, so the scan errs wide.
  *   pagesSlot0   the same for slot 0: a direct store to $FFFD (Sega) or
  *                $0000 (Codemasters). Without it, code run from a paged
- *                slot 0 traps instead of running page 0's arms.
+ *                slot 0 has no arms and runs in the interpreter.
  *
  * Options (all optional):
  *   platform: 'sms'|'gg'
@@ -146,7 +147,19 @@ function segaHeader(img) {
  *   legacy: boolean          reproduce sms-wat's emit_bank.py module exactly
  *                            (interrupts sampled only at scanline starts, no
  *                            register probe); for the differential gate.
+ *   ramInterpreter: boolean  (default true; the banked, non-legacy model)
+ *                            the Z80 interpreter (interp.js): every pc with
+ *                            no compiled arm runs through the arm the backend
+ *                            compiles for that encoding, with its address and
+ *                            operand bytes read at run time. Code the game
+ *                            writes into RAM, RAM code whose bytes changed,
+ *                            and a slot paged to a bank its arms were not
+ *                            compiled for all run exactly, with no discovery
+ *                            and no option. false is a MUST-FAIL CONTROL only:
+ *                            such a pc traps (trapped=1, trappc=the pc).
  *   ramCode: true | false | {frames, input}
+ *                            A SPEED OPTIMISATION ONLY: RAM code runs
+ *                            without it too, interpreted (ramInterpreter).
  *                            DEFAULT (option absent, banked emitter, ROM on
  *                            disk, no ramRegions / ramSnapshot*): AUTOMATIC.
  *                            The reference runs 3000 frames from power-on
@@ -154,14 +167,13 @@ function segaHeader(img) {
  *                            cart is built as with ramCode:true, otherwise
  *                            exactly as without it. false turns that off.
  *                            true / {frames, input}:
- *                            DISCOVER RAM-resident code from the reference
- *                            itself: run it `frames` frames from power-on
- *                            (default 3000) on the `input` schedule, record
- *                            every RAM pc it executes and every encoding seen
- *                            there, and compile each as a guarded variant (a
- *                            RAM instruction the discovery never saw traps
- *                            instead of running stale bytes). Implies a
- *                            whole-RAM region ($C000, 8KB).
+ *                            COMPILE the RAM-resident code the reference
+ *                            itself runs: `frames` frames from power-on
+ *                            (default 3000) on the `input` schedule, every
+ *                            RAM pc it executes and every encoding seen
+ *                            there, each as a guarded variant; bytes no
+ *                            variant matches run in the interpreter. Implies
+ *                            a whole-RAM region ($C000, 8KB).
  *   traceEntries: number     ALSO record a whole-frame instruction ring WITH
  *                            the Z80 registers for findDiverge
  *                            level:'instruction' (a power of two, 1024 to
@@ -301,6 +313,7 @@ export function describe(rom, opts = {}) {
     region,
     legacy: opts.legacy === true,
     traceEntries,
+    ramInterpreter: opts.ramInterpreter !== false && opts.legacy !== true && emitter === "banked",
     breakArm: parseBreakArm(opts.breakArm),
     probeRegs: opts.probeRegs !== false && opts.legacy !== true,
     supported,
@@ -738,8 +751,9 @@ ${RAMMAP_LOOKUP}    (i32.const 0))
  *    RAM at $A000-$BFFF; the register writes do not reach memory.
  *  - 'korean-a000' (write_mapper_korea_16k_v1): $A000 pages slot 2.
  *  - 'none': no registers; the image is already the CPU's view (noMapperImage).
- * Code fetched from a slot the scan did not find paged traps (a page other
- * than the one its arms were compiled for) instead of running wrong code.
+ * Code fetched from a slot the scan did not find paged (a page other than the
+ * one its arms were compiled for) has no arm there, so it runs in the
+ * interpreter, which reads the bytes the live mapping shows.
  */
 function bankHelpersExactWat(G, cfg, nbank) {
   const { ROMIMG, CARTRAM, BMAP0, BMAPP, BMAP1, BMAPR, BMAPS0 } = G;
@@ -1164,6 +1178,7 @@ ${REGPROBE}${cfg.traceEntries ? `    (i32.store (i32.const ${PROBE + BIGRING_BAS
   (export "dbg_l" (global $l))
   (export "dbg_a" (global $a))
   (export "dbg_sp" (global $sp))
+  (export "dbg_interps" (global $interps))
 `;
 }
 
@@ -1220,7 +1235,7 @@ function rebaseSnap(ops) {
   return ops.replace(/\$([0-9A-Fa-f]{4})/g, (m, h) => { const v = parseInt(h, 16); return v < 0x2000 ? "$" + (v + 0xC000).toString(16).toUpperCase().padStart(4, "0") : m; });
 }
 
-class Emitter {
+export class Emitter {
   /**
    * @param {Uint8Array} img
    * @param {object} cfg describe() result
@@ -1239,6 +1254,11 @@ class Emitter {
     this.unsupported = 0;
     this.missing = 0;
     this.ramVariants = 0;
+  }
+
+  /** An arm with nothing compiled for the bytes it finds: the interpreter (with ramInterpreter:false, a trap). */
+  fallback() {
+    return this.cfg.ramInterpreter ? "    (return (call $z80_interp (local.get $budget)))" : "    (call $trap)";
   }
 
   /** Z80 address + bank -> ROM file offset, or null when unmappable. */
@@ -1266,8 +1286,8 @@ class Emitter {
    * RAM-resident code (exact mode): one guarded variant per distinct
    * encoding the reference was seen executing at this address (or the
    * snapshot's, for an address never executed during discovery). The guard
-   * compares the live RAM bytes with the variant's; code the discovery never
-   * saw traps loudly instead of running stale bytes.
+   * compares the live RAM bytes with the variant's; bytes no variant matches
+   * run in the interpreter.
    */
   ramArm(addr, bank, snapoff) {
     const off = snapoff & 0x1FFF;
@@ -1284,7 +1304,7 @@ class Emitter {
       seen.add(key);
       variants.push({ n, text: ent[1], bytes });
     }
-    if (!variants.length) { this.missing++; return "    (call $trap)"; }
+    if (!variants.length) { this.missing++; return this.fallback(); }
     this.ramVariants += variants.length;
     const parts = [];
     for (const v of variants) {
@@ -1295,7 +1315,7 @@ class Emitter {
       const body = this.body(addr, bank, v.n, [[addr, v.n, txt]], (k) => v.bytes[k] ?? null, v.bytes[0]);
       parts.push(`    (if ${guard}\n      (then\n${body}\n      (return (local.get $budget))))`);
     }
-    parts.push("    (call $trap)");
+    parts.push(this.fallback());
     return parts.join("\n");
   }
 
@@ -1311,7 +1331,7 @@ class Emitter {
     let ins;
     if (snapoff !== null) {
       const ent = this.snapIdx.get(snapoff);
-      if (!ent) { this.missing++; return "    (call $trap)"; }
+      if (!ent) { this.missing++; return this.fallback(); }
       const mn0 = splitMnem(ent[1])[0];
       // The pseudo-ROM decodes at 0, so relative targets are rebased into RAM;
       // absolute operands are real CPU addresses in the bytes already.
@@ -1320,7 +1340,7 @@ class Emitter {
     } else {
       const off = this.fileOff(addr, bank);
       const ent = off === null ? undefined : this.idx.get(off);
-      if (!ent) { this.missing++; return "    (call $trap)"; }
+      if (!ent) { this.missing++; return this.fallback(); }
       ins = [[off, ent[0], ent[1]]];
     }
     return this.body(addr, bank, size, ins, (k) => this.romByte(addr, bank, k), snapoff === null ? undefined : null);
@@ -1443,6 +1463,7 @@ export async function discoverRamCode(romPath, platform, o = {}) {
     const executed = new Set();
     const windows = new Map();
     const snapshots = [];
+    let truncated = null;
     for (let f = 1; f <= frames + settle; f++) {
       const rf = f - settle;
       if (rf >= 0) driver._apply(driver._want(rf));
@@ -1459,9 +1480,11 @@ export async function discoverRamCode(romPath, platform, o = {}) {
         if (!set.has(key)) { set.add(key); changed = true; }
       }
       if (changed) snapshots.push(ram);
-      if (snapshots.length > 256) throw new Error("sms recompile: ramCode saw more than 256 distinct RAM code states; this cart generates code at run time and cannot be compiled statically");
+      // code generated at run time keeps changing: compiling more states
+      // only grows the cart, the interpreter runs whatever was not compiled
+      if (snapshots.length > 256) { snapshots.pop(); truncated = f - settle; break; }
     }
-    return { snapshots, executed, frames };
+    return { snapshots, executed, frames, ...(truncated !== null ? { truncatedAtFrame: truncated } : {}) };
   } finally {
     try { host.dispose?.(); } catch { /* best effort */ }
   }
@@ -1682,7 +1705,8 @@ export async function* emitWat(rom, opts = {}) {
     "  (global $frames (mut i32) (i32.const 0))",
     "  (global $irqs (mut i32) (i32.const 0))",
     "  (global $tracei (mut i32) (i32.const 0))",
-    "  (global $linectr (mut i32) (i32.const 0))");
+    "  (global $linectr (mut i32) (i32.const 0))",
+    "  (global $interps (mut i32) (i32.const 0))");
   head.push(cfg.legacy ? bankHelpersWat(G, cfg, NBANK) : bankHelpersExactWat(G, cfg, NBANK));
   head.push(flagHelpersWat({ exact: !cfg.legacy }));
   head.push(hwWat(PLATFORM, { exact: !cfg.legacy, region: cfg.region, pal: cfg.pal, fm: cfg.fm, sms1: cfg.vdp === "315-5124", ggms: cfg.ggms }));
@@ -1693,6 +1717,11 @@ export async function* emitWat(rom, opts = {}) {
   head.push(miscWat({ exact: !cfg.legacy }));
   head.push("  (func $trap (global.set $trapped (i32.const 1)) (global.set $trappc (global.get $pc)))");
   yield head.join("\n") + "\n";
+  let interp = null;
+  if (cfg.ramInterpreter) {
+    interp = await interpTemplates();
+    yield z80InterpWat(interp.templates);
+  }
 
   const em = new Emitter(CODE, cfg, idx, snaps, executed);
   const nshard = Math.ceil(n / SHARD_SZ);
@@ -1778,7 +1807,9 @@ export async function* emitWat(rom, opts = {}) {
       `(i32.add (i32.load (i32.const ${b + 4})) (i32.const 1)))))`);
   }
   r.push("      (local.set $id (call $blockid (global.get $pc)))",
-    "      (if (i32.eqz (local.get $id)) (then (call $trap) (br $exit)))",
+    cfg.ramInterpreter
+      ? "      (if (i32.eqz (local.get $id)) (then (local.set $budget (call $z80_interp (local.get $budget))) (br $next)))"
+      : "      (if (i32.eqz (local.get $id)) (then (call $trap) (br $exit)))",
     "      (local.set $id (i32.sub (local.get $id) (i32.const 1)))",
     `      (local.set $sh (i32.div_u (local.get $id) (i32.const ${SHARD_SZ})))`,
     `      (local.set $id (i32.rem_u (local.get $id) (i32.const ${SHARD_SZ})))`);
@@ -1833,8 +1864,9 @@ export async function* emitWat(rom, opts = {}) {
     pagesSlot1: cfg.pagesSlot1,
     ramArms: cfg.ramRegions.reduce((a, rr) => a + Math.min(rr.bytes, 0x10000 - rr.cpu), 0),
     ramVariants: em.ramVariants,
-    ...(discovery ? { ramCode: { frames: discovery.frames, snapshots: discovery.snapshots.length, executedRamPcs: discovery.executed.size, ...(autoRam ? { automatic: true } : {}) } }
-      : autoRam ? { ramCode: { automatic: true, frames: autoRam.frames, executedRamPcs: 0, note: "the reference executed no RAM code with no input; pass ramCode:{input} if gameplay reaches some" } } : {}),
+    ramInterpreter: interp ? { templates: interp.stats.keys } : false,
+    ...(discovery ? { ramCode: { frames: discovery.frames, snapshots: discovery.snapshots.length, executedRamPcs: discovery.executed.size, ...(discovery.truncatedAtFrame != null ? { truncatedAtFrame: discovery.truncatedAtFrame } : {}), ...(autoRam ? { automatic: true } : {}) } }
+      : autoRam ? { ramCode: { automatic: true, frames: autoRam.frames, executedRamPcs: 0, note: "the reference executed no RAM code with no input; RAM code the game runs later is interpreted (ramCode:{input} compiles it instead, for speed)" } } : {}),
     irUnresolvedOffsets: irStats.unresolvedOffsets,
     memory: { pages, ...G },
   });
@@ -1842,6 +1874,19 @@ export async function* emitWat(rom, opts = {}) {
     if (!em.broken) throw new Error(`sms recompile: options.breakArm $${cfg.breakArm.toString(16)} is not the start of any compiled instruction`);
     stats.brokenArms = em.broken;
   }
+}
+
+/**
+ * The interpreter's templates (interp.js) from this backend's own decode and
+ * lowering: the ROM arms' Emitter.body() on the exact (non-legacy) model.
+ */
+export function interpTemplates() {
+  const em = new Emitter(new Uint8Array(0), { legacy: false, breakArm: null, ramRegions: [], ramInterpreter: true }, new Map(), [], null);
+  return z80Templates({
+    decode: async (img) => (await instructionIndex(img, "sms")).idx,
+    body: (a, size, ins, byteAt) => em.body(a, 0, size, ins, byteAt, undefined),
+    length: z80Length,
+  });
 }
 
 /**

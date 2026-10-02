@@ -406,6 +406,14 @@ export class Tr {
           a.usesTables.add(base.name);
           return vw(`(call $tab_${base.name} ${idx.e()})`, I32);
         }
+        // the interpreter (interp.js, Arm.dynReg): a register READ whose number
+        // comes from an extension word read at run time (m68ki_get_ea_ix's
+        // REG_DA[extension >> 12]) goes through $dar_get
+        if (a.dynReg && base.k === "StructRef" && base.name.k === "ID" && base.name.name === "m68k" && base.field.name === "dar") {
+          const idx = this.expr(node.subscript, sc);
+          if (idx.c === null) return vw(`(call $dar_get (i32.and ${idx.e()} (i32.const 15)))`, U32);
+          return this.readLv(["glob", this.regGlobal("dar", idx.c), U32]);
+        }
         return this.readLv(["glob", this.ptrOfArrayref(node, sc), U32]);
       }
       case "Cast": {
@@ -898,8 +906,10 @@ function charCode(lit) {
  * @param {(p:number)=>number} fetch16
  * @returns {{body:string, nlocals:number}}  body ends with $pc set and the base cycles added
  */
-export function translateM68k(m68k, ir, pc, fetch16) {
+export function translateM68k(m68k, ir, pc, fetch16, o = {}) {
   const arm = new Arm(ir, pc, fetch16, m68k.tables);
+  // o.dynReg (the interpreter only): register numbers from run-time extension words
+  if (o.dynReg) arm.dynReg = true;
   arm.usesTables = new Set();
   const fd = m68k.astOf(m68k.handlerName(ir));
   const tr = new Tr(arm, m68k.astOf);

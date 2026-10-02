@@ -59,6 +59,34 @@ the bar is never lowered). `auto:false` restores the "pass atFrames" error.
 New `src/host/auto-verify.js`; `seededPlay` and `DEFAULT_BAR` are now shared
 from `verify-recompile.js` (the wrong-input script is unchanged).
 
+### Recompile: RAM code runs exactly with no discovery (SMS/GG and Genesis interpreters)
+
+A whole-ROM recompile no longer needs to know up front which code a game will
+run from RAM. Any pc with no compiled arm now runs in an interpreter built
+from the backend's own per-instruction lowering, so code the game writes into
+RAM at run time, RAM code it patches, and (SMS/GG) a slot paged to a bank its
+arms were not compiled for run exactly with default options:
+
+- SMS/GG (`wat/sms/interp.js`): one template per Z80 encoding (1786 keys),
+  each the compiled arm (`Emitter.body()`: lowering, cycle costs, R, WZ,
+  IN/OUT timing) abstracted over the instruction address and operand bytes.
+  Every template is fitted on sampled instructions and must reproduce the
+  directly lowered arm on further random and edge samples, or the build
+  fails. RAM-code discovery (`ramCode`, automatic by default) is now only a
+  speed optimisation; past 256 RAM states it stops instead of failing the
+  build.
+- Genesis (`wat/genesis/interp.js`): one handler per 68000 opcode word
+  (65536), gpgx's Musashi handler translated by ctrans.js as a ROM arm is,
+  with extension words read at run time ($ifetch16, gpgx's memory_map fetch)
+  and every address-dependent constant relocated to `$curpc` (checked against
+  direct translations at other addresses). Copy-loop scan, reference trace
+  and `options.ramCode` remain as speed optimisations. The Genesis Z80 already
+  ran from Z80 RAM through gpgx's own handlers.
+- `options.ramInterpreter:false` (both backends) is a must-fail control only:
+  such a pc traps as before.
+
+NES (`$dynop`), GB/GBC, SNES and GBA already ran RAM code generically.
+
 ### sync32: video mode 2, a 128x128 canvas
 
 `build({platform:'sync32', video:'128'})` writes header video_mode 2
