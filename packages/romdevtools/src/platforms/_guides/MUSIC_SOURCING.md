@@ -69,8 +69,9 @@ rough on a dense full mix. The chain uses optional open-source helpers (none
 bundled; suggest by name + install + license):
 
 **Step 1 - audio → MIDI (the hard MIR step):**
-- **Spotify Basic Pitch** - https://github.com/spotify/basic-pitch - Apache-2.0,
-  `pip install basic-pitch`. Neural audio→MIDI; best free general-purpose one,
+- **Spotify Basic Pitch** - https://github.com/spotify/basic-pitch-ts - Apache-2.0,
+  `npm install @spotify/basic-pitch` (the JS/TypeScript build, runs on
+  TensorFlow.js in node). Neural audio→MIDI; best free general-purpose one,
   polyphonic, handles real instruments. The headline helper for "my song → notes."
 - **aubio** - https://aubio.org - GPL. Lighter onset/pitch/tempo/BPM detection;
   good for monophonic melody + tempo extraction.
