@@ -105,6 +105,12 @@ export const RetroMemory = {
   /** 20 bytes, 5 u32 LE: [0] master clock since line 0 (V_Counter*H_Max + Cycles),
    *  [1] CPU.Cycles, [2] CPU.V_Counter, [3] Timings.H_Max, [4] TotalEmulatedFrames. */
   SNES_TIMING:        0x1B8,
+  /** The active coprocessor's internal state, serialized on read by the same
+   *  romdev_chipstate.h the recompiled cart's chip units compile (DSP-3, ST011,
+   *  ST018, S-RTC, SPC7110, BS-X); size 0 on any other cart. */
+  SNES_CHIPSTATE:     0x1B9,
+  /** The BS-X's 512KB PSRAM (where the BIOS loads a BS program); BS-X carts only. */
+  SNES_BSX_PSRAM:     0x1BA,
   GENESIS_CRAM:       0x120,
   GENESIS_VSRAM:      0x121,
   GENESIS_VDP_REGS:   0x122,
@@ -293,6 +299,8 @@ export const MemoryRegionToRetro = {
   snes_lp_world: RetroMemory.SNES_LP_WORLD,
   snes_lp_obj: RetroMemory.SNES_LP_OBJ,
   snes_timing: RetroMemory.SNES_TIMING,
+  snes_chipstate: RetroMemory.SNES_CHIPSTATE,
+  snes_bsx_psram: RetroMemory.SNES_BSX_PSRAM,
   genesis_cram: RetroMemory.GENESIS_CRAM,
   genesis_vsram: RetroMemory.GENESIS_VSRAM,
   genesis_vdp_regs: RetroMemory.GENESIS_VDP_REGS,

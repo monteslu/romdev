@@ -71,3 +71,8 @@ extern "C" void romdev_dsp_reset (void) { S9xResetDSP(); }
 /* getset.h MAP_DSP: S9xGetDSP(Address & 0xffff) / S9xSetDSP(Byte, Address & 0xffff) */
 extern "C" int romdev_dsp_get (int address) { return S9xGetDSP((uint16) address); }
 extern "C" void romdev_dsp_set (int byte, int address) { S9xSetDSP((uint8) byte, (uint16) address); }
+
+/* the DSP-3's state as the reference serves it (romdev_chipstate.h) */
+#define ROMDEV_CS_DSP3
+#include "romdev_chipstate.h"
+extern "C" int romdev_dsp3_chipstate (uint8 *o) { return (int) romdev_cs_dsp3(o); }

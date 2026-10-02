@@ -49,6 +49,10 @@ fi
 # keeps only the 65816 hooks + setReg/getReg + the VRAM-port watch + memory regions.
 RDBG_SRC="$PROJECT_DIR/scripts/romdev-debug"
 cp "$RDBG_SRC/romdev_debug.h" "$RDBG_SRC/romdev_debug.c" "$SNES9X_DIR/"
+# The coprocessor state serializer (snes_chipstate region): the SAME file the
+# recompiler's chip units compile (scripts/recompile-gen/snes9x-chips), so the
+# reference and a recompiled cart write identical bytes.
+cp "$PROJECT_DIR/scripts/recompile-gen/snes9x-chips/glue/romdev_chipstate.h" "$SNES9X_DIR/libretro/"
 ROMDEV_INC="-I$SNES9X_DIR"
 
 # Build the libretro static archive (.a) using snes9x's own emscripten

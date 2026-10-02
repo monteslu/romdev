@@ -24,19 +24,20 @@
 //             ROM buffer)
 //   +0x01000  the compiled unit
 //   +0x10000  the 64KB DMA buffer
+//   +0x20000  the chip's state for the verifier (chip-unit.js chipstateWat),
+//             its last 32 bytes the options.saveRtc image
 //
 // Plain JS ESM + JSDoc.
 
 import { ROM, MAPTAB } from "./layout.js";
 import { mapMirror } from "./memmap.js";
-import { unitWat, unitFn, unitStart, unitSize } from "./chip-unit.js";
+import { unitWat, unitFn, unitStart, unitSize, chipstateWat, chipstateRegion, rtcRestoreWat } from "./chip-unit.js";
+import { chipRegions, chipTimeWat } from "./chips-snes9x.js";
 import { RTC_CLOCK } from "../../recompile-section.js";
 
-const ZERO = 0x0000, UNIT = 0x1000, DMABUF = 0x10000;
+const ZERO = 0x0000, UNIT = 0x1000, DMABUF = 0x10000, STATE = 0x20000, RTCSLOT = STATE + 0xffe0;
 if (UNIT + unitSize("spc7110") > DMABUF) throw new Error("spc7110: the compiled unit outgrew its slot");
 
-/** The wasmcart host's clock block (frame-wat.js wc_get_info timePtr): f64 timeMs. */
-const timeAddr = (lay) => lay.ABI + 0x180;
 
 /** Map_SPC7110HiROMMap (map_System and map_WRAM are memmap.js's). */
 function buildMap(api, lay) {
@@ -66,12 +67,11 @@ function wat(lay, d) {
   const fn = (n) => unitFn("spc7110", n);
   const start = unitStart("spc7110");
   const rtc = d.chipset === 0xf9 ? 1 : 0;
-  return `
+  const restore = rtcRestoreWat("spc7110", "romdev_spc7110_rtcdata", d.saveRtcBytes, C + RTCSLOT);
+  return restore.data + chipstateWat("spc7110", "romdev_spc7110_chipstate", C + STATE) + `
 ${unitWat("spc7110", C + UNIT)}
-  ;; time(): the host's frame clock as emscripten's time() reads Date.now()
-  ;; (recompile-section.js RTC_CLOCK; the verifier pins snes9x to it)
-  (func $chip_time (param $p i32) (result i64)
-    (i64.trunc_f64_s (f64.div (f64.add (f64.const ${RTC_CLOCK.baseMs}) (f64.load (i32.const ${timeAddr(lay)}))) (f64.const 1000))))
+  ;; time(): the host's frame clock, lagged to snes9x's settle frames as every
+  ;; snes9x chip clock is (chips-snes9x.js chipTimeWat; RTC_CLOCK pins the reference)${chipTimeWat(lay)}
 
   ;; $D0-$FF from dx/ex/fx_offset: block b of window w reads Memory.ROM[offset + b * 4KB]
   (func $spc7110_map
@@ -99,6 +99,7 @@ ${unitWat("spc7110", C + UNIT)}
     ${start ? `(call ${start})` : ""}
     (call ${fn("romdev_spc7110_init")} (i32.const ${ROM}) (i32.const ${lay.romlen}) (i32.const ${rtc}))
     (call ${fn("romdev_spc7110_reset")})
+    ${restore.call}
     (call $spc7110_map))
 
   ;; S9xGetCPU: at $4800 and up S9xGetSPC7110 (its unknown addresses read OpenBus)
@@ -140,8 +141,11 @@ export const spc7110 = {
   board: ({ hiRom }) => (hiRom ? "SPC7110HiROM" : null),
   boards: ["SPC7110HiROM"],
   buildMap: (api, lay) => { if (api.map === "SPC7110HiROM") buildMap(api, lay); },
-  pages: (DMABUF + 0x10000) / 0x10000,
+  pages: (STATE + 0x10000) / 0x10000,
   wat,
   /** the RTC-4513 ($F9 carts) reads the host's frame clock; the verifier pins snes9x's time() to it */
-  section: (d) => (d.chipset === 0xf9 ? { clock: { ...RTC_CLOCK } } : {}),
+  // its registers, decompressor and RTC (chipstate) and the battery SRAM the
+  // games keep their state in are compared
+  section: (d) => ({ ...(d.chipset === 0xf9 ? { clock: { ...RTC_CLOCK } } : {}), ...chipRegions(d, chipstateRegion("spc7110", "romdev_spc7110_chipstate", d.memory.CHIP + STATE), true) }),
+  rtc: (d) => d.chipset === 0xf9,
 };

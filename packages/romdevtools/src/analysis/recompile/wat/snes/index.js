@@ -41,6 +41,9 @@ import { apuWat, apuDataWat, apuGlobalsWat, APU_OFF } from "./apu-wat.js";
 import { regwatchWat, stepHeadWat, frameWat } from "./frame-wat.js";
 import { chipFor, chipWat } from "./coproc.js";
 import { findMsuPack, msuPages, msuDataWat } from "./msu1.js";
+import { readFileSync, existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import path from "node:path";
 
 /** Platform ids this backend accepts. */
 export const platforms = ["snes"];
@@ -77,6 +80,17 @@ const REGRING_MAX = 1 << 18;
  * @property {number|string} [breakArm]  DEBUG / MUST-FAIL CONTROL: the arm at this 24-bit ROM
  *   address (the $80 mirror is the same) also flips bit 0 of A after it runs, so an
  *   instruction-level differ must name exactly this instruction
+ * @property {string} [saveRam]  a battery save (.srm) the cart powers on with, as a frontend
+ *   restores one before the game first runs: copied over the power-on SRAM fill at wc_init, and
+ *   named in the section (saveRam: {name, sha1, length}) so the verifier gives the reference the
+ *   same bytes (the file must sit beside the reference ROM under the same name)
+ * @property {string} [saveRtc]  the saved registers of a battery-backed clock (S-RTC, SPC7110 +
+ *   RTC-4513): RTCData.reg, the 20-byte .rtc file a frontend keeps and restores after the load
+ *   (libretro RETRO_MEMORY_RTC); restored after the chip's reset and named in the section
+ *   (saveRtc) so the verifier writes the same bytes into the reference's rtc region
+ * @property {boolean} [breakChip]  DEBUG / MUST-FAIL CONTROL: every byte read from the
+ *   coprocessor (CPU reads, B-bus registers, chip DMA) has bit 0 flipped; a cart without a
+ *   coprocessor refuses it
  * @property {object} [stats]  filled with {arms, lowered, interpreted, dual, reasons}
  */
 
@@ -149,6 +163,31 @@ export function describe(rom, opts = {}) {
     layout.pages += msuPages(msu);
     if (!refusal && fixes.apuSpeedup) refusal = "MSU-1 pack on a title with snes9x's APU speedup: the resampled DSP stream plus the MSU-1 mix is not modelled";
   }
+  // A battery save the cart powers on with (options.saveRam), above the rest.
+  let saveRam = null;
+  if (opts.saveRam != null) {
+    const f = String(opts.saveRam);
+    if (!existsSync(f)) throw new Error(`snes recompile: options.saveRam: no file at ${f}`);
+    const bytes = new Uint8Array(readFileSync(f));
+    if (!sramSize) throw new Error("snes recompile: options.saveRam given, but this cart has no SRAM (header SRAM size 0)");
+    if (!bytes.length || bytes.length > sramSize) throw new Error(`snes recompile: options.saveRam ${f} is ${bytes.length} bytes; this cart's SRAM is ${sramSize} bytes`);
+    saveRam = { name: path.basename(f), sha1: createHash("sha1").update(bytes).digest("hex"), length: bytes.length, bytes };
+    layout.SRAMINIT = layout.pages * 0x10000;
+    layout.SRAMINIT_LEN = bytes.length;
+    layout.pages += Math.ceil(bytes.length / 0x10000);
+  }
+  // A battery-backed clock's saved registers (options.saveRtc).
+  let saveRtc = null;
+  if (opts.saveRtc != null) {
+    const f = String(opts.saveRtc);
+    if (!existsSync(f)) throw new Error(`snes recompile: options.saveRtc: no file at ${f}`);
+    const bytes = new Uint8Array(readFileSync(f));
+    const hasRtc = chip?.rtc === true || (typeof chip?.rtc === "function" && chip.rtc({ chipset: L.romType }));
+    if (!hasRtc) throw new Error("snes recompile: options.saveRtc given, but this cart has no battery-backed clock (S-RTC, or SPC7110 with the RTC-4513)");
+    if (bytes.length !== 20) throw new Error(`snes recompile: options.saveRtc ${f} is ${bytes.length} bytes; RTCData is 20`);
+    saveRtc = { name: path.basename(f), sha1: createHash("sha1").update(bytes).digest("hex"), length: 20, bytes };
+  }
+  if (opts.breakChip && !chip) throw new Error("snes recompile: options.breakChip needs a cart with a coprocessor");
   const tn = opts.traceEntries;
   if (tn != null) {
     if (!Number.isInteger(tn) || tn < 1024 || tn > REGRING_MAX || (tn & (tn - 1))) {
@@ -194,7 +233,12 @@ export function describe(rom, opts = {}) {
       armRanges: "[[lo, hi), ...] ROM offset ranges to emit arms for (tests of large images; other ROM pcs run in the interpreter)",
       breakArm: "DEBUG / must-fail control: 24-bit ROM address whose arm also flips bit 0 of A",
       traceEntries: "power of two 1024-262144: also record the 65816 registers per ROM instruction for findDiverge level:'instruction' (off by default)",
+      breakChip: "DEBUG / must-fail control: true flips bit 0 of every byte read from the coprocessor (CPU, B-bus, chip DMA)",
+      saveRtc: "path to a battery-backed clock's saved registers (the 20-byte .rtc, RTCData) for an S-RTC or SPC7110+RTC cart; restored after the chip's reset, and the verifier writes it into the reference's rtc region (keep it beside the reference ROM)",
+      saveRam: "path to a battery save (.srm, at most the cart's SRAM size) the cart powers on with; the verifier writes the same file into the reference's save_ram before its first frame (keep it beside the reference ROM under the same name)",
     },
+    saveRam: saveRam ? { name: saveRam.name, sha1: saveRam.sha1, length: saveRam.length } : null,
+    saveRtc: saveRtc ? { name: saveRtc.name, sha1: saveRtc.sha1, length: saveRtc.length } : null,
     msu: msu ? { dataBytes: msu.data.length, tracks: msu.tracks.map((t) => t.num) } : null,
     // a multi-cart's slots and snes9x's CalculatedSize (addon-carts.js)
     multi: L.multi ?? null,
@@ -204,6 +248,9 @@ export function describe(rom, opts = {}) {
   };
   // the pack's bytes, for emitWat (kept out of the JSON the tool returns)
   Object.defineProperty(res, "msu1", { value: msu, enumerable: false });
+  Object.defineProperty(res, "saveRamBytes", { value: saveRam?.bytes ?? null, enumerable: false });
+  if (opts.breakChip) res.breakChip = true;
+  Object.defineProperty(res, "saveRtcBytes", { value: saveRtc?.bytes ?? null, enumerable: false });
   return res;
 }
 
@@ -293,8 +340,15 @@ export function recompileSection(rom, sha1, opts = {}) {
       trap: L.trap,
       pcRing: L.pcRing,
       ...(chipFor(d.coprocessor)?.section?.(d) ?? {}),
+      // a Sufami Turbo cart's SRAM (the cart's own battery RAM in its slot) is compared
+      ...(d.board === "SufamiTurboLoROM" && L.diagnosticRegions.sram
+        ? { regions: { ...L.regions, sram: L.diagnosticRegions.sram }, diagnosticRegions: {} } : {}),
       // the MSU-1 pack's files the reference core must find beside its ROM
       ...(d.companionFiles.length ? { companionFiles: d.companionFiles } : {}),
+      // the battery save both sides power on with (options.saveRam)
+      ...(d.saveRam ? { saveRam: d.saveRam } : {}),
+      ...(d.saveRtc ? { saveRtc: d.saveRtc } : {}),
+      ...(opts.breakChip ? { debugBreakChip: true, warning: "built with options.breakChip: every coprocessor read has bit 0 flipped (a must-fail control), NOT a faithful cart" } : {}),
       ...(opts.breakArm != null ? { debugBreakArm: parseBreakArm(opts.breakArm), warning: "built with options.breakArm: one instruction also flips bit 0 of A (a must-fail control), NOT a faithful cart" } : {}),
       // the ROM pc ring in recompile-section.js's `trace` schema: it records
       // ROM pcs only (bank < $7E, offset >= $8000) minus the skip ranges, so
@@ -488,6 +542,7 @@ export async function* emitWat(rom, opts = {}) {
   yield "\n" + `  (data (i32.const ${ROM}) "`;
   yield* escChunks(img);
   yield '")';
+  if (d.saveRamBytes) yield "\n" + `  (data (i32.const ${lay.SRAMINIT}) "` + [...escChunks(d.saveRamBytes)].join("") + '")';
   yield "\n)";
 }
 

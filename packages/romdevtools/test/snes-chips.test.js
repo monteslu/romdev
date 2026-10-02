@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { emitWat, describe as describeRom } from "../src/analysis/recompile/wat/snes/index.js";
+import { emitWat, describe as describeRom, recompileSection } from "../src/analysis/recompile/wat/snes/index.js";
 import { assembleWat } from "../src/analysis/recompile/wat/assemble.js";
 import { AUDIO, AUDIO_FRAMES } from "../src/analysis/recompile/wat/snes/layout.js";
 import { RTC_CLOCK } from "../src/analysis/recompile/recompile-section.js";
@@ -68,6 +68,79 @@ for (const [name, c] of Object.entries(CHIP_CASES)) {
     assert.equal(hex(mem.subarray(0x100, 0x100 + reads)), EXPECTED[name]);
   });
 }
+
+/**
+ * snes9x's snes_chipstate region (romdev_chipstate.h, served on read by the
+ * core) after each case's frames: its length and sha1. The cart's chipstate
+ * region (the section names it) must hold the same bytes.
+ */
+const CHIPSTATE = {
+  "DSP-3": [50294, "d665fa8b79fe7a0343652b62b9e983469c0bee07"],
+  "ST011": [1043, "a137feae58f01b0b717cc96580bd3cef6171598c"],
+  "ST018": [1048, "2ef8c56c7b57538550d360063c6c7011113c9850"],
+  "S-RTC": [28, "729613e5546d7f2a0d32a8c308a0e3527accb117"],
+};
+for (const [name, [len, sha]] of Object.entries(CHIPSTATE)) {
+  test(`${name}: the cart's chipstate region holds the bytes snes9x's snes_chipstate serves`, async () => {
+    const c = CHIP_CASES[name];
+    const { code } = chipProgram(c.ops);
+    const rom = chipImage({ code, ...c.image });
+    const at = c.image.hirom ? 0x8000 : 0;
+    const opts = { armRanges: [[at, at + 0x8000]] };
+    const sec = recompileSection(rom, null, opts).json;
+    const r = sec.regions.chipstate;
+    assert.ok(r, "the section names a chipstate region");
+    assert.equal(r.ref, "snes_chipstate");
+    assert.equal(r.length, len);
+    const mem = await runCart(rom, c.frames ?? 3, opts);
+    assert.equal(createHash("sha1").update(mem.subarray(r.offset, r.offset + r.length)).digest("hex"), sha);
+  });
+}
+
+test("options.saveRam / saveRtc: the cart powers on with the battery files and names them for the verifier", async () => {
+  const c = CHIP_CASES["S-RTC"];
+  const { code } = chipProgram([]);
+  const rom = chipImage({ code, ...c.image, sram: 3 });
+  const dir = mkdtempSync(path.join(os.tmpdir(), "snes-battery-"));
+  try {
+    const d0 = describeRom(rom);
+    assert.ok(d0.sramSize > 0);
+    const srm = Uint8Array.from({ length: d0.sramSize }, (_, i) => (i * 7 + 3) & 0xff);
+    const rtc = Uint8Array.from({ length: 20 }, (_, i) => i % 10);
+    writeFileSync(path.join(dir, "g.srm"), srm);
+    writeFileSync(path.join(dir, "g.rtc"), rtc);
+    const opts = { armRanges: [[0x8000, 0x10000]], saveRam: path.join(dir, "g.srm"), saveRtc: path.join(dir, "g.rtc") };
+    const sec = recompileSection(rom, null, opts).json;
+    assert.deepEqual(sec.saveRam, { name: "g.srm", sha1: createHash("sha1").update(srm).digest("hex"), length: srm.length });
+    assert.deepEqual(sec.saveRtc, { name: "g.rtc", sha1: createHash("sha1").update(rtc).digest("hex"), length: 20 });
+    const d = describeRom(rom, opts);
+    const mem = await runCart(rom, 0, opts);
+    assert.deepEqual(mem.subarray(d.memory.SRAM, d.memory.SRAM + srm.length), srm);
+    // the S-RTC's chipstate ends with RTCData.reg: the restored registers (before any tick)
+    const r = sec.regions.chipstate;
+    assert.equal(r.length, 28);
+    // a cart with no clock refuses saveRtc; a wrong-sized .rtc is refused
+    writeFileSync(path.join(dir, "bad.rtc"), new Uint8Array(19));
+    assert.throws(() => describeRom(rom, { saveRtc: path.join(dir, "bad.rtc") }), /RTCData is 20/);
+    const plain = chipImage({ code, mapMode: 0x20, romType: 0x02, sram: 3 });
+    assert.throws(() => describeRom(plain, { saveRtc: path.join(dir, "g.rtc") }), /no battery-backed clock/);
+    assert.throws(() => describeRom(plain, { breakChip: true }), /needs a cart with a coprocessor/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("options.breakChip (must-fail control): every chip read comes back with bit 0 flipped", async () => {
+  const c = CHIP_CASES["ST011"];
+  const { code, reads } = chipProgram(c.ops);
+  const rom = chipImage({ code, ...c.image });
+  const opts = { armRanges: [[0, 0x8000]] };
+  const good = await runCart(rom, c.frames ?? 3, opts);
+  const bad = await runCart(rom, c.frames ?? 3, { ...opts, breakChip: true });
+  assert.equal(hex(good.subarray(0x100, 0x100 + reads)), EXPECTED.ST011);
+  assert.notEqual(hex(bad.subarray(0x100, 0x100 + reads)), EXPECTED.ST011);
+  assert.equal(recompileSection(rom, null, { ...opts, breakChip: true }).json.debugBreakChip, true);
+});
 
 test("ST018: snes9x only stubs the chip, and so does the cart (plain LoROM + map_SetaRISC at $3000-$3FFF)", () => {
   const { code } = chipProgram([]);

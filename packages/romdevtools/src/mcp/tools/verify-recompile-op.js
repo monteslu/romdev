@@ -99,7 +99,27 @@ function resolveInputs(sessionKey, args, opName) {
         fs.writeFile(dst, new Uint8Array(readFileSync(src)));
       }
     }
-    await h.loadMedia({ platform, path: refPath, beforeSettle: hooks.beforeSettle });
+    // A cart built with a battery save (section saveRam) or a battery clock's
+    // registers (saveRtc) powers on with them; the reference gets the same
+    // bytes in save_ram / rtc before its first frame, as a frontend restores
+    // the .srm / .rtc after retro_load_game.
+    let beforeSettle = hooks.beforeSettle;
+    for (const [key, region, what] of [["saveRam", "save_ram", "battery save"], ["saveRtc", "rtc", "clock registers"]]) {
+      const want = layout[key];
+      if (!want) continue;
+      const src = path.join(path.dirname(refPath), want.name);
+      if (!existsSync(src)) throw new Error(`frame({op:'${opName}'}): the cart was built with the ${what} ${want.name}, and the reference needs it too: no file at ${src}`);
+      const bytes = new Uint8Array(readFileSync(src));
+      const sha = createHash("sha1").update(bytes).digest("hex");
+      if (sha !== want.sha1) throw new Error(`frame({op:'${opName}'}): ${src} has sha1 ${sha}, but the cart was built with ${what} of sha1 ${want.sha1}`);
+      const inner = beforeSettle;
+      beforeSettle = (host) => {
+        if (host.regionSize(region) < bytes.length) throw new Error(`frame({op:'${opName}'}): the reference's ${region} is ${host.regionSize(region)} bytes, smaller than the cart's ${bytes.length}-byte ${what}`);
+        host.writeMemory(region, 0, bytes);
+        inner?.(host);
+      };
+    }
+    await h.loadMedia({ platform, path: refPath, beforeSettle });
     return h;
   };
   return { cartPath, refPath, refSha1, refBytes: new Uint8Array(refBytes), layout, layoutSource, platform, core: resolved.coreName, openCart, openRef };

@@ -27,6 +27,7 @@
 
 import { ROM, MAPTAB } from "./layout.js";
 import { unitWat, unitFn, unitStart, unitSize } from "./chip-unit.js";
+import { chipRegions } from "./chips-snes9x.js";
 
 const REGS = 0x0000, ZERO = 0x1000, UNIT = 0x2000;
 
@@ -136,4 +137,6 @@ export const sdd1 = {
   buildMap,
   pages: Math.ceil((UNIT + unitSize("sdd1")) / 0x10000),
   wat,
+  /** the chip's registers ($4800-$4807, snes9x keeps them in FillRAM) are compared */
+  section: (d) => chipRegions(d, { sdd1reg: { offset: d.memory.CHIP + REGS, length: 8, ref: "snes_fillram", refOffset: 0x4800 } }, false),
 };
