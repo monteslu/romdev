@@ -1,6 +1,6 @@
 {
   "note": "sha256 of every shipped prebuilt binary. Regenerate ONLY when a build script legitimately rebuilds one: node scripts/binary-manifest.mjs --write",
-  "generated": "2026-09-30",
+  "generated": "2026-10-02",
   "binaries": {
     "romdev-analysis-decompiler/wasm/decompile.wasm": "2dd4ef4da24713f95052ab80658082356ca8806060890b074dcd218364b6c76f",
     "romdev-analysis/wasm/rizin.wasm": "d3f3b2a1ab5e5a34899a37fb53d58ea3eb41b58920758eea98c225facd1a0610",
@@ -17,7 +17,7 @@
     "romdev-core-handy/wasm/handy_libretro.wasm": "ae70f8fa006fd82851055b9c2cc00bef50f7333605dee456e7fd10324fd247d8",
     "romdev-core-parallel-n64/wasm/parallel_n64_libretro.wasm": "b4a6af011cbc58e80eb81985977d38fce4270d3fa826193aeff69ebb5d5939e7",
     "romdev-core-prosystem/wasm/prosystem_libretro.wasm": "74f50628925047cce2443407f94695ae1f4290b81c0a64451a8f35a03a8aef4a",
-    "romdev-core-s32core/wasm/s32core_libretro.wasm": "e1791d0ffc5a5f38af9cd384c5807586a70d7e90189f61b667140fc984ca4f20",
+    "romdev-core-s32core/wasm/s32core_libretro.wasm": "9f42673ba67f1f2b845f6c0d87de8bb1d2a38cc8aa57295efbe5ec1cda12a921",
     "romdev-core-vice/wasm/vice_x64_libretro.wasm": "2094843c3363c6120f9228c826d7b0f721f57b2a17e3e1d57e22fa3e539b10de",
     "romdev-platform-atari2600/wasm/dasm.wasm": "93d85efcef7cacee33f2a1fdd6cc437e3c9bf3afa676469e982c7c1b4cb890f7",
     "romdev-platform-atari2600/wasm/stella2014_libretro.wasm": "1b068833f64a9f29ededa3ed6afe1cd864a9e683485fc8227435f2e774a76494",
@@ -146,7 +146,7 @@
     "romdevtools/src/cores/wasm/mupen64plus_next_libretro.wasm": "271b6c1cc4382d5ecc46ece8436c535302eadcb6f25e6127ba0cbe2d6324a78a",
     "romdevtools/src/cores/wasm/parallel_n64_libretro.wasm": "b4a6af011cbc58e80eb81985977d38fce4270d3fa826193aeff69ebb5d5939e7",
     "romdevtools/src/cores/wasm/prosystem_libretro.wasm": "74f50628925047cce2443407f94695ae1f4290b81c0a64451a8f35a03a8aef4a",
-    "romdevtools/src/cores/wasm/s32core_libretro.wasm": "e1791d0ffc5a5f38af9cd384c5807586a70d7e90189f61b667140fc984ca4f20",
+    "romdevtools/src/cores/wasm/s32core_libretro.wasm": "9f42673ba67f1f2b845f6c0d87de8bb1d2a38cc8aa57295efbe5ec1cda12a921",
     "romdevtools/src/cores/wasm/snes9x_libretro.wasm": "22bdf174e0b1f09c0686ed09c1be2d69bc7ec41c80294481471a08c91d0a664a",
     "romdevtools/src/cores/wasm/stella2014_libretro.wasm": "1b068833f64a9f29ededa3ed6afe1cd864a9e683485fc8227435f2e774a76494",
     "romdevtools/src/cores/wasm/vice_x64_libretro.wasm": "2094843c3363c6120f9228c826d7b0f721f57b2a17e3e1d57e22fa3e539b10de",

@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildToolRegistry } from "../src/http/tool-registry.js";
 
-test("throughput options preserve the existing 38 tools and 44 decomp operations", () => {
+test("throughput options preserve the existing 38 tools and 45 decomp operations", () => {
   const registry = buildToolRegistry("throughput-surface-contract");
   assert.deepEqual([...registry.keys()].sort(), [
     "assembleSnippet", "audioDebug", "background", "breakpoint", "build", "cart", "catalog", "cheats", "cpu",
@@ -13,7 +13,7 @@ test("throughput options preserve the existing 38 tools and 44 decomp operations
     "romPatch", "runUntil", "sprites", "state", "symbols", "text", "tiles", "videoDebug", "wasm", "watch",
   ]);
   assert.deepEqual(registry.get("decomp").shape.op.options, [
-    "import", "status", "refresh", "list", "map", "plan", "batch", "resolve", "context", "generate", "types",
+    "setup", "import", "status", "refresh", "list", "map", "plan", "batch", "resolve", "context", "generate", "types",
     "compare", "search", "job", "jobs", "candidates", "integrate", "verify", "progress", "smoke", "overlays",
     "symbolize", "state", "trace", "coverage", "workbench", "dispatch", "experiment", "gate", "typeGraph", "rank",
     "ledger", "scenario", "capabilities", "knownSource", "assets", "artifacts", "handoff", "skill", "diagnose",
