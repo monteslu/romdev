@@ -13,7 +13,7 @@
     "romdev-core-gambatte/wasm/gambatte_libretro.wasm": "79c71986f4dea8b51c24aad6c165986acca603db2b56a8d2537c70cae8d02431",
     "romdev-core-gametank/wasm/gametank_libretro.wasm": "3693a411f01c8e93fc9dea8a399c370f7845d280a81041d102c83689ae412677",
     "romdev-core-geargrafx/wasm/geargrafx_libretro.wasm": "0e4c4dbf40ea001c24b6077743f279be3107c4b88fe783dfa895db1c856e0e16",
-    "romdev-core-gpgx/wasm/genesis_plus_gx_libretro.wasm": "677fd02f7beb897712c8283e29c40bfaf66f99df301864e301e56a1071ede1b7",
+    "romdev-core-gpgx/wasm/genesis_plus_gx_libretro.wasm": "51ca41461f94031d8404a8bdbabeed22e4e06ca3c4d386591e0920df5e938dbc",
     "romdev-core-handy/wasm/handy_libretro.wasm": "ae70f8fa006fd82851055b9c2cc00bef50f7333605dee456e7fd10324fd247d8",
     "romdev-core-parallel-n64/wasm/parallel_n64_libretro.wasm": "b4a6af011cbc58e80eb81985977d38fce4270d3fa826193aeff69ebb5d5939e7",
     "romdev-core-prosystem/wasm/prosystem_libretro.wasm": "74f50628925047cce2443407f94695ae1f4290b81c0a64451a8f35a03a8aef4a",
