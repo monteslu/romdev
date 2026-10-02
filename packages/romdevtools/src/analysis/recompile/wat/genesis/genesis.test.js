@@ -210,7 +210,7 @@ test("a synthetic cart runs: 68000, work RAM, VDP CRAM, Z80 bus and Z80 program"
   assert.equal(dv.getUint32(c.info + 40, true) % 8, 0);
 });
 
-test("RAM-resident code: discovered, trapped when disabled, restored by options.ramCode", async () => {
+test("RAM-resident code: discovered and compiled; undiscovered it runs in the interpreter; with neither it traps (control)", async () => {
   const rom = synthRom(ramCodeProgram());
   const run = async (opts) => {
     const c = await cartOf(rom, opts);
@@ -222,9 +222,13 @@ test("RAM-resident code: discovered, trapped when disabled, restored by options.
   assert.equal(auto.trapped, 0);
   assert.equal(auto.d2, 0xbeef, "the copied routine ran at its RAM address");
   assert.equal(auto.arms, 0x8000 + 4);
-  const off = await run({ discoverRamCode: false });
+  const interp = await run({ discoverRamCode: false });
+  assert.equal(interp.trapped, 0);
+  assert.equal(interp.d2, 0xbeef, "the undiscovered routine ran in the interpreter");
+  assert.equal(interp.arms, 0x8000);
+  const off = await run({ discoverRamCode: false, ramInterpreter: false });
   assert.equal(off.trapped, 1);
-  assert.equal(off.trappc, 0xfffff200, "the trap names the RAM PC to declare");
+  assert.equal(off.trappc, 0xfffff200, "the must-fail control traps at the RAM PC");
   const manual = await run({ discoverRamCode: false, ramCode: [{ romOffset: 0x292, ramAddress: 0xfffff200, length: 8 }] });
   assert.equal(manual.trapped, 0);
   assert.equal(manual.d2, 0xbeef);

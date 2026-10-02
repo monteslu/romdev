@@ -13,12 +13,17 @@
 // Python emitter produced for the verified carts (see the differential under
 // sms-wat/work/romdev-port/).
 //
-// Code the game copies from ROM into work RAM and runs there is compiled at
-// its RAM address. Such routines are found automatically by a static scan
-// for the copy loop (discoverRamCode); options.ramCode overrides/extends it.
-// A cart that jumps to RAM code nobody declared traps: its state block then
-// holds trapped=1 and trappc=<the RAM PC>, and the fix is
-// options.ramCode:[{romOffset, ramAddress, length}].
+// Any pc with no compiled arm (code the game builds or copies into work RAM,
+// RAM code whose words changed, a re-based cartridge bank) runs in the 68000
+// interpreter (interp.js): the same gpgx handlers, one per opcode word, with
+// the extension words and the address read at run time. Nothing has to be
+// declared or discovered for such code to run exactly. As a SPEED
+// OPTIMISATION, RAM code is also compiled at its RAM address where it can be
+// found up front: a static scan for ROM->RAM copy loops (discoverRamCode),
+// the reference's own trace (discoverRamCodeTrace, when the ROM is on disk)
+// and options.ramCode:[{romOffset, ramAddress, length}].
+// options.ramInterpreter:false (a MUST-FAIL CONTROL only) traps instead:
+// trapped=1, trappc=<the pc>.
 //
 // LICENSE: carts built by this backend contain code transpiled from Genesis
 // Plus GX and are NON-COMMERCIAL (see NOTICE and gpgx-derived.json.gz).
@@ -30,6 +35,7 @@ import { readFileSync } from "node:fs";
 import { loadGpgxData } from "./gpgx-data.js";
 import { translateM68k, translateZ80, z80HandlerNames, TrError, ZREGS } from "./ctrans.js";
 import * as RT from "./runtime.js";
+import { m68kInterpWat } from "./interp.js";
 import { ymWat, mdSoundInfo, hookZ80Wat, hookVdpWat, hookFrameWat, hookMemWat, deltasLayout } from "./ym2612.js";
 
 export const platforms = ["genesis", "md", "megadrive"];
@@ -773,7 +779,7 @@ export function recompileSection(rom, sha1, opts = {}) {
         ...(ring.regs ? { note: "options.traceEntries: d0-d7, a0-a7 (a7 = the active stack pointer) and sr before each instruction, compared with genesis_plus_gx's per-instruction 68000 columns" } : {}),
       },
       ramCode: d.ramCode.map(({ romOffset, ramAddress, length, source }) => ({ romOffset, ramAddress, length, source })),
-      trapHint: "probe trapped=1 with trappc in work RAM ($FFxxxxxx) means the game ran code it copied to RAM that discovery missed: rebuild with options.ramCode:[{romOffset, ramAddress, length}]",
+      trapHint: "probe trapped=1 means the cart reached something this backend does not model (trappc = the 68000 pc); code with no compiled arm runs in the interpreter, so RAM code alone never traps unless the cart was built with options.ramInterpreter:false",
       license: d.licenseNote,
       // genesis_plus_gx's libretro output (ym2612.js): s16 stereo 44100 Hz
       ...(opts.audio !== false ? { audio: mdSoundInfo(SND, opts.audioDeltas ? DELTAS : undefined).section } : {}),
@@ -962,6 +968,10 @@ export async function* emitWat(rom, opts = {}) {
     for (const zn of znames) buf.push(translateZ80(D.z80, zn, zlay));
     yield buf.join("");
   }
+  // the 68000 interpreter for every pc with no compiled arm (interp.js)
+  const INTERP = opts.ramInterpreter !== false;
+  if (INTERP) yield* m68kInterpWat(D);
+  const FALLBACK = INTERP ? "(call $m68k_interp)" : "(call $trap)";
   // the 68000 arms, one br_table shard per SH arms
   let bad = 0, broken = 0, ramVariantCount = 0;
   const breakAt = parseBreakArm(opts.breakArm);
@@ -972,7 +982,7 @@ export async function* emitWat(rom, opts = {}) {
     for (const [, pc, f16, variants, kind] of sh) {
       let body, nloc;
       if (variants) {
-        ({ body, nlocals: nloc } = kind === "alt" ? guardedAltArm(D, variants) : guardedRamArm(D, variants));
+        ({ body, nlocals: nloc } = kind === "alt" ? guardedAltArm(D, variants, FALLBACK) : guardedRamArm(D, variants, FALLBACK));
         ramVariantCount += variants.length;
       } else {
         try {
@@ -1044,7 +1054,7 @@ export async function* emitWat(rom, opts = {}) {
     (local.set $p (i32.and (local.get $p) (i32.const 0xFFFFFF)))
     ;; a bank a mapper re-based (or gave to backup RAM) no longer holds the
     ;; code the ROM arms were compiled from: the arms compiled for what the
-    ;; reference ran there, else stop loudly (trappc = the pc)
+    ;; reference ran there, else the interpreter
     (block $alt
     (if (i32.and (i32.or (global.get $remapped) (i32.ge_u (local.get $p) (i32.const ${ROMSIZE}))) (i32.lt_u (local.get $p) (i32.const 0x400000)))
       (then (if (i32.or (i32.ge_u (local.get $p) (i32.const ${ROMSIZE}))
@@ -1063,7 +1073,7 @@ export async function* emitWat(rom, opts = {}) {
       (else (if (i32.ge_u (local.get $p) (i32.const 0xE00000))
         (then (local.set $id (i32.load (i32.add (i32.const ${PCTAB + ROMWORDS * 4})
                 (i32.shl (i32.shr_u (i32.and (local.get $p) (i32.const 0xFFFF)) (i32.const 1)) (i32.const 2))))))))))
-    (if (i32.eqz (local.get $id)) (then (call $trap) (return)))
+    (if (i32.eqz (local.get $id)) (then${INTERP ? " (global.set $steps (i32.add (global.get $steps) (i32.const 1)))" : ""} ${FALLBACK} (return)))
     (local.set $id (i32.sub (local.get $id) (i32.const 1)))
     (global.set $steps (i32.add (global.get $steps) (i32.const 1)))
 `;
@@ -1092,7 +1102,7 @@ export async function* emitWat(rom, opts = {}) {
   yield AUDIO ? hookFrameWat(frameText, { abi: ABI, base: SND }) : frameText;
   yield ")\n";
   if (breakAt !== null && !broken) throw new Error(`genesis recompile: options.breakArm $${breakAt.toString(16)} is not an instruction address of this cart`);
-  if (opts.stats) Object.assign(opts.stats, { arms: narms, lowered: narms - bad, trapped: bad, shards: nsh, ramCodeArms: narms - Math.ceil(img.length / 2),
+  if (opts.stats) Object.assign(opts.stats, { arms: narms, lowered: narms - bad, trapped: bad, shards: nsh, ramCodeArms: narms - Math.ceil(img.length / 2), ramInterpreter: INTERP,
     ...(traced ? { ramTrace: { frames: traced.frames, instructions: traced.instructions, executedRamPcs: traced.windows.size, guardedVariants: ramVariantCount, recaptured: traced.recaptured, remappedPcs: traced.remap.size } } : {}),
     ...(broken ? { brokenArms: broken } : {}) });
   if (opts.onProgress) opts.onProgress(`genesis: ${narms} arms (${bad} untranslated)`);
@@ -1116,11 +1126,12 @@ function parseBreakArm(v) {
  * One arm for a work RAM word with several candidate encodings (see emitWat):
  * each variant is guarded by the RAM words its translation fetched and, when
  * the candidates disagree on it, the full 32-bit pc; the first match runs.
- * Duplicate encodings collapse; no match traps.
+ * Duplicate encodings collapse; no match runs `fallback` (the interpreter).
  * @param {object} D gpgx data
  * @param {{pc:number, f16:(p:number)=>number, source:string}[]} variants
+ * @param {string} [fallback]
  */
-function guardedRamArm(D, variants) {
+function guardedRamArm(D, variants, fallback = "(call $trap)") {
   const pcs = new Set(variants.map((v) => v.pc));
   const seen = new Set();
   const parts = [];
@@ -1169,7 +1180,7 @@ function guardedRamArm(D, variants) {
     const guard = conds.reduce((acc, c) => (acc ? `(i32.and ${acc} ${c})` : c), "");
     parts.push(`(if ${guard} (then ${body} (return)))`);
   }
-  parts.push("(call $trap)");
+  parts.push(fallback);
   return { body: parts.join("\n    "), nlocals };
 }
 
@@ -1177,11 +1188,12 @@ function guardedRamArm(D, variants) {
  * One arm for a pc in a cartridge bank the reference ran re-based: each
  * variant is guarded by what the banks it fetched from map to now ($cartmap:
  * the ROM offset it was compiled from) or, for backup RAM, by the backup RAM
- * words it was compiled from. No match traps.
+ * words it was compiled from. No match runs `fallback` (the interpreter).
  * @param {object} D gpgx data
  * @param {{pc:number, f16:(p:number)=>number, source:string, bank:number, b?:number, n?:number}[]} variants
+ * @param {string} [fallback]
  */
-function guardedAltArm(D, variants) {
+function guardedAltArm(D, variants, fallback = "(call $trap)") {
   const seen = new Set();
   const parts = [];
   let nlocals = 0;
@@ -1215,7 +1227,7 @@ function guardedAltArm(D, variants) {
     const guard = conds.reduce((acc, c) => (acc ? `(i32.and ${acc} ${c})` : c), "");
     parts.push(`(if ${guard} (then ${body} (return)))`);
   }
-  parts.push("(call $trap)");
+  parts.push(fallback);
   return { body: parts.join("\n    "), nlocals };
 }
 
