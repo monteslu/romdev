@@ -231,7 +231,7 @@ export async function buildZlib(srcTarball, { jobs = os.cpus().length } = {}) {
   const cflags = [...baseCflags(emRoot, buildDir), "-O2", "-I" + src, "-Wno-deprecated-non-prototype"];
   const srcs = "adler32.c compress.c crc32.c deflate.c gzclose.c gzlib.c gzread.c gzwrite.c infback.c inffast.c inflate.c inftrees.c trees.c uncompr.c zutil.c".split(" ");
   const objs = [];
-  const work = srcs.map((s) => { const o = path.join(buildDir, s.replace(/\.c$/, ".o")); objs.push(o); return { tool: "emcc", cwd: buildDir, args: ["-c", path.join(src, s), "-o", o, ...cflags] }; });
+  const work = srcs.map((s) => { const o = path.join(buildDir, s + ".o"); objs.push(o); /* ports name objects <src>.o, e.g. adler32.c.o */ return { tool: "emcc", cwd: buildDir, args: ["-c", path.join(src, s), "-o", o, ...cflags] }; });
   await runPool(work, jobs);
   const out = path.join(sysroot, "lib/wasm32-emscripten/libz.a");
   fs.rmSync(out, { force: true });
