@@ -89,3 +89,19 @@ test("pack: rejects a non-directory source + a jsgame with no entry", () => {
   writeFileSync(path.join(empty, "readme.txt"), "no game here");
   assert.throws(() => packJsgame({ source: empty, outputPath: "/tmp/x.jsgame" }), /no entry/);
 });
+
+test("pack wasc: the same inputs pack to the same bytes (fixed entry time, sorted dir order)", () => {
+  const src = explode(HELLO_WASC, "wasc-repro");
+  const a = path.join(os.tmpdir(), "romdev-pack-repro-a.wasc");
+  const b = path.join(os.tmpdir(), "romdev-pack-repro-b.wasc");
+  packWasc({ source: src, outputPath: a, name: "repro" });
+  packWasc({ source: src, outputPath: b, name: "repro" });
+  const bytes = readFileSync(a);
+  assert.deepEqual(bytes, readFileSync(b));
+  // Two packs inside one second can match by luck; the stored DOS time and
+  // date pin it. Local file header: time at offset 10, date at 12. 1980-01-01
+  // 00:00 is time 0, date (0 << 9) | (1 << 5) | 1 = 0x21.
+  assert.equal(bytes.readUInt32LE(0), 0x04034b50, "zip local file header");
+  assert.equal(bytes.readUInt16LE(10), 0, "entry time is the fixed 00:00:00");
+  assert.equal(bytes.readUInt16LE(12), 0x21, "entry date is the fixed 1980-01-01");
+});

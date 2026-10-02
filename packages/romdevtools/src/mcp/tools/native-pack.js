@@ -14,9 +14,16 @@ import path from "node:path";
 import { zipSync } from "fflate";
 import { jsonContent, safeTool } from "../util.js";
 
+/**
+ * Zip entries carry a fixed timestamp so the same inputs always pack to the
+ * same bytes (a recompile run twice must produce an identical .wasc). DOS zip
+ * time is local, so this is the 1980-01-01 local epoch in every timezone.
+ */
+const FIXED_ZIP_TIME = new Date(1980, 0, 1);
+
 /** Recursively collect files under `dir` into a { relPath: Uint8Array } map for zipSync. */
 function collectDir(dir, baseDir = dir, out = {}) {
-  for (const name of readdirSync(dir)) {
+  for (const name of readdirSync(dir).sort()) {
     const full = path.join(dir, name);
     const rel = path.relative(baseDir, full).split(path.sep).join("/");
     const st = statSync(full);
@@ -69,7 +76,7 @@ export function packWasc({ source, wasm, assets, outputPath, name, players } = {
     throw new Error("pack(wasmcart): provide `source` (a dir) or `wasm` (a cart .wasm).");
   }
 
-  const zipped = zipSync(files, { level: 6 });
+  const zipped = zipSync(files, { level: 6, mtime: FIXED_ZIP_TIME });
   writeFileSync(outputPath, zipped);
   return { outputPath, entries: Object.keys(files).length, bytes: zipped.length };
 }
@@ -92,7 +99,7 @@ export function packJsgame({ source, outputPath } = {}) {
   if (!hasEntry) {
     throw new Error("pack(jsgame): source has no entry (package.json 'main', index.html, or main.js). rungame won't be able to run it.");
   }
-  const zipped = zipSync(files, { level: 6 });
+  const zipped = zipSync(files, { level: 6, mtime: FIXED_ZIP_TIME });
   writeFileSync(outputPath, zipped);
   return { outputPath, entries: Object.keys(files).length, bytes: zipped.length };
 }
