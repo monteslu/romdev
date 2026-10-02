@@ -11,7 +11,8 @@ import path from "node:path";
 import { LibretroHost } from "romdev-core-host/index.js";
 import { resolveCore } from "../../cores/registry.js";
 import { WasmcartHost } from "../../host/WasmcartHost.js";
-import { verifyRecompile, findRecompileDivergence, fuzzRecompile } from "../../host/verify-recompile.js";
+import { verifyRecompile, findRecompileDivergence, fuzzRecompile, parseInputSchedule } from "../../host/verify-recompile.js";
+import { autoPlan, AUTO_DEFAULTS } from "../../host/auto-verify.js";
 import { findInstructionDivergence } from "../../host/instruction-diverge.js";
 import { readRecompileLayout, validateRecompileLayout, cartWasmBytes, wascFromWasm } from "../../analysis/recompile/recompile-section.js";
 import { isS32, readS32RecompileLayout } from "../../analysis/recompile/native/s32-cart.js";
@@ -112,28 +113,67 @@ function describeSides(ctx, cartHost, refHost) {
   };
 }
 
+/** The caller's bar overrides, as verifyRecompile takes them. */
+function barOf(args) {
+  return { ...(args.minContentPct != null ? { minContentPct: args.minContentPct } : {}), ...(args.minContentPx != null ? { minContentPx: args.minContentPx } : {}),
+    ...(args.minMovingPct != null ? { minMovingPct: args.minMovingPct } : {}), ...(args.minMovingPx != null ? { minMovingPx: args.minMovingPx } : {}),
+    ...(args.minChangePx != null ? { minChangePx: args.minChangePx } : {}) };
+}
+
+/** Auto mode: auto:true / auto:{...}, or atFrames omitted (and auto not false). */
+function autoOptions(args) {
+  if (args.auto === false) return null;
+  if (args.auto === true) return {};
+  if (args.auto && typeof args.auto === "object") return { ...args.auto };
+  return Array.isArray(args.atFrames) && args.atFrames.length ? null : {};
+}
+
 /** frame({op:'verifyRecompile'}) */
 export async function runVerifyRecompile(sessionKey, args) {
   const ctx = resolveInputs(sessionKey, args, "verifyRecompile");
-  const frames = args.atFrames;
-  if (!Array.isArray(frames) || !frames.length) throw new Error("frame({op:'verifyRecompile'}): pass atFrames:[...] - the REFERENCE frames (stepped after loadMedia) to score, e.g. [1000, 2000, 3000]. Score late frames with real pictures: a title screen proves little.");
+  const auto = autoOptions(args);
+  let frames = args.atFrames, input = args.input, audio = args.audio, audioFrames = args.audioFrames, plan = null;
+  if (!auto && (!Array.isArray(frames) || !frames.length)) throw new Error("frame({op:'verifyRecompile'}): pass atFrames:[...] - the REFERENCE frames (stepped after loadMedia) to score, e.g. [1000, 2000, 3000] - or auto:true to let romdev choose the input and frames from the reference. Score late frames with real pictures: a title screen proves little.");
+  if (auto) {
+    if (Array.isArray(frames) && frames.length) throw new Error("frame({op:'verifyRecompile', auto}): auto mode chooses atFrames itself; drop atFrames (pass input to fix the schedule and let auto choose only the frames), or drop auto to score your own frames");
+    for (const k of Object.keys(auto)) if (!(k in AUTO_DEFAULTS)) throw new Error(`frame({op:'verifyRecompile', auto}): unknown auto option '${k}' (known: ${Object.keys(AUTO_DEFAULTS).join(", ")})`);
+    plan = await autoPlan({ openRef: ctx.openRef, bar: barOf(args), movingWindow: args.movingWindow, fixedSchedule: input != null ? parseInputSchedule(input) : null, ...auto });
+    if (!plan.ok) {
+      return {
+        op: "verifyRecompile", verdict: "INCONCLUSIVE", verified: false, reasons: [plan.reason], auto: plan.report,
+        cart: { path: ctx.cartPath, layoutSource: ctx.layoutSource }, reference: { platform: ctx.platform, core: ctx.core, path: ctx.refPath, sha1: ctx.refSha1 },
+        note: "auto mode found nothing the verifier could score as evidence, so the cart was not run: INCONCLUSIVE is not a failure of the cart and never a pass.",
+      };
+    }
+    frames = plan.atFrames;
+    input = plan.input;
+    // Sound where the reference makes it is part of the verdict; a silent
+    // reference is reported and leaves audio out (audio:false opts out, an
+    // explicit audio / audioFrames is kept).
+    if (audio === undefined) audio = plan.audioFrames ? "required" : undefined;
+    if (audio && !audioFrames && plan.audioFrames) audioFrames = plan.audioFrames;
+  }
   const tag = args.tag ?? `${path.basename(ctx.cartPath).replace(/\.(wasc|wasm)$/, "")}`;
   const outputDir = args.outputDir ?? path.join(os.tmpdir(), "romdev-verify", tag);
   const { result, cartHost, refHost } = await verifyRecompile({
     openCart: ctx.openCart, openRef: ctx.openRef, refPlatform: ctx.platform, layout: ctx.layout,
-    frames, input: args.input, wrongInput: args.wrongInput, cartFrameOffset: args.cartFrameOffset,
+    frames, input, wrongInput: args.wrongInput, cartFrameOffset: args.cartFrameOffset,
     searchFrame: args.searchFrame, searchWindow: args.searchWindow, minSharpness: args.minSharpness,
     sweep: args.sweep, cartOrigin: args.cartOrigin, cartButtonMap: args.cartButtonMap,
     controls: args.controls, movingWindow: args.movingWindow, wrongFrameDelta: args.wrongFrameDelta, wrongFrameMaxDelta: args.wrongFrameMaxDelta,
-    bar: { ...(args.minContentPct != null ? { minContentPct: args.minContentPct } : {}), ...(args.minContentPx != null ? { minContentPx: args.minContentPx } : {}),
-      ...(args.minMovingPct != null ? { minMovingPct: args.minMovingPct } : {}), ...(args.minMovingPx != null ? { minMovingPx: args.minMovingPx } : {}),
-      ...(args.minChangePx != null ? { minChangePx: args.minChangePx } : {}) },
+    bar: barOf(args),
     requireStateMatch: args.requireStateMatch, outputDir, tag,
-    audio: args.audio, audioFrames: args.audioFrames, audioStream: args.audioStream, audioBar: args.audioBar,
+    audio, audioFrames, audioStream: args.audioStream, audioBar: args.audioBar,
     audioControls: args.audioControls, audioDropChannel: args.audioDropChannel, audioWav: args.audioWav, audioMaxLag: args.audioMaxLag,
   });
   installHost(sessionKey, cartHost);
   installHostB(sessionKey, refHost);
+  if (plan) {
+    const reproduce = { op: "verifyRecompile", cart: ctx.cartPath, reference: ctx.refPath, input: input || undefined, atFrames: frames,
+      ...(audio ? { audio, audioFrames } : {}) };
+    result.auto = { ...plan.report, input: input || "", atFrames: frames, ...(audio ? { audio, audioFrames } : {}), reproduce,
+      note: "romdev chose the input and frames from the REFERENCE core alone (the cart could not influence them); reproduce re-runs exactly this verification by hand." };
+  }
   return {
     ...result,
     ...describeSides(ctx, cartHost, refHost),

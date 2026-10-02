@@ -1009,6 +1009,21 @@ export function registerFrameTools(server, z, sessionKey) {
     "audio.referenceDoc. Pre-resample streams the romdev cores expose: gba_audio_raw (mGBA native, before its sinc resampler), gb_apu_raw " +
     "(gambatte's 2 MiHz PSG output, before blipper), gpgx_blip_deltas (genesis/sms/gg: every FM/PSG delta into blip_buf as time, delta_l, " +
     "delta_r); fceumm and snes9x need none (their output is the integer chain itself).\n" +
+    "AUTO MODE (`auto:true`, or atFrames omitted): romdev chooses the input schedule, the scored frames and the audio window ITSELF, " +
+    "from the REFERENCE core alone (the cart cannot influence the choice), then runs this same verification with the same bar. It runs a " +
+    "no-input baseline and up to auto.candidates seeded schedules (start / a menu presses at varied times, then seeded play) on fresh " +
+    "reference hosts to auto.horizon frames, scoring every auto.sampleEvery frames with the verifier's own functions: content pixels, " +
+    "moving pixels, and whether the no-input picture there would fail the wrong-input control. The schedule with the most frames that " +
+    "meet the content bar, move and respond to input wins (the first clearly good one stops the search); auto.frames scored frames are " +
+    "spread over its run, the last one responding to input (the wrong-input control is scored there); the audio window is the loudest " +
+    "stretch of up to auto.audioWindow frames before it, and audio becomes 'required' when the reference makes sound there (audio:false " +
+    "opts out; a silent reference leaves audio out and says so). Pass `input` with auto to keep your schedule and let it choose only frames " +
+    "and audio. Deterministic: the same cart, ROM and auto.seed choose the same schedule and frames; the result's `auto` block reports the " +
+    "seed, every candidate's score, the chosen plan, the predicted per-frame evidence and `reproduce` (the exact by-hand call). When no " +
+    "reference frame meets the bar it returns verdict INCONCLUSIVE with the reason and does not run the cart: never a pass, and the bar is " +
+    "never lowered. When no schedule makes input visibly matter, it verifies with no input and notes that input was not exercised (the " +
+    "wrong-input control is then skipped, as for any run without input). Cost: (candidates run + 1) x horizon reference frames, bounded by " +
+    "auto.budgetSec of wall clock (a run cut short by the budget says so: its choice may differ on another machine).\n" +
     "'fuzzRecompile': run a recompiled `cart` ALONE under seeded random play (`seeds`, default [1,2,3]; `frames` per seed, default 3600 (the tool-wide frames default of 1 counts as unset), " +
     "`input` presses kept in every script, e.g. the Start that leaves the title) and report the first frame each seed TRAPS " +
     "at (its romdev.recompile probe.trapped) with the probe block there (trappc). A trap is invisible from outside - the host keeps " +
@@ -1042,7 +1057,16 @@ export function registerFrameTools(server, z, sessionKey) {
       series: z.boolean().optional().describe("op=cycles: include every frame's cycle count."),
       annotate: z.string().optional().describe("op=cycles: a function name from the cart's map: per-instruction cycles per frame over from..to, with its Thumb-2 disassembly (hottest `top` instructions)."),
       perFrame: z.boolean().optional().describe("op=cycles with profile:true: split EVERY frame by subsystem group (min/mean/p95/max per group, the worst frame's split; with series:true the per-frame group series)."),
-      atFrames: z.array(z.number().int().min(1)).min(1).max(64).optional().describe("op=verifyRecompile: REFERENCE frames (frames stepped after loadMedia on the reference core) to score, ascending. Pick late frames with real, moving pictures: a title screen proves little."),
+      atFrames: z.array(z.number().int().min(1)).min(1).max(64).optional().describe("op=verifyRecompile: REFERENCE frames (frames stepped after loadMedia on the reference core) to score, ascending. Pick late frames with real, moving pictures: a title screen proves little. Omitted (without auto:false): auto mode chooses them."),
+      auto: z.union([z.boolean(), z.object({
+        seed: z.number().int().min(1).optional().describe("seed of the candidate play scripts (default 1)"),
+        horizon: z.number().int().min(120).max(36000).optional().describe("reference frames each candidate runs (default 3600)"),
+        candidates: z.number().int().min(1).max(64).optional().describe("candidate schedules at most, the no-input baseline not counted (default 16)"),
+        sampleEvery: z.number().int().min(5).max(600).optional().describe("frames between scored samples of each run (default 30)"),
+        frames: z.number().int().min(1).max(64).optional().describe("scored frames to choose (default 6)"),
+        audioWindow: z.number().int().min(30).max(36000).optional().describe("audio frames compared at most (default 600)"),
+        budgetSec: z.number().min(5).max(7200).optional().describe("wall-clock cap on the exploration in seconds (default 300)"),
+      }).strict()]).optional().describe("op=verifyRecompile: AUTO MODE (see the op description): romdev picks input, atFrames and the audio window from the reference core, then verifies. true = defaults; an object tunes {seed, horizon, candidates, sampleEvery, frames, audioWindow, budgetSec}. Implied when atFrames is omitted; auto:false restores the 'pass atFrames' error. Combine with input to keep your schedule. The result's auto block reports what was chosen and a reproduce call."),
       input: z.union([z.string(), z.array(z.object({ frame: z.number().int().min(0), buttons: z.union([z.string(), z.array(z.string()), z.record(z.string(), z.boolean())]), hold: z.number().int().min(1).optional() }))]).optional().describe("op=verifyRecompile/findDiverge/fuzzRecompile/cycles: ONE input schedule (op=cycles: frames counted since loadMedia) applied to both sides, in REFERENCE frames: 'frame:buttons:hold,...' (e.g. '700:start:10,900:right+b:15') or [{frame, buttons:'a+right'|['a']|{a:true}, hold}]. libretro names (a,b,x,y,l,r,start,select,up,down,left,right) or spatial names (south,east,west,north); the cart gets each press at frame+offset, by physical position."),
       wrongInput: z.union([z.string(), z.array(z.object({ frame: z.number().int().min(0), buttons: z.union([z.string(), z.array(z.string()), z.record(z.string(), z.boolean())]), hold: z.number().int().min(1).optional() }))]).optional().describe("op=verifyRecompile: schedule for the wrong-input control (default: withhold ALL input; if the picture still matches, a perturbed script with the start/select presses kept and every other press replaced). The control must FAIL."),
       cartFrameOffset: z.union([z.number().int().min(-10000).max(10000), z.literal("auto")]).optional().describe("op=verifyRecompile/findDiverge: override the computed alignment (cart frame = reference frame + offset). Default: reference settle frames - wasmcart settle frame (1) - the cart's warmupFrames, unless the cart's section says frameAlignment:'search'. 'auto' (or that section flag) FINDS the offset: a fresh cart and reference are run to searchFrame, every cart offset within +-searchWindow of the computed one is scored against that one reference picture, and the sharp peak wins (refused, naming the best candidates, when the peak is flat or below the bar). Each scored frame then refines it by up to +-2 when its own sweep peaks sharply elsewhere (row.refinedBy). Cost: one extra cart run to searchFrame+offset+window and 2*window+1 picture scores."),

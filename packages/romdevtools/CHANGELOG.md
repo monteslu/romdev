@@ -6,6 +6,29 @@ the `romdev-mcp` bin is kept as an alias.)
 
 ## Unreleased
 
+### verifyRecompile auto mode: romdev chooses the input and frames
+
+`frame({op:'verifyRecompile', cart, reference, auto:true})` (or atFrames
+omitted) no longer needs a hand-made `input` schedule and `atFrames`. Using
+only the REFERENCE core, it runs a no-input baseline and up to 16 seeded
+candidate schedules (start / a menu presses at varied times, then seeded play)
+to 3600 frames, scores every 30th frame with the verifier's own functions
+(content pixels, moving pixels, and whether the no-input picture there would
+fail the wrong-input control), keeps the schedule with the most frames that
+meet the bar, move and respond to input, spreads the scored frames over its
+run with the last one responding to input, and picks the loudest audio window
+before it (audio becomes 'required' when the reference makes sound there).
+Then the normal verification runs with the normal bar. The result's `auto`
+block reports the seed, every candidate's score, the chosen plan, the
+predicted evidence per frame and a `reproduce` call. Deterministic per cart,
+ROM and `auto.seed`; tunable with `auto:{seed, horizon, candidates,
+sampleEvery, frames, audioWindow, budgetSec}`; `input` with auto keeps the
+caller's schedule. When no reference frame meets the content bar it returns
+verdict INCONCLUSIVE with the reason without running the cart (never a pass,
+the bar is never lowered). `auto:false` restores the "pass atFrames" error.
+New `src/host/auto-verify.js`; `seededPlay` and `DEFAULT_BAR` are now shared
+from `verify-recompile.js` (the wrong-input script is unchanged).
+
 ### sync32: video mode 2, a 128x128 canvas
 
 `build({platform:'sync32', video:'128'})` writes header video_mode 2
