@@ -387,7 +387,20 @@ export class WasmcartHost {
         // (the shared offscreen one is every other session's too), so build a
         // private one. Falls through to the shared context if that fails --
         // a slower present is better than no cart.
-        if (presentWindow) {
+        //
+        // EVERY GL cart gets a private context now, not just presentWindow
+        // ones. Carts cache GL state (bound VAO/buffers/program/textures) and
+        // trust it across frames; on the one shared context another session's
+        // cart rebinds everything in between, so the next cart's
+        // glBufferData lands with nothing (or someone else's buffer) bound.
+        // Measured 2026-10-01: several OpenArena carts in parallel sessions
+        // segfaulted the server inside mesa's glBufferData five times in an
+        // hour (gdb: native-gles gl::_bufferData -> libgallium); each cart
+        // alone, or on its own server process, ran clean. native-gles is
+        // multi-context and a private context is destroyed with its host, so
+        // isolation costs one context per live GL session.
+        // ROMDEV_SHARED_GL=1 restores the old shared context.
+        if (presentWindow || process.env.ROMDEV_SHARED_GL !== "1") {
           const priv = await _createPrivateGl(wantW, wantH);
           if (priv) {
             this._glCtx = priv;

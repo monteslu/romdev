@@ -44,9 +44,28 @@ test("presentWindow gives a GL cart its own attachable context", GUARD, async ()
   } finally { h.destroy(); }
 });
 
-test("WITHOUT presentWindow a cart stays on the shared context and refuses to attach", GUARD, async () => {
+test("without presentWindow every GL cart still gets its OWN context", GUARD, async () => {
+  // Carts cache GL bindings across frames. On one shared context another
+  // session's cart rebinds everything in between, and the next cart's
+  // glBufferData ran with nothing bound: mesa segfaulted the whole server
+  // (2026-10-01, parallel OpenArena sessions). Two hosts must never share one.
+  const a = new WasmcartHost();
+  const b = new WasmcartHost();
+  try {
+    await a.loadMedia({ platform: "wasmcart", path: GLCART });
+    await b.loadMedia({ platform: "wasmcart", path: GLCART });
+    assert.ok(a._glCtx && b._glCtx, "each GL cart has a private context");
+    assert.notEqual(a._glCtx, b._glCtx, "and they are different contexts");
+    assert.notEqual(a._gl, b._gl, "with different GL objects");
+  } finally { a.destroy(); b.destroy(); }
+});
+
+test("ROMDEV_SHARED_GL=1: a cart on the shared context refuses to attach", GUARD, async () => {
   const h = new WasmcartHost();
-  await h.loadMedia({ platform: "wasmcart", path: GLCART });
+  process.env.ROMDEV_SHARED_GL = "1";
+  try {
+    await h.loadMedia({ platform: "wasmcart", path: GLCART });
+  } finally { delete process.env.ROMDEV_SHARED_GL; }
   try {
     // This is the safety property, not an incidental default. The offscreen
     // context is shared by every cart in every session, so attaching it to one
