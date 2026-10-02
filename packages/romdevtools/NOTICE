@@ -127,6 +127,16 @@ Bundled data  (reference-core-derived recompiler data)
   (NON-COMMERCIAL). SMS / Game Gear and Genesis wasmcarts built with sound
   (the default) contain code ported from them.
 
+  src/analysis/recompile/wat/genesis/gpgx-svp.json is genesis_plus_gx's SVP
+  chip (core/cart_hw/svp/svp.c + ssp16.c: the SSP1601 DSP interpreter and the
+  SVP memory controller, (c) 2008 Grazvydas "notaz" Ignotas, adapted by
+  Eke-Eke) compiled to WebAssembly and printed as WAT by
+  scripts/recompile-gen/gpgx-svp.mjs (the file records the upstream commit,
+  the compiler and a sha256 of every source file). Its notice reads "Free for
+  non-commercial use. For commercial use, separate licencing terms must be
+  obtained." A Genesis wasmcart built from an SVP cart contains that code and
+  is NON-COMMERCIAL on both counts.
+
 m2c (decompiler) - romdevtools depends on the separate romdev-m2c package,
 a JavaScript port of m2c (https://github.com/matt-kempster/m2c) licensed
 GPL-3.0, with its own LICENSE and NOTICE; its C parser is the separate

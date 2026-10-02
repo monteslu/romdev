@@ -457,3 +457,61 @@ test("a DMA fill started past the end of its line completes at once (gpgx's unsi
   const r = await gpgxParity({ platform: "genesis", rom: mdImage(code), maxFrames: 3 });
   assert.equal(r.diverged, false, divergenceText(r));
 });
+
+/**
+ * An SVP cart ('SV' at $1C8): the SSP1601 program at its reset PC (byte
+ * $800) and a 68000 program that talks to it. The SSP1601 writes XST, fills
+ * DRAM through a PM4 programmable-memory window (PMC address + mode, blind
+ * access), reads a ROM word through PM4, multiplies (X * Y and two mpya with
+ * pointer-register operands), then parks in gpgx's [$30FE08] tight loop
+ * (the PM4 read at $854) until the 68000 posts a job there. The 68000 reads
+ * XST / PM0, DRAM directly and through both cell arrange windows, posts the
+ * job, DMAs DRAM to VRAM (the SVP one-word DMA delay) and writes XST.
+ */
+function svpImage() {
+  const ssp = new Map();
+  const put = (byte, ...words) => { for (let i = 0; i < words.length; i++) ssp.set(byte + 2 * i, words[i]); };
+  put(0x800, 0x08b0, 0x1234,      // ldi XST,$1234
+    0x08e0, 0x0080, 0x08e0, 0x0818, 0x00c0, // ldi PMC,$0080 ; ldi PMC,$0818 ; ld PM4,- (DRAM write, word $80, +1)
+    0x08c0, 0x1111, 0x08c0, 0x2222, 0x08c0, 0x3333, 0x08c0, 0x4444, // ldi PM4,...
+    0x08e0, 0x0100, 0x08e0, 0x0800, 0x000c, // ldi PMC,$0100 ; ldi PMC,$0800 ; ld -,PM4 (ROM read, word $100)
+    0x003c, 0x00c3,                 // ld A,PM4 ; ld PM4,A
+    0x0810, 0x0123, 0x0820, 0xfedc, // ldi X,$0123 ; ldi Y,$FEDC
+    0x1810, 0x1c10,                 // ldi r0,$10 ; ldi r4,$10
+    0x0c00, 0x0007, 0x0d00, 0x0009, // ldi (r0),7 ; ldi (r4),9
+    0x9700, 0x9700,                 // mpya (r4),(r0) x2
+    0x00c3, 0x00cf,                 // ld PM4,A ; ld PM4,AL
+    0x4c00, 0x0440);                // bra $880
+  put(0x880, 0xa800, 0x0000,      // andi A,0
+    0x08e0, 0x7f04, 0x08e0, 0x0018, 0x000c, // DRAM read of word $7F04 ($30FE08), no increment
+    0x4c00, 0x042a);                // bra $854
+  put(0x854, 0x003c,              // ld A,PM4 (gpgx: SSP_WAIT_30FE08 while it reads 0)
+    0x6800, 0x0000, 0x4d50, 0x042a, // cmpi A,0 ; bra z,$854
+    0x00c3, 0x4c00, 0x0430);        // ld PM4,A ; bra $860
+  const readW = (a) => [...W(0x30f9), ...L(a)];
+  const readB = (a) => [...W(0x10f9), ...L(a)];
+  const vdp = (w) => [...W(0x33fc, w), ...L(0xc00004)];
+  const spin = [...W(0x3e3c, 0x4000, 0x51cf, 0xfffe)]; // move.w #$4000,d7 ; dbf d7,*
+  const code = [...W(0x41f9), ...L(0xff0000),
+    ...W(0x3039), ...L(0xa15000), ...W(0x67f8),       // wait for XST
+    ...readW(0xa15004), ...readW(0xa15004), ...spin,
+    ...[0, 2, 4, 6, 8, 10, 12].flatMap((o) => readW(0x300100 + o)),
+    ...readW(0x390004), ...readW(0x390000), ...readW(0x390084), ...readW(0x3a0004), ...readW(0x3a0040),
+    ...readB(0x390005), ...readB(0x3a0004),
+    ...W(0x33fc, 0x0005), ...L(0x30fe08), ...spin, ...readW(0x30010e),
+    ...vdp(0x8114), ...vdp(0x8f02), ...vdp(0x9304), ...vdp(0x9400), ...vdp(0x9580), ...vdp(0x9600), ...vdp(0x9718),
+    ...W(0x23fc), ...L(0x40000080), ...L(0xc00004),  // DMA $300100 -> VRAM $0000
+    ...W(0x33fc, 0xbeef), ...L(0xa15000), ...readW(0xa15000), ...readW(0xa15004),
+    ...W(0x60fe)];
+  return mdImage(code, { size: 0x20000, header: { 0x1c8: "SV" }, at: [...ssp].map(([b, w]) => [b, W(w)]) });
+}
+
+test("SVP carts: the SSP1601 (PM4 DRAM / ROM windows, mpya, the \$30FE08 wait), XST/PM0, cell arrange reads and the delayed DMA match gpgx", T, async () => {
+  const rom = svpImage();
+  const r = await gpgxParity({ platform: "genesis", rom, maxFrames: 12 });
+  assert.equal(r.diverged, false, divergenceText(r));
+  // must fail: the same cart with the SSP1601's mpya broken
+  const bad = await gpgxParity({ platform: "genesis", rom, maxFrames: 12, options: { svpBreak: true } });
+  assert.equal(bad.diverged, true, "options.svpBreak (one SSP opcode wrong) must diverge");
+  assert.ok((bad.regions ?? []).some((x) => x.region.startsWith("svp_")), `the SVP state names it: ${divergenceText(bad)}`);
+});

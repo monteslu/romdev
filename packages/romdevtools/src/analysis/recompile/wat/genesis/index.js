@@ -5,7 +5,8 @@
 // $pc, so a computed jump cannot land on uncompiled code. Each arm's body is
 // gpgx's own Musashi opcode handler partially evaluated for that opcode at
 // that address (ctrans.js over gpgx-derived.json.gz); the machine around it
-// (memory map, VDP, Z80, frame loop) is runtime.js. Both follow gpgx
+// (memory map, VDP, Z80, frame loop) is runtime.js; an SVP cart also carries
+// gpgx's own SSP1601 code compiled to WAT (svp.js). All follow gpgx
 // function for function because the carts are verified against gpgx's
 // picture and memory at the same frame.
 //
@@ -31,6 +32,7 @@ import { loadGpgxData } from "./gpgx-data.js";
 import { translateM68k, translateZ80, z80HandlerNames, TrError, ZREGS } from "./ctrans.js";
 import * as RT from "./runtime.js";
 import { ymWat, mdSoundInfo, hookZ80Wat, hookVdpWat, hookFrameWat, hookMemWat, deltasLayout } from "./ym2612.js";
+import { hasSvp, svpUnitSize, svpWat, svpRegions, SVP_DRAM, SVP_CELL } from "./svp.js";
 
 export const platforms = ["genesis", "md", "megadrive"];
 
@@ -66,6 +68,17 @@ export function traceRingFor(opts = {}) {
   return { entries: n, stride: REGRING_STRIDE, regs: true };
 }
 const SH = 1024; // arms per dispatch shard
+
+/**
+ * SVP carts: the SVP unit's memory (svp.js) sits right after the ROM image
+ * (the pc tables follow it), so its regions' offsets depend on the ROM alone.
+ * @param {Uint8Array} img normalised ROM
+ * @returns {{base:number, size:number}|null}
+ */
+function svpPlacement(img) {
+  if (!hasSvp(img)) return null;
+  return { base: ROMIMG + padRom(img).length, size: (svpUnitSize() + 0xffff) & ~0xffff };
+}
 
 /**
  * gpgx pads the ROM to a power of two of at least 64KB with $FF and mirrors
@@ -259,7 +272,6 @@ export function cartMapper(img) {
   const consoleType = headerText(img, 0x100, 0x110), romType = headerText(img, 0x180, 0x182), product = headerText(img, 0x182, 0x18e);
   const international = romName(img, 0x150), domestic = romName(img, 0x120);
   if (international.includes("DEMONS OF ASTEBORG") || international.includes("ASTEBROS") || domestic.includes("DAEMON CLAW")) return { kind: "default" };
-  if (img[0x1c8] === 0x53 && img[0x1c9] === 0x56) return { kind: null, reason: "the SVP chip (Samsung SSP1601 DSP, 'SV' at $1C8)" };
   const hw = cartHardware(img);
   if (hw && hw.unmodelled.length) return { kind: null, reason: `its rom_database entry's ${hw.unmodelled.join(" / ")} hardware` };
   if (hw && hw.realtec) return { kind: "realtec" };
@@ -705,13 +717,17 @@ export function describe(rom, opts = {}) {
     // eeprom_i2c_init: serial EEPROM / J-Cart boards (the backup RAM is then not memory-mapped)
     eeprom: eepromConfig(img),
     mapper: cartMapper(img),
+    // md_cart_init: 'SV' at $1C8 = the SVP chip (gpgx cart_hw/svp, svp.js)
+    svp: hasSvp(img),
     ramCode,
     arms: narms,
     shards: Math.ceil(narms / SH),
     layout,
     conventions,
     license: data.meta.license,
-    licenseNote: "carts built by this backend contain code transpiled from Genesis Plus GX: non-commercial",
+    licenseNote: hasSvp(img)
+      ? "carts built by this backend contain code transpiled from Genesis Plus GX, and this SVP cart its SVP chip code (svp.c / ssp16.c, free for non-commercial use only): non-commercial"
+      : "carts built by this backend contain code transpiled from Genesis Plus GX: non-commercial",
     derivedFrom: { gpgxCommit: data.meta.provenance.commit, generatorVersion: data.meta.generatorVersion },
   };
 }
@@ -736,6 +752,7 @@ export const conventions = { settleFrames: { cart: 1, reference: 5 }, cartFrameO
 export function recompileSection(rom, sha1, opts = {}) {
   const d = describe(rom, opts);
   const ring = traceRingFor(opts);
+  const svpAt = svpPlacement(normalizeRom(rom instanceof Uint8Array ? rom : new Uint8Array(rom)));
   const regFields = ring.regs ? {
     ...Object.fromEntries(Array.from({ length: 8 }, (_, i) => [`d${i}`, { offset: 16 + 4 * i }])),
     ...Object.fromEntries(Array.from({ length: 8 }, (_, i) => [`a${i}`, { offset: 48 + 4 * i }])),
@@ -754,7 +771,8 @@ export function recompileSection(rom, sha1, opts = {}) {
       // the picture is drawn from the framebuffer's left edge at the active
       // width (256 in H32, 320 in H40), which is where gpgx's frame starts
       screen: { origin: [0, 0] },
-      regions: layout.regions,
+      // SVP carts add the chip's DRAM, IRAM and SSP1601 state (svp.js)
+      regions: svpAt ? { ...layout.regions, ...svpRegions(svpAt.base) } : layout.regions,
       fields: layout.fields,
       probe: layout.probe,
       vramZero: layout.vramZero,
@@ -777,6 +795,7 @@ export function recompileSection(rom, sha1, opts = {}) {
       license: d.licenseNote,
       // genesis_plus_gx's libretro output (ym2612.js): s16 stereo 44100 Hz
       ...(opts.audio !== false ? { audio: mdSoundInfo(SND, opts.audioDeltas ? DELTAS : undefined).section } : {}),
+      ...(opts.svpBreak ? { debugSvpBreak: "mpya: A += P ^ 1", warning: "built with options.svpBreak: the SVP chip's mpya opcode adds P xor 1 (a must-fail control), NOT a faithful cart" } : {}),
       ...(opts.breakArm != null ? { debugBreakArm: parseBreakArm(opts.breakArm), warning: "built with options.breakArm: one instruction also flips bit 0 of d0 (a must-fail control), NOT a faithful cart" } : {}),
     },
   };
@@ -824,7 +843,9 @@ export async function* emitWat(rom, opts = {}) {
   const ROMDATA = padRom(img);
   const ROMSIZE = ROMDATA.length;
   const ROMWORDS = ROMSIZE / 2;
-  const PCTAB = ROMIMG + ROMSIZE;
+  const SVPAT = svpPlacement(img);
+  if (opts.svpBreak && !SVPAT) throw new Error("genesis recompile: options.svpBreak needs an SVP cart ('SV' at $1C8)");
+  const PCTAB = ROMIMG + ROMSIZE + (SVPAT ? SVPAT.size : 0);
   let PACKED = PCTAB + (ROMWORDS + RAMWORDS) * 4;
   const fetchRom = (p) => {
     p &= ROMSIZE - 1;
@@ -942,13 +963,13 @@ export async function* emitWat(rom, opts = {}) {
   const SRAM = sramConfig(img), MAPPER = cartMapper(img), EEP = eepromConfig(img);
   // a serial EEPROM is sram.custom: the backup RAM is not memory-mapped
   if (EEP && EEP.eeprom) SRAM.bank = null;
-  yield RT.cartWat(ROMIMG, ROMSIZE, { sramOn: (SRAM.on || !!(EEP && EEP.eeprom)) && SRAM.start < 0x400000, ssf2: MAPPER.kind === "ssf2", eeprom: EEP, hw: HW });
-  yield RT.ioWat({ sixButton: sixButtonPads(img), timeR: HW && HW.timeR });
+  yield RT.cartWat(ROMIMG, ROMSIZE, { sramOn: (SRAM.on || !!(EEP && EEP.eeprom)) && SRAM.start < 0x400000, ssf2: MAPPER.kind === "ssf2", eeprom: EEP, hw: HW, svp: !!SVPAT });
+  yield RT.ioWat({ sixButton: sixButtonPads(img), timeR: HW && HW.timeR, svp: !!SVPAT });
   const PAL = palTiming(img);
   // options.audio (default on): genesis_plus_gx's YM2612 + PSG output (ym2612.js)
   const AUDIO = opts.audio !== false;
   if (AUDIO && mdSoundInfo(SND).end > RT.ZT) throw new Error("genesis recompile: the sound state overlaps the Z80 tables");
-  yield AUDIO ? hookVdpWat(RT.vdpWat({ pal: PAL, hw: HW })) : RT.vdpWat({ pal: PAL, hw: HW });
+  yield AUDIO ? hookVdpWat(RT.vdpWat({ pal: PAL, hw: HW, svp: !!SVPAT })) : RT.vdpWat({ pal: PAL, hw: HW, svp: !!SVPAT });
   if (AUDIO) yield ymWat({ base: SND, cursorAddr: ABI + 256, fmBuf: FMBUF, pal: PAL, deltas: opts.audioDeltas ? DELTAS : undefined });
   yield RT.renderWat();
   // the Z80: one function per opcode handler, dispatched via the table
@@ -1088,8 +1109,10 @@ export async function* emitWat(rom, opts = {}) {
   }
   for (const [off, b] of tabsegs) yield `  (data (i32.const ${off}) "${watBytes(b)}")\n`;
   yield `  (data (i32.const ${ROMIMG}) "${watBytes(ROMDATA)}")\n`;
-  const frameText = frameWat(narms, PACKED, PCTAB, img, ROMSIZE, SRAM.bank, EEP).replace("(call $initmap)", `(call $initmap) (i32.store (i32.const ${STATE + 0xf4}) (i32.const ${tracebuf}))`);
+  const frameText = frameWat(narms, PACKED, PCTAB, img, ROMSIZE, SRAM.bank, EEP, !!SVPAT).replace("(call $initmap)", `(call $initmap) (i32.store (i32.const ${STATE + 0xf4}) (i32.const ${tracebuf}))`);
   yield AUDIO ? hookFrameWat(frameText, { abi: ABI, base: SND }) : frameText;
+  // the SVP unit last: its table follows the dispatch table (index 0)
+  if (SVPAT) yield svpWat(SVPAT.base, { romimg: ROMIMG, romsize: ROMSIZE, broken: !!opts.svpBreak }) + "\n";
   yield ")\n";
   if (breakAt !== null && !broken) throw new Error(`genesis recompile: options.breakArm $${breakAt.toString(16)} is not an instruction address of this cart`);
   if (opts.stats) Object.assign(opts.stats, { arms: narms, lowered: narms - bad, trapped: bad, shards: nsh, ramCodeArms: narms - Math.ceil(img.length / 2),
@@ -1241,7 +1264,9 @@ function regTraceWat(tracebuf, entries) {
         (i32.store (i32.const ${STATE + 0xFC}) (i32.and (i32.add (i32.load (i32.const ${STATE + 0xFC})) (i32.const 1)) (i32.const ${entries - 1}))))))`;
 }
 
-function frameWat(narms, PACKED, PCTAB, img, ROMSIZE, sramBank, eep) {
+function frameWat(narms, PACKED, PCTAB, img, ROMSIZE, sramBank, eep, svp = false) {
+  // system_frame_gen runs the SVP after each line's 68000 and Z80
+  const SVPL = svp ? "\n    (call $svp_line)" : "";
   return `
   ;; m68k_run: interrupt check on entry, bus refresh before each instruction,
   ;; and the one-instruction IRQ latency of m68k_set_irq_delay.
@@ -1323,7 +1348,7 @@ function frameWat(narms, PACKED, PCTAB, img, ROMSIZE, sramBank, eep) {
                 (global.set $nvint (i32.add (global.get $nvint) (i32.const 1)))))
         (i32.store8 (i32.const ${ZREGS + 61}) (i32.const 1))))
     (call $m68k_run (i32.const 3420))
-    (if (i32.eq (global.get $zstate) (i32.const 1)) (then (call $z80_run (i32.const 3420))))
+    (if (i32.eq (global.get $zstate) (i32.const 1)) (then (call $z80_run (i32.const 3420))))${SVPL}
     (i32.store8 (i32.const ${ZREGS + 61}) (i32.const 0))
     (global.set $mcvdp (i32.const 3420))
     (local.set $line (i32.add (global.get $vp_h) (i32.const 1)))
@@ -1331,7 +1356,7 @@ function frameWat(narms, PACKED, PCTAB, img, ROMSIZE, sramBank, eep) {
       (global.set $v_v_counter (local.get $line))
       (call $input_refresh)${eep && eep.jcart ? " (call $jpad_refresh)" : ""}
       (call $m68k_run (i32.add (global.get $mcvdp) (i32.const 3420)))
-    (if (i32.eq (global.get $zstate) (i32.const 1)) (then (call $z80_run (i32.add (global.get $mcvdp) (i32.const 3420)))))
+    (if (i32.eq (global.get $zstate) (i32.const 1)) (then (call $z80_run (i32.add (global.get $mcvdp) (i32.const 3420)))))${SVPL}
       (global.set $mcvdp (i32.add (global.get $mcvdp) (i32.const 3420)))
       (local.set $line (i32.add (local.get $line) (i32.const 1)))
       (br_if $l (i32.lt_s (local.get $line) (i32.const ${(palTiming(img) ? 313 : 262) - 1})))))
@@ -1342,7 +1367,7 @@ function frameWat(narms, PACKED, PCTAB, img, ROMSIZE, sramBank, eep) {
     (if (i32.and ${R(1)} (i32.const 0x40)) (then (call $parse_satb_any (i32.const -1))))
     (call $input_refresh)${eep && eep.jcart ? " (call $jpad_refresh)" : ""}
     (call $m68k_run (i32.add (global.get $mcvdp) (i32.const 3420)))
-    (if (i32.eq (global.get $zstate) (i32.const 1)) (then (call $z80_run (i32.add (global.get $mcvdp) (i32.const 3420)))))
+    (if (i32.eq (global.get $zstate) (i32.const 1)) (then (call $z80_run (i32.add (global.get $mcvdp) (i32.const 3420)))))${SVPL}
     (global.set $mcvdp (i32.add (global.get $mcvdp) (i32.const 3420)))
     (local.set $line (i32.const 0))
     (block $d (loop $l
@@ -1358,7 +1383,7 @@ function frameWat(narms, PACKED, PCTAB, img, ROMSIZE, sramBank, eep) {
                       (global.set $nhint (i32.add (global.get $nhint) (i32.const 1))))))
         (else (global.set $v_h_counter (i32.sub (global.get $v_h_counter) (i32.const 1)))))
       (call $m68k_run (i32.add (global.get $mcvdp) (i32.const 3420)))
-    (if (i32.eq (global.get $zstate) (i32.const 1)) (then (call $z80_run (i32.add (global.get $mcvdp) (i32.const 3420)))))
+    (if (i32.eq (global.get $zstate) (i32.const 1)) (then (call $z80_run (i32.add (global.get $mcvdp) (i32.const 3420)))))${SVPL}
       (global.set $mcvdp (i32.add (global.get $mcvdp) (i32.const 3420)))
       (local.set $line (i32.add (local.get $line) (i32.const 1)))
       (br_if $l (i32.lt_s (local.get $line) (global.get $vp_h)))))
@@ -1447,7 +1472,11 @@ function frameWat(narms, PACKED, PCTAB, img, ROMSIZE, sramBank, eep) {
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $l)))
     (global.set $region (i32.const ${regionCode(img)}))
-${RT.cartInitWat(ROMSIZE, sramBank, eep && eep.eeprom ? null : sramConfig(img), !!cartHardware(img)?.realtec)}${eep ? RT.eepromInitWat(eep) : ""}    (call $vdp_reset)
+${RT.cartInitWat(ROMSIZE, sramBank, eep && eep.eeprom ? null : sramConfig(img), !!cartHardware(img)?.realtec)}${eep ? RT.eepromInitWat(eep) : ""}${svp ? `    ;; svp_init: DRAM in banks $30-$31, the cell arrange reads in $39-$3A; svp_reset
+    (i32.store (i32.const ${RT.CARTMAP + 0x30 * 4}) (i32.const ${SVP_DRAM})) (i32.store (i32.const ${RT.CARTMAP + 0x31 * 4}) (i32.const ${SVP_DRAM}))
+    (i32.store (i32.const ${RT.CARTMAP + 0x39 * 4}) (i32.const ${SVP_CELL})) (i32.store (i32.const ${RT.CARTMAP + 0x3a * 4}) (i32.const ${SVP_CELL}))
+    (call $svp_power_on)
+` : ""}    (call $vdp_reset)
     (call $io_reset)
     (global.set $zstate (i32.const 0))
     (global.set $zmap (i32.const 0))

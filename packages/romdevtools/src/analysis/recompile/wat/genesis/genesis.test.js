@@ -259,3 +259,45 @@ test("options.traceEntries records d0-d7/a0-a7/sr per instruction; breakArm flip
   assert.equal(e(steps[0], 16 + 4 * 15), 0x00fffe00, "a7 = the stack pointer before the first instruction");
   assert.equal(e(steps[0], 80) & 0x2700, 0x2700, "sr: supervisor, interrupts masked at reset");
 });
+
+test("SVP carts: gpgx's SSP1601 runs from ROM, the 68000 sees XST / PM0, DRAM and the cell arrange window", async () => {
+  const code = Uint8Array.from([
+    ...W(0x33fc, 0xabcd), ...L(0x00300010), // move.w #$ABCD,$300010 (DRAM)
+    ...W(0x3439), ...L(0x00300010),         // move.w $300010,d2
+    ...W(0x33fc, 0x5a5a), ...L(0x00300100), // move.w #$5A5A,$300100
+    ...W(0x3639), ...L(0x00390004),         // move.w $390004,d3 (svp_read_cell_1: DRAM $100)
+    ...W(0x3039), ...L(0x00a15000),         // loop: move.w $A15000,d0 (XST)
+    ...W(0x67f8),                           //       beq.s loop
+    ...W(0x3239), ...L(0x00a15004),         // move.w $A15004,d1 (PM0: bit 0 = the SSP wrote XST, cleared by the read)
+    ...W(0x3a39), ...L(0x00a15004),         // move.w $A15004,d5
+    ...W(0x60fe),                           // bra.s *
+  ]);
+  const rom = synthRom(code, { size: 0x20000 });
+  rom[0x1c8] = 0x53; rom[0x1c9] = 0x56; // 'SV'
+  // the SSP1601 program at its reset PC (word $400 = byte $800): ldi XST,$1234 ; bra $402
+  rom.set(W(0x08b0, 0x1234, 0x4c00, 0x0402), 0x800);
+  const d = describeRom(rom);
+  assert.equal(d.svp, true);
+  assert.equal(d.supported, true);
+  const sec = recompileSection(rom, "00").json;
+  assert.equal(sec.regions.svp_dram.ref, "genesis_svp_dram");
+  assert.equal(sec.regions.svp_dram.length, 0x20000);
+  assert.equal(sec.regions.svp_iram.ref, "genesis_svp_iram");
+  assert.equal(sec.regions.svp_ssp.ref, "genesis_svp_ssp");
+  assert.equal(recompileSection(synthRom(W(0x60fe)), "00").json.regions.svp_dram, undefined, "no SVP regions without the chip");
+  assert.ok(recompileSection(rom, "00", { svpBreak: true }).json.warning.includes("svpBreak"));
+  const c = await cartOf(rom);
+  c.frame(2);
+  const dv = c.dv();
+  assert.equal(dv.getUint32(STATE + 96, true), 0, "not trapped");
+  assert.equal(dv.getUint32(STATE + 0, true) & 0xffff, 0x1234, "XST written by the SSP1601");
+  assert.equal(dv.getUint32(STATE + 4, true) & 0xffff, 1, "PM0 bit 0 set by the SSP's XST write");
+  assert.equal(dv.getUint32(STATE + 20, true) & 0xffff, 0, "and cleared by the 68000's read");
+  assert.equal(dv.getUint32(STATE + 8, true) & 0xffff, 0xabcd, "DRAM word read back");
+  assert.equal(dv.getUint32(STATE + 12, true) & 0xffff, 0x5a5a, "the cell arrange window maps $390004 to DRAM $100");
+  // DRAM holds host-order (little-endian) words, as gpgx's svp->dram does
+  assert.equal(dv.getUint16(sec.regions.svp_dram.offset + 0x10, true), 0xabcd);
+  // the IRAM/ROM copy svp_reset made: word $400 is the program's first opcode
+  assert.equal(dv.getUint16(sec.regions.svp_iram.offset + 0x800, true), 0x08b0);
+  await assert.rejects(cartOf(synthRom(W(0x60fe)), { svpBreak: true }), /svpBreak needs an SVP cart/);
+});

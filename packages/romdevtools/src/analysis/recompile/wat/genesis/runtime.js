@@ -848,7 +848,10 @@ export function ioWat(opts = {}) {
                                                                                 (i32.eq (local.get $s) (i32.const 0x41))))))
       (then (return (call $bus8 (local.get $a)))))
     (if (i32.eq (local.get $s) (i32.const 0x20)) (then (return (call $bus8 (local.get $a)))))
-    (if (i32.eq (local.get $s) (i32.const 0x50)) (then (return (call $bus8 (local.get $a)))))
+    (if (i32.eq (local.get $s) (i32.const 0x50)) (then${opts.svp ? `
+      ;; SVP: XST / PM0 status (mem68k.c case 0x50)
+      (local.set $d (call $svp_ctrl_r8 (local.get $a)))
+      (if (i32.ge_s (local.get $d) (i32.const 0)) (then (return (local.get $d))))` : ""} (return (call $bus8 (local.get $a)))))
     (call $lockup (local.get $a))
     (call $bus8 (local.get $a)))
 
@@ -871,7 +874,10 @@ export function ioWat(opts = {}) {
                         (i32.or (i32.eq (local.get $s) (i32.const 0x44)) (i32.or (i32.eq (local.get $s) (i32.const 0x30))
                                                                                 (i32.eq (local.get $s) (i32.const 0x41))))))
       (then (return (call $bus16))))
-    (if (i32.or (i32.eq (local.get $s) (i32.const 0x20)) (i32.eq (local.get $s) (i32.const 0x50)))
+${opts.svp ? `    (if (i32.eq (local.get $s) (i32.const 0x50))
+      (then (local.set $d (call $svp_ctrl_r16 (local.get $a)))
+            (if (i32.ge_s (local.get $d) (i32.const 0)) (then (return (local.get $d))))))
+` : ""}    (if (i32.or (i32.eq (local.get $s) (i32.const 0x20)) (i32.eq (local.get $s) (i32.const 0x50)))
       (then (return (call $bus16))))
     (call $lockup (local.get $a))
     (call $bus16))
@@ -913,7 +919,9 @@ export function ioWat(opts = {}) {
     (if (i32.eq (local.get $s) (i32.const 0x11))
       (then (call $zbusreq_w (i32.and (i32.shr_u (local.get $v) (i32.const 8)) (i32.const 1))) (return)))
     (if (i32.eq (local.get $s) (i32.const 0x12))
-      (then (call $zreset_w (i32.and (i32.shr_u (local.get $v) (i32.const 8)) (i32.const 1))) (return)))
+      (then (call $zreset_w (i32.and (i32.shr_u (local.get $v) (i32.const 8)) (i32.const 1))) (return)))${opts.svp ? `
+    ;; SVP: XST written by the 68000 (mem68k.c ctrl_io_write_word case 0x50)
+    (if (i32.eq (local.get $s) (i32.const 0x50)) (then (drop (call $svp_ctrl_w16 (local.get $a) (local.get $v))) (return)))` : ""}
     (if (i32.or (i32.or (i32.eq (local.get $s) (i32.const 0x10)) (i32.eq (local.get $s) (i32.const 0x13)))
                 (i32.or (i32.or (i32.eq (local.get $s) (i32.const 0x40)) (i32.eq (local.get $s) (i32.const 0x44)))
                         (i32.or (i32.eq (local.get $s) (i32.const 0x50)) (i32.or (i32.eq (local.get $s) (i32.const 0x30))
@@ -1306,7 +1314,12 @@ export function vdpWat(opts = {}) {
                                                         (i32.and (global.get $v_code) (i32.const 6))))
                         (global.set $v_dma_length (i32.or (i32.shl ${R(20)} (i32.const 8)) ${R(19)}))
                         (if (i32.eqz (global.get $v_dma_length)) (then (global.set $v_dma_length (i32.const 0x10000))))
-                        (global.set $v_dma_src (i32.or (i32.shl ${R(22)} (i32.const 8)) ${R(21)}))
+                        (global.set $v_dma_src (i32.or (i32.shl ${R(22)} (i32.const 8)) ${R(21)}))${opts.svp ? `
+                        ;; SVP ROM/RAM source ($000000-$3FFFFF): the first word is the bus's
+                        ;; previous data, so the transfer starts one slot later, one word shorter
+                        (if (i32.eqz (i32.and ${R(23)} (i32.const 0x60)))
+                          (then (global.set $v_addr (i32.and (i32.add (global.get $v_addr) ${R(15)}) (i32.const 0xFFFF)))
+                                (global.set $v_dma_length (i32.sub (global.get $v_dma_length) (i32.const 1)))))` : ""}
                         (call $dma_update (global.get $mc))))))))))))
     (global.set $v_fifo_byte_access (select (i32.const 0) (i32.const 1) (i32.and (global.get $v_code) (i32.const 6)))))
 
@@ -2627,7 +2640,9 @@ export function cartWat(romimg, romsize, o) {
     (i32.load (i32.add (i32.const ${CARTMAP}) (i32.shl (i32.and (i32.shr_u (local.get $a) (i32.const 16)) (i32.const 0x3F)) (i32.const 2)))))
 ${o.eeprom ? eepromWat(o.eeprom) : ""}  (func ${o.eeprom ? "$cart_b8" : "$cart_rd8"} (param $a i32) (result i32)
     (local $e i32) (local $o i32)
-    (local.set $e (call $cartmap (local.get $a)))${m32 ? `
+    (local.set $e (call $cartmap (local.get $a)))${o.svp ? `
+    ;; svp_init: DRAM ($30-$31) and the cell arrange windows ($39-$3A)
+    (if (i32.le_s (local.get $e) (i32.const -8)) (then (return (call $svp_rd8 (local.get $a)))))` : ""}${m32 ? `
     (if (i32.eq (local.get $e) (i32.const -3)) (then (return ${romAt("(call $m32k_off (local.get $a))")})))` : ""}${rt ? `
     (if (i32.eq (local.get $e) (i32.const -4)) (then (return ${romAt("(i32.or (i32.const 0x7E000) (i32.and (local.get $a) (i32.const 0x1FFF)))")})))` : ""}
     (if (i32.lt_s (local.get $e) (i32.const 0))
@@ -2636,7 +2651,8 @@ ${o.eeprom ? eepromWat(o.eeprom) : ""}  (func ${o.eeprom ? "$cart_b8" : "$cart_r
     ${romAt("(local.get $o)")})
   (func ${o.eeprom ? "$cart_b16" : "$cart_rd16"} (param $a i32) (result i32)
     (local $e i32) (local $o i32)
-    (local.set $e (call $cartmap (local.get $a)))${m32 ? `
+    (local.set $e (call $cartmap (local.get $a)))${o.svp ? `
+    (if (i32.le_s (local.get $e) (i32.const -8)) (then (return (call $svp_rd16 (local.get $a)))))` : ""}${m32 ? `
     (if (i32.eq (local.get $e) (i32.const -3))
       (then (local.set $o (call $m32k_off (i32.and (local.get $a) (i32.const -2))))
             (return (i32.or (i32.shl ${romAt("(local.get $o)")} (i32.const 8)) ${romAt("(i32.add (local.get $o) (i32.const 1))")}))))` : ""}${rt ? `
@@ -2650,11 +2666,14 @@ ${o.eeprom ? eepromWat(o.eeprom) : ""}  (func ${o.eeprom ? "$cart_b8" : "$cart_r
     (local.set $o (i32.add (local.get $e) (i32.and (local.get $a) (i32.const 0xFFFE))))
     (i32.or (i32.shl ${romAt("(local.get $o)")} (i32.const 8))
             ${romAt("(i32.add (local.get $o) (i32.const 1))")}))
-  (func ${o.eeprom ? "$cart_wb8" : "$cart_wr8"} (param $a i32) (param $v i32)
+  (func ${o.eeprom ? "$cart_wb8" : "$cart_wr8"} (param $a i32) (param $v i32)${o.svp ? `
+    ;; DRAM takes writes; the cell arrange windows keep the ROM banks' m68k_unused_w
+    (if (i32.eq (call $cartmap (local.get $a)) (i32.const -8)) (then (call $svp_wr8 (local.get $a) (local.get $v)) (return)))` : ""}
     (if (i32.eq (call $cartmap (local.get $a)) (i32.const -1))
       (then (i32.store8 (i32.add (i32.const ${SRAMBUF}) (i32.and (local.get $a) (i32.const 0xFFFF))) (local.get $v)))))
   (func ${o.eeprom ? "$cart_wb16" : "$cart_wr16"} (param $a i32) (param $v i32)
-    (local $o i32)
+    (local $o i32)${o.svp ? `
+    (if (i32.eq (call $cartmap (local.get $a)) (i32.const -8)) (then (call $svp_wr16 (local.get $a) (local.get $v)) (return)))` : ""}
     (if (i32.eq (call $cartmap (local.get $a)) (i32.const -1))
       (then (local.set $o (i32.add (i32.const ${SRAMBUF}) (i32.and (local.get $a) (i32.const 0xFFFE))))
             (i32.store8 (local.get $o) (i32.shr_u (local.get $v) (i32.const 8)))
