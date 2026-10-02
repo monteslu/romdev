@@ -17530,10 +17530,10 @@ index 74d5053..3ab6eab 100644
 +}
 +
 diff --git a/libretro/libretro.c b/libretro/libretro.c
-index 798c6cc..fc9abb8 100644
+index 798c6cc..f4f28ff 100644
 --- a/libretro/libretro.c
 +++ b/libretro/libretro.c
-@@ -1,4016 +1,4347 @@
+@@ -1,4016 +1,4362 @@
 -/****************************************************************************
 - *  libretro.c
 - *
@@ -25520,6 +25520,12 @@ index 798c6cc..fc9abb8 100644
 + * FM and PSG input to blip_buf BEFORE band-limited resampling. Zero deltas
 + * are skipped, as blip_add_delta skips them. */
 +#define ROMDEV_MEMORY_GPGX_BLIP_DELTAS 0x136
++/* SVP cartridge (cart_hw/svp): the SSP1601 DRAM (128KB, host-order 16-bit
++ * words), its IRAM (the first 2KB of svp->iram_rom) and the ssp1601_t
++ * state. NULL / size 0 when the cart has no SVP. */
++#define ROMDEV_MEMORY_GENESIS_SVP_DRAM 0x137
++#define ROMDEV_MEMORY_GENESIS_SVP_IRAM 0x138
++#define ROMDEV_MEMORY_GENESIS_SVP_SSP  0x139
 +#include "romdev_audio_stream.h"
 +#define ROMDEV_GPGX_BLIP_CAP 32768u
 +static uint8_t romdev_gpgx_blip[ROMDEV_AS_BYTES(ROMDEV_GPGX_BLIP_CAP, 3, 4)];
@@ -25578,6 +25584,12 @@ index 798c6cc..fc9abb8 100644
 +         return zram;
 +      case ROMDEV_MEMORY_GENESIS_M68K:
 +         return &m68k;
++      case ROMDEV_MEMORY_GENESIS_SVP_DRAM:
++         return svp ? svp->dram : NULL;
++      case ROMDEV_MEMORY_GENESIS_SVP_IRAM:
++         return svp ? svp->iram_rom : NULL;
++      case ROMDEV_MEMORY_GENESIS_SVP_SSP:
++         return svp ? (void *)&svp->ssp1601 : NULL;
 +      case ROMDEV_MEMORY_GENESIS_YM2612:
 +         YM2612SaveContext(romdev_ym2612_snap);
 +         return romdev_ym2612_snap;
@@ -25667,6 +25679,9 @@ index 798c6cc..fc9abb8 100644
 +      case ROMDEV_MEMORY_GENESIS_VDP_REGS: return 0x20;
 +      case ROMDEV_MEMORY_GENESIS_Z80_RAM:  return 0x2000;
 +      case ROMDEV_MEMORY_GENESIS_M68K:     return sizeof(m68ki_cpu_core);
++      case ROMDEV_MEMORY_GENESIS_SVP_DRAM: return svp ? sizeof(svp->dram) : 0;
++      case ROMDEV_MEMORY_GENESIS_SVP_IRAM: return svp ? 0x800 : 0;
++      case ROMDEV_MEMORY_GENESIS_SVP_SSP:  return svp ? sizeof(ssp1601_t) : 0;
 +      case ROMDEV_MEMORY_GENESIS_YM2612:   return sizeof(romdev_ym2612_snap);
 +      case ROMDEV_MEMORY_GENESIS_PSG:      return sizeof(romdev_psg_snap);
 +      case ROMDEV_MEMORY_MD_LINEPIX:       return 240 * 320;

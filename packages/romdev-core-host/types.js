@@ -11,6 +11,7 @@
  *   | "snes_oam" | "snes_cgram" | "snes_aram" | "snes_fillram"
  *   | "genesis_cram" | "genesis_vsram" | "genesis_vdp_regs"
  *   | "genesis_z80_ram" | "genesis_m68k" | "genesis_ym2612" | "genesis_psg"
+ *   | "genesis_svp_dram" | "genesis_svp_iram" | "genesis_svp_ssp"
  *   | "md_linepix" | "md_bgpix" | "md_objpix" | "md_pixrgb" | "md_linestate"
  *   | "sms_linepix" | "sms_bgpix" | "sms_objpix" | "sms_pixrgb" | "sms_linestate"
  *   | "gg_linepix" | "gg_bgpix" | "gg_objpix" | "gg_pixrgb" | "gg_linestate"
@@ -129,6 +130,12 @@ export const RetroMemory = {
    *  - the FM + PSG input to blip_buf BEFORE band-limited resampling. Shared by
    *  the genesis / sms / gg platforms (all genesis_plus_gx). */
   GPGX_BLIP_DELTAS:   0x136,
+  /** SVP carts (gpgx cart_hw/svp): the SSP1601 DRAM (128KB of host-order
+   *  16-bit words), its 2KB IRAM and the ssp1601_t state. Absent (size 0)
+   *  on a cart without the chip. */
+  GENESIS_SVP_DRAM:   0x137,
+  GENESIS_SVP_IRAM:   0x138,
+  GENESIS_SVP_SSP:    0x139,
   GB_VRAM:            0x140,
   GB_OAM:             0x141,
   GB_IO:              0x142,
@@ -300,6 +307,9 @@ export const MemoryRegionToRetro = {
   genesis_m68k: RetroMemory.GENESIS_M68K,
   genesis_ym2612: RetroMemory.GENESIS_YM2612,
   genesis_psg: RetroMemory.GENESIS_PSG,
+  genesis_svp_dram: RetroMemory.GENESIS_SVP_DRAM,
+  genesis_svp_iram: RetroMemory.GENESIS_SVP_IRAM,
+  genesis_svp_ssp: RetroMemory.GENESIS_SVP_SSP,
   /* gpgx resolved-layer capture (shared line renderer, so the same core
    * regions serve genesis/sms/gg; per-platform aliases below). */
   md_linepix: RetroMemory.MD_LINEPIX,

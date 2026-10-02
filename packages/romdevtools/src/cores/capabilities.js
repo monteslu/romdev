@@ -91,7 +91,8 @@ export const CAPABILITIES = {
     audioChips: ["ym2612", "psg"],
     memoryRegions: [...GENERIC_REGIONS, "genesis_cram", "genesis_vsram", "genesis_vdp_regs",
       "genesis_z80_ram", "genesis_m68k", "genesis_ym2612", "genesis_psg",
-      "md_linepix", "md_bgpix", "md_objpix", "md_pixrgb", "md_linestate", "md_pixlines", "gpgx_blip_deltas"],
+      "md_linepix", "md_bgpix", "md_objpix", "md_pixrgb", "md_linestate", "md_pixlines", "gpgx_blip_deltas",
+      "genesis_svp_dram", "genesis_svp_iram", "genesis_svp_ssp"],
     ...tileDeep(),
   },
   sms: {

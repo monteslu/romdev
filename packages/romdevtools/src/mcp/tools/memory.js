@@ -140,6 +140,9 @@ const REGION_INFO = {
   genesis_m68k:      { endianness: "little", wordSize: 4, note: "Live m68ki_cpu_core struct from gpgx. Host-side fields are wasm32 native LE. Use getCPUState({platform:'genesis'}) instead of decoding by hand." },
   genesis_ym2612:    { endianness: "little", wordSize: 1, note: "YM2612 internal context snapshot (gpgx-private layout - diff-only)" },
   genesis_psg:       { endianness: "little", wordSize: 1, note: "PSG (SN76489) internal context snapshot - parse via getAudioState({chip:'psg'})" },
+  genesis_svp_dram:  { endianness: "little", wordSize: 2, note: "SVP carts only: the SSP1601 DSP's 128KB DRAM ($300000-$31FFFF on the 68000 side) as gpgx stores it, host-order (little-endian) 16-bit words" },
+  genesis_svp_iram:  { endianness: "little", wordSize: 2, note: "SVP carts only: the SSP1601's 2KB instruction RAM (little-endian 16-bit words)" },
+  genesis_svp_ssp:   { endianness: "little", wordSize: 4, note: "SVP carts only: gpgx's ssp1601_t (internal RAM banks, registers, pointer regs, stack, PMAC modes, emu_status)" },
 };
 
 // Per-platform fallback endianness for generic regions (system_ram etc).
