@@ -299,7 +299,12 @@ function hwExactWat(platform, opts) {
                                   (i32.lt_u (global.get $line) (global.get $vph)))
                          (i32.and (i32.gt_s (global.get $curbudget) (i32.const 0))
                                   (i32.le_s (i32.mul (i32.sub (i32.const 228) (global.get $curbudget)) (i32.const 15)) (i32.const 860))))
-              (then (local.set $redraw (i32.const 1))))))
+              (then (local.set $redraw (i32.const 1))))
+            ;; gpgx vdp_reg_w case 1: R1 bit 2 (the Mega Drive's Mode 5
+            ;; select) has no effect on these VDPs and is cleared when a
+            ;; write changes it, "to avoid mode 5 detection elsewhere".
+            (if (i32.and (i32.xor (local.get $d) (call $vreg (i32.const 1))) (i32.const 4))
+              (then (local.set $d (i32.and (local.get $d) (i32.const 0xFB)))))))
     (i32.store8 (i32.add (i32.const ${VREG}) (local.get $r)) (local.get $d))
     (if (local.get $redraw) (then (call $render_line (global.get $line))))
 ${opts.sms1 ? "" : `    (local.set $mode (i32.or (i32.and (call $vreg (i32.const 0)) (i32.const 6)) (i32.and (call $vreg (i32.const 1)) (i32.const 0x18))))

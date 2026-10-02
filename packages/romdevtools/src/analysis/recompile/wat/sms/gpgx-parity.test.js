@@ -378,3 +378,14 @@ test("the Korean 16K v2 mapper: $4000 / $8000 page slots 1 / 2, SEGA registers w
   const r = await gpgxParity({ platform: "gg", rom: await forgeCrc32(img, 0x3F80, 0x01A2D595), maxFrames: 3 });
   assert.equal(r.diverged, false, divergenceText(r));
 });
+
+test("VDP R1 bit 2 (the Mega Drive's Mode 5 select) is cleared when written on SMS / GG VDPs", T, async () => {
+  // di; ld sp,$DFF0; R1 = $E4 (bit 2 set); ld a,1; ld ($C000),a; R1 = $AE; jr $
+  // gpgx vdp_reg_w clears R1 bit 2 outside Mega Drive hardware, so R1 reads $E0 then $AA.
+  const main = [0xF3, 0x31, 0xF0, 0xDF, 0x3E, 0xE4, 0xD3, 0xBF, 0x3E, 0x81, 0xD3, 0xBF,
+    0x3E, 0x01, 0x32, 0x00, 0xC0, 0x3E, 0xAE, 0xD3, 0xBF, 0x3E, 0x81, 0xD3, 0xBF, 0x18, 0xFE];
+  for (const [platform, region] of [["sms", 4], ["gg", 6]]) {
+    const r = await gpgxParity({ platform, rom: smsImage(main, { region }), maxFrames: 5 });
+    assert.equal(r.diverged, false, `${platform}: ${divergenceText(r)}`);
+  }
+});
