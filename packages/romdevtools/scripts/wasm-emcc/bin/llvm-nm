@@ -1,0 +1,6 @@
+#!/usr/bin/env node
+// llvm-nm from the WASM-hosted LLVM (paths made absolute for the WASI root).
+import path from "node:path";
+import { runLLVMTool } from "../llvm.mjs";
+const argv = process.argv.slice(2).map((a) => (a.startsWith("-") ? a : path.resolve(a)));
+process.exit(await runLLVMTool(["nm", ...argv]));

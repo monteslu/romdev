@@ -1,0 +1,11 @@
+#!/usr/bin/env node
+// emconfigure (Python-free): run a build command with CC/CXX/AR/... pointing at wasm-emcc.
+import { spawnSync } from "node:child_process";
+import { buildingEnv } from "../env.mjs";
+const args = process.argv.slice(2);
+if (!args.length) { process.stderr.write("usage: emconfigure <command> [args...]\n"); process.exit(1); }
+const env = buildingEnv();
+if ("emconfigure" === "emconfigure") env.EMMAKEN_JUST_CONFIGURE = "1";
+process.stderr.write(`emconfigure: "${args.join(" ")}" in "${process.cwd()}"\n`);
+const r = spawnSync(args[0], args.slice(1), { stdio: "inherit", env });
+process.exit(r.status ?? 1);

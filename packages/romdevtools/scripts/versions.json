@@ -20,6 +20,26 @@
     "so an emsdk bump is a deliberate change."
   ],
   "emsdk": "4.0.18",
+  "wasm_toolchain": {
+    "_comment": "Python-free emcc (scripts/wasm-emcc/): LLVM, binaryen and emscripten's own JS, all run from node. Fetched by scripts/wasm-emcc/fetch-wasm-toolchain.mjs into build/wasm-toolchain. See internal-romdev/PLAN_no_python_wasm_toolchain.md.",
+    "npm": {
+      "@yowasp/clang": "22.0.0-git20542-10",
+      "binaryen": "124.0.0-nightly.20251021",
+      "acorn": "8.15.0"
+    },
+    "emscripten": {
+      "kind": "tarball",
+      "url": "https://github.com/emscripten-core/emscripten/archive/refs/tags/4.0.18.tar.gz",
+      "sha256": "a35d47135c19e244110c42129c99acdfe7313e2d212cfa513ac13212664948e4",
+      "license": "MIT / University of Illinois NCSA"
+    },
+    "zlib": {
+      "kind": "tarball",
+      "url": "https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz",
+      "sha256": "17e88863f3600672ab49182f217281b6fc4d3c762bde361935e436a95214d05c",
+      "license": "zlib"
+    }
+  },
   "cores": {
     "fceumm": {
       "kind": "git",

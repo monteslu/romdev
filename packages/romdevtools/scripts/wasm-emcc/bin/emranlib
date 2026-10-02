@@ -1,0 +1,7 @@
+#!/usr/bin/env node
+// emranlib shim for the Python-free wasm-emcc toolchain (see ../emcc.mjs).
+process.env.ROMDEV_EMCC_TOOL = "emranlib";
+const m = await import("../emcc.mjs");
+const argv = process.argv.slice(2);
+const run = "emranlib" === "emar" ? m.emar(argv) : "emranlib" === "emranlib" ? m.emranlib(argv) : m.main(argv, { cxx: "emranlib" === "em++" });
+run.then((c) => process.exit(c ?? 0), (e) => { process.stderr.write("wasm-emcc: error: " + e.message + "\n"); if (process.env.ROMDEV_EMCC_VERBOSE) process.stderr.write(e.stack + "\n"); process.exit(1); });
