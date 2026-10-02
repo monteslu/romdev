@@ -10,6 +10,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { importMain, resolveToolchainUrl, fixup_build_command, finalize_compile_command, prune_asm, shq, fnmatch } from "../src/import.js";
 import { workDir, removeDir } from "./helpers/work.js";
+import { IDO } from "./helpers/payloads.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const toolchain = resolveToolchainUrl();
@@ -32,7 +33,7 @@ test("prune_asm moves .late_rodata to a trailing .rodata section", () => {
   assert.equal(asm, "glabel f\n jr $ra\n.text\n nop\n\n.section .rodata\n.word 1\n");
 });
 
-test("import a function from a Make project and permute it to a match", { skip: !toolchain && "romdev's toolchain adapter (romdevtools) is not available" }, async () => {
+test("import a function from a Make project and permute it to a match", { skip: (!toolchain && "romdev's toolchain adapter (romdevtools) is not available") || IDO }, async () => {
   const root = workDir("import");
   try {
     mkdirSync(path.join(root, "src"));

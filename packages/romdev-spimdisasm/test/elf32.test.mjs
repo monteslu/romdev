@@ -2,9 +2,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { configureVersion, common, elf32 } from "../src/index.js";
+import { RABBITIZER_SKIP } from "./helpers/payload.mjs";
 
-const { Elf32File, Elf32HeaderFlag, Elf32SectionHeaderFlag, Elf32SectionHeaderType, Elf32ObjectFileType, Elf32Constants, Elf32Relocs } = elf32;
+// Loading the port loads romdev-rabbitizer's WASM; without that payload every
+// test here skips with the reason instead of the file failing to import.
+const { configureVersion, common, elf32 } = RABBITIZER_SKIP ? {} : await import("../src/index.js");
+const { Elf32File, Elf32HeaderFlag, Elf32SectionHeaderFlag, Elf32SectionHeaderType, Elf32ObjectFileType, Elf32Constants, Elf32Relocs } = elf32 ?? {};
 
 const SHT = { NULL: 0, PROGBITS: 1, SYMTAB: 2, STRTAB: 3, NOBITS: 8, REL: 9, REGINFO: 0x70000006 };
 
@@ -146,11 +149,13 @@ const EXPECTED = {
   nobits: [".bss"],
 };
 
-test.beforeEach(() => configureVersion("1.42.4"));
-test.after(() => configureVersion("1.42.4"));
+if (!RABBITIZER_SKIP) {
+  test.beforeEach(() => configureVersion("1.42.4"));
+  test.after(() => configureVersion("1.42.4"));
+}
 
 for (const little of [false, true]) {
-  test(`parses a synthetic ${little ? "little" : "big"}-endian MIPS ELF32 object`, () => {
+  test(`parses a synthetic ${little ? "little" : "big"}-endian MIPS ELF32 object`, { skip: RABBITIZER_SKIP }, () => {
     const elf = new Elf32File(buildElf({ little }));
     assert.deepEqual(summarize(elf), EXPECTED);
     assert.equal(common.GlobalConfig.ENDIAN, little ? common.InputEndian.LITTLE : common.InputEndian.BIG);
@@ -161,7 +166,7 @@ for (const little of [false, true]) {
   });
 }
 
-test("names used by the splat PS2 elf reader exist with Python semantics", () => {
+test("names used by the splat PS2 elf reader exist with Python semantics", { skip: RABBITIZER_SKIP }, () => {
   const elf = new Elf32File(buildElf());
   assert.ok(elf.elfFlags.includes(Elf32Constants.Elf32HeaderFlag._5900));
   const [flags, unknown] = Elf32SectionHeaderFlag.parseFlags(elf.sectionHeaders.sections[7].flags);
@@ -183,7 +188,7 @@ test("names used by the splat PS2 elf reader exist with Python semantics", () =>
   assert.equal([...OsAbi].length, 14);
 });
 
-test("header flag parsing keeps unknown bits", () => {
+test("header flag parsing keeps unknown bits", { skip: RABBITIZER_SKIP }, () => {
   const [flags, unknown] = Elf32HeaderFlag.parseFlags(0x40000000 | 0x00ab0000 | 0x800 | 0x2);
   assert.deepEqual(flags.map((f) => f.name), ["PIC", "ARCH_5"]);
   assert.equal(unknown, 0x00ab0800);
@@ -192,7 +197,7 @@ test("header flag parsing keeps unknown bits", () => {
   assert.equal(u2, 0x90000000);
 });
 
-test("handleFlags version gates (ARCH_5 level, N64 ABI)", () => {
+test("handleFlags version gates (ARCH_5 level, N64 ABI)", { skip: RABBITIZER_SKIP }, () => {
   const arch5 = buildElf({ flags: 0x40001000 });
   configureVersion("1.42.4");
   new Elf32File(arch5).handleFlags();
@@ -214,7 +219,7 @@ test("handleFlags version gates (ARCH_5 level, N64 ABI)", () => {
   assert.equal(common.GlobalConfig.PIC, true);
 });
 
-test("perturbing one byte changes the parse result", () => {
+test("perturbing one byte changes the parse result", { skip: RABBITIZER_SKIP }, () => {
   const good = buildElf();
   const base = summarize(new Elf32File(good));
   assert.deepEqual(base, EXPECTED);
@@ -243,7 +248,7 @@ test("perturbing one byte changes the parse result", () => {
   assert.throws(() => new Elf32File(enc), /Unsupported ELF data encoding/);
 });
 
-test("string table iteration and readelf output", () => {
+test("string table iteration and readelf output", { skip: RABBITIZER_SKIP }, () => {
   const elf = new Elf32File(buildElf());
   assert.deepEqual([...elf.strtab], ["", "func_a", "data_b"]);
   const chunks = [];

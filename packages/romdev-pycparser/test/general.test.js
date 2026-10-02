@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parse_file, c_ast } from "../src/index.js";
-import { parse_file_with_cpp, C_FILES, FAKE_LIBC } from "./cpp.js";
+import { parse_file_with_cpp, C_FILES, FAKE_LIBC, CPP_SKIP } from "./cpp.js";
 
 const cFile = (name) => fileURLToPath(new URL("./fixtures/c_files/" + name, import.meta.url));
 const missing = (name) => (existsSync(cFile(name)) ? false : `upstream fixture c_files/${name} is not shipped with the vendored fork`);
@@ -18,7 +18,7 @@ test("without cpp", { skip: missing("example_c_file.c") }, () => {
   assert.ok(ast instanceof c_ast.FileAST);
 });
 
-test("with cpp", async () => {
+test("with cpp", { skip: CPP_SKIP }, async () => {
   const ast = await parse_file_with_cpp(cFile("memmgr.c"), ["-I" + C_FILES]);
   assert.ok(ast instanceof c_ast.FileAST);
   const ast2 = await parse_file_with_cpp(cFile("year.c"), ["-I" + FAKE_LIBC]);
@@ -33,12 +33,12 @@ test("cpp funkydir", async () => {
   assert.ok(ast instanceof c_ast.FileAST);
 });
 
-test("no real content after cpp", async () => {
+test("no real content after cpp", { skip: CPP_SKIP }, async () => {
   const ast = await parse_file_with_cpp(cFile("empty.h"));
   assert.ok(ast instanceof c_ast.FileAST);
 });
 
-test("c11 with cpp", async () => {
+test("c11 with cpp", { skip: CPP_SKIP }, async () => {
   const ast = await parse_file_with_cpp(cFile("c11.c"), ["-I" + FAKE_LIBC]);
   assert.ok(ast instanceof c_ast.FileAST);
 });

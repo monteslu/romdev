@@ -11,6 +11,11 @@ import { run } from "../src/main.js";
 import { Compiler } from "../src/compiler.js";
 import { wasmGccCompile } from "./helpers/wasm-gcc.js";
 import { workDir, removeDir } from "./helpers/work.js";
+import { MIPS_GCC_SCORER } from "./helpers/payloads.js";
+
+// Every case compiles through the WASM mips gcc and scores with its objdump;
+// without that payload they skip with the reason.
+const skip = MIPS_GCC_SCORER;
 
 async function go(intro, outro, base, target, { fn_name = null, ...kwargs } = {}) {
   base = intro + "\n" + base + "\n" + outro;
@@ -30,15 +35,15 @@ async function go(intro, outro, base, target, { fn_name = null, ...kwargs } = {}
   }
 }
 
-test("general", async () => {
+test("general", { skip }, async () => {
   assert.equal(await go("int test() {", "}", "return PERM_GENERAL(32,64);", "return 64;"), 0);
 });
 
-test("not_found", async () => {
+test("not_found", { skip }, async () => {
   assert.notEqual(await go("int test() {", "}", "return PERM_GENERAL(32,64);", "return 92;"), 0);
 });
 
-test("multiple_functions", async () => {
+test("multiple_functions", { skip }, async () => {
   const score = await go("", "", `
             int ignoreme() {}
             int foo() { return PERM_GENERAL(32,64); }
@@ -47,27 +52,27 @@ test("multiple_functions", async () => {
   assert.equal(score, 0);
 });
 
-test("general_multiple", async () => {
+test("general_multiple", { skip }, async () => {
   assert.equal(await go("int test() {", "}", "return PERM_GENERAL(1,2,3) + PERM_GENERAL(3,6,9);", "return 9;"), 0);
 });
 
-test("general_nested", async () => {
+test("general_nested", { skip }, async () => {
   assert.equal(await go("int test() {", "}", "return PERM_GENERAL(1,PERM_GENERAL(100,101),3) + PERM_GENERAL(3,6,9);", "return 110;"), 0);
 });
 
-test("cast", async () => {
+test("cast", { skip }, async () => {
   assert.equal(await go("int test(int a, int b) {", "}", "return a / PERM_GENERAL(,(unsigned int),(float)) b;", "return a / (float) b;"), 0);
 });
 
-test("cast_threaded", async () => {
+test("cast_threaded", { skip }, async () => {
   assert.equal(await go("int test(int a, int b) {", "}", "return a / PERM_GENERAL(,(unsigned int),(float)) b;", "return a / (float) b;", { threads: 2 }), 0);
 });
 
-test("ignore", async () => {
+test("ignore", { skip }, async () => {
   assert.equal(await go("int test(int a, int b) {", "}", "PERM_IGNORE( return a / PERM_GENERAL(a, b); )", "return a / b;"), 0);
 });
 
-test("pretend", async () => {
+test("pretend", { skip }, async () => {
   const score = await go("int global;", "", `
             PERM_IGNORE( inline void foo() { )
             PERM_PRETEND( void foo(); void bar() { )
@@ -86,7 +91,7 @@ test("pretend", async () => {
   assert.equal(score, 0);
 });
 
-test("once1", async () => {
+test("once1", { skip }, async () => {
   const score = await go("volatile int A, B, C; void test() {", "}", `
                 PERM_ONCE(B = 2;)
                 A = 1;
@@ -97,7 +102,7 @@ test("once1", async () => {
   assert.equal(score, 0);
 });
 
-test("once2", async () => {
+test("once2", { skip }, async () => {
   const score = await go("volatile int A, B, C; void test() {", "}", `
                 PERM_VAR(emit,)
                 PERM_VAR(bademit,)
@@ -115,7 +120,7 @@ test("once2", async () => {
   assert.equal(score, 0);
 });
 
-test("lineswap", async () => {
+test("lineswap", { skip }, async () => {
   const score = await go("void a(); void b(); void c(); void test(void) {", "}", `
             PERM_LINESWAP(
                 a();
@@ -126,7 +131,7 @@ test("lineswap", async () => {
   assert.equal(score, 0);
 });
 
-test("lineswap_text", async () => {
+test("lineswap_text", { skip }, async () => {
   const score = await go("void a(); void b(); void c(); void test(void) {", "}", `
             PERM_LINESWAP_TEXT(
                 a();
@@ -137,14 +142,14 @@ test("lineswap_text", async () => {
   assert.equal(score, 0);
 });
 
-test("randomizer", async () => {
+test("randomizer", { skip }, async () => {
   assert.equal(await go("void foo(); void bar(); void test(void) {", "}", "PERM_RANDOMIZE(bar(); foo();)", "foo(); bar();"), 0);
 });
 
-test("auto_randomizer", async () => {
+test("auto_randomizer", { skip }, async () => {
   assert.equal(await go("void foo(); void bar(); void test(void) {", "}", "bar(); foo();", "foo(); bar();"), 0);
 });
 
-test("randomizer_threaded", async () => {
+test("randomizer_threaded", { skip }, async () => {
   assert.equal(await go("void foo(); void bar(); void test(void) {", "}", "PERM_RANDOMIZE(bar(); foo();)", "foo(); bar();", { threads: 2 }), 0);
 });

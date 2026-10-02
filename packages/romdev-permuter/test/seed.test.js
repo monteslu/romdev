@@ -15,6 +15,7 @@ import { perm_parse } from "../src/perm/parse.js";
 import { perm_evaluate_one } from "../src/perm/eval.js";
 import { get_default_randomization_weights, parseToml, get_settings } from "../src/helpers.js";
 import { wasmGccCompile } from "./helpers/wasm-gcc.js";
+import { MIPS_GCC_SCORER } from "./helpers/payloads.js";
 import { workDir, removeDir } from "./helpers/work.js";
 
 const INTRO = "int a, b, c; int f(int x) {";
@@ -40,7 +41,7 @@ async function seededRun(dir, seed, iterations) {
   return { scores, outs };
 }
 
-test("a forced seed replays the same scores and outputs", async () => {
+test("a forced seed replays the same scores and outputs", { skip: MIPS_GCC_SCORER }, async () => {
   const d1 = await setup(), d2 = await setup();
   try {
     const a = await seededRun(d1, "0,4242", 12);
@@ -54,7 +55,7 @@ test("a forced seed replays the same scores and outputs", async () => {
   }
 });
 
-test("the forced rng seed denotes Candidate.from_source + randomize_ast", async () => {
+test("the forced rng seed denotes Candidate.from_source + randomize_ast", { skip: MIPS_GCC_SCORER }, async () => {
   const dir = await setup();
   try {
     const weights = get_default_randomization_weights("gcc");

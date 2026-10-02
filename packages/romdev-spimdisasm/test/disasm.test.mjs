@@ -6,9 +6,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import * as spim from "../src/index.js";
+import { RABBITIZER_SKIP } from "./helpers/payload.mjs";
 
-const { common, mips } = spim;
+// Loading the port loads romdev-rabbitizer's WASM; without that payload every
+// test here skips with the reason instead of the file failing to import.
+const spim = RABBITIZER_SKIP ? null : await import("../src/index.js");
+const { common, mips } = spim ?? {};
 
 function be(words, size) {
   const b = new Uint8Array(size ?? words.length * 4);
@@ -49,7 +52,7 @@ function jumptableOutput(textWords, jtblWords) {
   return [t.disassemble(), r.disassemble(), t, r];
 }
 
-test("jump table: hi/lo pair, jr, jlabel and .word .L entries", () => {
+test("jump table: hi/lo pair, jr, jlabel and .word .L entries", { skip: RABBITIZER_SKIP }, () => {
   const [text, rodata] = jumptableOutput(JTBL_TEXT, [0x80000020, 0x80000028, 0x80000020, 0]);
   assert.equal(
     text,
@@ -92,7 +95,7 @@ enddlabel jtbl_80000100
   );
 });
 
-test("jump table output changes when one input word is perturbed", () => {
+test("jump table output changes when one input word is perturbed", { skip: RABBITIZER_SKIP }, () => {
   const [, base] = jumptableOutput(JTBL_TEXT, [0x80000020, 0x80000028, 0x80000020, 0]);
   const [, pert] = jumptableOutput(JTBL_TEXT, [0x80000020, 0x80000024, 0x80000020, 0]);
   assert.notEqual(base, pert);
@@ -112,7 +115,7 @@ function stringRodata(bytesAt, encoding = "SHIFT-JIS") {
   return r.disassemble();
 }
 
-test("string guesser: Shift-JIS text, 0x5C trail byte split, escapes", () => {
+test("string guesser: Shift-JIS text, 0x5C trail byte split, escapes", { skip: RABBITIZER_SKIP }, () => {
   const out = stringRodata([
     [0x00, [0x82, 0xa0, 0x82, 0xa2, 0x41, 0x00, 0, 0]],
     [0x08, [0x83, 0x5c, 0x0a, 0x22, 0x00, 0, 0, 0]],
@@ -144,7 +147,7 @@ enddlabel RO_STR_80000108
   );
 });
 
-test("string guesser: a Shift-JIS decode error keeps the symbol as words", () => {
+test("string guesser: a Shift-JIS decode error keeps the symbol as words", { skip: RABBITIZER_SKIP }, () => {
   // 0x85 0x40 is an unassigned JIS X 0208 row: CPython's shift_jis raises
   const bad = stringRodata([[0x00, [0x85, 0x40, 0x42, 0x00]], [0x08, [0x41, 0x42, 0x00, 0x00]]]);
   assert.match(bad, /dlabel RO_80000100\n {4}\/\* 000000 80000100 85404200 \*\/ \.word 0x85404200/);
@@ -158,7 +161,7 @@ test("string guesser: a Shift-JIS decode error keeps the symbol as words", () =>
   assert.match(ascii, /\.word 0x82404200/);
 });
 
-test("float and double text use Python's .10g/.18g formatting", () => {
+test("float and double text use Python's .10g/.18g formatting", { skip: RABBITIZER_SKIP }, () => {
   const ctx = freshContext();
   const b = be([0x3f800000, 0x3dcccccd, 0x37800000, 0, 0x3fb99999, 0x9999999a, 0x7e37e43c, 0x8800759c]);
   ctx.globalSegment.addSymbol(0x80000100).setTypeSpecial("f32", false);
@@ -176,7 +179,7 @@ test("float and double text use Python's .10g/.18g formatting", () => {
   assert.match(out, /\.align 3\nnonmatching RO_DBL_80000110/);
 });
 
-test("ContextSymbol default names and quoting", () => {
+test("ContextSymbol default names and quoting", { skip: RABBITIZER_SKIP }, () => {
   const ctx = freshContext();
   const seg = ctx.globalSegment;
   assert.equal(seg.addFunction(0x80000400).getName(), "func_80000400");
@@ -202,7 +205,7 @@ test("ContextSymbol default names and quoting", () => {
   assert.equal(s2.getName(), "has space");
 });
 
-test("version selection resets defaults and pairs rabbitizer", () => {
+test("version selection resets defaults and pairs rabbitizer", { skip: RABBITIZER_SKIP }, () => {
   assert.deepEqual(spim.configureVersion("1.35.0"), { spimdisasm: "1.35.0", rabbitizer: "1.13.0" });
   assert.equal(spim.__version__, "1.35.0");
   assert.equal(spim.rabbitizer.__version__, "1.13.0");
@@ -224,7 +227,7 @@ test("version selection resets defaults and pairs rabbitizer", () => {
   assert.throws(() => spim.configureVersion("1.40.0"));
 });
 
-test("bss pads from user-declared sizes (1.42 CREATE_BSS_PADS)", () => {
+test("bss pads from user-declared sizes (1.42 CREATE_BSS_PADS)", { skip: RABBITIZER_SKIP }, () => {
   const ctx = freshContext();
   const s = ctx.globalSegment.addSymbol(0x80000900);
   s.userDeclaredSize = 8;

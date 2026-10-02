@@ -15,6 +15,7 @@ import { _make_script_portable } from "../src/net/client.js";
 import { bindScript, profilePrograms } from "../src/net/evaluator.js";
 import { pyJsonLoads, pyJsonDumps } from "../src/net/core.js";
 import { workDir, removeDir } from "./helpers/work.js";
+import { IDO } from "./helpers/payloads.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const BIN = path.join(here, "..", "bin");
@@ -51,7 +52,7 @@ function spawnNode(args, { cwd, onOut, timeoutMs = 240_000 } = {}) {
 }
 
 test("permuter@home loopback: setup, vouch, run-server and a -J client that finds the match remotely",
-  { skip: !toolchain && "romdev's toolchain adapter (romdevtools) is not available", timeout: 300_000 }, async () => {
+  { skip: (!toolchain && "romdev's toolchain adapter (romdevtools) is not available") || IDO, timeout: 300_000 }, async () => {
     const root = workDir("pah");
     let controller = null;
     let worker = null;

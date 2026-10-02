@@ -28,6 +28,7 @@ import * as ast_util from "../src/ast_util.js";
 import { get_default_randomization_weights } from "../src/helpers.js";
 import { PyRandom } from "../src/pyrandom.js";
 import { wasmGccCompile } from "./helpers/wasm-gcc.js";
+import { MIPS_GCC } from "./helpers/payloads.js";
 import { runWasmTool } from "../src/wasm-tool.js";
 import { workDir, removeDir } from "./helpers/work.js";
 
@@ -61,7 +62,7 @@ async function compiles(dir, text, k) {
 
 const summary = {};
 for (const pass of RANDOMIZATION_PASSES) {
-  test(`${pass.name} produces valid C`, async () => {
+  test(`${pass.name} produces valid C`, { skip: MIPS_GCC }, async () => {
     const dir = workDir(pass.name);
     let applied = 0, compiled = 0, slips = 0;
     const failures = [];

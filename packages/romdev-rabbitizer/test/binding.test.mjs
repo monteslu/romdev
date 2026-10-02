@@ -3,8 +3,17 @@
 // tests/c/instruction_checks/plain_disassembly.c, MIT, Decompollaborate).
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { VERSIONS, DEFAULT_VERSION, loadRabbitizer, loadRabbitizerSync } from "../src/index.js";
-import * as r1162 from "romdev-rabbitizer/1.16.2";
+
+// wasm/ is gitignored: a dev box builds it (packages/romdevtools/scripts/
+// build-rabbitizer.sh) and CI fills it from the published npm tarball
+// (scripts/fetch-payloads.mjs). Without it every test skips with this reason
+// instead of failing on ENOENT, the contract romdevtools' test-rom.js set.
+const absent = VERSIONS.map((v) => `wasm/rabbitizer-${v}.wasm`).filter((f) => !existsSync(fileURLToPath(new URL(`../${f}`, import.meta.url))));
+const WASM_SKIP = absent.length ? `romdev-rabbitizer payload absent (${absent.join(", ")}): gitignored WASM, built by packages/romdevtools/scripts/build-rabbitizer.sh or filled from npm by scripts/fetch-payloads.mjs` : false;
+const r1162 = WASM_SKIP ? null : await import("romdev-rabbitizer/1.16.2");
 
 // [word, immOverride, expected] with default config and gnuMode on.
 const PLAIN = [
@@ -81,7 +90,7 @@ function withConfig(rab, fields, fn) {
   }
 }
 
-test("loader: every shipped version loads, reports its version, defaults to the newest", async () => {
+test("loader: every shipped version loads, reports its version, defaults to the newest", { skip: WASM_SKIP }, async () => {
   assert.deepEqual(VERSIONS, ["1.16.2", "1.14.3", "1.13.0"]);
   assert.equal(DEFAULT_VERSION, "1.16.2");
   for (const v of VERSIONS) {
@@ -98,7 +107,7 @@ test("loader: every shipped version loads, reports its version, defaults to the 
 });
 
 for (const v of VERSIONS) {
-  test(`${v}: upstream expected disassembly (plain CPU)`, () => {
+  test(`${v}: upstream expected disassembly (plain CPU)`, { skip: WASM_SKIP }, () => {
     const rab = loadRabbitizerSync(v);
     for (const [word, imm, expected] of PLAIN) {
       const instr = new rab.Instruction(word);
@@ -107,7 +116,7 @@ for (const v of VERSIONS) {
     }
   });
 
-  test(`${v}: config defaults, setters change the output, unknown fields are rejected`, () => {
+  test(`${v}: config defaults, setters change the output, unknown fields are rejected`, { skip: WASM_SKIP }, () => {
     const rab = loadRabbitizerSync(v);
     for (const [k, want] of Object.entries(CONFIG_DEFAULTS)) assert.equal(rab.config[k], want, k);
     assert.equal(rab.config.regNames_gprAbiNames, rab.Abi.O32);
@@ -134,7 +143,7 @@ for (const v of VERSIONS) {
     assert.equal(rab.config.misc_opcodeLJust, 11);
   });
 
-  test(`${v}: enums are shared singletons with Python names and values`, () => {
+  test(`${v}: enums are shared singletons with Python names and values`, { skip: WASM_SKIP }, () => {
     const rab = loadRabbitizerSync(v);
     const a = new rab.Instruction(0x27BDFFE8);
     const b = new rab.Instruction(0x27A40010);
@@ -172,7 +181,7 @@ for (const v of VERSIONS) {
     }
   });
 
-  test(`${v}: Instruction methods and Python-shaped errors`, () => {
+  test(`${v}: Instruction methods and Python-shaped errors`, { skip: WASM_SKIP }, () => {
     const rab = loadRabbitizerSync(v);
     const lui = new rab.Instruction(0x3C088001, 0x80000400);
     assert.equal(lui.getRaw(), 0x3C088001);
@@ -260,7 +269,7 @@ for (const v of VERSIONS) {
     assert.equal(blank.uniqueId, rab.InstrId.cpu_addiu);
   });
 
-  test(`${v}: RegistersTracker pairs a lui with its lo`, () => {
+  test(`${v}: RegistersTracker pairs a lui with its lo`, { skip: WASM_SKIP }, () => {
     const rab = loadRabbitizerSync(v);
     const lui = new rab.Instruction(0x3C018001, 0x80000400); // lui $at, 0x8001
     const lo = new rab.Instruction(0x2424E190, 0x80000404); //  addiu $a0, $at, -0x1E70
@@ -314,7 +323,7 @@ for (const v of VERSIONS) {
     tracker.free();
   });
 
-  test(`${v}: Utils`, () => {
+  test(`${v}: Utils`, { skip: WASM_SKIP }, () => {
     const rab = loadRabbitizerSync(v);
     assert.equal(rab.Utils.from2Complement(0xFFFF, 16), -1);
     assert.equal(rab.Utils.from2Complement(0x7FFF, 16), 0x7FFF);
@@ -325,7 +334,7 @@ for (const v of VERSIONS) {
   });
 }
 
-test("instructions keep their own struct: interleaved use, mutation and long immOverrides", () => {
+test("instructions keep their own struct: interleaved use, mutation and long immOverrides", { skip: WASM_SKIP }, () => {
   const rab = loadRabbitizerSync(DEFAULT_VERSION);
   const a = new rab.Instruction(0x3C018001, 0x80000400);
   const b = new rab.Instruction(0x0C001F24, 0x80000404);
