@@ -8,6 +8,7 @@
 // Plain JS ESM + JSDoc.
 
 import { readFileSync } from "node:fs";
+import { placeUnit } from "../wasm-unit.js";
 
 let CHIPS = null;
 function units() {
@@ -47,19 +48,5 @@ export function unitStart(name) { return chipUnit(name).start; }
  * @param {number} base  linear address of the unit's memory (16-byte aligned)
  */
 export function unitWat(name, base) {
-  const u = chipUnit(name);
-  const place = (t) => t.replace(/@\{(-?\d+)\}/g, (_, n) => String(base + Number(n)));
-  const parts = [`  ;; ---- snes9x chip unit '${name}' (snes9x-chips.json), memory at 0x${base.toString(16)}, ${u.size} bytes`];
-  if (u.types) parts.push(u.types);
-  if (u.table) parts.push(u.table);
-  if (u.globals) parts.push(place(u.globals));
-  for (const d of u.data) {
-    const bytes = Buffer.from(d.hex, "hex");
-    for (const r of d.relocs) bytes.writeUInt32LE((base + r.rel) >>> 0, r.at);
-    let s = "";
-    for (const v of bytes) s += "\\" + (v < 16 ? "0" : "") + v.toString(16);
-    parts.push(`  (data (i32.const ${base + d.off}) "${s}")`);
-  }
-  parts.push(place(u.funcs));
-  return parts.join("\n");
+  return placeUnit(chipUnit(name), base, `snes9x chip unit '${name}' (snes9x-chips.json)`);
 }
