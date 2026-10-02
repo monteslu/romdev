@@ -22,7 +22,7 @@
 // model. The output is committed so a recompile never needs C source on disk.
 import { readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { revParseHead, remoteUrl } from "../../src/git/index.js";
 import path from "node:path";
 
 const [root, out] = process.argv.slice(2);
@@ -185,8 +185,8 @@ const spuInit = (cgb) => {
 // ---- provenance ----
 let commit = null, remote = null;
 try {
-  commit = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-  remote = execFileSync("git", ["-C", root, "remote", "get-url", "origin"], { encoding: "utf8" }).trim();
+  commit = revParseHead(root);
+  remote = commit === null ? null : remoteUrl(root, "origin");
 } catch { /* not a checkout: provenance records the hashes only */ }
 
 const json = {

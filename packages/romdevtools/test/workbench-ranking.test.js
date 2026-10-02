@@ -7,6 +7,7 @@ import path from "node:path";
 import os from "node:os";
 import { RANKING_STAMP_SCHEMA, checkRankingFresh, freshnessNote, freshnessWarning, gitHead, readStamp, renderFreshness, stampRanking } from "../src/decomp/workbench/ranking.js";
 import { runCommand } from "../src/decomp/workbench/cli.js";
+import { GitWriter } from "./helpers/git-writer.js";
 
 const ROWS = [
   { name: "func_80012574", differing_words: 18, size_bytes: 240 },
@@ -34,17 +35,30 @@ const read = (p) => JSON.parse(readFileSync(p, "utf8"));
 
 test("the head is read from the project root", () => {
   const seen = [];
-  const runner = (argv, opts) => { seen.push({ argv, cwd: opts.cwd }); return { returncode: 0, stdout: `${HEAD}\n` }; };
-  assert.equal(gitHead("/project", { runner }), HEAD);
-  assert.deepEqual(seen[0].argv, ["git", "rev-parse", "HEAD"]);
-  assert.equal(seen[0].cwd, "/project");
+  const readHead = (root) => { seen.push(root); return `${HEAD}\n`; };
+  assert.equal(gitHead("/project", { readHead }), HEAD);
+  assert.deepEqual(seen, ["/project"]);
 });
 
-test("a tree that is not a checkout is unknown, not an error", () => {
-  assert.equal(gitHead(".", { runner: () => ({ returncode: 128, stdout: "" }) }), null);
-  assert.equal(gitHead(".", { runner: () => { throw new Error("git: not found"); } }), null);
+test("the default reader is romdev's own git reader, not a git process", () => withDir((d) => {
+  const oid = writeSyntheticRepo(d);
+  assert.equal(gitHead(d), oid);
+  assert.equal(gitHead(path.join(d, "sub")), oid, "found from a subdirectory, as git rev-parse does");
+}));
+
+test("a tree that is not a checkout is unknown, not an error", () => withDir((d) => {
+  assert.equal(gitHead(".", { readHead: () => null }), null);
+  assert.equal(gitHead(".", { readHead: () => { throw new Error("unreadable"); } }), null);
   assert.equal(gitHead("/nonexistent-project-dir"), null);
-});
+  assert.equal(gitHead(d), null);
+}));
+
+/** A one-commit repository written by the test's own git writer; returns HEAD. */
+function writeSyntheticRepo(d) {
+  const repo = new GitWriter(d);
+  repo.file("sub/a.c", "int a;\n");
+  return repo.commit("one");
+}
 
 test("a stamped ranking still reads as a ranking", () => withDir((d) => {
   const p = writeRanking(d, ROWS);

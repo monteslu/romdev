@@ -37,6 +37,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { revParseHead, showFile } from "../../src/git/index.js";
 import assert from "node:assert/strict";
 import { muslTrig, sincTables } from "../../src/analysis/recompile/wat/gba/musl-trig.js";
 
@@ -53,13 +54,19 @@ const pin = versions.cores?.mgba ?? Object.values(versions).find((v) => v?.mgba)
 
 const isGit = existsSync(path.join(MGBA, ".git"));
 let commit = null;
-if (isGit) commit = execFileSync("git", ["-C", MGBA, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+if (isGit) commit = revParseHead(MGBA);
 if (pin?.commit) assert.equal(commit, pin.commit, `mGBA checkout ${commit} is not the pinned ${pin.commit}`);
 
 const files = {};
+/** `git show HEAD:<rel>` of the mGBA checkout, read without a git process. */
+function committedText(rel) {
+  const buf = showFile(MGBA, rel, "HEAD");
+  if (buf === null) throw new Error(`${rel} is not in the mGBA checkout's HEAD`);
+  return buf.toString("utf8");
+}
 function src(rel) {
   const text = isGit
-    ? execFileSync("git", ["-C", MGBA, "show", `HEAD:${rel}`], { encoding: "utf8", maxBuffer: 1 << 26 })
+    ? committedText(rel)
     : execFileSync("cat", [path.join(MGBA, rel)], { encoding: "utf8", maxBuffer: 1 << 26 });
   files[rel] = createHash("sha256").update(text).digest("hex");
   return text;

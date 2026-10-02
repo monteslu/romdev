@@ -24,7 +24,7 @@
 // identical to its gbc_initstate.json, plus `cgb_objp` and provenance.
 import { readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { revParseHead, remoteUrl } from "../../src/git/index.js";
 import path from "node:path";
 
 const [src, out] = process.argv.slice(2);
@@ -177,8 +177,8 @@ expectFrag(t, "std::memcpy(state.ppu.objpData.ptr, cgbObjpDump, sizeof cgbObjpDu
 let commit = null, remote = null;
 try {
   const dir = path.dirname(path.resolve(src));
-  commit = execFileSync("git", ["-C", dir, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-  remote = execFileSync("git", ["-C", dir, "remote", "get-url", "origin"], { encoding: "utf8" }).trim();
+  commit = revParseHead(dir);
+  remote = commit === null ? null : remoteUrl(dir, "origin");
 } catch { /* not a checkout: the sha256 below still pins the input */ }
 
 const doc = {

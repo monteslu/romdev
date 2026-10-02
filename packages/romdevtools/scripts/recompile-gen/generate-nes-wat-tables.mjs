@@ -20,7 +20,7 @@
 // usage: generate-nes-wat-tables.mjs <fceumm src/ dir> <out.json>
 //   e.g. build/fceumm/src/src (after scripts/build-fceumm.sh)
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { revParseHead } from "../../src/git/index.js";
 import path from "node:path";
 
 const dir = process.argv[2], out = process.argv[3];
@@ -129,7 +129,7 @@ let commit = null;
 try {
   const root = path.resolve(dir, "..");
   if (existsSync(path.join(root, ".git"))) {
-    commit = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    commit = revParseHead(root);
   }
 } catch { /* provenance without a commit is still the table */ }
 

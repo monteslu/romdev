@@ -18,7 +18,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { run } from "./mips-obj.js";
 import { Makefile } from "./makefile.js";
 import { parseShell, classifyCommand } from "./recipe.js";
 import { preprocess, parseDepsText, parseCppArgs } from "./cpp.js";
@@ -26,6 +25,7 @@ import { idoDir, binutilsGlue, toolName, programFiles } from "./toolchain.js";
 import { loadSplatMap, loadSymbolAddrs, loadLinkerMap, findFunctionSource, parseSplatAsm, hx } from "./splat-map.js";
 import { profileFor, readRomHeader, classifyInvocation, binutilsPrefixFromAssembler } from "./platform.js";
 import { fileIdentities } from "./measurement.js";
+import { revParseHead, statusPorcelain, GitUnsupportedError } from "../git/index.js";
 
 export const DECOMP_HOME = process.env.ROMDEV_DECOMP_HOME || path.join(os.homedir(), ".romdev", "decomp");
 export const MANIFEST_VERSION = 1;
@@ -119,10 +119,18 @@ function builtArtifacts(manifest) {
   };
 }
 
+/**
+ * The checkout's commit and dirty-path count: what `git rev-parse --short
+ * HEAD` and the line count of `git status --porcelain` report, read by
+ * romdev's pure-JS git reader (src/git/) with no git process. null where git
+ * would have failed (not a repository, unborn HEAD) or the layout is one the
+ * reader will not guess about.
+ */
 export async function gitState(root) {
-  const head = await run("git", ["-C", root, "rev-parse", "--short", "HEAD"]);
-  const dirty = await run("git", ["-C", root, "status", "--porcelain"]);
-  return { head: head.code === 0 ? head.stdout.trim() : null, dirtyFiles: dirty.code === 0 ? dirty.stdout.split("\n").filter(Boolean).length : null };
+  const ask = (fn) => { try { return fn(); } catch (e) { if (e instanceof GitUnsupportedError) return null; throw e; } };
+  const head = ask(() => revParseHead(root, { short: true }));
+  const dirty = ask(() => statusPorcelain(root));
+  return { head, dirtyFiles: dirty === null ? null : dirty.length };
 }
 
 /**

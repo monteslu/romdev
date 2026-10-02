@@ -12,7 +12,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { spawnSync } from "node:child_process";
+import { revParseHead } from "../../git/index.js";
 import { randomBytes } from "node:crypto";
 import { ValueError, strip } from "./py.js";
 import { dumps } from "./pyjson.js";
@@ -30,23 +30,19 @@ export function timestamp(moment) {
 
 const utcNow = () => new Date();
 
-/** Default runner: argv-only, never through a shell. */
-function defaultRunner(argv, { cwd }) {
-  const r = spawnSync(argv[0], argv.slice(1), { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-  if (r.error) throw r.error;
-  return { returncode: r.status ?? 1, stdout: r.stdout ?? "" };
-}
-
-/** The project's current commit, or null when it cannot be read. */
-export function gitHead(root, { runner = defaultRunner } = {}) {
-  let completed;
+/**
+ * The project's current commit (what `git rev-parse HEAD` prints), or null
+ * when it cannot be read. Read by romdev's pure-JS git reader - no git
+ * process. `readHead` is injectable for tests.
+ */
+export function gitHead(root, { readHead = revParseHead } = {}) {
+  let head;
   try {
-    completed = runner(["git", "rev-parse", "HEAD"], { cwd: String(root) });
+    head = readHead(String(root));
   } catch {
     return null;
   }
-  if (completed.returncode !== 0) return null;
-  const head = strip(completed.stdout ?? "");
+  head = strip(head ?? "");
   return head || null;
 }
 

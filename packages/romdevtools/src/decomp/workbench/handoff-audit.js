@@ -7,7 +7,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { spawnSync } from "node:child_process";
+import { showToplevel, isTracked, lsFiles, GitUnsupportedError } from "../../git/index.js";
 import { sorted, strip, strRepr } from "./py.js";
 import { OSError } from "./py-extra.js";
 
@@ -73,27 +73,39 @@ export function fnmatch(name, pattern) {
   return new RegExp(`^(?:${re})$`, "s").test(name);
 }
 
+// Repository questions are answered by romdev's pure-JS git reader
+// (src/git/), never by launching git. A layout the reader will not guess
+// about counts as "no answer", exactly as a failing git command did.
+const gitQuery = (fn, fallback) => {
+  try { return fn(); } catch (e) { if (e instanceof GitUnsupportedError) return fallback; throw e; }
+};
+
+/** `git rev-parse --show-toplevel`, resolved; null outside a worktree. */
 function gitRoot(p) {
-  const r = spawnSync("git", ["-C", p, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
-  if (r.status !== 0 || r.error) return null;
-  return resolvePath(r.stdout.trim());
+  const top = gitQuery(() => showToplevel(p), null);
+  return top === null ? null : resolvePath(top);
 }
 
+/** `git ls-files --error-unmatch`: is this path (or anything below it) in its repository's index? */
 function gitTracked(p, cache) {
   const resolved = resolvePath(p);
   if (cache.has(resolved)) return cache.get(resolved)[1];
   const root = gitRoot(isDir(resolved) ? resolved : path.dirname(resolved));
   if (root === null || !isRelativeTo(resolved, root)) { cache.set(resolved, [root, false]); return false; }
-  const r = spawnSync("git", ["-C", root, "ls-files", "--error-unmatch", "--", relPosix(resolved, root)], { stdio: "ignore" });
-  const tracked = r.status === 0;
+  const tracked = gitQuery(() => isTracked(root, relPosix(resolved, root)), false);
   cache.set(resolved, [root, tracked]);
   return tracked;
 }
 
+/** `git ls-files [--cached] [--others] [--exclude-standard] -- <root, relative to the repository>`. */
 function gitFiles(root, gitRootDir, ...modes) {
-  const r = spawnSync("git", ["-C", gitRootDir, "ls-files", "-z", ...modes, "--", relPosix(root, gitRootDir)], { maxBuffer: 1 << 28 });
-  if (r.status !== 0 || r.error) return [];
-  return r.stdout.toString("utf8").split("\0").filter(Boolean).map((raw) => resolvePath(path.join(gitRootDir, raw)));
+  const opts = {
+    cached: modes.includes("--cached"), others: modes.includes("--others"), excludeStandard: modes.includes("--exclude-standard"),
+    pathspec: [relPosix(root, gitRootDir)],
+  };
+  const listed = gitQuery(() => lsFiles(gitRootDir, opts), null);
+  if (listed === null) return [];
+  return listed.map((raw) => resolvePath(path.join(gitRootDir, raw)));
 }
 
 const excluded = (p, root, patterns) => { const rel = relPosix(p, root); return patterns.some((pat) => fnmatch(rel, pat)); };

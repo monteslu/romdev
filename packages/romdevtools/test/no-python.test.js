@@ -28,7 +28,7 @@
 // with a reason of at least ten characters. A marker without a reason fails.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { showToplevel, lsFiles } from "../src/git/index.js";
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,15 +36,9 @@ import { fileURLToPath } from "node:url";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SELF = "packages/romdevtools/test/no-python.test.js";
 
-function repoRoot() {
-  try {
-    return execFileSync("git", ["-C", HERE, "rev-parse", "--show-toplevel"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-  } catch { return null; }
-}
-const ROOT = repoRoot();
-const tracked = ROOT
-  ? execFileSync("git", ["-C", ROOT, "ls-files", "-z"], { encoding: "utf8", maxBuffer: 1 << 28 }).split("\0").filter(Boolean)
-  : [];
+// git rev-parse --show-toplevel / git ls-files, read by romdev's own git reader.
+const ROOT = showToplevel(HERE);
+const tracked = ROOT ? lsFiles(ROOT, { cached: true }) : [];
 
 const JS_EXT = /\.(?:m|c)?[jt]s$/;
 const SHELL_FILE = (f) => /\.(?:sh|bash)$/.test(f) || /(^|\/)Dockerfile[^/]*$/.test(f) || /(^|\/)Makefile[^/]*$/.test(f) || /^\.github\/.*\.ya?ml$/.test(f);

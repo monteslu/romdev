@@ -3,16 +3,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, realpathSync, rmSync } from "node:fs";
-import { execFileSync } from "node:child_process";
 import path from "node:path";
 import os from "node:os";
 import { runCommand } from "../src/decomp/workbench/cli.js";
 import { auditHandoff } from "../src/decomp/workbench/handoff-audit.js";
+import { GitWriter } from "./helpers/git-writer.js";
 
 const tmp = () => realpathSync(mkdtempSync(path.join(os.tmpdir(), "romdev-wb-handoff-")));
+/** git init + git add of the listed paths, written by the JS git writer (no git process). */
 function gitInit(root, ...tracked) {
-  execFileSync("git", ["init", "-q", root], { stdio: "ignore" });
-  if (tracked.length) execFileSync("git", ["-C", root, "add", "--", ...tracked], { stdio: "ignore" });
+  const w = new GitWriter(root);
+  for (const rel of tracked) w.add(rel);
+  w.writeIndex();
 }
 
 test("a tracked relative reference is ready", () => {

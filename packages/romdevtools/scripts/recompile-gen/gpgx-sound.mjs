@@ -19,7 +19,7 @@
 // LICENSE: derived from Genesis Plus GX (non-commercial, see NOTICE).
 import { readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { revParseHead } from "../../src/git/index.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -64,7 +64,7 @@ function generate(root) {
   const files = ["core/sound/blip_buf.c", "core/sound/psg.c", "core/sound/ym2612.c", "core/sound/sound.c", "core/system.c", "libretro/libretro.c"];
   const sha = Object.fromEntries(files.map((f) => [f, createHash("sha256").update(readFileSync(path.join(root, f))).digest("hex")]));
   let commit = null;
-  try { commit = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(); } catch { /* not a checkout */ }
+  try { commit = revParseHead(root); } catch { /* an unreadable checkout: provenance without a commit */ }
 
   // blip_buf.c: bl_step[phase_count + 1][half_width], Sinc_Generator( 0.9, 0.55, 4.5 )
   const blip = rd("core/sound/blip_buf.c");
