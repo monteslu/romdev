@@ -170,8 +170,21 @@ export function wrongInputSchedule(schedule, endFrame, seed = 99) {
   const keep = schedule.filter((p) => p.buttons.some((b) => b === "start" || b === "select"));
   const play = schedule.filter((p) => !keep.includes(p));
   const from = play.length ? play[0].frame : Math.max(...keep.map((p) => p.frame + p.hold)) + 60;
-  const pool = ["right", "left", "up", "down", "a", "b", "a+right", "b+left", "a+left", "b+right"];
-  const out = [...keep];
+  return [...keep, ...seededPlay(from, endFrame, seed)].sort((a, b) => a.frame - b.frame);
+}
+
+/** The play pool of the seeded scripts (wrong-input control, fuzzRecompile, auto mode). */
+export const PLAY_POOL = Object.freeze(["right", "left", "up", "down", "a", "b", "a+right", "b+left", "a+left", "b+right"]);
+
+/**
+ * A deterministic pseudo-random play script over [from, endFrame): presses
+ * drawn from `pool`, held 4..43 frames, 0..11 released frames between them
+ * (the LCG the sms-wat play scripts used, so the same seed gives the same
+ * script everywhere it is used).
+ * @returns {{frame:number, buttons:string[], hold:number}[]}
+ */
+export function seededPlay(from, endFrame, seed, pool = PLAY_POOL) {
+  const out = [];
   let x = seed & 0x7fffffff, f = from;
   while (f < endFrame) {
     x = (Math.imul(x, 1103515245) + 12345) & 0x7fffffff;
@@ -180,13 +193,13 @@ export function wrongInputSchedule(schedule, endFrame, seed = 99) {
     out.push({ frame: f, buttons: b.split("+"), hold: h });
     f += h + ((x >> 12) % 12);
   }
-  return out.sort((a, b) => a.frame - b.frame);
+  return out;
 }
 
 // ─── pictures ────────────────────────────────────────────────────────────────
 
 /** @param {{width:number,height:number,rgba:Uint8Array}} s */
-function snap(s) { return { width: s.width, height: s.height, rgba: Uint8Array.from(s.rgba) }; }
+export function snap(s) { return { width: s.width, height: s.height, rgba: Uint8Array.from(s.rgba) }; }
 
 function key(rgba, i) { return (rgba[i] << 16) | (rgba[i + 1] << 8) | rgba[i + 2]; }
 
@@ -671,6 +684,9 @@ async function channelDropControl({ a, layout, run, base, schedule, nameMap, off
 
 const DEFAULT_CONTROLS = ["vramZero", "wrongFrame", "wrongInput"];
 
+/** The evidence bar every verification scores against (callers may only override it explicitly). */
+export const DEFAULT_BAR = Object.freeze({ minContentPct: 95, minContentPx: 2000, minMovingPct: 95, minMovingPx: 200, minChangePx: 50 });
+
 function passesBar(s, bar) {
   if (s.status !== "OK") return false;
   const contentOk = s.contentTotal >= bar.minContentPx && s.contentPct >= bar.minContentPct;
@@ -679,14 +695,14 @@ function passesBar(s, bar) {
 }
 
 /** A control must FAIL: any of blank, below the content bar, or below the moving bar. */
-function controlFailed(s, bar) {
+export function controlFailed(s, bar) {
   if (s.status === "BLANK") return true;
   if (s.status === "INCONCLUSIVE") return false;
   if (s.movingTotal != null && s.movingTotal >= bar.minMovingPx) return s.movingPct < bar.minMovingPct;
   return !(s.contentTotal >= bar.minContentPx && s.contentPct >= bar.minContentPct);
 }
 
-function disposeHost(h) {
+export function disposeHost(h) {
   try { if (typeof h?.dispose === "function") h.dispose(); else if (typeof h?.destroy === "function") h.destroy(); } catch { /* best effort */ }
 }
 
@@ -746,7 +762,7 @@ export async function verifyRecompile(a) {
   const wfCands = a.wrongFrameDelta != null ? [a.wrongFrameDelta]
     : [...new Set([wfd, 5, 10, 20, 60, 120])].filter((d) => d >= 1 && d <= Math.max(wfMax, 1)).sort((x, y) => x - y);
   const controls = a.controls ?? DEFAULT_CONTROLS;
-  const bar = { minContentPct: 95, minContentPx: 2000, minMovingPct: 95, minMovingPx: 200, minChangePx: 50, ...(a.bar ?? {}) };
+  const bar = { ...DEFAULT_BAR, ...(a.bar ?? {}) };
   const nameMap = a.cartButtonMap ?? (layout.buttons === "byName" ? BY_NAME_CART_MAP : null);
   const tag = (a.tag ?? "verify").replace(/[^A-Za-z0-9_.-]/g, "_");
 

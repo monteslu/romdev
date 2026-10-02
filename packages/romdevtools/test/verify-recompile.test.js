@@ -392,7 +392,7 @@ test("input schedule: compact string and object forms, shifting, edges applied b
   assert.ok(!alt.some((p) => p.frame === 200 && p.buttons.join() === "right" && p.hold === 50), "play presses are replaced");
 });
 
-test("frame tool: verifyRecompile needs atFrames; step takes count as an alias; trace formats are routed", async () => {
+test("frame tool: verifyRecompile needs atFrames (or auto); step takes count as an alias; trace formats are routed", async () => {
   const { z } = await import("zod");
   const { registerFrameTools } = await import("../src/mcp/tools/frame.js");
   const { _setHostForTest, clearHost } = await import("../src/mcp/state.js");
@@ -402,9 +402,16 @@ test("frame tool: verifyRecompile needs atFrames; step takes count as an alias; 
   _setHostForTest(key, host);
   try {
     const cart = new URL("./fixtures/hello.wasc", import.meta.url).pathname;
-    const r = await tools.frame({ op: "verifyRecompile", cart, reference: cart, platform: "nes" });
+    // Omitted atFrames means auto mode; auto:false restores the error.
+    const r = await tools.frame({ op: "verifyRecompile", cart, reference: cart, platform: "nes", auto: false });
     assert.equal(r.isError, true);
-    assert.match(r.content[0].text, /atFrames/);
+    assert.match(r.content[0].text, /pass atFrames/);
+    const both = await tools.frame({ op: "verifyRecompile", cart, reference: cart, platform: "nes", auto: true, atFrames: [100] });
+    assert.equal(both.isError, true);
+    assert.match(both.content[0].text, /auto mode chooses atFrames itself/);
+    const unknown = await tools.frame({ op: "verifyRecompile", cart, reference: cart, platform: "nes", auto: { seed: 2, sampleEvery: 30, bogus: 1 } });
+    assert.equal(unknown.isError, true);
+    assert.match(unknown.content[0].text, /unknown auto option 'bogus'/);
     const s = JSON.parse((await tools.frame({ op: "step", count: 7, frames: 1 })).content[0].text);
     assert.equal(s.framesRun, 7);
     const bad = await tools.frame({ op: "step", count: 7, frames: 3 });
