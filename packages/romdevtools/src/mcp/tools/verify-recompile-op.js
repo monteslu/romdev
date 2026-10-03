@@ -9,7 +9,7 @@ import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { LibretroHost } from "romdev-core-host/index.js";
-import { resolveCore } from "../../cores/registry.js";
+import { resolveCore, coresFor, ALT_CORES } from "../../cores/registry.js";
 import { WasmcartHost } from "../../host/WasmcartHost.js";
 import { verifyRecompile, findRecompileDivergence, fuzzRecompile, parseInputSchedule } from "../../host/verify-recompile.js";
 import { autoPlan, AUTO_DEFAULTS } from "../../host/auto-verify.js";
@@ -54,9 +54,29 @@ function resolveInputs(sessionKey, args, opName) {
 
   const platform = args.platform ?? section?.reference ?? section?.platform;
   if (!platform) throw new Error(`frame({op:'${opName}'}): pass platform (the reference core's loadMedia platform, e.g. 'sms'); the cart carries no romdev.recompile section to say`);
-  const resolved = resolveCore(platform);
-  if (!resolved) throw new Error(`frame({op:'${opName}'}): no core for platform '${platform}'`);
+  // referenceCore: a second core of the platform as the reference (ALT_CORES,
+  // e.g. bsnes for an SNES cart); the platform's own core by default
+  const named = section?.referenceCore && ALT_CORES[platform]?.[section.referenceCore] ? section.referenceCore : null;
+  const referenceCore = args.referenceCore ?? named;
+  if (referenceCore && !coresFor(platform).includes(referenceCore)) {
+    throw new Error(`frame({op:'${opName}'}): referenceCore '${referenceCore}' is not a ${platform} core (${coresFor(platform).join(", ") || "none"})`);
+  }
+  const resolved = resolveCore(platform, referenceCore ?? undefined);
+  if (!resolved) throw new Error(`frame({op:'${opName}'}): no ${referenceCore ? referenceCore + " " : ""}core for platform '${platform}'`);
 
+  // A coprocessor firmware the cart was built with (section firmware): the
+  // reference core finds the same file in its system directory.
+  let firmware = null;
+  if (layout.firmware) {
+    const want = layout.firmware;
+    const tries = args.firmware ? [args.firmware] : [path.join(path.dirname(refPath), want.name), path.join(path.dirname(refPath), "firmware", want.name)];
+    const src = tries.find((p) => existsSync(p));
+    if (!src) throw new Error(`frame({op:'${opName}'}): the cart was built with the ${want.chip ?? "coprocessor"} firmware ${want.name}, and the reference needs it too: no file at ${tries.join(" or ")} (pass firmware:'<path>')`);
+    const bytes = new Uint8Array(readFileSync(src));
+    const sha = createHash("sha1").update(bytes).digest("hex");
+    if (sha !== want.sha1) throw new Error(`frame({op:'${opName}'}): ${src} has sha1 ${sha}, but the cart was built with firmware of sha1 ${want.sha1}`);
+    firmware = { name: want.name, bytes, path: src };
+  }
   const refBytes = readFileSync(refPath);
   const refSha1 = createHash("sha1").update(refBytes).digest("hex");
   if (section?.romSha1 && section.romSha1.toLowerCase() !== refSha1) {
@@ -81,6 +101,13 @@ function resolveInputs(sessionKey, args, opName) {
   const openRef = async (hooks = {}) => {
     const h = new LibretroHost();
     await h.loadCore(resolved.jsPath, resolved.wasmPath, { hwRender: resolved.hwRender, noderawfs: resolved.noderawfs });
+    if (firmware) {
+      const fs = h.mod?.FS;
+      if (!fs) throw new Error(`frame({op:'${opName}'}): the cart needs firmware (${firmware.name}) but the ${resolved.coreName} core has no file system to put it in`);
+      const dir = h.state.systemDir;
+      fs.mkdirTree(dir);
+      fs.writeFile(path.join(dir, firmware.name), firmware.bytes);
+    }
     // A cart with a real-time clock reads the wasmcart host's frame clock
     // (frame N of the cart at (N - 1) * stepMs); the reference's wall clock
     // is pinned to the same frames: its settle runs see baseMs, and run
@@ -123,13 +150,36 @@ function resolveInputs(sessionKey, args, opName) {
     await h.loadMedia({ platform, path: refPath, beforeSettle });
     return h;
   };
-  return { cartPath, refPath, refSha1, refBytes: new Uint8Array(refBytes), layout, layoutSource, platform, core: resolved.coreName, openCart, openRef };
+  return { cartPath, refPath, refSha1, refBytes: new Uint8Array(refBytes), layout, layoutSource, platform, core: resolved.coreName, referenceCore, firmware: firmware ? { name: firmware.name, path: firmware.path } : null, openCart, openRef };
+}
+
+/**
+ * A second core of the platform (referenceCore) may not have every region
+ * the cart's section names for its own core (bsnes has no save_ram on a
+ * board without one, where snes9x always allocates SRAM). Those regions are
+ * left out of the comparison and listed in the result, never silently: a
+ * region the reference does have is compared exactly as always.
+ */
+async function dropRegionsNotOnReference(ctx) {
+  if (!ctx.referenceCore) return [];
+  const probe = await ctx.openRef();
+  const missing = [];
+  try {
+    for (const key of ["regions", "diagnosticRegions"]) {
+      const regs = ctx.layout[key];
+      if (!regs) continue;
+      for (const [name, spec] of Object.entries(regs)) {
+        if (!(probe.regionSize?.(spec.ref) > 0)) { missing.push({ region: name, ref: spec.ref, compared: key === "regions" }); delete regs[name]; }
+      }
+    }
+  } finally { probe.dispose?.(); }
+  return missing;
 }
 
 function describeSides(ctx, cartHost, refHost) {
   return {
     cart: { path: ctx.cartPath, framebuffer: { width: cartHost.status.fbWidth, height: cartHost.status.fbHeight }, layoutSource: ctx.layoutSource, regions: Object.keys(ctx.layout.regions), abiWarnings: cartHost.status.abiWarnings?.length ? cartHost.status.abiWarnings : undefined },
-    reference: { platform: ctx.platform, core: ctx.core, path: ctx.refPath, sha1: ctx.refSha1, framebuffer: { width: refHost.status.fbWidth, height: refHost.status.fbHeight } },
+    reference: { platform: ctx.platform, core: ctx.core, path: ctx.refPath, sha1: ctx.refSha1, ...(ctx.firmware ? { firmware: ctx.firmware } : {}), framebuffer: { width: refHost.status.fbWidth, height: refHost.status.fbHeight } },
   };
 }
 
@@ -173,6 +223,7 @@ export async function runVerifyRecompile(sessionKey, args) {
     if (audio === undefined) audio = plan.audioFrames ? "required" : undefined;
     if (audio && !audioFrames && plan.audioFrames) audioFrames = plan.audioFrames;
   }
+  const notOnReference = await dropRegionsNotOnReference(ctx);
   const tag = args.tag ?? `${path.basename(ctx.cartPath).replace(/\.(wasc|wasm)$/, "")}`;
   const outputDir = args.outputDir ?? path.join(os.tmpdir(), "romdev-verify", tag);
   const { result, cartHost, refHost } = await verifyRecompile({
@@ -197,6 +248,7 @@ export async function runVerifyRecompile(sessionKey, args) {
   return {
     ...result,
     ...describeSides(ctx, cartHost, refHost),
+    ...(notOnReference.length ? { notOnReference, notOnReferenceNote: `the ${ctx.core} reference has no such memory region, so these were not compared` } : {}),
     outputDir,
     slots: "slot A now holds the cart and slot B the reference, both at the last scored frame (memory/wasm reads and frame({op:'step', slot}) work on them). The controls ran on separate cart instances.",
   };
@@ -205,6 +257,7 @@ export async function runVerifyRecompile(sessionKey, args) {
 /** frame({op:'findDiverge', cart, reference}) - the recompile mode. */
 export async function runRecompileDiverge(sessionKey, args) {
   const ctx = resolveInputs(sessionKey, args, "findDiverge");
+  const notOnReference = await dropRegionsNotOnReference(ctx);
   const refHost = await ctx.openRef();
   let cartHost;
   try { cartHost = await ctx.openCart(); } catch (e) { refHost.dispose?.(); throw e; }
@@ -222,7 +275,7 @@ export async function runRecompileDiverge(sessionKey, args) {
   }
   installHost(sessionKey, cartHost);
   installHostB(sessionKey, refHost);
-  return { ...res, ...describeSides(ctx, cartHost, refHost), slots: "slot A = the cart, slot B = the reference, both stopped at the reported frame." };
+  return { ...res, ...describeSides(ctx, cartHost, refHost), ...(notOnReference.length ? { notOnReference } : {}), slots: "slot A = the cart, slot B = the reference, both stopped at the reported frame." };
 }
 
 /** frame({op:'findDiverge', cart, reference, level:'instruction'}) - the instruction-level differ. */

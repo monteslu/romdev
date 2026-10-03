@@ -54,7 +54,14 @@ async function runCart(rom, refFrames, opts = {}, onFrame = null) {
 
 const hex = (a) => Array.from(a, (v) => v.toString(16).padStart(2, "0")).join("");
 
+// The ST011 and ST018 run on bsnes's code from the chip's firmware now
+// (chips-bsnes.js); a cart without options.firmware is refused, which
+// chips-bsnes.test.js covers, and the firmware is not shipped, so the real
+// carts are checked by the sms-wat snes-chips gate instead of here.
+const FIRMWARE_CHIPS = new Set(["ST011", "ST018"]);
+
 for (const [name, c] of Object.entries(CHIP_CASES)) {
+  if (FIRMWARE_CHIPS.has(name)) continue;
   test(`${name}: the chip's register traffic reads back what snes9x reads`, async () => {
     const { code, reads } = chipProgram(c.ops);
     const rom = chipImage({ code, ...c.image });
@@ -81,6 +88,7 @@ const CHIPSTATE = {
   "S-RTC": [28, "729613e5546d7f2a0d32a8c308a0e3527accb117"],
 };
 for (const [name, [len, sha]] of Object.entries(CHIPSTATE)) {
+  if (FIRMWARE_CHIPS.has(name)) continue;
   test(`${name}: the cart's chipstate region holds the bytes snes9x's snes_chipstate serves`, async () => {
     const c = CHIP_CASES[name];
     const { code } = chipProgram(c.ops);
@@ -131,18 +139,18 @@ test("options.saveRam / saveRtc: the cart powers on with the battery files and n
 });
 
 test("options.breakChip (must-fail control): every chip read comes back with bit 0 flipped", async () => {
-  const c = CHIP_CASES["ST011"];
+  const c = CHIP_CASES["ST010"];
   const { code, reads } = chipProgram(c.ops);
   const rom = chipImage({ code, ...c.image });
   const opts = { armRanges: [[0, 0x8000]] };
   const good = await runCart(rom, c.frames ?? 3, opts);
   const bad = await runCart(rom, c.frames ?? 3, { ...opts, breakChip: true });
-  assert.equal(hex(good.subarray(0x100, 0x100 + reads)), EXPECTED.ST011);
-  assert.notEqual(hex(bad.subarray(0x100, 0x100 + reads)), EXPECTED.ST011);
+  assert.equal(hex(good.subarray(0x100, 0x100 + reads)), EXPECTED.ST010);
+  assert.notEqual(hex(bad.subarray(0x100, 0x100 + reads)), EXPECTED.ST010);
   assert.equal(recompileSection(rom, null, { ...opts, breakChip: true }).json.debugBreakChip, true);
 });
 
-test("ST018: snes9x only stubs the chip, and so does the cart (plain LoROM + map_SetaRISC at $3000-$3FFF)", () => {
+test("ST018: snes9x's board for the chip (plain LoROM + map_SetaRISC at $3000-$3FFF)", () => {
   const { code } = chipProgram([]);
   const d = describeRom(chipImage({ code, mapMode: 0x30, romType: 0xf5 }));
   assert.equal(d.coprocessor, "ST018");

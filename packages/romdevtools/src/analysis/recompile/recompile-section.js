@@ -26,6 +26,14 @@
 //     "saveRtc": { "name": "game.rtc", "sha1": "<hex>", "length": 20 }
 //                                   the same for a battery-backed clock's registers: written
 //                                   into the reference's rtc region (libretro RETRO_MEMORY_RTC)
+//     "firmware": { "chip": "ST011", "name": "st011.rom", "sha1": "<hex>", "length": 53248 }
+//                                   a coprocessor's firmware the cart was built with: the
+//                                   verifier finds the file (the caller's firmware path, or
+//                                   beside the reference ROM, or in a firmware/ directory
+//                                   there; sha1 checked) and puts it in the reference core's
+//                                   system directory under that name before the load
+//     "referenceCore": "snes9x",    the reference core the cart follows (a platform's
+//                                   default core, or one of its ALT_CORES)
 //     "clock": { "baseMs": 1700000000000, "stepMs": 16.667 }
 //                                   the cart reads the wasmcart host's frame clock (a
 //                                   game-visible real-time clock); the verifier pins the
@@ -316,7 +324,7 @@ export function validateRecompileLayout(layout) {
       throw new Error("companionFiles must be file-name suffixes (e.g. '.msu', '-1.pcm') or '/<file name>', with no other path separators");
     }
   }
-  for (const key of ["saveRam", "saveRtc"]) {
+  for (const key of ["saveRam", "saveRtc", "firmware"]) {
     const r = out[key];
     if (r == null) continue;
     if (typeof r !== "object" || typeof r.name !== "string" || !/^[^\\/]+$/.test(r.name) || !/^[0-9a-f]{40}$/.test(r.sha1 ?? "") || !(Number.isInteger(r.length) && r.length > 0)) {

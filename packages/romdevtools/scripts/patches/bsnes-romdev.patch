@@ -1,0 +1,367 @@
+diff --git a/Makefile b/Makefile
+index 3376029..e41e3b0 100644
+--- a/Makefile
++++ b/Makefile
+@@ -361,6 +361,8 @@ else ifneq (,$(findstring windows_msvc2017,$(platform)))
+ else ifeq ($(platform), emscripten)
+    TARGET := $(TARGET_NAME)_libretro_$(platform).bc
+    STATIC_LINKING = 1
++   # romdev: nall specializes std::is_signed / is_unsigned for its own integer types
++   FLAGS += -Wno-invalid-specialization
+ 
+ # Windows MSVC 2005 x86
+ else ifeq ($(platform), windows_msvc2005_x86)
+diff --git a/bsnes/sfc/coprocessor/armdsp/armdsp.cpp b/bsnes/sfc/coprocessor/armdsp/armdsp.cpp
+index 8a7d08d..88fad33 100644
+--- a/bsnes/sfc/coprocessor/armdsp/armdsp.cpp
++++ b/bsnes/sfc/coprocessor/armdsp/armdsp.cpp
+@@ -2,6 +2,9 @@
+ 
+ namespace SuperFamicom {
+ 
++//romdev: every S-CPU access to the chip, with the master clock (romdev_bsnes_sfc.cpp)
++auto romdev_chiplog(uint kind, uint addr, uint8 data) -> void;
++
+ #include "memory.cpp"
+ #include "serialization.cpp"
+ ArmDSP armdsp;
+@@ -68,11 +71,13 @@ auto ArmDSP::read(uint addr, uint8) -> uint8 {
+     data = bridge.status();
+   }
+ 
++  romdev_chiplog(0, addr, data);
+   return data;
+ }
+ 
+ auto ArmDSP::write(uint addr, uint8 data) -> void {
+   cpu.synchronizeCoprocessors();
++  romdev_chiplog(1, addr, data);
+ 
+   addr &= 0xff06;
+ 
+@@ -92,6 +97,7 @@ auto ArmDSP::power() -> void {
+   random.array((uint8*)programRAM, sizeof(programRAM));
+   bridge.reset = false;
+   reset();
++  romdev_chiplog(4, 0, 0);
+ }
+ 
+ auto ArmDSP::reset() -> void {
+diff --git a/bsnes/sfc/coprocessor/necdsp/necdsp.cpp b/bsnes/sfc/coprocessor/necdsp/necdsp.cpp
+index 3942d98..b636c5c 100644
+--- a/bsnes/sfc/coprocessor/necdsp/necdsp.cpp
++++ b/bsnes/sfc/coprocessor/necdsp/necdsp.cpp
+@@ -3,6 +3,9 @@
+ 
+ namespace SuperFamicom {
+ 
++//romdev: every S-CPU access to the chip, with the master clock, for cross-checking a transplant (romdev_bsnes_sfc.cpp)
++auto romdev_chiplog(uint kind, uint addr, uint8 data) -> void;
++
+ #include "serialization.cpp"
+ NECDSP necdsp;
+ 
+@@ -29,15 +32,14 @@ auto NECDSP::step(uint clocks) -> void {
+ 
+ auto NECDSP::read(uint addr, uint8) -> uint8 {
+   cpu.synchronizeCoprocessors();
+-  if(addr & 1) {
+-    return uPD96050::readSR();
+-  } else {
+-    return uPD96050::readDR();
+-  }
++  uint8 data = addr & 1 ? uPD96050::readSR() : uPD96050::readDR();
++  romdev_chiplog(0, addr, data);
++  return data;
+ }
+ 
+ auto NECDSP::write(uint addr, uint8 data) -> void {
+   cpu.synchronizeCoprocessors();
++  romdev_chiplog(1, addr, data);
+   if(addr & 1) {
+     return uPD96050::writeSR(data);
+   } else {
+@@ -47,17 +49,21 @@ auto NECDSP::write(uint addr, uint8 data) -> void {
+ 
+ auto NECDSP::readRAM(uint addr, uint8) -> uint8 {
+   cpu.synchronizeCoprocessors();
+-  return uPD96050::readDP(addr);
++  uint8 data = uPD96050::readDP(addr);
++  romdev_chiplog(2, addr, data);
++  return data;
+ }
+ 
+ auto NECDSP::writeRAM(uint addr, uint8 data) -> void {
+   cpu.synchronizeCoprocessors();
++  romdev_chiplog(3, addr, data);
+   return uPD96050::writeDP(addr, data);
+ }
+ 
+ auto NECDSP::power() -> void {
+   uPD96050::power();
+   create(NECDSP::Enter, Frequency);
++  romdev_chiplog(4, 0, 0);
+ }
+ 
+ }
+diff --git a/bsnes/sfc/cpu/cpu.hpp b/bsnes/sfc/cpu/cpu.hpp
+index fa69da4..77cec94 100644
+--- a/bsnes/sfc/cpu/cpu.hpp
++++ b/bsnes/sfc/cpu/cpu.hpp
+@@ -1,4 +1,5 @@
+ struct CPU : Processor::WDC65816, Thread, PPUcounter {
++  friend struct RomdevAccess;  //romdev: the master clock count for the chip access log (sfc/interface/romdev_bsnes_sfc.cpp)
+   inline auto interruptPending() const -> bool override { return status.interruptPending; }
+   inline auto pio() const -> uint8 { return io.pio; }
+   inline auto refresh() const -> bool { return status.dramRefresh == 1; }
+diff --git a/bsnes/sfc/interface/interface.cpp b/bsnes/sfc/interface/interface.cpp
+index 51d3b9b..00f77c6 100644
+--- a/bsnes/sfc/interface/interface.cpp
++++ b/bsnes/sfc/interface/interface.cpp
+@@ -342,3 +342,6 @@ auto Interface::setRunAhead(bool runAhead) -> void {
+ }
+ 
+ }
++
++//romdev: memory regions for the libretro target (target-libretro/romdev_bsnes.cpp)
++#include "romdev_bsnes_sfc.cpp"
+diff --git a/bsnes/sfc/ppu/ppu.hpp b/bsnes/sfc/ppu/ppu.hpp
+index 353acf2..f578c01 100644
+--- a/bsnes/sfc/ppu/ppu.hpp
++++ b/bsnes/sfc/ppu/ppu.hpp
+@@ -1,4 +1,5 @@
+ struct PPU : Thread, PPUcounter {
++  friend struct RomdevAccess;  //romdev: memory regions (target-libretro/romdev_bsnes.cpp)
+   alwaysinline auto interlace() const -> bool { return display.interlace; }
+   alwaysinline auto overscan() const -> bool { return display.overscan; }
+   alwaysinline auto vdisp() const -> uint { return display.vdisp; }
+diff --git a/bsnes/target-libretro/libretro.cpp b/bsnes/target-libretro/libretro.cpp
+index 8010816..2385826 100644
+--- a/bsnes/target-libretro/libretro.cpp
++++ b/bsnes/target-libretro/libretro.cpp
+@@ -489,13 +489,13 @@ static void set_environment_info(retro_environment_t cb)
+ 	static const retro_variable vars[] = {
+ 		{ "bsnes_aspect_ratio", "Aspect Ratio; Auto|8:7|4:3|NTSC|PAL" },
+ 		{ "bsnes_blur_emulation", "Blur emulation; OFF|ON" },
+-		{ "bsnes_entropy", "Entropy (randomization); Low|High|None" },
++		{ "bsnes_entropy", "Entropy (randomization); None|Low|High" },
+ 		{ "bsnes_hotfixes", "Hotfixes; OFF|ON" },
+ 		{ "bsnes_cpu_overclock", "CPU Overclocking; 100|110|120|130|140|150|160|170|180|190|200|210|220|230|240|250|260|270|280|290|300|310|320|330|340|350|360|370|380|390|400|10|20|30|40|50|60|70|80|90" },
+ 		{ "bsnes_cpu_fastmath", "CPU Fast Math; OFF|ON" },
+ 		{ "bsnes_sa1_overclock", "SA1 Coprocessor Overclocking; 100|110|120|130|140|150|160|170|180|190|200|210|220|230|240|250|260|270|280|290|300|310|320|330|340|350|360|370|380|390|400|10|20|30|40|50|60|70|80|90" },
+ 		{ "bsnes_sfx_overclock", "SuperFX Coprocessor Overclocking; 100|110|120|130|140|150|160|170|180|190|200|210|220|230|240|250|260|270|280|290|300|310|320|330|340|350|360|370|380|390|400|410|420|430|440|450|460|470|480|490|500|510|520|530|540|550|560|570|580|590|600|610|620|630|640|650|660|670|680|690|700|710|720|730|740|750|760|770|780|790|800|10|20|30|40|50|60|70|80|90" },
+-		{ "bsnes_ppu_fast", "PPU Fast mode; ON|OFF" },
++		{ "bsnes_ppu_fast", "PPU Fast mode; OFF|ON" },
+ 		{ "bsnes_ppu_deinterlace", "PPU Deinterlace; ON|OFF" },
+ 		{ "bsnes_ppu_no_sprite_limit", "PPU No sprite limit; OFF|ON" },
+ 		{ "bsnes_ppu_no_vram_blocking", "PPU No VRAM blocking; OFF|ON" },
+@@ -504,11 +504,11 @@ static void set_environment_info(retro_environment_t cb)
+ 		{ "bsnes_mode7_perspective", "HD Mode 7 Perspective correction; ON|OFF" },
+ 		{ "bsnes_mode7_supersample", "HD Mode 7 Supersampling; OFF|ON" },
+ 		{ "bsnes_mode7_mosaic", "HD Mode 7 HD->SD Mosaic; ON|OFF" },
+-		{ "bsnes_dsp_fast", "DSP Fast mode; ON|OFF" },
++		{ "bsnes_dsp_fast", "DSP Fast mode; OFF|ON" },
+ 		{ "bsnes_dsp_cubic", "DSP Cubic interpolation; OFF|ON" },
+ 		{ "bsnes_dsp_echo_shadow", "DSP Echo shadow RAM; OFF|ON" },
+ 		{ "bsnes_coprocessor_delayed_sync", "Coprocessor Delayed Sync; ON|OFF" },
+-		{ "bsnes_coprocessor_prefer_hle", "Coprocessor Prefer HLE; ON|OFF" },
++		{ "bsnes_coprocessor_prefer_hle", "Coprocessor Prefer HLE; OFF|ON" },
+ 		{ "bsnes_sgb_bios", "Preferred Super GameBoy BIOS (restart); SGB1.sfc|SGB2.sfc" },
+ 		{ "bsnes_run_ahead_frames", "Amount of frames for run-ahead; OFF|1|2|3|4" },
+ 		{ "bsnes_touchscreen_lightgun", "Enable Touchscreen Lightgun; ON|OFF" },
+@@ -603,7 +603,7 @@ RETRO_API void retro_set_controller_port_device(unsigned port, unsigned device)
+ 	set_controller_ports(port, device);
+ }
+ 
+-RETRO_API void retro_reset()
++static void romdev_impl_retro_reset()
+ {
+ 	emulator->reset();
+ }
+@@ -624,7 +624,7 @@ static void run_with_runahead(const int frames)
+ 	emulator->unserialize(state);
+ }
+ 
+-RETRO_API void retro_run()
++static void romdev_impl_retro_run()
+ {
+ 	check_variables();
+ 	input_poll();
+@@ -637,18 +637,18 @@ RETRO_API void retro_run()
+ 		run_with_runahead(run_ahead_frames);
+ }
+ 
+-RETRO_API size_t retro_serialize_size()
++static size_t romdev_impl_retro_serialize_size()
+ {
+ 	return emulator->serialize().size();
+ }
+ 
+-RETRO_API bool retro_serialize(void *data, size_t size)
++static bool romdev_impl_retro_serialize(void *data, size_t size)
+ {
+ 	memcpy(data, emulator->serialize().data(), size);
+ 	return true;
+ }
+ 
+-RETRO_API bool retro_unserialize(const void *data, size_t size)
++static bool romdev_impl_retro_unserialize(const void *data, size_t size)
+ {
+ 	serializer s(static_cast<const uint8_t *>(data), size);
+ 	return emulator->unserialize(s);
+@@ -681,7 +681,7 @@ RETRO_API void retro_cheat_set(unsigned index, bool enabled, const char *code)
+ 	}
+ }
+ 
+-RETRO_API bool retro_load_game(const retro_game_info *game)
++static bool romdev_impl_retro_load_game(const retro_game_info *game)
+ {
+ 	// bsnes uses 0RGB1555 internally but it is deprecated
+ 	// let software conversion happen in frontend
+@@ -772,7 +772,7 @@ RETRO_API bool retro_load_game_special(unsigned game_type,
+ 	return true;
+ }
+ 
+-RETRO_API void retro_unload_game()
++static void romdev_impl_retro_unload_game()
+ {
+ 	program->save();
+ 	emulator->unload();
+@@ -783,14 +783,5 @@ RETRO_API unsigned retro_get_region()
+ 	return program->superFamicom.region == "NTSC" ? RETRO_REGION_NTSC : RETRO_REGION_PAL;
+ }
+ 
+-// Currently, there is no safe/sensible way to use the memory interface without severe hackery.
+-// Rely on higan to load and save SRAM until there is really compelling reason not to.
+-RETRO_API void *retro_get_memory_data(unsigned id)
+-{
+-	return nullptr;
+-}
+-
+-RETRO_API size_t retro_get_memory_size(unsigned id)
+-{
+-	return 0;
+-}
++// romdev: cothread entry points and memory regions
++#include "romdev_bsnes.cpp"
+diff --git a/bsnes/target-libretro/program.cpp b/bsnes/target-libretro/program.cpp
+index 81b9b66..187cfee 100644
+--- a/bsnes/target-libretro/program.cpp
++++ b/bsnes/target-libretro/program.cpp
+@@ -186,6 +186,7 @@ struct Program : Emulator::Platform
+ 	auto openRomSuperFamicom(string name, vfs::file::mode mode) -> shared_pointer<vfs::file>;
+ 	auto openRomGameBoy(string name, vfs::file::mode mode) -> shared_pointer<vfs::file>;
+ 	auto openRomBSMemory(string name, vfs::file::mode mode) -> shared_pointer<vfs::file>;
++	auto romdevFirmware(string name) -> shared_pointer<vfs::file>;
+ 	
+ 	auto hackPatchMemory(vector<uint8_t>& data) -> void;
+ 	
+@@ -403,6 +404,23 @@ auto Program::videoFrame(const uint16* data, uint pitch, uint width, uint height
+ 			height -= 16 * multiplier;
+ 		}
+ 	}
++	//romdev: the accurate PPU always draws 512 wide with every line twice; a
++	//frame that is exactly a 2x2 copy of a 256-wide one (no hires, no
++	//interlace) is handed on at its own size, as the fast PPU and other cores
++	//present it. Lossless: any frame that is not such a copy is unchanged.
++	if(width == 512 && (height == 448 || height == 480)) {
++		static uint16 half[256 * 240];
++		bool doubled = true;
++		for(uint y = 0; y < height && doubled; y += 2) {
++			const uint16* a = data + y * (pitch >> 1);
++			const uint16* b = a + (pitch >> 1);
++			for(uint x = 0; x < 512; x += 2) {
++				if(a[x] != a[x + 1] || b[x] != a[x] || b[x + 1] != a[x]) { doubled = false; break; }
++				half[(y >> 1) * 256 + (x >> 1)] = a[x];
++			}
++		}
++		if(doubled) { video_cb(half, 256, height >> 1, 256 * sizeof(uint16)); return; }
++	}
+ 	video_cb(data, width, height, pitch);
+ }
+ 
+@@ -559,6 +577,51 @@ auto Program::openRomSuperFamicom(string name, vfs::file::mode mode) -> shared_p
+ 		return vfs::fs::file::open(save_path, mode);
+ 	}
+ 
++	if(mode == vfs::file::mode::read) return romdevFirmware(name);
++
++	return {};
++}
++
++//romdev: a coprocessor's firmware (program and data ROM), which the cartridge
++//loader asks for by architecture. Taken from the end of the ROM image when it
++//is appended there (heuristics.firmwareRomSize), else from the system
++//directory: <identifier>.rom (program then data, as the dumps are
++//distributed; e.g. st011.rom, st018.rom) or <identifier>.program.rom /
++//<identifier>.data.rom. Without it the cartridge falls back to bsnes's HLE
++//where it has one (DSP-1/2/4, ST010, Cx4) and to nothing for the ST011/ST018.
++auto Program::romdevFirmware(string name) -> shared_pointer<vfs::file>
++{
++	struct Chip { const char* arch; uint programSize; uint dataSize; };
++	static const Chip chips[] = {
++		{ "uPD7725", 0x1800, 0x800 },
++		{ "uPD96050", 0xc000, 0x1000 },
++		{ "ARM6", 0x20000, 0x8000 },
++		{ "HG51BS169", 0, 0xc00 },
++	};
++	for(auto& chip : chips) {
++		string arch = chip.arch;
++		bool program = name == string{arch.downcase(), ".program.rom"};
++		bool data = name == string{arch.downcase(), ".data.rom"};
++		if(!program && !data) continue;
++		string content = program ? "Program" : "Data";
++		auto memory = superFamicom.document[string{"game/board/memory(type=ROM,content=", content, ",architecture=", chip.arch, ")"}];
++		if(!memory) return {};
++		uint offset = program ? 0 : chip.programSize;
++		uint size = program ? chip.programSize : chip.dataSize;
++		uint total = chip.programSize + chip.dataSize;
++		if(superFamicom.firmware.size() == total) {
++			return vfs::memory::file::open(superFamicom.firmware.data() + offset, size);
++		}
++		const char *system_dir = nullptr;
++		if(!environ_cb || !environ_cb(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &system_dir) || !system_dir) return {};
++		string id = memory["identifier"].text().downcase();
++		string dir = string(system_dir).transform("\\", "/");
++		auto combined = file::read(string{dir, "/", id, ".rom"});
++		if(combined.size() == total) return vfs::memory::file::open(combined.data() + offset, size);
++		auto part = file::read(string{dir, "/", id, ".", content.downcase(), ".rom"});
++		if(part.size() == size) return vfs::memory::file::open(part.data(), size);
++		return {};
++	}
+ 	return {};
+ }
+ 
+diff --git a/libco/libco.c b/libco/libco.c
+index 21fe4ca..eed50f0 100755
+--- a/libco/libco.c
++++ b/libco/libco.c
+@@ -7,7 +7,9 @@
+ #endif
+ 
+ #if defined(__clang__) || defined(__GNUC__)
+-  #if defined(__i386__)
++  #if defined(__EMSCRIPTEN__)
++    #include "wasm.c"
++  #elif defined(__i386__)
+     #include "x86.c"
+   #elif defined(__amd64__)
+     #include "amd64.c"
+diff --git a/nall/intrinsics.hpp b/nall/intrinsics.hpp
+index ad132db..5d332db 100755
+--- a/nall/intrinsics.hpp
++++ b/nall/intrinsics.hpp
+@@ -98,6 +98,13 @@ namespace nall {
+   constexpr auto platform() -> Platform { return Platform::Horizon; }
+   constexpr auto api() -> API { return API::Posix; }
+   constexpr auto display() -> DisplayServer { return DisplayServer::Unknown; }
++#elif defined(__EMSCRIPTEN__)
++  //romdev: WebAssembly (emscripten's POSIX layer)
++  #define API_POSIX
++  #define DISPLAY_UNKNOWN
++  constexpr auto platform() -> Platform { return Platform::Unknown; }
++  constexpr auto api() -> API { return API::Posix; }
++  constexpr auto display() -> DisplayServer { return DisplayServer::Unknown; }
+ #elif defined(linux) || defined(__linux__)
+   #define PLATFORM_LINUX
+   #define API_POSIX

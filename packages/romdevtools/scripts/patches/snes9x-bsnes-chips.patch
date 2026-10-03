@@ -1,0 +1,147 @@
+diff --git a/cpu.cpp b/cpu.cpp
+index 2c8d07d..62b5d0a 100644
+--- a/cpu.cpp
++++ b/cpu.cpp
+@@ -6,6 +6,7 @@
+ 
+ #include "snes9x.h"
+ #include "memmap.h"
++#include "seta.h"
+ #include "dma.h"
+ #include "apu/apu.h"
+ #include "fxemu.h"
+@@ -125,6 +126,8 @@ void S9xReset (void)
+ 		S9xResetOBC1();
+ 	if (Settings.SRTC)
+ 		S9xResetSRTC();
++	if (romdev_bchip)
++		romdev_bchip_power();  // romdev: bsnes powers its chips with the system
+ 	if (Settings.MSU1)
+ 		S9xMSU1Init();
+ 
+diff --git a/cpuexec.cpp b/cpuexec.cpp
+index dd4beea..37d4726 100644
+--- a/cpuexec.cpp
++++ b/cpuexec.cpp
+@@ -6,6 +6,7 @@
+ 
+ #include "snes9x.h"
+ #include "memmap.h"
++#include "seta.h"
+ #include "cpuops.h"
+ #include "dma.h"
+ #include "apu/apu.h"
+@@ -341,6 +342,8 @@ void S9xDoHEventProcessing (void)
+ 			}
+ 
+ 			S9xAPUEndScanline();
++			if (romdev_bchip)
++				romdev_bchip_line();  // romdev: the chip's clock base moves with the line (romdev_bchip.cpp)
+ 			CPU.Cycles -= Timings.H_Max;
+ 			if (Timings.NMITriggerPos != 0xffff)
+ 				Timings.NMITriggerPos -= Timings.H_Max;
+diff --git a/libretro/Makefile.common b/libretro/Makefile.common
+index 6ed99a5..3156840 100644
+--- a/libretro/Makefile.common
++++ b/libretro/Makefile.common
+@@ -50,6 +50,7 @@ SOURCES_CXX := $(CORE_DIR)/apu/apu.cpp \
+ 				 $(CORE_DIR)/seta010.cpp \
+ 				 $(CORE_DIR)/seta011.cpp \
+ 				 $(CORE_DIR)/seta018.cpp \
++				 $(CORE_DIR)/romdev_bchip.cpp \
+ 				 $(CORE_DIR)/snapshot.cpp \
+ 				 $(CORE_DIR)/snes9x.cpp \
+ 				 $(CORE_DIR)/spc7110.cpp \
+diff --git a/libretro/libretro.cpp b/libretro/libretro.cpp
+index 27f16d5..f89acfb 100644
+--- a/libretro/libretro.cpp
++++ b/libretro/libretro.cpp
+@@ -2181,6 +2181,7 @@ static uint8 romdev_snes_chipstate[ROMDEV_CHIPSTATE_MAX];
+ #define ROMDEV_MEMORY_SNES_BSX_PSRAM 0x1BA
+ static unsigned romdev_snes_fill_chipstate(void)
+ {
++    if (romdev_bchip)                   return romdev_bchip_chipstate(romdev_snes_chipstate);
+     if (Settings.DSP == 3)              return romdev_cs_dsp3(romdev_snes_chipstate);
+     if (Settings.SETA == ST_011)        return romdev_cs_st011(romdev_snes_chipstate);
+     if (Settings.SETA == ST_018)        return romdev_cs_st018(romdev_snes_chipstate);
+diff --git a/memmap.cpp b/memmap.cpp
+index 6aae7bd..a46500a 100644
+--- a/memmap.cpp
++++ b/memmap.cpp
+@@ -2060,6 +2060,7 @@ void CMemory::InitROM (void)
+ 	Settings.SPC7110RTC = FALSE;
+ 	Settings.OBC1 = FALSE;
+ 	Settings.SETA = 0;
++	romdev_bchip = 0;
+ 	Settings.SRTC = FALSE;
+ 	Settings.BS = FALSE;
+ 	Settings.MSU1 = FALSE;
+@@ -2211,6 +2212,8 @@ void CMemory::InitROM (void)
+ 			Settings.SETA = ST_018;
+ 			SetSETA = NULL;
+ 			GetSETA = NULL;
++			// romdev: the ARM on bsnes's code when st018.rom is in the system directory (romdev_bchip.cpp)
++			romdev_bchip_select(18);
+ 			SRAMSize = 2;
+ 			SNESGameFixes.SRAMInitialValue = 0x00;
+ 			break;
+@@ -2222,6 +2225,12 @@ void CMemory::InitROM (void)
+ 				Settings.SETA = ST_011;
+ 				SetSETA = &S9xSetST011;
+ 				GetSETA = &S9xGetST011;
++				// romdev: the uPD96050 on bsnes's code when st011.rom is in the system directory (romdev_bchip.cpp)
++				if (romdev_bchip_select(11))
++				{
++					SetSETA = &romdev_bchip_set_seta;
++					GetSETA = &romdev_bchip_get_seta;
++				}
+ 			}
+ 			else
+ 			{
+diff --git a/seta.h b/seta.h
+index 2fa4e56..f3fdf80 100644
+--- a/seta.h
++++ b/seta.h
+@@ -64,4 +64,15 @@ void S9xSetSetaDSP (uint8, uint32);
+ extern uint8 (*GetSETA) (uint32);
+ extern void (*SetSETA) (uint32, uint8);
+ 
++// romdev: the ST011 / ST018 on bsnes's chips (romdev_bchip.cpp)
++extern int	romdev_bchip;
++bool	romdev_bchip_select (int);
++void	romdev_bchip_power (void);
++uint8	romdev_bchip_get_seta (uint32);
++void	romdev_bchip_set_seta (uint32, uint8);
++uint8	romdev_bchip_get_risc (uint32);
++void	romdev_bchip_set_risc (uint8, uint32);
++void	romdev_bchip_line (void);
++unsigned	romdev_bchip_chipstate (uint8 *);
++
+ #endif
+diff --git a/seta018.cpp b/seta018.cpp
+index 371a407..c354556 100644
+--- a/seta018.cpp
++++ b/seta018.cpp
+@@ -13,6 +13,9 @@ static int	line;	// line counter
+ 
+ uint8 S9xGetST018 (uint32 Address)
+ {
++	if (romdev_bchip)
++		return romdev_bchip_get_risc(Address);  // romdev: the ARM (romdev_bchip.cpp)
++
+ 	uint8	t       = 0;
+ 	uint16	address = (uint16) Address & 0xFFFF;
+ 
+@@ -46,6 +49,12 @@ uint8 S9xGetST018 (uint32 Address)
+ 
+ void S9xSetST018 (uint8 Byte, uint32 Address)
+ {
++	if (romdev_bchip)
++	{
++		romdev_bchip_set_risc(Byte, Address);  // romdev: the ARM (romdev_bchip.cpp)
++		return;
++	}
++
+ 	static bool	reset   = false;
+ 	uint16		address = (uint16) Address & 0xFFFF;
+ 

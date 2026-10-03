@@ -55,11 +55,32 @@ Emulator cores
   gambatte          GB / GBC            GPL-2.0
   genesis_plus_gx   Genesis / SMS / GG  non-commercial  ⚠ (see above)
   snes9x            SNES                non-commercial  ⚠ (see above)
+  bsnes             SNES (reference)    GPL-3.0 (libco, nall: ISC); romdev-core-bsnes,
+                                        the accuracy reference for the firmware
+                                        coprocessors (ST010/ST011, ST018)
   mgba              GBA                 MPL-2.0
   vice (x64)        C64                 GPL-2.0  (see "C64 ROMs" below)
   stella2014        Atari 2600          GPL-2.0
   prosystem         Atari 7800          GPL-2.0
   handy             Atari Lynx          zlib
+
+bsnes chip code outside romdev-core-bsnes  ⚠ licence conflict to resolve
+-------------------------------------------
+  bsnes's uPD96050 and ARM coprocessor code (with romdev's driver for it,
+  romdevtools/scripts/recompile-gen/bsnes-chips/) is GPL-3.0 and is compiled
+  into two places besides the bsnes core:
+    - recompiled SNES carts built with options.firmware (ST011 / ST018): the
+      units in romdevtools/src/analysis/recompile/wat/snes/bsnes-chips.json.
+      Such a cart contains GPL-3.0 code, so the cart is GPL-3.0;
+    - romdev's snes9x core (romdev-platform-snes, snes9x-bsnes-chips.patch),
+      used when st011.rom / st018.rom is in the system directory.
+  Both also contain snes9x-derived code under snes9x's non-commercial
+  license (the snes9x core itself; a recompiled SNES cart's machine follows
+  snes9x and carries snes9x's own chip units). GPL-3.0 does not allow the
+  extra non-commercial restriction, so neither combination can be
+  redistributed as is; the conflict must be resolved (a licence decision)
+  before such a cart or that core build is distributed. No coprocessor
+  firmware ships with romdev.
 
 C64 ROMs - free replacements, not Commodore's
 ----------------------------------------------

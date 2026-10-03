@@ -43,6 +43,7 @@ import { spc7110 } from "./spc7110.js";
 import { SNES9X_HLE_CHIPS } from "./chips-snes9x.js";
 import { msuWat } from "./msu1.js";
 import { bsxChip } from "./bsx.js";
+import { BSNES_CHIPS } from "./chips-bsnes.js";
 
 /** The chip modules (add one line per chip). */
 const CHIP_LIST = [
@@ -57,12 +58,22 @@ const CHIP_LIST = [
 
 /** @type {Map<string, any>} loader.js coprocessor name -> chip module */
 const CHIPS = new Map(CHIP_LIST.map((c) => [c.id, c]));
+/** The chips that run on bsnes's code when the cart is built with their firmware (chips-bsnes.js). */
+const BSNES = new Map(BSNES_CHIPS.map((c) => [c.id, c]));
 
 /**
- * The chip module for a loader coprocessor name, or null.
+ * The chip module for a loader coprocessor name, or null. impl "bsnes" picks
+ * the chip run on bsnes's code (a cart built with options.firmware).
  * @param {string|null|undefined} name
+ * @param {string|null} [impl]
  */
-export function chipFor(name) { return (name && CHIPS.get(name)) || null; }
+export function chipFor(name, impl = null) {
+  if (impl === "bsnes") return (name && BSNES.get(name)) || null;
+  return (name && CHIPS.get(name)) || null;
+}
+
+/** Whether the chip runs firmware the recompiler can only run on bsnes's code (it needs options.firmware). */
+export function chipNeedsFirmware(name) { return !!name && BSNES.has(name); }
 
 /** Every $chip_* hook with its no-chip body, and the chip DMA globals. */
 const DEFAULTS = {
@@ -96,7 +107,7 @@ const DEFAULTS = {
  * @param {any} lay  its layout
  */
 export function chipWat(d, lay) {
-  const chip = chipFor(d.coprocessor);
+  const chip = chipFor(d.coprocessor, d.chipImpl);
   const own = chip ? chip.wat(lay, d) : "";
   const parts = [
     "  ;; ---- coprocessor hooks (coproc.js) ----",

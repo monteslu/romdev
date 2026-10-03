@@ -88,6 +88,18 @@
         "snes"
       ]
     },
+    "bsnes": {
+      "kind": "git",
+      "url": "https://github.com/libretro/bsnes.git",
+      "ref": "master",
+      "commit": "63ee22f7af8f5d1ada295c2c98fd7bf261fa62a7",
+      "license": "GPL-3.0-only (bsnes; libco and nall ISC)",
+      "patch": "scripts/patches/bsnes-romdev.patch",
+      "platforms": [
+        "snes"
+      ],
+      "note": "accuracy reference for the SNES coprocessors that run firmware (ST010/ST011 on the uPD96050, ST018 on the ARM); package romdev-core-bsnes"
+    },
     "stella2014": {
       "kind": "git",
       "url": "https://github.com/libretro/stella2014-libretro.git",

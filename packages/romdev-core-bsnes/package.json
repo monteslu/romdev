@@ -1,0 +1,34 @@
+{
+  "name": "romdev-core-bsnes",
+  "version": "0.1.0",
+  "description": "bsnes libretro core for romdev, bundled as WASM: the SNES accuracy reference for the coprocessors that run firmware (ST010/ST011, ST018).",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./wasm/*": "./wasm/*"
+  },
+  "files": [
+    "index.js",
+    "wasm",
+    "README.md",
+    "NOTICE"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "license": "GPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/monteslu/romdev.git",
+    "directory": "packages/romdev-core-bsnes"
+  },
+  "homepage": "https://github.com/monteslu/romdev#readme",
+  "bugs": {
+    "url": "https://github.com/monteslu/romdev/issues"
+  },
+  "author": "Luis Montes",
+  "scripts": {
+    "prepublishOnly": "node ../../scripts/verify-wasm.mjs"
+  }
+}
