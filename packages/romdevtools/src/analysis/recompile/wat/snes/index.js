@@ -39,7 +39,8 @@ import { globalsWat, memWat, interpWat } from "./cpu-wat.js";
 import { ppuDataWat, ppuWat, renderWat } from "./ppu-wat.js";
 import { apuWat, apuDataWat, apuGlobalsWat, APU_OFF } from "./apu-wat.js";
 import { regwatchWat, stepHeadWat, frameWat } from "./frame-wat.js";
-import { chipFor, chipWat } from "./coproc.js";
+import { chipFor, chipWat, chipNeedsFirmware } from "./coproc.js";
+import { BSNES_FIRMWARE } from "./chips-bsnes.js";
 import { findMsuPack, msuPages, msuDataWat } from "./msu1.js";
 import { readFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -150,8 +151,27 @@ export function describe(rom, opts = {}) {
   // PAL by region byte (snes9x Settings.PAL): 312 lines, the PAL APU clock
   // ratio, $213F bit 4.
   layout.pal = L.pal;
+  // A chip that runs firmware snes9x cannot run (the ST011, ST018) runs on
+  // bsnes's code from the firmware the build is given (options.firmware,
+  // chips-bsnes.js); without it the cart is refused.
+  let firmware = null, chipImpl = null;
+  if (chipNeedsFirmware(L.coprocessor)) {
+    const need = BSNES_FIRMWARE[L.coprocessor];
+    if (opts.firmware == null) {
+      if (!refusal) refusal = `cart uses the ${L.coprocessor}, which runs firmware snes9x does not emulate (its ${L.coprocessor === "ST018" ? "ST018 is a command stub" : "ST011 is an HLE that stops after the opening"}); build it with options.firmware: '<path to ${need.file}>' (${need.length} bytes: ${need.what}) to run the chip on bsnes's code`;
+    } else {
+      const f = String(opts.firmware);
+      if (!existsSync(f)) throw new Error(`snes recompile: options.firmware: no file at ${f}`);
+      const bytes = new Uint8Array(readFileSync(f));
+      if (bytes.length !== need.length) throw new Error(`snes recompile: options.firmware ${f} is ${bytes.length} bytes; the ${L.coprocessor}'s firmware (${need.file}) is ${need.length}: ${need.what}`);
+      firmware = { chip: L.coprocessor, name: need.file, sha1: createHash("sha1").update(bytes).digest("hex"), length: bytes.length, bytes };
+      chipImpl = "bsnes";
+    }
+  } else if (opts.firmware != null) {
+    throw new Error(`snes recompile: options.firmware given, but this cart's ${L.coprocessor ? L.coprocessor : "board"} runs no firmware the recompiler loads (only the ST011 and ST018 do)`);
+  }
   // A coprocessor's state (coproc.js), above everything computeLayout placed.
-  const chip = chipFor(L.coprocessor);
+  const chip = chipFor(L.coprocessor, chipImpl);
   if (chip?.pages) {
     layout.CHIP = layout.pages * 0x10000;
     layout.pages += chip.pages;
@@ -215,6 +235,8 @@ export function describe(rom, opts = {}) {
     mapMode: byte(0x15),
     chipset: L.romType,
     coprocessor: L.coprocessor,
+    // "bsnes" when the chip runs on bsnes's code (options.firmware)
+    chipImpl,
     romSize: img.length,
     copierHeader: L.headerStripped ? 512 : 0,
     sramSize,
@@ -236,9 +258,11 @@ export function describe(rom, opts = {}) {
       breakChip: "DEBUG / must-fail control: true flips bit 0 of every byte read from the coprocessor (CPU, B-bus, chip DMA)",
       saveRtc: "path to a battery-backed clock's saved registers (the 20-byte .rtc, RTCData) for an S-RTC or SPC7110+RTC cart; restored after the chip's reset, and the verifier writes it into the reference's rtc region (keep it beside the reference ROM)",
       saveRam: "path to a battery save (.srm, at most the cart's SRAM size) the cart powers on with; the verifier writes the same file into the reference's save_ram before its first frame (keep it beside the reference ROM under the same name)",
+      firmware: "path to the chip's firmware for an ST011 (st011.rom, 53248 bytes) or ST018 (st018.rom, 163840 bytes) cart, REQUIRED for those: the chip runs on bsnes's code (GPL-3.0, so the cart is too) from it; the verifier gives the reference core the same file (keep it beside the reference ROM, or in a firmware/ directory there)",
     },
     saveRam: saveRam ? { name: saveRam.name, sha1: saveRam.sha1, length: saveRam.length } : null,
     saveRtc: saveRtc ? { name: saveRtc.name, sha1: saveRtc.sha1, length: saveRtc.length } : null,
+    firmware: firmware ? { chip: firmware.chip, name: firmware.name, sha1: firmware.sha1, length: firmware.length } : null,
     msu: msu ? { dataBytes: msu.data.length, tracks: msu.tracks.map((t) => t.num) } : null,
     // a multi-cart's slots and snes9x's CalculatedSize (addon-carts.js)
     multi: L.multi ?? null,
@@ -251,6 +275,7 @@ export function describe(rom, opts = {}) {
   Object.defineProperty(res, "saveRamBytes", { value: saveRam?.bytes ?? null, enumerable: false });
   if (opts.breakChip) res.breakChip = true;
   Object.defineProperty(res, "saveRtcBytes", { value: saveRtc?.bytes ?? null, enumerable: false });
+  Object.defineProperty(res, "firmwareBytes", { value: firmware?.bytes ?? null, enumerable: false });
   return res;
 }
 
@@ -339,7 +364,7 @@ export function recompileSection(rom, sha1, opts = {}) {
       probe: L.probe.fields,
       trap: L.trap,
       pcRing: L.pcRing,
-      ...(chipFor(d.coprocessor)?.section?.(d) ?? {}),
+      ...(chipFor(d.coprocessor, d.chipImpl)?.section?.(d) ?? {}),
       // a Sufami Turbo cart's SRAM (the cart's own battery RAM in its slot) is compared
       ...(d.board === "SufamiTurboLoROM" && L.diagnosticRegions.sram
         ? { regions: { ...L.regions, sram: L.diagnosticRegions.sram }, diagnosticRegions: {} } : {}),
@@ -473,7 +498,7 @@ export async function* emitWat(rom, opts = {}) {
   yield apuGlobalsWat();
   yield "\n" + memWat(lay);
   // The CPU bus map (snes9x Memory.Map), 4096 blocks x {type, base}.
-  const chip = chipFor(d.coprocessor);
+  const chip = chipFor(d.coprocessor, d.chipImpl);
   const chipMap = chip?.buildMap ? (api) => chip.buildMap(api, lay, d) : undefined;
   yield "\n" + `  (data (i32.const ${MAPTAB}) "` + [...escChunks(buildMemMap({ map: d.board, romSize: img.length, romSizeByte: d.romSizeByte, sramSizeByte: d.sramSizeByte, sramBase: lay.SRAM, chipMap, multi: d.multi }))].join("") + '")';
   // the coprocessor, or the no-chip bodies of its hooks (coproc.js)

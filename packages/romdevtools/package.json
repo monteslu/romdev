@@ -60,6 +60,7 @@
     "romdev-audio-resampler": "0.1.1",
     "romdev-core-beetle-psx-hw": "0.3.1",
     "romdev-core-bluemsx": "0.9.1",
+    "romdev-core-bsnes": "0.1.0",
     "romdev-core-fake08": "0.1.1",
     "romdev-core-fceumm": "0.13.1",
     "romdev-core-flycast": "0.4.1",

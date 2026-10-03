@@ -112,6 +112,9 @@ export const RetroMemory = {
   SNES_CHIPSTATE:     0x1B9,
   /** The BS-X's 512KB PSRAM (where the BIOS loads a BS program); BS-X carts only. */
   SNES_BSX_PSRAM:     0x1BA,
+  // bsnes (romdev-core-bsnes) only: every S-CPU access to a firmware chip
+  // (ST010/ST011/ST018) with the master clock, a ring the cross-check replays
+  SNES_CHIPLOG:       0x1BB,
   GENESIS_CRAM:       0x120,
   GENESIS_VSRAM:      0x121,
   GENESIS_VDP_REGS:   0x122,
@@ -308,6 +311,7 @@ export const MemoryRegionToRetro = {
   snes_timing: RetroMemory.SNES_TIMING,
   snes_chipstate: RetroMemory.SNES_CHIPSTATE,
   snes_bsx_psram: RetroMemory.SNES_BSX_PSRAM,
+  snes_chiplog: RetroMemory.SNES_CHIPLOG,
   genesis_cram: RetroMemory.GENESIS_CRAM,
   genesis_vsram: RetroMemory.GENESIS_VSRAM,
   genesis_vdp_regs: RetroMemory.GENESIS_VDP_REGS,

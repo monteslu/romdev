@@ -88,6 +88,29 @@ export const CORES = {
   dreamcast: { platform: "dreamcast", coreName: "flycast", pkg: "romdev-core-flycast", displayName: "Sega Dreamcast (Flycast)", aka: "dc", hwRender: true, noderawfs: true },
 };
 
+/**
+ * Second cores for a platform: not what loadMedia runs by default, but a
+ * reference a caller can name (loadMedia core, verifyRecompile referenceCore).
+ * bsnes is the SNES accuracy reference for the coprocessors that run firmware
+ * (ST010/ST011 on the uPD96050, ST018 on the ARM: it needs st011.rom /
+ * st018.rom in its system directory), with the same memory region ids as
+ * romdev's snes9x (system_ram, video_ram, save_ram, snes_oam, snes_cgram,
+ * snes_aram, snes_chipstate). GPL-3.0.
+ * @type {Record<string, Record<string, CoreInfo>>}
+ */
+export const ALT_CORES = {
+  snes: {
+    bsnes: { platform: "snes", coreName: "bsnes", pkg: "romdev-core-bsnes", displayName: "SNES (bsnes, accuracy reference for firmware coprocessors)" },
+  },
+};
+
+/** The core names a platform can run: its default first, then ALT_CORES. */
+export function coresFor(platform) {
+  const info = CORES[platform];
+  if (!info) return [];
+  return [info.coreName, ...Object.keys(ALT_CORES[platform] ?? {})];
+}
+
 /** Try to get {jsPath,wasmPath} for a core from its binary package. */
 function resolveCoreFromPackage(pkg, coreName) {
   if (!pkg) return null;
@@ -104,11 +127,14 @@ function resolveCoreFromPackage(pkg, coreName) {
  * Resolve a platform id to absolute paths for its core. Tries the binary
  * package first (the shipped layout), then the gitignored `src/cores/wasm/`
  * build-staging dir (in-tree dev fallback). Returns null if neither has it.
+ * `core` names a second core of the platform (ALT_CORES); omitted or the
+ * default core's name, it is the platform's own.
  * @param {string} platform
+ * @param {string} [core]
  * @returns {{ platform: string, coreName: string, pkg: string, displayName: string, jsPath: string, wasmPath: string } | null}
  */
-export function resolveCore(platform) {
-  const info = CORES[platform];
+export function resolveCore(platform, core) {
+  const info = core && core !== CORES[platform]?.coreName ? ALT_CORES[platform]?.[core] : CORES[platform];
   if (!info) return null;
   const fromPkg = resolveCoreFromPackage(info.pkg, info.coreName);
   if (fromPkg) return { ...info, ...fromPkg };

@@ -347,7 +347,7 @@ function lldFlagsForExecutable(ctx, externalSymbols) {
   if (!S.get("ERROR_ON_UNDEFINED_SYMBOLS")) cmd.push("--import-undefined");
   if (S.get("IMPORTED_MEMORY")) cmd.push("--import-memory");
   if (S.get("SHARED_MEMORY")) cmd.push("--shared-memory");
-  if (!S.get("GENERATE_DWARF") && !S.get("EMIT_SYMBOL_MAP") && !S.get("GENERATE_SOURCE_MAP") && !S.get("EMIT_NAME_SECTION") && !S.get("ASYNCIFY")) cmd.push("--strip-debug");
+  if (!S.get("GENERATE_DWARF") && !S.get("EMIT_SYMBOL_MAP") && !S.get("GENERATE_SOURCE_MAP") && !S.get("EMIT_NAME_SECTION") && !S.get("ASYNCIFY") && !ctx.keepNames) cmd.push("--strip-debug");
   if (S.get("LTO") && !S.get("EXIT_RUNTIME")) cmd.push("-u__cxa_atexit");
   let cExports = S.get("EXPORTED_FUNCTIONS").filter(isCSymbol).map(demangleC).filter((e) => !(e in externalSymbols));
   cExports = cExports.concat(S.get("REQUIRED_EXPORTS"));
@@ -559,7 +559,7 @@ async function emscript(ctx, inWasm, outWasm, outJs, jsSyms) {
   ctx.intermediate?.("base.wasm", fs.readFileSync(inWasm));
   const strip = [];
   if (!S.get("EMIT_PRODUCERS_SECTION")) strip.push("producers");
-  strip.push("name");
+  if (!process.env.ROMDEV_EMCC_KEEP_NAMES) strip.push("name");
   await objcopyStrip(inWasm, outWasm, { debug: !S.get("GENERATE_DWARF"), sections: strip });
   const md = extractMetadata(fs.readFileSync(outWasm), { standaloneWasm: !!S.get("STANDALONE_WASM") });
   // expected vs unexpected (EMSCRIPTEN_KEEPALIVE) exports
@@ -621,7 +621,7 @@ function binaryenPasses(S, opts) {
 
 function runBinaryen(ctx, tool, infile, outfile, args, { capture = false } = {}) {
   const S = ctx.S;
-  const cmd = [path.join(ctx.binaryenBin, tool), ...args, infile];
+  const cmd = [path.join(ctx.binaryenBin, tool), ...args, ...(process.env.ROMDEV_EMCC_KEEP_NAMES ? ["-g"] : []), infile];
   if (outfile) cmd.push("-o", outfile);
   cmd.push(...(S.get("BINARYEN_FEATURES").length ? S.get("BINARYEN_FEATURES") : ["--detect-features"]));
   ctx.log?.(cmd);
@@ -720,6 +720,54 @@ function preprocess(ctx, file, expandMacros) {
   return execFileSync(process.execPath, args, { input: json, cwd: path.dirname(file), encoding: "utf8", maxBuffer: 1 << 30, stdio: ["pipe", "pipe", "inherit"] });
 }
 
+/**
+ * romdev extension (not in emcc): cothreads that switch inside the module.
+ * A module that imports binaryen's Asyncify intrinsics from module "asyncify"
+ * (start_unwind / stop_unwind / start_rewind / stop_rewind; romdev's libco
+ * backend, scripts/patches/bsnes/libco-wasm.c, is the user) gets the Asyncify
+ * pass right after wasm-ld, before emscripten sees the module: the pass turns
+ * those imports into the functions it adds, so the JS glue never has them.
+ * Imports never unwind (asyncify-ignore-imports); the trampoline that unwinds
+ * stop at and rewinds start from, romdev_co_trampoline, is left alone. This is
+ * emscripten's ASYNCIFY=1 transform without its JS runtime, which romdev does
+ * not use (ASYNCIFY itself stays refused above).
+ *
+ * By default every function that can reach a switch (indirect calls count)
+ * is instrumented. A module whose cothreads are a small part of it (snes9x
+ * with bsnes's ARM, build-snes9x.sh) names the functions that can be on a
+ * cothread's stack in ROMDEV_ASYNCIFY_ONLY (comma-separated, * wildcards):
+ * only those are instrumented (asyncify-onlylist), and the rest of the
+ * module is untouched. The list must name libco's co_switch AND its leaf
+ * co_suspend (the function that calls start_unwind): a function left out is
+ * taken to never switch, so a switch through it would not unwind. ROMDEV_EMCC_KEEP_NAMES=1 keeps the function names in
+ * the output (debugging a switch).
+ */
+function asyncifyListArgs() {
+  const only = process.env.ROMDEV_ASYNCIFY_ONLY;
+  if (only) return [`--pass-arg=asyncify-onlylist@${only}`];
+  return ["--pass-arg=asyncify-removelist@romdev_co_trampoline"];
+}
+
+function importsAsyncify(wasmFile) {
+  const bytes = fs.readFileSync(wasmFile);
+  const r = { p: 8 };
+  const uleb = () => { let v = 0, s = 0, b; do { b = bytes[r.p++]; v |= (b & 0x7f) << s; s += 7; } while (b & 0x80); return v >>> 0; };
+  const str = () => { const n = uleb(); const t = bytes.subarray(r.p, r.p + n).toString("utf8"); r.p += n; return t; };
+  let wanted = false;
+  while (r.p < bytes.length && !wanted) {
+    const id = bytes[r.p++], size = uleb(), end = r.p + size;
+    if (id === 2) {
+      for (let n = uleb(); n-- && !wanted;) {
+        const mod = str(); str(); const kind = bytes[r.p++];
+        if (kind === 0) uleb(); else if (kind === 1) { r.p++; const f = bytes[r.p++]; uleb(); if (f & 1) uleb(); } else if (kind === 2) { const f = bytes[r.p++]; uleb(); if (f & 1) uleb(); } else if (kind === 3) r.p += 2; else if (kind === 4) { r.p++; uleb(); }
+        if (mod === "asyncify") wanted = true;
+      }
+    }
+    r.p = end;
+  }
+  return wanted;
+}
+
 /** The whole link: setup -> wasm-ld -> emscript -> binaryen -> final emitting. */
 export async function link(ctx) {
   const { S, opts } = ctx;
@@ -745,6 +793,13 @@ export async function link(ctx) {
   S.set("EXPORT_IF_DEFINED", dedup(S.get("EXPORT_IF_DEFINED")));
   await linkLld(ctx, ctx.linkerArgs.map((a) => (a.startsWith("-") ? a : path.resolve(a))), wasmTarget, jsSyms);
   if (oformat === "WASM") unsupported("wasm-only output post-link");
+  if (importsAsyncify(wasmTarget)) {
+    // the pass needs the function names (its removelist); link again keeping them
+    ctx.keepNames = true;
+    await linkLld(ctx, ctx.linkerArgs.map((a) => (a.startsWith("-") ? a : path.resolve(a))), wasmTarget, jsSyms);
+    ctx.keepNames = false;
+    runBinaryen(ctx, "wasm-opt", wasmTarget, wasmTarget, ["--asyncify", "--pass-arg=asyncify-ignore-imports", ...asyncifyListArgs(), ...(process.env.ROMDEV_EMCC_KEEP_NAMES ? [] : ["--strip-debug"])]);
+  }
 
   // phase_post_link
   let finalJs = path.join(ctx.tmp, path.basename(unsuffixed(target)) + ".js");

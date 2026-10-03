@@ -35,7 +35,8 @@ staging), and copies into the shipping package's `wasm/`.
 | PC Engine | geargrafx | `build-geargrafx.sh` | `geargrafx-romdev-memory-regions.patch` | `romdev-core-geargrafx` |
 | MSX | bluemsx | `build-bluemsx.sh` | `bluemsx-romdev-memory-regions.patch`, `bluemsx-emscripten-build.patch` | `romdev-core-bluemsx` |
 | Atari 2600 | stella2014 | `build-stella2014.sh` | `stella2014-romdev-memory-regions.patch` | `romdev-platform-atari2600` |
-| SNES | snes9x | `build-snes9x.sh` | `snes9x-romdev-memory-regions.patch` | `romdev-platform-snes` |
+| SNES | snes9x | `build-snes9x.sh` | `snes9x-romdev-memory-regions.patch`, `snes9x-bsnes-chips.patch` (+ `patches/snes9x/`; links bsnes's uPD96050 / ARM chips, GPL-3.0, used only with the chip's firmware in the system directory) | `romdev-platform-snes` |
+| SNES (accuracy reference for the firmware coprocessors; `ALT_CORES`, not loadMedia's default) | bsnes | `build-bsnes.sh` | `bsnes-romdev.patch` (+ `patches/bsnes/`: libco on Asyncify, memory regions, firmware) | `romdev-core-bsnes` |
 | GBA | mgba | `build-mgba.sh` | `mgba-romdev-watchpoint.patch` | `romdev-platform-gba` |
 
 **`romdev-core-*` vs `romdev-platform-*`:** a `core` package is just an emulator
