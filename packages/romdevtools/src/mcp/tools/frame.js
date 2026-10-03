@@ -1090,7 +1090,7 @@ export function registerFrameTools(server, z, sessionKey) {
       minContentPx: z.number().int().min(0).optional().describe("op=verifyRecompile: minimum reference content pixels for a frame to count as evidence (default 2000)."),
       minMovingPct: z.number().min(0).max(100).optional().describe("op=verifyRecompile: bar for moving-pixel % (default 95)."),
       minMovingPx: z.number().int().min(0).optional().describe("op=verifyRecompile: moving pixels needed before the moving bar applies to a frame (default 200)."),
-      requireStateMatch: z.boolean().optional().describe("op=verifyRecompile: any region/field difference fails the verdict (default false: differences are reported in stateDiffs, the pixels decide)."),
+      requireStateMatch: z.boolean().optional().describe("op=verifyRecompile: any compared region/field difference fails the verdict (default TRUE: matching pixels over differing memory is not a verified recompile). false only reports differences in stateDiffs and lets the pixels decide; diagnostic regions (compare:false) never count."),
       outputDir: z.string().optional().describe("op=verifyRecompile: directory for the [cart|ref|diff] PNGs (default a temp dir, reported as outputDir)."),
       tag: z.string().optional().describe("op=verifyRecompile: PNG filename prefix (default the cart's basename)."),
       level: z.enum(["frame", "instruction"]).optional().describe("op=findDiverge (recompile mode): 'frame' (default) compares regions/fields per frame; 'instruction' traces one frame on both sides and returns the first divergent instruction (see the op description)."),

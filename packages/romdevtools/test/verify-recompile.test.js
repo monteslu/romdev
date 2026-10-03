@@ -254,16 +254,19 @@ test("a probe `trapped` field fails the verdict", async () => {
   } finally { dispose(r); }
 });
 
-test("requireStateMatch turns a region difference into a failure; otherwise it is reported", async () => {
+test("a region difference fails the verdict by default; requireStateMatch:false only reports it", async () => {
   const layout = validateRecompileLayout({ ...LAYOUT, regions: { ...LAYOUT.regions, spare: { offset: 12, length: 4, ref: "system_ram", refOffset: 8 } } });
   const r = await run({ layout, controls: [] });
   try {
     assert.equal(r.result.stateIdentical, false);
-    assert.equal(r.result.verdict, "VERIFIED", "pixels decide by default");
-    assert.ok(r.result.stateDiffs.some((d) => /spare/.test(d)));
+    assert.equal(r.result.verdict, "NOT VERIFIED", "matching pixels over differing memory is not verified");
+    assert.match(r.result.reasons.join(" "), /state differs: .*spare/);
   } finally { dispose(r); }
-  const r2 = await run({ layout, controls: [], requireStateMatch: true });
-  try { assert.equal(r2.result.verdict, "NOT VERIFIED"); } finally { dispose(r2); }
+  const r2 = await run({ layout, controls: [], requireStateMatch: false });
+  try {
+    assert.equal(r2.result.verdict, "VERIFIED", "explicit opt-out: pixels decide");
+    assert.ok(r2.result.stateDiffs.some((d) => /spare/.test(d)));
+  } finally { dispose(r2); }
 });
 
 test("findDiverge (recompile): identical run is no-divergence; an injected fault is found at its exact frame", async () => {

@@ -730,7 +730,8 @@ export function disposeHost(h) {
  *                                             and the one where the reference changed most is used)
  * @param {number} [a.wrongFrameMaxDelta]      bound on those candidates (default 120)
  * @param {object} [a.bar]                     {minContentPct, minContentPx, minMovingPct, minMovingPx, minChangePx}
- * @param {boolean} [a.requireStateMatch]      a region/field difference fails the verdict
+ * @param {boolean} [a.requireStateMatch]      a region/field difference fails the verdict (default true;
+ *   false only reports differences in stateDiffs and lets the pixels decide)
  * @param {string} [a.outputDir]               where [cart|ref|diff] PNGs go (omit: none written)
  * @param {string} [a.tag]                     PNG filename prefix
  * @param {boolean|"required"} [a.audio]       capture and score both sides' audio (true: reported;
@@ -1019,7 +1020,9 @@ export async function verifyRecompile(a) {
     for (const [n, v] of Object.entries(r.fields ?? {})) if (v.error || v.same === false) stateDiffs.push(`ref frame ${r.refFrame}: field ${n} ${v.error ? `unreadable (${v.error})` : `cart ${v.cart} ref ${v.ref}`}`);
   }
   if (a.audio === "required" && audioResult) for (const r of audioResult.verdictReasons) reasons.push(`audio: ${r}`);
-  if (a.requireStateMatch && stateDiffs.length) reasons.push(`state differs: ${stateDiffs.slice(0, 6).join("; ")}${stateDiffs.length > 6 ? ` (+${stateDiffs.length - 6} more)` : ""}`);
+  // Matching pixels over differing memory is not a verified recompile: state
+  // decides by default, and only an explicit requireStateMatch:false opts out.
+  if (a.requireStateMatch !== false && stateDiffs.length) reasons.push(`state differs: ${stateDiffs.slice(0, 6).join("; ")}${stateDiffs.length > 6 ? ` (+${stateDiffs.length - 6} more)` : ""}`);
   const verified = reasons.length === 0;
   const regionNames = Object.keys(layout.regions ?? {});
   const table = [
