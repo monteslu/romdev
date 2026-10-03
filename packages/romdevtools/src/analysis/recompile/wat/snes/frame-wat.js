@@ -278,6 +278,9 @@ export function frameWat(lay) {
     ;; snes9x ClearSRAM: the 512KB SRAM buffer powers on as
     ;; SNESGameFixes.SRAMInitialValue ($60 unless a per-title fix says otherwise).
     (memory.fill (i32.const ${lay.SRAM}) (i32.const ${lay.fixes?.sramInit ?? 0x60}) (i32.const 0x80000))
+    ${lay.SRAMINIT != null ? `;; a battery save the cart powers on with (options.saveRam), as a frontend
+    ;; restores the .srm before the game first runs
+    (memory.copy (i32.const ${lay.SRAM}) (i32.const ${lay.SRAMINIT}) (i32.const ${lay.SRAMINIT_LEN}))` : ""}
     ;; snes9x S9xResetPPU / S9xResetDMA register state that the cart keeps
     ;; in its shadow: WRIO/RDIO $FF, both windows empty (left 1 > right 0),
     ;; the H/V IRQ positions $1FF, every DMA channel register $FF and each
@@ -725,6 +728,8 @@ export function frameWat(lay) {
             (call $ev_sched (i32.const 0))))
     (global.set $fdone (i32.const 0))
     (call $run_frame)
+    ;; a chip's state where the verifier reads it (coproc.js $chip_frame)
+    (call $chip_frame)
     ;; LIVENESS PROBE BLOCK at $3F000, mirrored every frame.
     ;; Globals are invisible to a host: \`wasm read\` reads LINEAR
     ;; MEMORY, so a counter kept only in a global cannot be seen through the

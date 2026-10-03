@@ -54,3 +54,11 @@ extern "C" void romdev_spc7110_dma (uint8 *buf, int transferBytes)
 	s7emu.r4809 =  icount & 0x00ff;
 	s7emu.r480a = (icount & 0xff00) >> 8;
 }
+
+/* the SPC7110's state as the reference serves it (romdev_chipstate.h) */
+#define ROMDEV_CS_SPC7110
+#include "romdev_chipstate.h"
+extern "C" int romdev_spc7110_chipstate (uint8 *o) { return (int) romdev_cs_spc7110(o); }
+/* RTCData.reg, the 20 bytes a frontend keeps as the cart's .rtc file
+ * (libretro RETRO_MEMORY_RTC) */
+extern "C" uint8 *romdev_spc7110_rtcdata (void) { return RTCData.reg; }

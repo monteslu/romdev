@@ -16,6 +16,8 @@
 //       -> $chip_vec, before the vector read
 //   CPU.IRQExternal (the SuperFX's IRQ on stop)
 //       -> $irqext, taken by $run_frame with the H/V timer's line
+//   the end of a frame (retro_run returns)
+//       -> $chip_frame (the chip's state for the verifier's chipstate region)
 //   the board map (Map_SDD1LoROMMap, Map_SPC7110HiROMMap, map_C4)
 //       -> chip.board() names it, chip.buildMap() fills memmap.js's table
 //
@@ -79,6 +81,9 @@ const DEFAULTS = {
   // S9xOpcode_IRQ / S9xOpcode_NMI's vector ($nmi 0 / 1): a chip that
   // supplies it (the SA-1's $220E / $220C) sets $pc and returns 1.
   chip_vec: "(func $chip_vec (param $nmi i32) (result i32) (i32.const 0))",
+  // the end of a frame (where retro_run returns): a chip that serves its
+  // internal state to the verifier writes it (chip-unit.js chipstateWat)
+  chip_frame: "(func $chip_frame)",
 };
 
 /**
@@ -102,7 +107,34 @@ export function chipWat(d, lay) {
     if (!new RegExp(`\\(func \\$${name}[\\s)]`).test(own)) parts.push("  " + body);
   }
   const text = parts.join("\n") + "\n" + own;
-  return d.msu1 ? withMsu(text, lay, d) : text;
+  const full = d.msu1 ? withMsu(text, lay, d) : text;
+  return d.breakChip ? withBrokenChip(full) : full;
+}
+
+/**
+ * options.breakChip, a MUST-FAIL CONTROL: every byte the CPU or a DMA reads
+ * from the coprocessor ($chip_rd, $chip_io_rd, $chip_b_rd when the chip
+ * answers, $chip_dma_byte) has bit 0 flipped, so a verifier that really
+ * compares the chip's effects must reject the cart.
+ * @param {string} text  the composed hooks
+ */
+function withBrokenChip(text) {
+  for (const h of ["chip_rd", "chip_io_rd", "chip_b_rd", "chip_dma_byte"]) {
+    text = text.replace(new RegExp(`\\(func \\$${h}([\\s)])`), `(func $${h}_unbroken$1`);
+  }
+  return text + `
+  ;; options.breakChip (must-fail control): chip reads come back with bit 0 flipped
+  (func $chip_rd (param $a i32) (result i32)
+    (i32.xor (call $chip_rd_unbroken (local.get $a)) (i32.const 1)))
+  (func $chip_io_rd (param $x i32) (result i32)
+    (i32.xor (call $chip_io_rd_unbroken (local.get $x)) (i32.const 1)))
+  (func $chip_b_rd (param $x i32) (result i32)
+    (local $v i32)
+    (local.set $v (call $chip_b_rd_unbroken (local.get $x)))
+    (if (result i32) (i32.ge_s (local.get $v) (i32.const 0))
+      (then (i32.xor (local.get $v) (i32.const 1))) (else (local.get $v))))
+  (func $chip_dma_byte (param $i i32) (result i32)
+    (i32.xor (call $chip_dma_byte_unbroken (local.get $i)) (i32.const 1)))`;
 }
 
 /**

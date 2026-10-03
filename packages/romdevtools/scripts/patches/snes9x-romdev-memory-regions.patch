@@ -328,7 +328,7 @@ index 98f9941..f44eb0f 100644
  {
  	int	SmallWidth, SmallHeight, LargeWidth, LargeHeight;
 diff --git a/libretro/libretro.cpp b/libretro/libretro.cpp
-index d381c61..ea7a21c 100644
+index d381c61..27f16d5 100644
 --- a/libretro/libretro.cpp
 +++ b/libretro/libretro.cpp
 @@ -6,6 +6,7 @@
@@ -339,7 +339,7 @@ index d381c61..ea7a21c 100644
  #include "gfx.h"
  #include "snapshot.h"
  #include "controls.h"
-@@ -2029,6 +2030,178 @@ unsigned retro_get_region()
+@@ -2029,6 +2030,203 @@ unsigned retro_get_region()
      return Settings.PAL ? RETRO_REGION_PAL : RETRO_REGION_NTSC;
  }
  
@@ -477,6 +477,31 @@ index d381c61..ea7a21c 100644
 +    romdev_snes_timing[4] = (uint32)IPPU.TotalEmulatedFrames;
 +    return romdev_snes_timing;
 +}
++/* The active coprocessor's internal state as one flat byte string, built
++ * on read by romdev_chipstate.h -- the same file the recompiled cart's chip
++ * units compile, so both sides write the same bytes (DSP-3, ST011, ST018,
++ * S-RTC, SPC7110, BS-X; empty for any other cart). */
++#define ROMDEV_MEMORY_SNES_CHIPSTATE 0x1B9
++#define ROMDEV_CS_DSP3
++#define ROMDEV_CS_SETA
++#define ROMDEV_CS_SRTC
++#define ROMDEV_CS_SPC7110
++#define ROMDEV_CS_BSX
++#include "romdev_chipstate.h"
++static uint8 romdev_snes_chipstate[ROMDEV_CHIPSTATE_MAX];
++/* The BS-X's 512KB PSRAM (Memory.BSRAM = ROM + $400000), where the BIOS
++ * loads a BS program it runs; BS-X carts only. */
++#define ROMDEV_MEMORY_SNES_BSX_PSRAM 0x1BA
++static unsigned romdev_snes_fill_chipstate(void)
++{
++    if (Settings.DSP == 3)              return romdev_cs_dsp3(romdev_snes_chipstate);
++    if (Settings.SETA == ST_011)        return romdev_cs_st011(romdev_snes_chipstate);
++    if (Settings.SETA == ST_018)        return romdev_cs_st018(romdev_snes_chipstate);
++    if (Settings.SPC7110)               return romdev_cs_spc7110(romdev_snes_chipstate);
++    if (Settings.SRTC)                  return romdev_cs_srtc(romdev_snes_chipstate);
++    if (Settings.BS)                    return romdev_cs_bsx(romdev_snes_chipstate);
++    return 0;
++}
 +unsigned char romdev_snes_linepix[480 * 512 * 2];
 +unsigned char romdev_snes_lp_world[240 * 512 * 2];
 +unsigned char romdev_snes_lp_obj[240 * 512 * 2];
@@ -518,7 +543,7 @@ index d381c61..ea7a21c 100644
  void* retro_get_memory_data(unsigned type)
  {
      void* data;
-@@ -2051,6 +2224,45 @@ void* retro_get_memory_data(unsigned type)
+@@ -2051,6 +2249,51 @@ void* retro_get_memory_data(unsigned type)
          case RETRO_MEMORY_VIDEO_RAM:
          data = Memory.VRAM;
          break;
@@ -546,6 +571,12 @@ index d381c61..ea7a21c 100644
 +        case ROMDEV_MEMORY_SNES_TIMING:
 +            data = romdev_snes_fill_timing();
 +            break;
++        case ROMDEV_MEMORY_SNES_CHIPSTATE:
++            data = romdev_snes_fill_chipstate() ? romdev_snes_chipstate : NULL;
++            break;
++        case ROMDEV_MEMORY_SNES_BSX_PSRAM:
++            data = Settings.BS ? Memory.BSRAM : NULL;
++            break;
 +        case ROMDEV_MEMORY_SNES_M7LINES:
 +            data = romdev_snes_m7lines;
 +            break;
@@ -564,7 +595,7 @@ index d381c61..ea7a21c 100644
          //case RETRO_MEMORY_ROM:
          //	data = Memory.ROM;
          //	break;
-@@ -2085,6 +2297,45 @@ size_t retro_get_memory_size(unsigned type)
+@@ -2085,6 +2328,51 @@ size_t retro_get_memory_size(unsigned type)
          case RETRO_MEMORY_VIDEO_RAM:
              size = 64 * 1024;
              break;
@@ -589,6 +620,12 @@ index d381c61..ea7a21c 100644
 +        case ROMDEV_MEMORY_SNES_TIMING:
 +            size = sizeof(romdev_snes_timing);
 +            break;
++        case ROMDEV_MEMORY_SNES_CHIPSTATE:
++            size = romdev_snes_fill_chipstate();
++            break;
++        case ROMDEV_MEMORY_SNES_BSX_PSRAM:
++            size = Settings.BS ? 0x80000 : 0;
++            break;
 +        case ROMDEV_MEMORY_SNES_M7LINES:
 +            size = 240 * 16;
 +            break;
@@ -610,7 +647,7 @@ index d381c61..ea7a21c 100644
          //case RETRO_MEMORY_ROM:
          //	size = Memory.CalculatedSize;
          //	break;
-@@ -2259,10 +2510,36 @@ bool8 S9xDeinitUpdate(int width, int height)
+@@ -2259,10 +2547,36 @@ bool8 S9xDeinitUpdate(int width, int height)
              width >>= 1;
          }
  

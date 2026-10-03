@@ -13,3 +13,8 @@ void CMemory::map_WriteProtectROM (void) {}
 extern "C" void romdev_st018_bind (int sram) { Memory.SRAM = (uint8 *) (pint) sram; }
 extern "C" int romdev_st018_get (int address) { return S9xGetST018((uint32) address); }
 extern "C" void romdev_st018_set (int byte, int address) { S9xSetST018((uint8) byte, (uint32) address); }
+
+/* the ST018 stub's state as the reference serves it (romdev_chipstate.h) */
+#define ROMDEV_CS_SETA
+#include "romdev_chipstate.h"
+extern "C" int romdev_st018_chipstate (uint8 *o) { return (int) romdev_cs_st018(o); }

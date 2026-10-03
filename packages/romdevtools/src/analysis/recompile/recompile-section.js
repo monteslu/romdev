@@ -18,6 +18,14 @@
 //                                   verifier copies <rom stem><suffix>, or the named file
 //                                   for a "/<name>" entry, from the reference ROM's
 //                                   directory into the core's file system next to its ROM
+//     "saveRam": { "name": "game.srm", "sha1": "<hex>", "length": 8192 }
+//                                   the battery save the cart powers on with: the verifier
+//                                   writes the named file (beside the reference ROM, sha1
+//                                   checked) into the reference's save_ram before its first
+//                                   frame, as a frontend restores a .srm
+//     "saveRtc": { "name": "game.rtc", "sha1": "<hex>", "length": 20 }
+//                                   the same for a battery-backed clock's registers: written
+//                                   into the reference's rtc region (libretro RETRO_MEMORY_RTC)
 //     "clock": { "baseMs": 1700000000000, "stepMs": 16.667 }
 //                                   the cart reads the wasmcart host's frame clock (a
 //                                   game-visible real-time clock); the verifier pins the
@@ -306,6 +314,13 @@ export function validateRecompileLayout(layout) {
     const c = out.companionFiles;
     if (!Array.isArray(c) || !c.every((f) => typeof f === "string" && /^\/?[^\\/]+$/.test(f))) {
       throw new Error("companionFiles must be file-name suffixes (e.g. '.msu', '-1.pcm') or '/<file name>', with no other path separators");
+    }
+  }
+  for (const key of ["saveRam", "saveRtc"]) {
+    const r = out[key];
+    if (r == null) continue;
+    if (typeof r !== "object" || typeof r.name !== "string" || !/^[^\\/]+$/.test(r.name) || !/^[0-9a-f]{40}$/.test(r.sha1 ?? "") || !(Number.isInteger(r.length) && r.length > 0)) {
+      throw new Error(`${key} must be {name: a file name with no path, sha1: 40 hex digits, length > 0}`);
     }
   }
   if (out.screen?.origin != null) {

@@ -50,3 +50,52 @@ export function unitStart(name) { return chipUnit(name).start; }
 export function unitWat(name, base) {
   return placeUnit(chipUnit(name), base, `snes9x chip unit '${name}' (snes9x-chips.json)`);
 }
+
+/**
+ * Bytes a unit's *_chipstate export writes (romdev_chipstate.h, measured by
+ * the generator): the length of the cart's chipstate region.
+ * @param {string} name
+ * @param {string} fn
+ */
+export function unitChipstateLen(name, fn) {
+  const n = chipUnit(name).chipstate?.[fn];
+  if (!n) throw new Error(`snes chips: unit ${name} has no chipstate length for ${fn}`);
+  return n;
+}
+
+/**
+ * A chip's internal state as one region (romdev_chipstate.h): the cart's
+ * $chip_frame writes it at `addr` at the end of every frame, and the
+ * reference serves the same bytes as snes_chipstate.
+ * @param {string} name  unit
+ * @param {string} fn    its *_chipstate export
+ * @param {number} addr  where the cart keeps it (ROMDEV_CHIPSTATE_MAX = 64KB free)
+ */
+export function chipstateWat(name, fn, addr) {
+  return `
+  ;; the chip's state for the verifier (romdev_chipstate.h; the reference's snes_chipstate)
+  (func $chip_frame (drop (call ${unitFn(name, fn)} (i32.const ${addr}))))`;
+}
+/** @param {string} name @param {string} fn @param {number} addr */
+export function chipstateRegion(name, fn, addr) {
+  return { chipstate: { offset: addr, length: unitChipstateLen(name, fn), ref: "snes_chipstate" } };
+}
+
+/**
+ * A battery-backed clock's saved registers (options.saveRtc: RTCData.reg, the
+ * 20 bytes a frontend keeps as the .rtc file and restores after the load),
+ * copied over the chip's RTCData after its reset. `slot` is 32 free bytes.
+ * @param {string} name  unit
+ * @param {string} fn    its *_rtcdata export (returns RTCData.reg)
+ * @param {Uint8Array|null} bytes
+ * @param {number} slot
+ */
+export function rtcRestoreWat(name, fn, bytes, slot) {
+  if (!bytes) return { data: "", call: "" };
+  let s = "";
+  for (const v of bytes) s += "\\" + (v < 16 ? "0" : "") + v.toString(16);
+  return {
+    data: `\n  ;; options.saveRtc: the cart's .rtc (RTCData.reg), restored after the reset as a frontend does\n  (data (i32.const ${slot}) "${s}")`,
+    call: `(memory.copy (call ${unitFn(name, fn)}) (i32.const ${slot}) (i32.const ${bytes.length}))`,
+  };
+}

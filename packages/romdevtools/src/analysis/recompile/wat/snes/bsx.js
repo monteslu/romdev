@@ -14,10 +14,13 @@
 //
 // Plain JS ESM + JSDoc.
 
-import { unitWat, unitSize, unitFn, unitStart } from "./chip-unit.js";
-import { chipTimeWat } from "./chips-snes9x.js";
+import { unitWat, unitSize, unitFn, unitStart, chipstateWat, chipstateRegion } from "./chip-unit.js";
+import { chipTimeWat, chipRegions } from "./chips-snes9x.js";
 import { ROM, WRAM, MAPTAB } from "./layout.js";
 import { RTC_CLOCK } from "../../recompile-section.js";
+
+/** The page after the unit, where the cart keeps the chip's state. */
+const bsxState = (lay) => lay.CHIP + Math.ceil(unitSize("bsx") / 0x10000) * 0x10000;
 
 export const bsxChip = {
   id: "BS-X",
@@ -25,7 +28,8 @@ export const bsxChip = {
   board: () => "BSX",
   boards: ["BSX"],
   buildMap() {},
-  pages: Math.ceil(unitSize("bsx") / 0x10000),
+  // the unit, then a page for its state (chip-unit.js chipstateWat)
+  pages: Math.ceil(unitSize("bsx") / 0x10000) + 1,
   wat(lay, d) {
     const m = d.multi ?? { cartType: 0, offsetA: 0, sizeA: 0, offsetB: 0, sizeB: 0 };
     const fn = (n) => unitFn("bsx", n);
@@ -52,8 +56,13 @@ export const bsxChip = {
     (call ${fn("romdev_bsx_init")} (i32.const ${ROM}) (i32.const ${d.calculatedSize}) (i32.const ${lay.SRAM})
       (i32.const ${WRAM}) (i32.const ${MAPTAB}) (i32.const ${m.cartType}) (i32.const ${m.offsetA}) (i32.const ${m.sizeA})
       (i32.const ${m.offsetB}) (i32.const ${m.sizeB}))
-    (call ${fn("romdev_bsx_reset")}))`;
+    (call ${fn("romdev_bsx_reset")}))` + chipstateWat("bsx", "romdev_bsx_chipstate", bsxState(lay));
   },
-  // the satellite clock reads time(); the verifier pins snes9x's to the frames
-  section: () => ({ clock: { ...RTC_CLOCK } }),
+  // the satellite clock reads time(); the verifier pins snes9x's to the frames.
+  // The MMC / flash / PPU-port registers (chipstate) and the PSRAM a BS
+  // program is loaded into and runs from are compared.
+  section: (d) => ({ clock: { ...RTC_CLOCK }, ...chipRegions(d, {
+    ...chipstateRegion("bsx", "romdev_bsx_chipstate", bsxState(d.memory)),
+    psram: { offset: ROM + 0x400000, length: 0x80000, ref: "snes_bsx_psram" },
+  }, false) }),
 };

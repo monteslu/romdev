@@ -124,3 +124,8 @@ extern "C" void romdev_bsx_set (int byte, int address) { S9xSetBSX((uint8) byte,
 /* ppu.cpp: $2188-$219F */
 extern "C" int romdev_bsx_ppu_get (int address, int openbus) { OpenBus = (uint8) openbus; return S9xGetBSXPPU((uint16) address); }
 extern "C" void romdev_bsx_ppu_set (int byte, int address) { S9xSetBSXPPU((uint8) byte, (uint16) address); }
+
+/* the BS-X's state as the reference serves it (romdev_chipstate.h) */
+#define ROMDEV_CS_BSX
+#include "romdev_chipstate.h"
+extern "C" int romdev_bsx_chipstate (uint8 *o) { return (int) romdev_cs_bsx(o); }

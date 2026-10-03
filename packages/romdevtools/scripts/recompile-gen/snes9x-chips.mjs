@@ -71,17 +71,17 @@ const UNITS = {
   dsp: {
     sources: ["dsp.cpp", "dsp1.cpp", "dsp2.cpp", "dsp3.cpp", "dsp4.cpp"], headers: [],
     glue: "glue_dsp.cpp", stack: 0x4000,
-    exports: ["romdev_dsp_init", "romdev_dsp_reset", "romdev_dsp_get", "romdev_dsp_set", "romdev_set_openbus"],
+    exports: ["romdev_dsp_init", "romdev_dsp_reset", "romdev_dsp_get", "romdev_dsp_set", "romdev_set_openbus", "romdev_dsp3_chipstate"],
   },
   seta: {
     sources: ["seta.cpp", "seta010.cpp", "seta011.cpp"], headers: [],
     glue: "glue_seta.cpp", stack: 0x4000,
-    exports: ["romdev_seta_init", "romdev_seta_get", "romdev_seta_set", "romdev_set_openbus"],
+    exports: ["romdev_seta_init", "romdev_seta_get", "romdev_seta_set", "romdev_set_openbus", "romdev_st011_chipstate"],
   },
   st018: {
     sources: ["seta018.cpp"], headers: [],
     glue: "glue_st018.cpp", stack: 0x1000,
-    exports: ["romdev_st018_bind", "romdev_st018_get", "romdev_st018_set", "romdev_set_openbus"],
+    exports: ["romdev_st018_bind", "romdev_st018_get", "romdev_st018_set", "romdev_set_openbus", "romdev_st018_chipstate"],
   },
   obc1: {
     sources: ["obc1.cpp"], headers: [],
@@ -91,7 +91,7 @@ const UNITS = {
   srtc: {
     sources: ["srtc.cpp"], headers: ["srtc.h", "srtcemu.h", "srtcemu.cpp"],
     glue: "glue_srtc.cpp", stack: 0x1000,
-    exports: ["romdev_srtc_init", "romdev_srtc_reset", "romdev_srtc_get", "romdev_srtc_set", "romdev_set_openbus"],
+    exports: ["romdev_srtc_init", "romdev_srtc_reset", "romdev_srtc_get", "romdev_srtc_set", "romdev_set_openbus", "romdev_srtc_chipstate", "romdev_srtc_rtcdata"],
     imports: { time: "time" },
   },
   msu1: {
@@ -108,7 +108,7 @@ const UNITS = {
     // getset.h brings bsx.h in through memmap.h in snes9x; the libc calls it makes
     cflags: ["-include", "snes9x.h", "-include", "bsx.h", "-include", "glue_bsx_libc.h"],
     exports: ["romdev_bsx_init", "romdev_bsx_active", "romdev_bsx_reset", "romdev_bsx_get", "romdev_bsx_set",
-      "romdev_bsx_ppu_get", "romdev_bsx_ppu_set"],
+      "romdev_bsx_ppu_get", "romdev_bsx_ppu_set", "romdev_bsx_chipstate"],
     imports: { time: "time" },
   },
   // (sdd1.js / spc7110.js / cx4.js) `cflags` are added to CFLAGS for the
@@ -123,7 +123,7 @@ const UNITS = {
     glue: "glue_spc7110.cpp", stack: 0x1000,
     // memmap.h -> getset.h brings spc7110.h into spc7110.cpp in snes9x
     cflags: ["-include", "snes9x.h", "-include", "spc7110.h"],
-    exports: ["romdev_spc7110_init", "romdev_spc7110_reset", "romdev_spc7110_get", "romdev_spc7110_set", "romdev_spc7110_offset", "romdev_spc7110_dma", "romdev_set_openbus"],
+    exports: ["romdev_spc7110_init", "romdev_spc7110_reset", "romdev_spc7110_get", "romdev_spc7110_set", "romdev_spc7110_offset", "romdev_spc7110_dma", "romdev_set_openbus", "romdev_spc7110_chipstate", "romdev_spc7110_rtcdata"],
     imports: { time: "time" },
   },
   cx4: {
@@ -179,6 +179,30 @@ function listDir(d) {
     .map((e) => path.relative(d, path.join(e.parentPath ?? e.path, e.name))).sort();
 }
 
+/**
+ * The byte length each *_chipstate export writes (romdev_chipstate.h): the
+ * cart's chipstate region is that long. The functions copy fixed fields, so
+ * running them once on the unlinked unit (imports stubbed) gives the length.
+ * @param {Uint8Array} bytes  the unit linked at BASE_A
+ * @param {any} u
+ */
+async function chipstateLengths(bytes, u) {
+  const names = u.exports.filter((e) => e.endsWith("_chipstate"));
+  if (!names.length) return null;
+  const memory = new WebAssembly.Memory({ initial: (BASE_B + 0x200000) / 0x10000 });
+  const mod = await WebAssembly.compile(bytes);
+  const env = { memory };
+  for (const imp of WebAssembly.Module.imports(mod)) if (imp.kind === "function") env[imp.name] = () => 0;
+  const inst = await WebAssembly.instantiate(mod, { env });
+  const out = {};
+  for (const n of names) {
+    const len = inst.exports[n](BASE_B);
+    if (!(len > 0 && len <= 0x10000)) throw new Error(`snes9x-chips: ${n} wrote ${len} bytes`);
+    out[n] = len;
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------- main
 const clangVersion = execFileSync(CLANG, ["--version"], { encoding: "utf8" }).split("\n")[0];
 const units = {};
@@ -189,6 +213,8 @@ for (const [name, u] of Object.entries(UNITS)) {
   Object.assign(provFiles, a.files);
   Object.assign(provStubs, a.stubs);
   units[name] = printUnit(name, decodeModule(a.bytes), decodeModule(b.bytes), { imports: u.imports ?? {}, baseA: BASE_A, delta: DELTA });
+  const cs = await chipstateLengths(a.bytes, u);
+  if (cs) units[name].chipstate = cs;
 }
 const data = {
   provenance: {

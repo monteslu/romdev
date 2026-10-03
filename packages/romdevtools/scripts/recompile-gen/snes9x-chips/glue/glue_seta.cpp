@@ -30,3 +30,8 @@ extern "C" void romdev_seta_init (int seta, int sram, int sramMask)
 /* getset.h MAP_SETA_DSP: S9xGetSetaDSP(Address) / S9xSetSetaDSP(Byte, Address) */
 extern "C" int romdev_seta_get (int address) { return S9xGetSetaDSP((uint32) address); }
 extern "C" void romdev_seta_set (int byte, int address) { S9xSetSetaDSP((uint8) byte, (uint32) address); }
+
+/* the ST010 / ST011's state as the reference serves it (romdev_chipstate.h; ST011 only) */
+#define ROMDEV_CS_SETA
+#include "romdev_chipstate.h"
+extern "C" int romdev_st011_chipstate (uint8 *o) { return (int) romdev_cs_st011(o); }

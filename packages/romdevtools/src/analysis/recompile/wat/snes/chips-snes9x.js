@@ -16,11 +16,30 @@
 //
 // Plain JS ESM + JSDoc.
 
-import { unitWat, unitSize, unitFn, unitStart } from "./chip-unit.js";
+import { unitWat, unitSize, unitFn, unitStart, chipstateWat, chipstateRegion, rtcRestoreWat } from "./chip-unit.js";
 import { sramMaskFor } from "./memmap.js";
 import { RTC_CLOCK } from "../../recompile-section.js";
 
 const pagesFor = (bytes) => Math.ceil(bytes / 0x10000);
+/** The 64KB page after a unit where the cart keeps the chip's state (chip-unit.js chipstateWat). */
+const stateAddr = (lay, unit) => lay.CHIP + pagesFor(unitSize(unit)) * 0x10000;
+/** Its last 32 bytes: the options.saveRtc image (no chipstate here is near that long). */
+const rtcSlot = (lay, unit) => stateAddr(lay, unit) + 0xffe0;
+
+/**
+ * The section's regions with a chip's own state added: its chipstate
+ * region, and the cart SRAM moved from diagnostic to compared when the chip
+ * works in it (the SETA chips) or the game keeps its state there.
+ * @param {any} d  describe()
+ * @param {object} add  regions to add
+ * @param {boolean} sram  compare the SRAM
+ */
+export function chipRegions(d, add, sram) {
+  const regions = { ...d.layout.regions, ...add };
+  const diagnosticRegions = { ...d.layout.diagnosticRegions };
+  if (sram && diagnosticRegions.sram) { regions.sram = diagnosticRegions.sram; delete diagnosticRegions.sram; }
+  return { regions, diagnosticRegions };
+}
 /** The cart's clock (wasmcart timePtr, ABI + 0x180): timeMs since power-on as f64. */
 const timeAddr = (lay) => lay.ABI + 0x180;
 /** Reference settle frames minus the cart's (index.js conventions): 5 - 1. */
@@ -83,7 +102,8 @@ function dspWindows(api, dsp, d) {
 function dspChip(n) {
   return {
     id: `DSP-${n}`,
-    pages: pagesFor(unitSize("dsp")),
+    // the DSP-3 also keeps its state for the verifier (the page after the unit)
+    pages: pagesFor(unitSize("dsp")) + (n === 3 ? 1 : 0),
     buildMap(api, lay, d) {
       if (plainBoard(d, "LoROM") || plainBoard(d, "HiROM")) dspWindows(api, n, d);
     },
@@ -99,8 +119,9 @@ function dspChip(n) {
   (func $chip_reset
     ${start ? `(call ${start})` : ""}
     (call ${unitFn("dsp", "romdev_dsp_init")} (i32.const ${n}) (i32.const ${d.mapping === "hirom" ? 1 : 0}) (i32.const ${d.romSize}))
-    (call ${unitFn("dsp", "romdev_dsp_reset")}))`;
+    (call ${unitFn("dsp", "romdev_dsp_reset")}))` + (n === 3 ? chipstateWat("dsp", "romdev_dsp3_chipstate", stateAddr(lay, "dsp")) : "");
     },
+    ...(n === 3 ? { section: (d) => chipRegions(d, chipstateRegion("dsp", "romdev_dsp3_chipstate", stateAddr(d.memory, "dsp")), false) } : {}),
   };
 }
 
@@ -115,7 +136,8 @@ function setaChip(id, which) {
     board: () => "SetaDSPLoROM",
     boards: ["SetaDSPLoROM"],
     ...setaSram,
-    pages: pagesFor(unitSize("seta")),
+    // the ST011 also keeps its state for the verifier (the page after the unit)
+    pages: pagesFor(unitSize("seta")) + (which === ST_011 ? 1 : 0),
     // memmap.cpp Map_SetaDSPLoROMMap
     buildMap(api) {
       const { each, set, lorom, loSram, size, MAP_TYPE } = api;
@@ -139,8 +161,11 @@ function setaChip(id, which) {
   ;; memmap.cpp InitROM case 0xF630 (${id}); S9xReset resets no SETA chip
   (func $chip_reset
     ${start ? `(call ${start})` : ""}
-    (call ${unitFn("seta", "romdev_seta_init")} (i32.const ${which}) (i32.const ${lay.SRAM}) (i32.const ${sramMaskFor(d.sramSizeByte)})))`;
+    (call ${unitFn("seta", "romdev_seta_init")} (i32.const ${which}) (i32.const ${lay.SRAM}) (i32.const ${sramMaskFor(d.sramSizeByte)})))` +
+        (which === ST_011 ? chipstateWat("seta", "romdev_st011_chipstate", stateAddr(lay, "seta")) : "");
     },
+    // the ST011 works in the cart's SRAM: compared, with its command state
+    ...(which === ST_011 ? { section: (d) => chipRegions(d, chipstateRegion("seta", "romdev_st011_chipstate", stateAddr(d.memory, "seta")), true) } : {}),
   };
 }
 
@@ -148,7 +173,7 @@ function setaChip(id, which) {
 const st018Chip = {
   id: "ST018",
   ...setaSram,
-  pages: pagesFor(unitSize("st018")),
+  pages: pagesFor(unitSize("st018")) + 1,
   // Map_LoROMMap: else if (Settings.SETA == ST_018) map_SetaRISC();
   buildMap(api, lay, d) {
     if (!plainBoard(d, "LoROM")) return;
@@ -168,8 +193,10 @@ const st018Chip = {
     (call ${unitFn("st018", "romdev_st018_set")} (local.get $v) (local.get $a)))
   (func $chip_reset
     ${start ? `(call ${start})` : ""}
-    (call ${unitFn("st018", "romdev_st018_bind")} (i32.const ${lay.SRAM})))`;
+    (call ${unitFn("st018", "romdev_st018_bind")} (i32.const ${lay.SRAM})))` + chipstateWat("st018", "romdev_st018_chipstate", stateAddr(lay, "st018"));
   },
+  // the stub's writes land in SRAM: compared, with its command state
+  section: (d) => chipRegions(d, chipstateRegion("st018", "romdev_st018_chipstate", stateAddr(d.memory, "st018")), true),
 };
 
 // ---------------------------------------------------------------- OBC1
@@ -207,10 +234,11 @@ const obc1Chip = {
 // ---------------------------------------------------------------- S-RTC
 const srtcChip = {
   id: "S-RTC",
-  pages: pagesFor(unitSize("srtc")),
-  wat(lay) {
+  pages: pagesFor(unitSize("srtc")) + 1,
+  wat(lay, d) {
     const start = unitStart("srtc");
-    return unitWat("srtc", lay.CHIP) + chipTimeWat(lay) + `
+    const rtc = rtcRestoreWat("srtc", "romdev_srtc_rtcdata", d.saveRtcBytes, rtcSlot(lay, "srtc"));
+    return unitWat("srtc", lay.CHIP) + chipTimeWat(lay) + rtc.data + chipstateWat("srtc", "romdev_srtc_chipstate", stateAddr(lay, "srtc")) + `
   ;; ppu.cpp: $2800 reads S9xGetSRTC, $2801 writes S9xSetSRTC (the else
   ;; branch past $2183, not reachable from a (H)DMA A-bus access, which
   ;; S9xGetPPU / S9xSetPPU turn away first)
@@ -227,10 +255,14 @@ const srtcChip = {
   (func $chip_reset
     ${start ? `(call ${start})` : ""}
     (call ${unitFn("srtc", "romdev_srtc_init")})
-    (call ${unitFn("srtc", "romdev_srtc_reset")}))`;
+    (call ${unitFn("srtc", "romdev_srtc_reset")})
+    ${rtc.call})`;
   },
-  // the chip reads the host's frame clock; the verifier pins snes9x's time() to it
-  section: () => ({ clock: { ...RTC_CLOCK } }),
+  // the chip reads the host's frame clock; the verifier pins snes9x's time() to it.
+  // Its registers (mode, index, RTCData) are compared, and the battery SRAM
+  // (the game's save) is too.
+  section: (d) => ({ clock: { ...RTC_CLOCK }, ...chipRegions(d, chipstateRegion("srtc", "romdev_srtc_chipstate", stateAddr(d.memory, "srtc")), true) }),
+  rtc: true,
 };
 
 /** Every chip this file provides, for coproc.js's registry. */
