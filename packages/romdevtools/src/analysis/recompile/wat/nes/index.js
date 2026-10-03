@@ -43,6 +43,7 @@ import {
   NTRAM, PAL, OAM, EMPH, luts, globalsWat, ppuWat,
 } from "./ppu.js";
 import { MAPPERS, ntSelFixed } from "./mappers.js";
+import { assertHostSpans, padAddr, WC_ABI_VERSION } from "../cart-abi.js";
 import { AUDIO, AUDIO_CAP, AUDIO_CURSOR, WAVE, WL1, WL2, NOISETAB, MUTE, MUTE_CHANNELS, soundConstants, apuGlobalsWat, apuWat } from "./apu.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -71,10 +72,18 @@ export const PCRING = 0x09000;  // 1024 x (pc u16 | opcode<<16, ts): last instru
 /** options.traceEntries rings live above the ABI block (memory is 1MB). */
 export const BIGRING = 0xB0000;
 export const BIGRING_MAX = 16384; // x 16 bytes = 256KB, ends at 0xF0000
-export const INPUT = 0x08400;   // 64 bytes host pad state (inputPtr) - MUST NOT be 0
-export const TIME = 0x08440;    // 24 bytes host clock (timePtr) - MUST NOT be 0, 8-aligned
+export const INPUT = 0x08400;   // 80 bytes host pad state (inputPtr, 4 x 20-byte wc_pad_t, ABI v4) - MUST NOT be 0
+export const TIME = 0x08480;    // 20 bytes host clock (timePtr) - MUST NOT be 0, 8-aligned
 export const FB = 0x70000;
 export const ABI = FB + FB_W * FB_H * 4 + 0x1000;
+// Every host-written span checked against each other and the cart state
+// around them, at import (so at every build). Under ABI v3 TIME sat at
+// INPUT+64; the v4 pad block is 80 bytes and would have run into it.
+assertHostSpans({
+  who: "nes", info: ABI, input: INPUT, time: TIME, audio: AUDIO, audioBytes: AUDIO_CAP * 4, audioWrite: AUDIO_CURSOR,
+  others: [["RAM", 0, 0x800], ["PROBE", PROBE, 0x400], ["PCRING", PCRING, 1024 * 8], ["FB", FB, FB_W * FB_H * 4],
+    ["BIGRING", BIGRING, BIGRING_MAX * 16], ["NTRAM", NTRAM, 0x800], ["OAM", OAM, 256], ["WRAM", WRAM, 0x2000], ["CHR", CHR, 0x2000]],
+});
 
 export const PROBE_FIELDS = ["steps", "trapped", "trappc", "pc", "frame", "nnmi", "ts",
   "a", "x", "y", "s", "p", "ppu0", "ppu1", "ppustatus",
@@ -394,7 +403,7 @@ export function recompileSection(rom, sha1, opts = {}) {
 function cpuGlobals() {
   const g = ["a", "x", "y", "pc", "fn", "fv", "fd", "fz", "fc", "t", "t2", "t3",
     "ea", "trapped", "trappc", "trapop", "curpc", "cnt", "ts", "steps",
-    "irqlow", "nframe", "nnmi", "nvram", "joy", "joybit", "joybit2", "laststrobe",
+    "irqlow", "nframe", "nnmi", "nvram", "joy", "joy2", "joybit", "joybit2", "laststrobe",
     "ringi", "nbrk", "nemph", "apu4017", "lastts", "dmcbitcount",
     "dmcaddrlatch", "dmcsizelatch", "dmcformat", "dmcaddress", "dmcsize",
     "dmcshift", "dmchavedma", "dmcdmabuf", "dmchavesample", "dmcirq",
@@ -455,8 +464,10 @@ function memWat(mapper) {
     (local $ret i32)
     (if (local.get $w)
       (then
-        ;; port 2: a gamepad with nothing pressed
-        (local.set $ret (i32.ge_u (global.get $joybit2) (i32.const 8)))
+        ;; port 2: fceumm attaches a gamepad there too (wasmcart pad 1)
+        (if (i32.ge_u (global.get $joybit2) (i32.const 8))
+          (then (local.set $ret (i32.const 1)))
+          (else (local.set $ret (i32.and (i32.shr_u (global.get $joy2) (global.get $joybit2)) (i32.const 1)))))
         (global.set $joybit2 (i32.and (i32.add (global.get $joybit2) (i32.const 1)) (i32.const 0xFF)))
         (return (i32.or (local.get $ret) (i32.const 0x40)))))
     (if (i32.ge_u (global.get $joybit) (i32.const 8))
@@ -820,8 +831,12 @@ function frameWat(mapper) {
         (global.set $nirq (i32.add (global.get $nirq) (i32.const 1))))))
 
   (func $read_pad
-    (local $b i32) (local $j i32)
-    (local.set $b (i32.load16_u (i32.const ${INPUT})))
+    (global.set $joy (call $pad_bits (i32.load16_u (i32.const ${padAddr(INPUT, 0)}))))
+    ;; wasmcart pad 1 (ABI v4 stride: 20 bytes) is fceumm's port 2 gamepad
+    (global.set $joy2 (call $pad_bits (i32.load16_u (i32.const ${padAddr(INPUT, 1)})))))
+
+  (func $pad_bits (param $b i32) (result i32)
+    (local $j i32)
     ;; wasmcart buttons are POSITIONAL (W3C): the east face button is
     ;; WC_BTN_B, which is where the NES A button sits; south (WC_BTN_A) is
     ;; NES B. NES bit order: A B Select Start Up Down Left Right.
@@ -833,10 +848,10 @@ function frameWat(mapper) {
     (if (i32.and (local.get $b) (i32.const 512))  (then (local.set $j (i32.or (local.get $j) (i32.const 0x20)))))
     (if (i32.and (local.get $b) (i32.const 1024)) (then (local.set $j (i32.or (local.get $j) (i32.const 0x40)))))
     (if (i32.and (local.get $b) (i32.const 2048)) (then (local.set $j (i32.or (local.get $j) (i32.const 0x80)))))
-    (global.set $joy (local.get $j)))
+    (local.get $j))
 
   (func (export "wc_get_info") (result i32)
-    (i32.store (i32.add (i32.const ${ABI}) (i32.const 0))  (i32.const 3))
+    (i32.store (i32.add (i32.const ${ABI}) (i32.const 0))  (i32.const ${WC_ABI_VERSION}))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 4))  (i32.const ${FB_W}))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 8))  (i32.const ${FB_H}))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 12)) (i32.const ${FB}))
