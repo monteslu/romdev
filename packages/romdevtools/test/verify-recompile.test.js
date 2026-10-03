@@ -38,7 +38,7 @@ function cartWat({ inputPtr = INPUT, timePtr = TIME, southBit = 0, bootDelay = 0
   (data (i32.const ${VRAM}) "${hex}")
   (data (i32.const 0) "${f0}")
   (func (export "wc_get_info") (result i32)
-    (i32.store (i32.const ${INFO}) (i32.const 3))
+    (i32.store (i32.const ${INFO}) (i32.const 4))
     (i32.store (i32.const ${INFO + 4}) (i32.const ${W}))
     (i32.store (i32.const ${INFO + 8}) (i32.const ${H}))
     (i32.store (i32.const ${INFO + 12}) (i32.const ${FB}))
@@ -513,4 +513,17 @@ test("fuzzRecompile reports the first trap frame per seed, and nothing when noth
   const q = await fuzzRecompile({ openCart: () => openCartFrom(cartBytes()), layout: quiet, frames: 300, seeds: [1] });
   assert.equal(q.verdict, "NO TRAP");
   await assert.rejects(() => fuzzRecompile({ openCart: () => openCartFrom(cartBytes()), layout: validateRecompileLayout({ regions: {} }) }), /probe.trapped/);
+});
+
+test("input schedule: 'p2.' addresses controller 2 on both hosts, and a byName map still applies", async () => {
+  const s = parseInputSchedule("0:p2.a+b:2,1:p2.start:1");
+  assert.deepEqual(s[0].buttons, ["p2.a", "b"]);
+  assert.throws(() => parseInputSchedule("0:p5.a:1"), /invalid button name/);
+  const seen = [];
+  const host = { setInput: (i) => seen.push(JSON.parse(JSON.stringify(i))), stepFrames: async () => {} };
+  const d = new ScheduleDriver(host, s, { a: "b", b: "a" });
+  await d.to(3);
+  assert.deepEqual(seen[0], { ports: [{ a: true }, { b: true }] });
+  assert.deepEqual(seen[1], { ports: [{ a: true }, { b: true, start: true }] });
+  assert.deepEqual(seen[2], { ports: [{}] });
 });

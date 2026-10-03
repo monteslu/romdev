@@ -30,7 +30,7 @@
 import { decode, lowerArm, oplen, interpCostTable, interpWat as interpGenWat } from "./lower.js";
 import {
   computeLayout, FB_W, FB_H, WRAM, VRAM, CGRAM, OAM, PROBE,
-  PROBE_FIELDS, INPUT, ROM, PCRING, PCRING_N, MAPTAB, APUST, ICOST,
+  PROBE_FIELDS, INPUT, INPUT_SZ, ROM, PCRING, PCRING_N, MAPTAB, APUST, ICOST,
 } from "./layout.js";
 import { buildMemMap, sramMaskFor } from "./memmap.js";
 import { loadRom } from "./loader.js";
@@ -328,7 +328,7 @@ function cartLayout(lay, sramSize) {
     trap: { flag: "trapped", pc: "trappc" },
     pcRing: { offset: PCRING, entries: PCRING_N, stride: 4, cursorField: "npc", format: "u32 pc24, circular" },
     framebuffer: { offset: lay.FB, width: FB_W, height: FB_H, format: "bgra8888", note: "u32 words 0xAARRGGBB; the region is the largest frame (512 x 478), each frame's size is in wc_info (256 or 512 wide, 224 or 448 tall after snes9x's overscan crop)" },
-    input: { offset: INPUT, length: 64 },
+    input: { offset: INPUT, length: INPUT_SZ },
   };
 }
 

@@ -16,6 +16,7 @@ import {
   REGWATCH, REGWATCH_N, REGWATCH_STRIDE,
 } from "./layout.js";
 import { SA1_BOARD, SA1_HOOKS } from "./sa1.js";
+import { WC_ABI_VERSION } from "../cart-abi.js";
 
 /**
  * REGISTER WATCH probe: records (A, X, Y, P, $8D, D, [$00]) each time
@@ -235,7 +236,7 @@ export function frameWat(lay) {
       (br $l))))
 
   (func (export "wc_get_info") (result i32)
-    (i32.store (i32.add (i32.const ${lay.ABI}) (i32.const 0))  (i32.const 3))
+    (i32.store (i32.add (i32.const ${lay.ABI}) (i32.const 0))  (i32.const ${WC_ABI_VERSION}))
     ;; snes9x's first frame is 256 x 224; $deinit_update sets each frame's
     ;; size (the framebuffer region holds the largest, 512 x 478), and a
     ;; later call must not undo it.
@@ -250,7 +251,7 @@ export function frameWat(lay) {
     (i32.store (i32.add (i32.const ${lay.ABI}) (i32.const 24)) (i32.const ${lay.ABI + 0x100}))
     (i32.store (i32.add (i32.const ${lay.ABI}) (i32.const 52)) (i32.const 32040))
     ;; inputPtr (WCInfo field 7, byte 28). MUST be a real address: the host
-    ;; writes 64 bytes of pad state here every frame WITHOUT checking for
+    ;; writes 80 bytes of pad state (ABI v4) here every frame WITHOUT checking for
     ;; zero, so leaving it 0 scribbles over WASM offset 0 - the SNES direct
     ;; page - and corrupts $00-$3F between frames.
     (i32.store (i32.add (i32.const ${lay.ABI}) (i32.const 28)) (i32.const ${INPUT}))

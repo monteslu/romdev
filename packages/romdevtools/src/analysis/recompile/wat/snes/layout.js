@@ -13,6 +13,8 @@
 //
 // Plain JS ESM + JSDoc.
 
+import { WC_SIZES, assertHostSpans } from "../cart-abi.js";
+
 // The framebuffer holds the largest frame snes9x's libretro core reports
 // (MAX_SNES_WIDTH x the 478-line interlaced overscan frame); each frame
 // sets its own size in wc_info (256 or 512 wide, 224/239/448/478 tall
@@ -71,11 +73,12 @@ export const OPTAB = 0x030c00;  // opcode -> operation id
 export const MODTAB = 0x030d00; // opcode -> addressing-mode id
 export const ICOST = 0x030e00;  // opcode -> [length | flags, internal cycles] (interpCostTable)
 
-// Debug probes. The host writes 64 bytes of pad state at inputPtr every
-// frame without a zero check, so INPUT must be a real address clear of WRAM
-// (at 0 it overwrote the SNES direct page between frames).
+// Debug probes. The host writes 80 bytes of pad state at inputPtr every
+// frame (4 x 20-byte wc_pad_t, ABI v4) without a zero check, so INPUT must be
+// a real address clear of WRAM (at 0 it overwrote the SNES direct page
+// between frames). Pad N is at INPUT + 20 * N.
 export const INPUT = 0x03e000;
-export const INPUT_SZ = 64;
+export const INPUT_SZ = WC_SIZES.input;
 export const PROBE_N = 34;          // i32 counters, mirrored every frame
 export const PROBE = 0x03f000;
 export const ITRACE_N = 160;        // (pc, opcode, S) triples
@@ -188,6 +191,11 @@ export function checkLayout(lay, imgLen) {
       throw new Error(`snes layout: ${na} (0x${hex(aa)}..0x${hex(aa + sa)}) overlaps ${nb} (0x${hex(ab)}..0x${hex(ab + sb)})`);
     }
   }
+  // The host-written spans inside the ABI block (audio cursor +0x100,
+  // clock +0x180) and the pads at INPUT, against each other and everything
+  // above (ABI v4 grew the pad block from 64 to 80 bytes).
+  assertHostSpans({ who: "snes", info: lay.ABI, input: INPUT, time: lay.ABI + 0x180, audioWrite: lay.ABI + 0x100,
+    audio: AUDIO, audioBytes: AUDIO_FRAMES * 4, others: regions.filter((r) => r[0] !== "INPUT" && r[0] !== "ABI" && r[0] !== "AUDIO") });
   const skip = new Set(["ROM", "PCTAB", "ARAM", "FB", "ABI"]);
   const probetop = Math.max(...regions.filter((r) => !skip.has(r[0])).map((r) => r[1] + r[2]));
   if (probetop > ROM) throw new Error(`snes layout: probes end 0x${hex(probetop)}, past ROM 0x${hex(ROM)}`);

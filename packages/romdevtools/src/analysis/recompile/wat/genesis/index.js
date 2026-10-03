@@ -36,6 +36,7 @@ import { readFileSync } from "node:fs";
 import { loadGpgxData } from "./gpgx-data.js";
 import { translateM68k, translateZ80, z80HandlerNames, TrError, ZREGS } from "./ctrans.js";
 import * as RT from "./runtime.js";
+import { assertHostSpans, padAddr, WC_ABI_VERSION } from "../cart-abi.js";
 import { m68kInterpWat } from "./interp.js";
 import { ymWat, mdSoundInfo, hookZ80Wat, hookVdpWat, hookFrameWat, hookMemWat, deltasLayout } from "./ym2612.js";
 import { hasSvp, svpUnitSize, svpWat, svpRegions, SVP_DRAM, SVP_CELL } from "./svp.js";
@@ -43,6 +44,11 @@ import { hasSvp, svpUnitSize, svpWat, svpRegions, SVP_DRAM, SVP_CELL } from "./s
 export const platforms = ["genesis", "md", "megadrive"];
 
 const { R, CYCTAB, FIFO, ABI, FB, FB_W, FB_H, PIXEL } = RT;
+// The wasmcart ABI block: audio cursor +256, 4 x 20-byte pads (ABI v4) at
+// +288..+368, the clock at +0x180. Checked at import, so at every build.
+const INPUT = ABI + 288;
+assertHostSpans({ who: "genesis", info: ABI, input: INPUT, time: ABI + 0x180, audioWrite: ABI + 256,
+  others: [["FB", FB, FB_W * FB_H * 4], ["CARTMAP", RT.CARTMAP, 0x100], ["JPADS", RT.JPADS, 32], ["ZT", RT.ZT, 0x1000]] });
 const ROMIMG = 0x160000;
 // ym2612.js / ../sms/psg.js sound state, tables and the audio ring (free
 // space between the ABI block and the Z80 tables)
@@ -1343,11 +1349,11 @@ function frameWat(narms, PACKED, PCTAB, img, ROMSIZE, sramBank, eep, svp = false
     (call $input_refresh)${eep && eep.jcart ? " (call $jpad_refresh)" : ""}
     ;; osd_input_update: the pad state the game sees for this whole frame,
     ;; both ports (wasmcart pads 0 and 1)
-    (global.set $pad0 (call $pad_bits (i32.load16_u (i32.const ${ABI + 288}))))
-    (global.set $pad1 (call $pad_bits (i32.load16_u (i32.const ${ABI + 304}))))${eep && eep.jcart ? `
+    (global.set $pad0 (call $pad_bits (i32.load16_u (i32.const ${padAddr(INPUT, 0)}))))
+    (global.set $pad1 (call $pad_bits (i32.load16_u (i32.const ${padAddr(INPUT, 1)}))))${eep && eep.jcart ? `
     ;; J-Cart pads 3 and 4: wasmcart pads 2 and 3
-    (global.set $pad2 (call $pad_bits (i32.load16_u (i32.const ${ABI + 320}))))
-    (global.set $pad3 (call $pad_bits (i32.load16_u (i32.const ${ABI + 336}))))` : ""}
+    (global.set $pad2 (call $pad_bits (i32.load16_u (i32.const ${padAddr(INPUT, 2)}))))
+    (global.set $pad3 (call $pad_bits (i32.load16_u (i32.const ${padAddr(INPUT, 3)}))))` : ""}
     (if (i32.ne (global.get $v_v_counter) (global.get $vp_h))
       (then
         (global.set $v_v_counter (global.get $vp_h))
@@ -1457,14 +1463,14 @@ function frameWat(narms, PACKED, PCTAB, img, ROMSIZE, sramBank, eep, svp = false
       (br $l))))
 
   (func (export "wc_get_info") (result i32)
-    (i32.store (i32.const ${ABI + 0}) (i32.const 3))
+    (i32.store (i32.const ${ABI + 0}) (i32.const ${WC_ABI_VERSION}))
     (i32.store (i32.const ${ABI + 4}) (i32.const ${FB_W}))
     (i32.store (i32.const ${ABI + 8}) (i32.const 224))
     (i32.store (i32.const ${ABI + 12}) (i32.const ${FB}))
     (i32.store (i32.const ${ABI + 16}) (i32.const 0))
     (i32.store (i32.const ${ABI + 20}) (i32.const 0))
     (i32.store (i32.const ${ABI + 24}) (i32.const ${ABI + 256}))
-    (i32.store (i32.const ${ABI + 28}) (i32.const ${ABI + 288}))
+    (i32.store (i32.const ${ABI + 28}) (i32.const ${INPUT}))
     (i32.store (i32.const ${ABI + 40}) (i32.const ${ABI + 0x180}))
     (i32.const ${ABI}))
 

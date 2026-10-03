@@ -10,7 +10,7 @@
 import { cost } from "./cycles.js";
 import { lower, m1Count, rIncWat } from "./z80.js";
 import { hwWat, renderWat, psgWat, miscWat, cramBody, startBody, ggLutBytes, CRAM, GGLUT, PROBE, SMSFB } from "./hw.js";
-import { watBytes } from "../cart-abi.js";
+import { watBytes, abiBlock, assertHostSpans, padAddr, WC_ABI_VERSION } from "../cart-abi.js";
 
 // Linear memory layout.
 export const FLAT = Object.freeze({
@@ -206,6 +206,9 @@ function armWat(img, idx, addr, size, counts) {
 
 function abiWat(nblocks, platform) {
   const { BMAP, BTAB, ABI, FB, AUDIO, ROMIMG } = FLAT;
+  const AB = abiBlock(ABI);
+  assertHostSpans({ who: "sms flat", info: AB.info, input: AB.input, time: AB.time, hostInfo: AB.hostInfo, audioWrite: AB.audioWrite,
+    audio: AUDIO, audioBytes: 4096 * 8, others: [["FB", FB, 256 * 192 * 4], ["TRACE", FLAT.TRACE, 16384 * 4], ["BTAB", BTAB, ABI - BTAB]] });
   const CRAMBODY = cramBody(platform, CRAM);
   const STARTBTN = startBody(platform);
   return `
@@ -268,18 +271,18 @@ ${CRAMBODY}
       (br $l))))
 
   (func (export "wc_get_info") (result i32)
-    (i32.store (i32.add (i32.const ${ABI}) (i32.const 0))  (i32.const 3))
+    (i32.store (i32.add (i32.const ${ABI}) (i32.const 0))  (i32.const ${WC_ABI_VERSION}))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 4))  (i32.const 256))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 8))  (i32.const 192))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 12)) (i32.const ${FB}))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 16)) (i32.const ${AUDIO}))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 20)) (i32.const 4096))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 24)) (i32.add (i32.const ${ABI}) (i32.const 256)))
-    (i32.store (i32.add (i32.const ${ABI}) (i32.const 28)) (i32.add (i32.const ${ABI}) (i32.const 288)))
+    (i32.store (i32.add (i32.const ${ABI}) (i32.const 28)) (i32.const ${AB.input}))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 32)) (i32.const 0))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 36)) (i32.const 0))
-    (i32.store (i32.add (i32.const ${ABI}) (i32.const 40)) (i32.add (i32.const ${ABI}) (i32.const 320)))
-    (i32.store (i32.add (i32.const ${ABI}) (i32.const 44)) (i32.add (i32.const ${ABI}) (i32.const 352)))
+    (i32.store (i32.add (i32.const ${ABI}) (i32.const 40)) (i32.const ${AB.time}))
+    (i32.store (i32.add (i32.const ${ABI}) (i32.const 44)) (i32.const ${AB.hostInfo}))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 48)) (i32.const 1))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 52)) (i32.const 48000))
     (i32.const ${ABI}))
@@ -294,7 +297,7 @@ ${CRAMBODY}
     (local $ln i32) (local $btn i32) (local $k i32)
     (global.set $frames (i32.add (global.get $frames) (i32.const 1)))
 
-    (local.set $btn (i32.load16_u (i32.add (i32.const ${ABI}) (i32.const 288))))
+    (local.set $btn (i32.load16_u (i32.const ${padAddr(AB.input, 0)})))
     (global.set $joy1 (i32.const 0xFF))
     (if (i32.and (local.get $btn) (i32.const 256))
       (then (global.set $joy1 (i32.and (global.get $joy1) (i32.const 0xFE)))))
