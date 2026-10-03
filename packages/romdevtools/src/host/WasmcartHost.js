@@ -564,7 +564,10 @@ export class WasmcartHost {
     // given, for callers that already speak the pad struct.
     const ax = src.axes && typeof src.axes === "object" ? src.axes : {};
     const stick = (v) => Math.max(-32768, Math.min(32767, Math.round((Number(v) || 0) * 32767)));
-    const trigger = (v) => Math.max(0, Math.min(255, Math.round((Number(v) || 0) * 255)));
+    // 0..32767 as of wasmcart ABI v4, the same scale as the sticks above: a
+    // trigger is just an axis that never goes negative. It was 0..255 while
+    // the pad struct stored it in a byte.
+    const trigger = (v) => Math.max(0, Math.min(32767, Math.round((Number(v) || 0) * 32767)));
     const pick = (raw, scaled) => (raw !== undefined ? raw | 0 : scaled);
     return {
       connected: true,
