@@ -316,7 +316,7 @@ test("options.traceEntries records the 65816 registers per ROM instruction; brea
  * starts it, waits for $2141 == $77 and copies $2142/$2143 to $7E0010/11.
  * The program bytes sit at ROM $8200.
  */
-function uploadRom(prog) {
+function uploadRom(prog, tail = [0x80, 0xfe], sram = 0) {
   const len = prog.length;
   const code = [
     0x78, 0x18, 0xfb, 0xc2, 0x10, 0xe2, 0x20,       // sei, native, 16-bit X, 8-bit A
@@ -334,9 +334,9 @@ function uploadRom(prog) {
     0xa9, 0x77, 0xcd, 0x41, 0x21, 0xd0, 0xfb,       // wait for the program's $77
     0xad, 0x42, 0x21, 0x8f, 0x10, 0x00, 0x7e,
     0xad, 0x43, 0x21, 0x8f, 0x11, 0x00, 0x7e,
-    0x80, 0xfe,
+    ...tail,
   ];
-  const rom = synthRom({ code });
+  const rom = synthRom({ code, sram });
   rom.set(prog, 0x200);
   return rom;
 }
@@ -780,6 +780,73 @@ test("an interrupt's entry cycles are one AddCycles: a line end they cross happe
     checked++;
   }
   assert.ok(checked > 40, `IRQ entries checked: ${checked}`);
+});
+
+/** snes9x frames the SPC700 count is compared over, and what it read. */
+const WORD_ACCESS_FRAMES = 600;
+const WORD_ACCESS_ROM_SHA1 = "5e890018ffe831cefbd4f128577f6c85087e5572";
+const WORD_ACCESS_ARAM_SHA1 = "68af28b2f2193b0daa053eb0d4e143a2d0609782";
+
+/**
+ * A cart whose SPC700 counts in ARAM $10/$11 (incw $10, 6 SPC clocks each)
+ * while the 65816 loops over 16-bit accesses of every grouping: MAP_NONE
+ * ($00:6000) read and write, a write to write-protected ROM, LoROM SRAM
+ * read and write, and a MAP_CPU word ($4218, byte by byte).
+ */
+function wordAccessRom() {
+  const prog = [0x8f, 0x77, 0xf5, ...Array.from({ length: 60 }, () => [0x3a, 0x10]).flat(), 0x2f, 0x100 - 122];
+  const loop = [
+    0xad, 0x00, 0x60,         // lda $6000      MAP_NONE word read
+    0x8d, 0x00, 0x60,         // sta $6000      MAP_NONE word write
+    0x8d, 0x00, 0x80,         // sta $8000      ROM (write-protected: MAP_NONE on writes)
+    0xaf, 0x00, 0x00, 0x70,   // lda $700000    MAP_LOROM_SRAM word read
+    0x8f, 0x02, 0x00, 0x70,   // sta $700002    MAP_LOROM_SRAM word write
+    0xad, 0x18, 0x42,         // lda $4218      MAP_CPU: byte by byte
+  ];
+  return uploadRom(prog, [0xc2, 0x20, ...loop, 0x80, 0x100 - (loop.length + 2)], 1);
+}
+
+test("16-bit accesses group their cycles as snes9x's S9xGetWord / S9xSetWord do: a line end between the bytes moves the APU catch-up", async () => {
+  // snes9x adds both bytes' cycles at once (addCyclesInMemoryAccess_x2) for
+  // plain memory, the SRAM windows and MAP_NONE (which is also what a write
+  // to write-protected ROM sees), and per byte for MAP_CPU / MAP_PPU / chip
+  // windows. The vblank line end inside each instruction of the loop is
+  // processed at these offsets from the instruction start (SlowROM code):
+  // the operand fetch (one AddCycles), then the access(es).
+  const rom = wordAccessRom();
+  const lay = describeRom(rom).memory;
+  const { createHash } = await import("node:crypto");
+  assert.equal(createHash("sha1").update(rom).digest("hex"), WORD_ACCESS_ROM_SHA1, "the image snes9x was run with");
+  const loopAt = 0x8000 + rom.findIndex((b, i) => b === 0xc2 && rom[i + 1] === 0x20 && rom[i + 2] === 0xad && rom[i + 3] === 0x00 && rom[i + 4] === 0x60) + 2;
+  const points = {
+    [loopAt]: [24, 40], [loopAt + 3]: [24, 40], [loopAt + 6]: [24, 40],
+    [loopAt + 9]: [32, 48], [loopAt + 13]: [32, 48], [loopAt + 17]: [24, 30, 36], [loopAt + 20]: [16, 22],
+  };
+  const { bytes } = await assembleWat(emitWat(rom));
+  const { instance } = await WebAssembly.instantiate(bytes, {});
+  const ex = instance.exports;
+  ex.wc_init();
+  const seen = new Set();
+  const counts = [];
+  for (let f = 1; f <= WORD_ACCESS_FRAMES + 5; f++) {
+    ex.wc_render();
+    const mem = new Uint8Array(ex.memory.buffer);
+    // snes9x frame F (stepped after loadMedia) is cart frame F + 5
+    if (f > 5) counts.push(mem[lay.ARAM + 0x10], mem[lay.ARAM + 0x11]);
+    const dv = new DataView(ex.memory.buffer);
+    const pc = dv.getUint32(PROBE + PROBE_FIELDS.vblankpc, true) & 0xffff;
+    const pts = points[pc];
+    if (!pts) continue;   // still uploading
+    const p = dv.getInt32(PROBE + PROBE_FIELDS.vblankpos, true);
+    const st = dv.getInt32(PROBE + PROBE_FIELDS.vblankistart, true);
+    assert.equal(p, st + pts.find((o) => st + o >= 1364), `frame ${f}: ${pc.toString(16)} from ${st}, line end at +${1364 - st}`);
+    seen.add(pc);
+  }
+  assert.equal(seen.size, 7, "the line end fell inside every instruction of the loop");
+  assert.equal(ex.dbg_trapped(), 0);
+  // The SPC700's count at every frame end is snes9x's (romdev's pinned core,
+  // the same image, frames 1..WORD_ACCESS_FRAMES after loadMedia).
+  assert.equal(createHash("sha1").update(Uint8Array.from(counts)).digest("hex"), WORD_ACCESS_ARAM_SHA1);
 });
 
 test("BRL costs its one internal cycle and no taken-branch extra (snes9x Op82)", async () => {

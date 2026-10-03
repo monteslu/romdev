@@ -11,9 +11,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { describe as describeRom, recompileSection } from "../src/analysis/recompile/wat/snes/index.js";
-import { WRAM } from "../src/analysis/recompile/wat/snes/layout.js";
+import { WRAM, PROBE, PROBE_FIELDS } from "../src/analysis/recompile/wat/snes/layout.js";
+import { emitWat } from "../src/analysis/recompile/wat/snes/index.js";
+import { assembleWat } from "../src/analysis/recompile/wat/assemble.js";
 import { RTC_CLOCK } from "../src/analysis/recompile/recompile-section.js";
-import { spc7110Rom, spc7110RtcRom, runCart } from "./snes-coproc-synth.js";
+import { spc7110Rom, spc7110RtcRom, runCart, spc7110WordRom } from "./snes-coproc-synth.js";
 
 const sha1 = (b) => createHash("sha1").update(b).digest("hex");
 const ARMS = { armRanges: [[0x8000, 0xb000]] };
@@ -60,4 +62,40 @@ test("SPC7110 RTC-4513: reads, writes, control registers and a midnight rollover
   // must differ: the same cart with the clock stopped never reaches midnight
   const stopped = await runCart(spc7110RtcRom(), 405, ARMS, { stepMs: 0 });
   assert.notEqual(sha1(stopped.mem.subarray(WRAM, WRAM + 0x20000)), sha1(w));
+});
+
+test("SPC7110: 16-bit accesses group their cycles by snes9x's map types, so the APU catches up where snes9x's does", async () => {
+  // S9xGetWord reads MAP_SPC7110_ROM ($D0-$FF) byte by byte although the cart
+  // keeps those blocks as ROM; bank $50 is MAP_SPC7110_DRAM mapped as ROM, so
+  // a word written there is MAP_NONE (one grouped access); HiROM SRAM words
+  // are grouped. Where the vblank line end inside each loop instruction is
+  // processed (offsets from the instruction start), and the SPC700's count
+  // at every frame end, are snes9x's (romdev's pinned core, the same image,
+  // frames 1-600 after loadMedia; the cart's frame F + 5).
+  const { rom, loopAt } = spc7110WordRom();
+  assert.equal(sha1(rom), "1ee86af0e93e93757e931daa460494eaf1d3bea9", "the image snes9x was run with");
+  const points = { [loopAt]: [32, 40, 48], [loopAt + 4]: [32, 48], [loopAt + 8]: [24, 40], [loopAt + 11]: [24, 40], [loopAt + 14]: [16, 22] };
+  const d = describeRom(rom, ARMS);
+  const { bytes } = await assembleWat(emitWat(rom, ARMS));
+  const { instance } = await WebAssembly.instantiate(bytes, {});
+  const ex = instance.exports;
+  ex.wc_init();
+  const seen = new Set();
+  const counts = [];
+  for (let f = 1; f <= 605; f++) {
+    ex.wc_render();
+    const mem = new Uint8Array(ex.memory.buffer);
+    if (f > 5) counts.push(mem[d.memory.ARAM + 0x10], mem[d.memory.ARAM + 0x11]);
+    const dv = new DataView(ex.memory.buffer);
+    const pc = dv.getUint32(PROBE + PROBE_FIELDS.vblankpc, true) & 0xffff;
+    const pts = points[pc];
+    if (!pts) continue;
+    const p = dv.getInt32(PROBE + PROBE_FIELDS.vblankpos, true);
+    const st = dv.getInt32(PROBE + PROBE_FIELDS.vblankistart, true);
+    assert.equal(p, st + pts.find((o) => st + o >= 1364), `frame ${f}: $${pc.toString(16)} from ${st}, line end at +${1364 - st}`);
+    seen.add(pc);
+  }
+  assert.equal(seen.size, 5, "the line end fell inside every instruction of the loop");
+  assert.equal(ex.dbg_trapped(), 0);
+  assert.equal(sha1(Uint8Array.from(counts)), "1f8500e89bd06837806eeedcc85583ba69e9e86f");
 });

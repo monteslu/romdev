@@ -20,9 +20,12 @@
 //       -> $chip_frame (the chip's state for the verifier's chipstate region)
 //   the board map (Map_SDD1LoROMMap, Map_SPC7110HiROMMap, map_C4)
 //       -> chip.board() names it, chip.buildMap() fills memmap.js's table
+//   S9xGetWord / S9xSetWord's choice between one grouped access and two
+//   byte accesses, where a chip's map types differ from its block types
+//       -> chip.wordBus {readByByte, writeGrouped} bank ranges (cpu-wat.js $fast2)
 //
 // A chip module exports an object {id, board?, boards?, buildMap?, pages?,
-// wat(lay, d), section?(d)}: `id` is loader.js's coprocessor name, `board`
+// wordBus?, wat(lay, d), section?(d)}: `id` is loader.js's coprocessor name, `board`
 // renames the board map and `boards` lists the names memmap.js does not
 // know (buildMap(api, lay, d) builds those, or adds the chip's window to a
 // known one), `wat` defines the $chip_* functions it implements and this
