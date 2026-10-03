@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { assembleWat, assembleWatSync, parseF32Bits, parseF64Bytes, parseI32, parseI64 } from "./assemble.js";
-import { wcGetInfoWat, abiBlock, readRecompileInfo, recompileSectionBytes, watBytes, WC_INFO } from "./cart-abi.js";
+import { wcGetInfoWat, abiBlock, readRecompileInfo, recompileSectionBytes, watBytes, WC_INFO, padAddr, assertHostSpans } from "./cart-abi.js";
 
 const BIG = `
 (module
@@ -208,10 +208,19 @@ test("wcGetInfoWat fills inputPtr and timePtr and refuses the known footguns", a
   assert.equal(u32[WC_INFO.inputPtr / 4], b.input);
   assert.equal(u32[WC_INFO.timePtr / 4], b.time);
   assert.equal(u32[WC_INFO.timePtr / 4] % 8, 0);
-  assert.equal(u32[WC_INFO.version / 4], 3);
+  assert.equal(u32[WC_INFO.version / 4], 4); // wasmcart >= 0.31 refuses a cart below ABI v4
   assert.throws(() => wcGetInfoWat({ info: 0x1000, width: 1, height: 1, fb: 0x2000, input: 0x1120 }), /time/);
   assert.throws(() => wcGetInfoWat({ info: 0x1000, width: 1, height: 1, fb: 0x2000, input: 0x1120, time: 0x1164 }), /8-byte aligned/);
   assert.throws(() => wcGetInfoWat({ info: 0x1000, width: 1, height: 1, fb: 0x2000, input: 0x1120, time: 0x1140 }), /overlaps/);
+  // ABI v4: the pad block is 80 bytes. A clock right after 64 bytes of pads
+  // (legal under v3) is now under pad 3, and the build must refuse it.
+  assert.throws(() => wcGetInfoWat({ info: 0x1000, width: 1, height: 1, fb: 0x2000, input: 0x1120, time: 0x1160 }), /input .*overlaps time/);
+  assert.doesNotThrow(() => wcGetInfoWat({ info: 0x1000, width: 1, height: 1, fb: 0x2000, input: 0x1120, time: 0x1170 }));
+  assert.throws(() => wcGetInfoWat({ info: 0x1000, width: 1, height: 1, fb: 0x2000, input: 0x1120, time: 0x1170, version: 3 }), /below ABI v4/);
+  // the shared block itself is v4-sized, and pads are 20 bytes apart
+  assert.ok(b.time >= b.input + 80 && b.hostInfo >= b.time + 20);
+  assert.equal(padAddr(b.input, 1) - b.input, 20);
+  assert.throws(() => assertHostSpans({ info: 0x1000, input: 0x2000, time: 0x2100, others: [["RAM", 0x2040, 0x100]] }), /input .*overlaps RAM/);
 });
 
 test("watBytes matches sms-wat's escaping", () => {

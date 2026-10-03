@@ -6,6 +6,32 @@ the `romdev-mcp` bin is kept as an alias.)
 
 ## Unreleased
 
+### Recompiled carts declare wasmcart ABI v4
+
+wasmcart 0.31 refuses any cart below ABI v4, so every cart the static
+recompiler emitted was rejected at load. Every WAT backend (nes, gb/gbc, sms/gg
+including the flat emitter, gba, genesis, snes) now writes version 4 and lays
+its input block out for the v4 pad: 4 x 20-byte `wc_pad_t` = 80 bytes, pad N at
+`inputPtr + 20 * N`. Layouts that changed: nes moves its clock from INPUT+64 to
+INPUT+128; sms/gg (and `abiBlock()`) move the clock to ABI+368 and host info to
+ABI+392 (under v3 both sat inside what is now the pad block); snes's
+`input` region length is 80. Second-controller reads moved to the 20-byte
+stride (snes JOY2, sms port B, genesis pads 2-4 on J-Cart). The nes cart now
+reads controller 2 too (fceumm's port 2 gamepad; it was hard-wired idle).
+
+`cart-abi.js` gains `WC_ABI_VERSION`, `WC_PAD`, `padAddr()` and
+`assertHostSpans()`, which every backend calls at build time: the 80-byte
+input span must be disjoint from the clock, host info, audio ring and cursor,
+and the emulated state around them, or the build refuses.
+
+verifyRecompile / findDiverge / fuzzRecompile input schedules can address
+another controller: `p2.start` (p1-p4) presses player 2's start.
+`wasm({op:'conformance'})` reports `input-span-overlap` when a cart's 80-byte
+pad block lands on its clock, host info or audio cursor.
+
+The wasmcart test fixtures (hello, dbghello, detrng, glcart, glstress) were
+rebuilt from source against the v4 headers.
+
 ### Genesis recompile: SVP carts
 
 `disasm({target:'recompile', emit:'wasmcart', platform:'genesis'})` no

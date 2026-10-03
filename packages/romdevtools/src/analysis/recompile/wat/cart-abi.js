@@ -6,10 +6,13 @@
 // verify op needs no sidecar file. The helpers here make the parts that have
 // already bitten several emitters impossible to write incompletely:
 //
-//   - inputPtr (info field 7) MUST be a real address. The host writes 64
-//     bytes of pad state through it every frame with NO zero check, so 0
-//     scribbles over linear memory offset 0 (the SNES direct page, the NES
-//     zero page).
+//   - inputPtr (info field 7) MUST be a real address. The host writes 80
+//     bytes of pad state through it every frame (4 pads x 20 bytes, ABI v4)
+//     with NO zero check, so 0 scribbles over linear memory offset 0 (the
+//     SNES direct page, the NES zero page). Pad N is at inputPtr + 20 * N.
+//     Under ABI v3 the pad was 16 bytes; a layout sized for 64 bytes now has
+//     its last 16 bytes overwritten every frame, which is why every backend
+//     runs its host-written spans through assertHostSpans() at build time.
 //   - timePtr (info field 10) has the same contract, 20 bytes (two f64 and a
 //     u32), and MUST be 8-byte aligned because the host stores the f64s
 //     through a Float64Array index. On the NES cart a zero timePtr made
@@ -27,13 +30,82 @@ export const WC_INFO = Object.freeze({
   gpuApi: 64, wheelPtr: 68,
 });
 
-/** Size in bytes the host writes through each pointer. */
-export const WC_SIZES = Object.freeze({ info: 72, input: 64, pad: 16, time: 20, hostInfo: 20 });
+/**
+ * The wasmcart ABI version every recompiled cart declares in wc_info_t.version.
+ * wasmcart 0.31 (ABI v4) refuses any cart below 4: v4 widened the pad's
+ * triggers to int16, which moved `connected` and grew the pad to 20 bytes.
+ */
+export const WC_ABI_VERSION = 4;
+
+/** Size in bytes the host writes through each pointer (ABI v4). */
+export const WC_SIZES = Object.freeze({ info: 72, input: 80, pad: 20, pads: 4, time: 20, hostInfo: 20 });
+
+/**
+ * wc_pad_t field offsets (ABI v4, 20 bytes): u32 buttons, i16 sticks,
+ * i16 triggers (0..32767), u8 connected, 3 pad bytes.
+ */
+export const WC_PAD = Object.freeze({
+  buttons: 0, leftX: 4, leftY: 6, rightX: 8, rightY: 10, leftTrigger: 12, rightTrigger: 14, connected: 16,
+});
+
+/**
+ * Address of pad `n`'s wc_pad_t inside the input block.
+ * @param {number} input  inputPtr
+ * @param {number} n      pad index 0..3
+ */
+export function padAddr(input, n) {
+  if (!(Number.isInteger(n) && n >= 0 && n < WC_SIZES.pads)) throw new Error(`cart-abi: pad index ${n} out of range 0..${WC_SIZES.pads - 1}`);
+  return input + n * WC_SIZES.pad;
+}
+
+/**
+ * Build-time check of every span the HOST writes into cart memory (or that
+ * the cart hands the host), so a layout that lets one host write land on
+ * another, or on emulated state, refuses to build instead of corrupting a
+ * byte every frame. Every WAT backend calls this, whether or not it emits its
+ * wc_get_info through wcGetInfoWat.
+ *
+ * @param {object} o
+ * @param {number} o.info        wc_info_t address (72 bytes, 4-aligned)
+ * @param {number} o.input       inputPtr (80 bytes, nonzero)
+ * @param {number} o.time        timePtr (20 bytes, nonzero, 8-aligned)
+ * @param {number} [o.hostInfo]  wc_host_info_t (20 bytes) if declared
+ * @param {number} [o.audioWrite] the u32 audio write cursor
+ * @param {number} [o.audio]     the audio ring (with o.audioBytes)
+ * @param {number} [o.audioBytes]
+ * @param {Array<[string, number, number]>} [o.others]  other cart state the
+ *   host spans must not touch: [name, address, length]
+ * @param {string} [o.who]       backend name for the error
+ */
+export function assertHostSpans(o) {
+  const who = o.who ? `${o.who}: ` : "";
+  for (const k of ["info", "input", "time"]) {
+    if (!Number.isInteger(o[k]) || o[k] <= 0) throw new Error(`cart-abi: ${who}${k} must be a nonzero address`);
+  }
+  if (o.info % 4) throw new Error(`cart-abi: ${who}the info struct must be 4-byte aligned`);
+  if (o.time % 8) throw new Error(`cart-abi: ${who}timePtr 0x${o.time.toString(16)} must be 8-byte aligned (the host writes f64s through it)`);
+  const spans = [["info", o.info, WC_SIZES.info], ["input", o.input, WC_SIZES.input], ["time", o.time, WC_SIZES.time]];
+  if (o.hostInfo) spans.push(["hostInfo", o.hostInfo, WC_SIZES.hostInfo]);
+  if (o.audioWrite) spans.push(["audioWrite", o.audioWrite, 4]);
+  if (o.audio && o.audioBytes) spans.push(["audio ring", o.audio, o.audioBytes]);
+  const host = spans.length;
+  for (const [n, a, l] of o.others ?? []) if (l > 0) spans.push([n, a, l]);
+  if (spans[1][2] !== WC_SIZES.pad * WC_SIZES.pads) throw new Error(`cart-abi: ${who}input span must be ${WC_SIZES.pad * WC_SIZES.pads} bytes`);
+  for (let i = 0; i < host; i++) {
+    for (let j = i + 1; j < spans.length; j++) {
+      const [an, a, al] = spans[i], [bn, b, bl] = spans[j];
+      if (a < b + bl && b < a + al) throw new Error(`cart-abi: ${who}${an} (0x${a.toString(16)}+${al}) overlaps ${bn} (0x${b.toString(16)}+${bl})`);
+    }
+  }
+  return spans;
+}
 
 /** wasmcart pad button bits (wc_pad_t.buttons). */
 export const WC_BTN = Object.freeze({
   A: 1 << 0, B: 1 << 1, X: 1 << 2, Y: 1 << 3, L: 1 << 4, R: 1 << 5, START: 1 << 6, SELECT: 1 << 7,
   UP: 1 << 8, DOWN: 1 << 9, LEFT: 1 << 10, RIGHT: 1 << 11, L3: 1 << 12, R3: 1 << 13,
+  // ABI v4: the rest of the SDL2 button set (buttons is a u32 now).
+  GUIDE: 1 << 14, MISC1: 1 << 15, PADDLE1: 1 << 16, PADDLE2: 1 << 17, PADDLE3: 1 << 18, PADDLE4: 1 << 19, TOUCHPAD: 1 << 20,
 });
 
 /** Info flags. */
@@ -53,14 +125,14 @@ export const HOST_SETTLE = Object.freeze({ wasmcart: 1, libretro: 5 });
  * (base must be 8-byte aligned):
  *   base+0    wc_info_t (72 bytes)
  *   base+256  audio write cursor (u32)
- *   base+288  input: 4 pads x 16 bytes = 64 bytes
- *   base+352  wc_time_t (20 bytes, 8-aligned)
- *   base+384  wc_host_info_t (20 bytes)
+ *   base+288  input: 4 pads x 20 bytes = 80 bytes (ABI v4)
+ *   base+368  wc_time_t (20 bytes, 8-aligned)
+ *   base+392  wc_host_info_t (20 bytes)
  * @param {number} base
  */
 export function abiBlock(base) {
   if (base % 8 !== 0) throw new Error(`cart-abi: ABI block base 0x${base.toString(16)} must be 8-byte aligned`);
-  return { info: base, audioWrite: base + 256, input: base + 288, time: base + 352, hostInfo: base + 384, end: base + 512 };
+  return { info: base, audioWrite: base + 256, input: base + 288, time: base + 368, hostInfo: base + 392, end: base + 512 };
 }
 
 /**
@@ -72,7 +144,7 @@ export function abiBlock(base) {
  * @param {number} o.width
  * @param {number} o.height
  * @param {number} o.fb          framebuffer address (RGBA8888, width*height*4)
- * @param {number} o.input       inputPtr: 64 writable bytes, not 0
+ * @param {number} o.input       inputPtr: 80 writable bytes (4 x wc_pad_t), not 0
  * @param {number} o.time        timePtr: 20 writable bytes, not 0, 8-aligned
  * @param {number} [o.audio=0]   audio ring address (0 = no audio)
  * @param {number} [o.audioCap=0]
@@ -80,7 +152,7 @@ export function abiBlock(base) {
  * @param {number} [o.hostInfo=0]
  * @param {number} [o.flags=0]
  * @param {number} [o.sampleRate=0]
- * @param {number} [o.version=3]
+ * @param {number} [o.version=WC_ABI_VERSION]
  * @param {string} [o.name='wc_get_info']  export name
  * @param {boolean} [o.allowOverlap=false]  permit input/time/info to overlap
  *   (only for reproducing a legacy cart byte-for-byte)
@@ -91,6 +163,7 @@ export function wcGetInfoWat(o) {
   need("info"); need("fb"); need("input"); need("time");
   if (o.info % 4) throw new Error("cart-abi: the info struct must be 4-byte aligned");
   if (o.time % 8) throw new Error(`cart-abi: timePtr 0x${o.time.toString(16)} must be 8-byte aligned (the host writes f64s through it)`);
+  if ((o.version ?? WC_ABI_VERSION) < WC_ABI_VERSION) throw new Error(`cart-abi: version ${o.version} is below ABI v${WC_ABI_VERSION}; the host refuses it`);
   if (o.audio) {
     if (!(Number.isInteger(o.audioCap) && o.audioCap > 0)) throw new Error("cart-abi: an audio ring needs audioCap (capacity in stereo sample frames)");
     if (!(Number.isInteger(o.audioWrite) && o.audioWrite > 0)) throw new Error("cart-abi: an audio ring needs a nonzero audioWrite (address of the u32 write cursor)");
@@ -98,19 +171,11 @@ export function wcGetInfoWat(o) {
     if (o.audio % 4) throw new Error("cart-abi: the audio ring must be 4-byte aligned");
   }
   if (!o.allowOverlap) {
-    const spans = [["info", o.info, WC_SIZES.info], ["input", o.input, WC_SIZES.input], ["time", o.time, WC_SIZES.time]];
-    if (o.audio) spans.push(["audio ring", o.audio, o.audioCap * ((o.flags ?? 0) & WC_FLAG.AUDIO_F32 ? 8 : 4)]);
-    if (o.hostInfo) spans.push(["hostInfo", o.hostInfo, WC_SIZES.hostInfo]);
-    if (o.audioWrite) spans.push(["audioWrite", o.audioWrite, 4]);
-    for (let i = 0; i < spans.length; i++) {
-      for (let j = i + 1; j < spans.length; j++) {
-        const [an, a, al] = spans[i], [bn, b, bl] = spans[j];
-        if (a < b + bl && b < a + al) throw new Error(`cart-abi: ${an} (0x${a.toString(16)}+${al}) overlaps ${bn} (0x${b.toString(16)}+${bl})`);
-      }
-    }
+    assertHostSpans({ info: o.info, input: o.input, time: o.time, hostInfo: o.hostInfo, audioWrite: o.audioWrite,
+      audio: o.audio, audioBytes: o.audio ? o.audioCap * ((o.flags ?? 0) & WC_FLAG.AUDIO_F32 ? 8 : 4) : 0, others: o.others });
   }
   const f = [
-    [WC_INFO.version, o.version ?? 3],
+    [WC_INFO.version, o.version ?? WC_ABI_VERSION],
     [WC_INFO.width, o.width],
     [WC_INFO.height, o.height],
     [WC_INFO.fbPtr, o.fb],
@@ -130,7 +195,7 @@ export function wcGetInfoWat(o) {
 }
 
 /**
- * WAT that reads pad 0's button word (u16) from inputPtr into a local.
+ * WAT that reads pad 0's button word (low 16 bits of the u32) from inputPtr into a local.
  * @param {number} input  inputPtr address
  * @param {string} local  local name including '$'
  */

@@ -48,6 +48,7 @@ import * as video from "./video.js";
 import { gpioWat, HW_RTC } from "./gpio.js";
 import { RTC_CLOCK } from "../../recompile-section.js";
 import { audioLayout, audioWat, audioData, audioInfoWat, audioSection } from "./audio.js";
+import { assertHostSpans, WC_ABI_VERSION } from "../cart-abi.js";
 
 export const platforms = ["gba"];
 /** loadMedia platform id of the reference core */
@@ -222,6 +223,10 @@ export function computeLayout(romLen, staticRom, nArm = 0) {
   L.AUD = A.SINC;
   L.END = A.END_TRACE;
   L.FB = fb;
+  // ABI v4: 80 bytes of pads at ABI+0x100 (to +0x150), the clock at +0x180.
+  assertHostSpans({ who: "gba", info: L.ABI, input: L.ABI + 0x100, time: L.ABI + 0x180,
+    audio: A.OUT, audioBytes: A.STATE - A.OUT, audioWrite: A.STATE,
+    others: [["TRACE", L.TRACE, L.ABI - L.TRACE], ["ROM", L.ROM, Math.max(romLen, 4)], ["FB", fb, video.FB_W * video.FB_H * 4], ["EWRAM", L.EWRAM, 0x40000], ["IWRAM", L.IWRAM, 0x8000]] });
   return L;
 }
 
@@ -796,7 +801,7 @@ export async function* emitWat(rom, opts = {}) {
       (br $l))))
 
   (func (export "wc_get_info") (result i32)
-    (i32.store (i32.const ${ABI}) (i32.const 3))
+    (i32.store (i32.const ${ABI}) (i32.const ${WC_ABI_VERSION}))
     (i32.store (i32.const ${ABI + 4}) (i32.const ${FB_W}))
     (i32.store (i32.const ${ABI + 8}) (i32.const ${FB_H}))
     (i32.store (i32.const ${ABI + 12}) (i32.const ${L.FB}))

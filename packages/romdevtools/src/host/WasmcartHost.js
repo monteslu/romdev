@@ -515,7 +515,7 @@ export class WasmcartHost {
   }
 
   /**
-   * CartHost writes 64 bytes of pad state at WCInfo.inputPtr and 20 bytes of
+   * CartHost writes 80 bytes of pad state (4 x 20-byte wc_pad_t, ABI v4) at WCInfo.inputPtr and 20 bytes of
    * clock (f64 time, f64 delta, u32 frame) at WCInfo.timePtr EVERY frame, with
    * no check for 0 - so a cart that leaves either field unset gets the host
    * scribbling over linear offset 0, underneath the running program. For a
@@ -534,7 +534,7 @@ export class WasmcartHost {
     if (info && this.cart) {
       if (!info.inputPtr) {
         this.cart._writePads = () => {};
-        warnings.push({ code: "input-ptr-zero", message: "cart declares inputPtr=0 (WCInfo field 7, byte 28): pad state is NOT delivered (the host would otherwise write 64 bytes at linear offset 0 every frame). Fill the field to receive input." });
+        warnings.push({ code: "input-ptr-zero", message: "cart declares inputPtr=0 (WCInfo field 7, byte 28): pad state is NOT delivered (the host would otherwise write 80 bytes at linear offset 0 every frame). Fill the field to receive input." });
       }
       if (!info.timePtr || info.timePtr % 8 !== 0) {
         this.cart._writeTime = () => {};
@@ -564,7 +564,10 @@ export class WasmcartHost {
     // given, for callers that already speak the pad struct.
     const ax = src.axes && typeof src.axes === "object" ? src.axes : {};
     const stick = (v) => Math.max(-32768, Math.min(32767, Math.round((Number(v) || 0) * 32767)));
-    const trigger = (v) => Math.max(0, Math.min(255, Math.round((Number(v) || 0) * 255)));
+    // 0..32767 as of wasmcart ABI v4, the same scale as the sticks above: a
+    // trigger is just an axis that never goes negative. It was 0..255 while
+    // the pad struct stored it in a byte.
+    const trigger = (v) => Math.max(0, Math.min(32767, Math.round((Number(v) || 0) * 32767)));
     const pick = (raw, scaled) => (raw !== undefined ? raw | 0 : scaled);
     return {
       connected: true,
@@ -1272,7 +1275,19 @@ export class WasmcartHost {
     //    it gets no input, or no clock.
     if (!info.inputPtr) {
       issues.push({ severity: "error", code: "input-ptr-zero",
-        message: "WCInfo.inputPtr (field 7, byte 28) is 0. The cart receives NO input, and an unguarded host writes 64 bytes of pad state over linear offset 0 every frame. Point it at 64 bytes of cart memory." });
+        message: "WCInfo.inputPtr (field 7, byte 28) is 0. The cart receives NO input, and an unguarded host writes 80 bytes of pad state over linear offset 0 every frame. Point it at 80 bytes of cart memory (4 x 20-byte wc_pad_t, ABI v4)." });
+    }
+    // The pad block is 80 bytes as of ABI v4 (it was 64): a cart laid out for
+    // v3 that put its clock or host info right after 64 bytes of pads now
+    // has the host's pad write landing on them every frame.
+    if (info.inputPtr) {
+      const spans = [["timePtr", info.timePtr, 20], ["hostInfoPtr", info.hostInfoPtr, 20], ["audioWritePtr", info.audioWritePtr, 4]];
+      for (const [name, p, len] of spans) {
+        if (p && p < info.inputPtr + 80 && info.inputPtr < p + len) {
+          issues.push({ severity: "error", code: "input-span-overlap",
+            message: `WCInfo.inputPtr (${info.inputPtr}) + 80 bytes of pads overlaps ${name} (${p}, ${len} bytes): the host writes 4 x 20-byte wc_pad_t every frame (ABI v4), so ${name}'s bytes are overwritten. Move one of them.` });
+        }
+      }
     }
     if (!info.timePtr) {
       issues.push({ severity: "error", code: "time-ptr-zero",

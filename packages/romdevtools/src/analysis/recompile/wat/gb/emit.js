@@ -11,6 +11,7 @@ import * as H from "./hw-gb.js";
 import * as P from "./hw-gbc.js";
 import { ppuShadowWat } from "./ppu-shadow.js";
 import * as A from "./apu.js";
+import { assertHostSpans, WC_ABI_VERSION } from "../cart-abi.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -96,6 +97,12 @@ export function gbLayout(romLen) {
       }
     }
   }
+  // The host-written spans (ABI v4: 80 bytes of pads at ABI+0x100, the
+  // clock at ABI+0x180) against each other and everything around them.
+  assertHostSpans({ who: "gb", info: ABI, input: ABI + 0x100, time: ABI + 0x180,
+    audio: A.APU_LAYOUT.ring, audioBytes: A.APU_LAYOUT.ringCap * 4, audioWrite: A.APU_LAYOUT.writeCursor,
+    others: [["VRAM/IO", 0, 0x10000], ["PROBE", PROBE, 4096 + 2048 * 16], ["ROM", ROMIMG, romEnd - ROMIMG], ["FB", FB, FB_W * FB_H * 4],
+      ["PCTAB", PCTAB, PCSPAN * 4], ["APU state", A.APU, 0x10], ["APU buffers", A.APU_LAYOUT.mute, A.APU_LAYOUT.ring - A.APU_LAYOUT.mute]] });
   return { romEnd, FB, ABI, PCTAB, PCSPAN, PACKED, INPUT: ABI + 0x100, TIME: ABI + 0x180 };
 }
 
@@ -1773,12 +1780,12 @@ export function* emitGbWat(img, blocks, o) {
       (br $l))))
 
   (func (export "wc_get_info") (result i32)
-    (i32.store (i32.add (i32.const ${ABI}) (i32.const 0))  (i32.const 3))
+    (i32.store (i32.add (i32.const ${ABI}) (i32.const 0))  (i32.const ${WC_ABI_VERSION}))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 4))  (i32.const ${FB_W}))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 8))  (i32.const ${FB_H}))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 12)) (i32.const ${FB}))
     ;; inputPtr (WCInfo field 7, byte 28). MUST be a real address: the host
-    ;; writes 64 bytes of pad state here EVERY FRAME without checking for
+    ;; writes 80 bytes of pad state (ABI v4) here EVERY FRAME without checking for
     ;; zero, so leaving it 0 scribbles over WASM linear offset 0. On the
     ;; SNES and NES carts that offset is work RAM and the corruption was
     ;; the whole black screen; here it lands on unused space, but a probe

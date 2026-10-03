@@ -28,7 +28,7 @@ import { cost, costExact } from "./cycles.js";
 import { lower, flagHelpersWat, m1Count, rIncWat } from "./z80.js";
 import { smsSoundWat, smsSoundInfo } from "./psg.js";
 import { hwWat, renderWat, psgWat, miscWat, cramBody, startBody, pauseNmiWat, ggLutBytes, hcounterBytes, hcolBytes, hlatchBytes, VRAM, CRAM, VREG, GGLUT, PROBE, PCWATCH, SMSFB, LINEPROBE, HCTAB, HCOLTAB, HLATTAB } from "./hw.js";
-import { watBytes } from "../cart-abi.js";
+import { watBytes, abiBlock, assertHostSpans, padAddr, WC_ABI_VERSION } from "../cart-abi.js";
 import { emitFlatWat } from "./flat.js";
 import { z80Templates, z80InterpWat } from "./interp.js";
 
@@ -894,6 +894,12 @@ ${RAMMAP_LOOKUP}    (i32.const 0))
 /** Block maps init, CRAM->RGBA present, the wasmcart ABI exports and wc_render's frame loop. */
 function abiWat(G, cfg, n, platform) {
   const { ABI, FB, AUDIO, TRACE, BTAB, BMAP0, BMAPP, BMAP1, BMAPR } = G;
+  // ABI v4: 80 bytes of pads at AB.input, then the clock and host info
+  // (under v3 the clock sat at +320, inside the v4 pad block).
+  const AB = abiBlock(ABI);
+  const audioCap = cfg.legacy ? 4096 : smsSoundInfo(AUDIO).audioCap;
+  assertHostSpans({ who: "sms", info: AB.info, input: AB.input, time: AB.time, hostInfo: AB.hostInfo, audioWrite: AB.audioWrite,
+    audio: AUDIO, audioBytes: audioCap * (cfg.legacy ? 8 : 4), others: [["FB", FB, 256 * 256 * 4], ["TRACE", TRACE, AUDIO - TRACE]] });
   // a Game Gear in SMS mode shows, colours and pauses as a Master System
   const video = cfg.ggms ? "sms" : platform;
   const CRAMBODY = cramBody(video, CRAM);
@@ -1029,18 +1035,18 @@ ${cfg.legacy ? `    (block $d (loop $l
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 8)) (global.get $vph)))`}
 
   (func (export "wc_get_info") (result i32)
-    (i32.store (i32.add (i32.const ${ABI}) (i32.const 0))  (i32.const 3))
+    (i32.store (i32.add (i32.const ${ABI}) (i32.const 0))  (i32.const ${WC_ABI_VERSION}))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 4))  (i32.const 256))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 8))  (i32.const 192))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 12)) (i32.const ${FB}))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 16)) (i32.const ${AUDIO}))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 20)) (i32.const ${cfg.legacy ? 4096 : smsSoundInfo(AUDIO).audioCap}))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 24)) (i32.add (i32.const ${ABI}) (i32.const 256)))
-    (i32.store (i32.add (i32.const ${ABI}) (i32.const 28)) (i32.add (i32.const ${ABI}) (i32.const 288)))
+    (i32.store (i32.add (i32.const ${ABI}) (i32.const 28)) (i32.const ${AB.input}))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 32)) (i32.const 0))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 36)) (i32.const 0))
-    (i32.store (i32.add (i32.const ${ABI}) (i32.const 40)) (i32.add (i32.const ${ABI}) (i32.const 320)))
-    (i32.store (i32.add (i32.const ${ABI}) (i32.const 44)) (i32.add (i32.const ${ABI}) (i32.const 352)))
+    (i32.store (i32.add (i32.const ${ABI}) (i32.const 40)) (i32.const ${AB.time}))
+    (i32.store (i32.add (i32.const ${ABI}) (i32.const 44)) (i32.const ${AB.hostInfo}))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 48)) (i32.const ${cfg.legacy ? 1 : 0}))
     (i32.store (i32.add (i32.const ${ABI}) (i32.const 52)) (i32.const ${cfg.legacy ? 48000 : smsSoundInfo(AUDIO).sampleRate}))
     (i32.const ${ABI}))
@@ -1078,7 +1084,7 @@ ${cfg.legacy ? "" : `    ;; gpgx sram_init: backup RAM powers on as $FF
   (func (export "wc_render")
     (local $ln i32) (local $btn i32) (local $k i32)
     (global.set $frames (i32.add (global.get $frames) (i32.const 1)))
-    (local.set $btn (i32.load16_u (i32.add (i32.const ${ABI}) (i32.const 288))))
+    (local.set $btn (i32.load16_u (i32.const ${padAddr(AB.input, 0)})))
     (global.set $joy1 (i32.const 0xFF))
     (if (i32.and (local.get $btn) (i32.const 256))
       (then (global.set $joy1 (i32.and (global.get $joy1) (i32.const 0xFE)))))
@@ -1095,7 +1101,7 @@ ${cfg.legacy ? "" : `    ;; gpgx sram_init: backup RAM powers on as $FF
 ${STARTBTN}
 ${cfg.legacy ? "" : `    ;; the second pad (wasmcart pad 1): up/down on $DC bits 6-7, left/right
     ;; and buttons 1/2 on $DD bits 0-3 (gpgx io_z80_read)
-    (local.set $btn (i32.load16_u (i32.add (i32.const ${ABI}) (i32.const 304))))
+    (local.set $btn (i32.load16_u (i32.const ${padAddr(AB.input, 1)})))
     (global.set $joy2 (i32.const 0xFF))
     (if (i32.and (local.get $btn) (i32.const 256)) (then (global.set $joy1 (i32.and (global.get $joy1) (i32.const 0xBF)))))
     (if (i32.and (local.get $btn) (i32.const 512)) (then (global.set $joy1 (i32.and (global.get $joy1) (i32.const 0x7F)))))
@@ -1103,7 +1109,7 @@ ${cfg.legacy ? "" : `    ;; the second pad (wasmcart pad 1): up/down on $DC bits
     (if (i32.and (local.get $btn) (i32.const 2048)) (then (global.set $joy2 (i32.and (global.get $joy2) (i32.const 0xFD)))))
     (if (i32.and (local.get $btn) (i32.const 1)) (then (global.set $joy2 (i32.and (global.get $joy2) (i32.const 0xFB)))))
     (if (i32.and (local.get $btn) (i32.const 2)) (then (global.set $joy2 (i32.and (global.get $joy2) (i32.const 0xF7)))))
-    (local.set $btn (i32.load16_u (i32.add (i32.const ${ABI}) (i32.const 288))))
+    (local.set $btn (i32.load16_u (i32.const ${padAddr(AB.input, 0)})))
 `}${FRAME_START}    (local.set $k (i32.const 0))
     (block $fd (loop $fl
       (br_if $fd (i32.ge_u (local.get $k) (i32.const ${LINES})))

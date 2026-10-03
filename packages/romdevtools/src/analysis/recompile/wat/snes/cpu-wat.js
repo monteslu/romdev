@@ -15,6 +15,7 @@ import {
   WRAM, PPUREG, INPUT, MAPTAB, HDMAST, DPWATCH, DMALOG, DMALOG_N, DMALOG_STRIDE,
 } from "./layout.js";
 import { ppuGlobalsWat } from "./ppu-wat.js";
+import { padAddr } from "../cart-abi.js";
 import { SA1_BOARD, SA1_HOOKS } from "./sa1.js";
 
 /**
@@ -717,8 +718,8 @@ export function memWat(lay) {
     (if (i32.and (local.get $j) (i32.const 0x100)) (then (local.set $j (i32.and (local.get $j) (i32.const 0xFDFF)))))
     (local.get $j))
   (func $pads_sample
-    (global.set $pad0 (call $pad_word (i32.load16_u (i32.const ${INPUT}))))
-    (global.set $pad1 (call $pad_word (i32.load16_u (i32.const ${INPUT + 16})))))
+    (global.set $pad0 (call $pad_word (i32.load16_u (i32.const ${padAddr(INPUT, 0)}))))
+    (global.set $pad1 (call $pad_word (i32.load16_u (i32.const ${padAddr(INPUT, 1)})))))
   ;; S9xSetJoypadLatch: raising the latch rewinds both shift positions.
   (func $joy_latch (param $l i32)
     (if (i32.and (local.get $l) (i32.eqz (global.get $joylatch)))

@@ -39,14 +39,23 @@ import { AUDIO_REFERENCE } from "../analysis/recompile/wat/cart-abi.js";
 
 // ─── input schedule ──────────────────────────────────────────────────────────
 
-const BUTTON_RE = /^[a-z0-9]+$/;
+// A button name, optionally addressed to another controller: "p2.a" is
+// player 2's a (host port 1), "p1.a" is the same as "a". Ports 1-4.
+const BUTTON_RE = /^(?:p[1-4]\.)?[a-z0-9]+$/;
+
+/** Split "p2.up" into [1, "up"] (port index, button); a bare name is port 0. */
+export function splitPortButton(name) {
+  const m = /^p([1-4])\.(.+)$/.exec(name);
+  return m ? [Number(m[1]) - 1, m[2]] : [0, name];
+}
 
 /**
  * Normalise an input schedule. Accepts the compact string the sms-wat
  * verifiers used ("300:start:10,900:a+right:6" = frame:buttons:hold) or an
  * array of {frame, buttons, hold} where buttons is "a+right", ["a","right"]
  * or {a:true, right:true}. Frames are REFERENCE frames (frames stepped after
- * loadMedia on the reference core).
+ * loadMedia on the reference core). A name prefixed "p2." (p1-p4) presses
+ * that controller's button ("0:p2.start:10" is player 2's start).
  * @param {string|Array<object>|undefined} input
  * @returns {{frame:number, buttons:string[], hold:number}[]}
  */
@@ -117,16 +126,27 @@ export class ScheduleDriver {
 
   _want(f) {
     const set = new Set();
-    for (const p of this.schedule) if (p.frame <= f && f < p.frame + p.hold) for (const b of p.buttons) set.add(this.nameMap?.[b] ?? b);
+    for (const p of this.schedule) {
+      if (!(p.frame <= f && f < p.frame + p.hold)) continue;
+      for (const n of p.buttons) {
+        const [port, b] = splitPortButton(n);
+        const m = this.nameMap?.[b] ?? b;
+        set.add(port ? `p${port + 1}.${m}` : m);
+      }
+    }
     return [...set].sort();
   }
 
   _apply(names) {
     const key = names.join("+");
     if (key === this._held) return;
-    const port = {};
-    for (const n of names) port[n] = true;
-    this.host.setInput({ ports: [port] });
+    const ports = [{}];
+    for (const n of names) {
+      const [p, b] = splitPortButton(n);
+      while (ports.length <= p) ports.push({});
+      ports[p][b] = true;
+    }
+    this.host.setInput({ ports });
     this._held = key;
   }
 

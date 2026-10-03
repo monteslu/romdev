@@ -103,8 +103,8 @@ test("wasmcart: input axes reach the pad as stick/trigger values", () => {
   assert.equal(pad.leftY, -16383);   // -0.5 * 32767 rounds toward +inf
   assert.equal(pad.rightX, -32767);
   assert.equal(pad.rightY, 8192);
-  assert.equal(pad.leftTrigger, 255);
-  assert.equal(pad.rightTrigger, 128);
+  assert.equal(pad.leftTrigger, 32767); // ABI v4: triggers are int16, 0..32767
+  assert.equal(pad.rightTrigger, 16384);
   // raw pad-struct keys still win when given
   assert.equal(host._padFromInput({ leftX: 123, axes: { lx: 1 } }).leftX, 123);
   // no axes = centered
