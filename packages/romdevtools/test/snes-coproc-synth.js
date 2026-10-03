@@ -321,3 +321,53 @@ export function spc7110Rom({ rtc = false } = {}) {
     name: "SPC7110 SYNTH TEST", code: c, codeAt: 0x8000, data: [[0x100000, data], [0x10000, rand(0xf0000, 5)]] });
 }
 export const spc7110RtcRom = () => spc7110Rom({ rtc: true });
+
+/**
+ * 65816 code that uploads the SPC700 program at CPU `progAt` (`len` bytes)
+ * to ARAM $0200 through the IPL boot protocol, starts it and waits for its
+ * $77 on $2141 (native mode, A 8-bit, X 16-bit), then runs `tail`.
+ */
+export function spcUploadCode(len, progAt, tail) {
+  return [
+    0x78, 0x18, 0xfb, 0xc2, 0x10, 0xe2, 0x20,
+    0xa9, 0xaa, 0xcd, 0x40, 0x21, 0xd0, 0xfb,
+    0xa9, 0xbb, 0xcd, 0x41, 0x21, 0xd0, 0xfb,
+    0xa2, 0x00, 0x02, 0x8e, 0x42, 0x21,
+    0xa9, 0x01, 0x8d, 0x41, 0x21, 0xa9, 0xcc, 0x8d, 0x40, 0x21,
+    0xcd, 0x40, 0x21, 0xd0, 0xfb,
+    0xa2, 0x00, 0x00,
+    0xbd, lo(progAt), hi(progAt), 0x8d, 0x41, 0x21, 0x8a, 0x8d, 0x40, 0x21,
+    0xcd, 0x40, 0x21, 0xd0, 0xfb,
+    0xe8, 0xe0, lo(len), hi(len), 0xd0, 0xeb,
+    0xa2, 0x00, 0x02, 0x8e, 0x42, 0x21, 0x9c, 0x41, 0x21,
+    0xa9, lo(len + 1), 0x8d, 0x40, 0x21,
+    0xa9, 0x77, 0xcd, 0x41, 0x21, 0xd0, 0xfb,
+    ...tail,
+  ];
+}
+
+/** An SPC700 program: answer $77 on $F5, then count in ARAM $10/$11 (incw $10, 6 clocks each). */
+export const SPC_COUNTER = [0x8f, 0x77, 0xf5, ...Array.from({ length: 60 }, () => [0x3a, 0x10]).flat(), 0x2f, 0x100 - 122];
+
+/**
+ * The SPC7110 word-access cart: the SPC700 counts while the 65816 loops over
+ * 16-bit accesses whose snes9x map types group them differently from their
+ * cart block types: a $D0 data ROM read (MAP_SPC7110_ROM, byte by byte), a
+ * bank $50 write (MAP_SPC7110_DRAM mapped as ROM: MAP_NONE on writes, one
+ * grouped access) and HiROM SRAM at $00:6000 (MAP_HIROM_SRAM, grouped).
+ * `loopAt` is the CPU address of the loop's first instruction.
+ */
+export function spc7110WordRom() {
+  const loop = [
+    ...A.ldaL(0xd00010),    // MAP_SPC7110_ROM word read
+    ...A.staL(0x500000),    // MAP_SPC7110_DRAM word write (write side MAP_NONE)
+    ...A.lda(0x6000),       // MAP_HIROM_SRAM word read
+    ...A.sta(0x6002),       // MAP_HIROM_SRAM word write
+  ];
+  const code = spcUploadCode(SPC_COUNTER.length, 0x8200, [...A.rep(0x20), ...loop, ...A.bra(-(loop.length + 2))]);
+  if (code.length > 0x200) throw new Error("spc7110WordRom: code overruns the program at $8200");
+  const loopAt = 0x8000 + code.length - loop.length - 2;
+  const rom = cartImage({ size: 0x400000, hiRom: true, mapMode: 0x3a, chipset: 0xf5, romSizeByte: 0x0c, sramSizeByte: 0x01,
+    name: "SPC7110 WORD TEST", code, codeAt: 0x8000, data: [[0x8200, SPC_COUNTER], [0x100000, rand(0x1000, 7)]] });
+  return { rom, loopAt };
+}

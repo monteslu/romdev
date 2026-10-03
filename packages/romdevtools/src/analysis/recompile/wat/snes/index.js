@@ -152,6 +152,9 @@ export function describe(rom, opts = {}) {
   layout.pal = L.pal;
   // A coprocessor's state (coproc.js), above everything computeLayout placed.
   const chip = chipFor(L.coprocessor);
+  // where its snes9x map types group 16-bit accesses differently from its
+  // cart block types (cpu-wat.js $fast2)
+  layout.wordBus = chip?.wordBus ?? null;
   if (chip?.pages) {
     layout.CHIP = layout.pages * 0x10000;
     layout.pages += chip.pages;

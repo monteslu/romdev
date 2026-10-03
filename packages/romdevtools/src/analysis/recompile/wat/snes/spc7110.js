@@ -142,6 +142,10 @@ export const spc7110 = {
   boards: ["SPC7110HiROM"],
   buildMap: (api, lay) => { if (api.map === "SPC7110HiROM") buildMap(api, lay); },
   pages: (STATE + 0x10000) / 0x10000,
+  // getset.h: S9xGetWord reads MAP_SPC7110_ROM ($D0-$FF, kept as ROM blocks
+  // by $spc7110_map) byte by byte; bank $50 (MAP_SPC7110_DRAM) is mapped
+  // MAP_TYPE_ROM, so a word written there is MAP_NONE: one grouped access.
+  wordBus: { readByByte: [[0xd0, 0xff]], writeGrouped: [[0x50, 0x50]] },
   wat,
   /** the RTC-4513 ($F9 carts) reads the host's frame clock; the verifier pins snes9x's time() to it */
   // its registers, decompressor and RTC (chipstate) and the battery SRAM the

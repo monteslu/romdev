@@ -17,6 +17,28 @@ import {
 import { ppuGlobalsWat } from "./ppu-wat.js";
 import { SA1_BOARD, SA1_HOOKS } from "./sa1.js";
 
+/**
+ * A chip's exceptions to $fast2's block-type rule (coproc.js `wordBus`):
+ * bank ranges whose 16-bit reads go byte by byte although the cart keeps
+ * them as plain ROM (`readByByte`), and bank ranges of a chip window whose
+ * 16-bit writes are one grouped access (`writeGrouped`: snes9x maps them
+ * as ROM, so map_WriteProtectROM leaves MAP_NONE on the write side).
+ * @param {{readByByte?: number[][], writeGrouped?: number[][]}|null|undefined} wb
+ * @returns {string} WAT statements for $fast2 (locals $a, $want)
+ */
+export function wordBusWat(wb) {
+  if (!wb) return "";
+  const bank = "(i32.and (i32.shr_u (local.get $a) (i32.const 16)) (i32.const 0xFF))";
+  const inRanges = (rs) => rs.map(([b0, b1]) => (b0 === b1
+    ? `(i32.eq ${bank} (i32.const 0x${b0.toString(16)}))`
+    : `(i32.le_u (i32.sub ${bank} (i32.const 0x${b0.toString(16)})) (i32.const ${b1 - b0}))`))
+    .reduce((x, y) => `(i32.or ${x} ${y})`);
+  let out = "";
+  if (wb.readByByte?.length) out += `\n    (if (i32.and (i32.eq (local.get $want) (i32.const 1)) ${inRanges(wb.readByByte)}) (then (return (i32.const 0))))`;
+  if (wb.writeGrouped?.length) out += `\n    (if (i32.and (i32.eq (local.get $want) (i32.const 2)) ${inRanges(wb.writeGrouped)}) (then (return (i32.const 1))))`;
+  return out;
+}
+
 // emit_snes.py globals_wat() lines 205-297
 /** @param {import("./layout.js").SnesLayout} lay */
 export function globalsWat(lay) {
@@ -241,21 +263,29 @@ export function memWat(lay) {
       (return (call $chip_rd (local.get $a))))
     (global.get $ob))
 
-  ;; snes9x S9xGetWord / S9xSetWord take a FAST PATH when both bytes are
-  ;; plain memory in one 4KB block: one access of twice the speed, and the
-  ;; event check after both bytes (addCyclesInMemoryAccess_x2). Anything
-  ;; else - I/O, SRAM windows handled byte by byte, a word that straddles a
-  ;; block - goes byte by byte. $want is 1 for ROM or RAM (reads), 2 for RAM
-  ;; only (writes: ROM is write-protected, so it is not a plain block there).
+  ;; Is this 16-bit access ONE access of twice the speed, with a single
+  ;; event check after both bytes (snes9x addCyclesInMemoryAccess_x2), or
+  ;; two byte accesses with an event check after each? snes9x S9xGetWord /
+  ;; S9xSetWord decide it by the block's map type, and it matters: a line
+  ;; end that falls between the two bytes is processed 8 clocks later in
+  ;; the grouped form, and the APU catches up to that position. A word that
+  ;; straddles a 4KB block, and (H)DMA, always go byte by byte. Otherwise
+  ;; the I/O handlers go byte by byte (MAP_CPU, MAP_PPU and every chip
+  ;; window: DSP, C4, OBC1, Seta, BS-X, SPC7110 data), and everything else
+  ;; is grouped: plain memory, the SRAM windows (MAP_LOROM_SRAM,
+  ;; MAP_LOROM_SRAM_B, MAP_HIROM_SRAM, MAP_BWRAM) and MAP_NONE, which is
+  ;; also what a write to write-protected ROM sees (map_WriteProtectROM).
+  ;; $want is 1 for a read, 2 for a write. A chip whose snes9x map types do
+  ;; not follow its cart block types says so (lay.wordBus, coproc.js).
   (func $fast2 (param $a i32) (param $want i32) (result i32)
     (local $t i32)${sa1 ? "\n    " + sa1.fast2 : ""}
     (if (i32.eq (i32.and (local.get $a) (i32.const 0xFFF)) (i32.const 0xFFF)) (then (return (i32.const 0))))
-    (if (global.get $indma) (then (return (i32.const 0))))
+    (if (global.get $indma) (then (return (i32.const 0))))${wordBusWat(lay.wordBus)}
     (local.set $t (i32.load (i32.add (i32.const ${MAPTAB})
       (i32.shl (i32.shr_u (i32.and (local.get $a) (i32.const 0xFFFFFF)) (i32.const 12)) (i32.const 3)))))
-    (if (result i32) (i32.eq (local.get $want) (i32.const 1))
-      (then (i32.or (i32.eq (local.get $t) (i32.const 1)) (i32.eq (local.get $t) (i32.const 2))))
-      (else (i32.eq (local.get $t) (i32.const 2)))))
+    ;; MAP_TYPE PPU 3, CPU 4, CHIP 7 (memmap.js)
+    (i32.eqz (i32.or (i32.or (i32.eq (local.get $t) (i32.const 3)) (i32.eq (local.get $t) (i32.const 4)))
+                     (i32.eq (local.get $t) (i32.const 7)))))
 
   (func $rd16 (param $a i32) (result i32)
     (local $v i32)
