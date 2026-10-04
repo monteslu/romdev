@@ -23,6 +23,7 @@ import { backendFor, PLATFORM_BACKEND } from "./index.js";
 import { assembleWat } from "./assemble.js";
 import { toCustomSection, recompileSectionBytes } from "./cart-abi.js";
 import { packWasc } from "../../../mcp/tools/native-pack.js";
+import { cartLicence } from "../licence.js";
 
 /**
  * @typedef {object} RecompileResult
@@ -104,9 +105,13 @@ export async function recompileToWasmcart(a) {
   }
 
   // Custom section: the backend's own, else a minimal one from describe().
-  let section;
-  if (typeof backend.recompileSection === "function") section = toCustomSection(await backend.recompileSection(rom, romSha1, opts));
-  else if (desc && desc.layout) section = toCustomSection({ json: { platform: a.platform, referenceCore: desc.referenceCore || backend.REFERENCE_CORE, romSha1, ...desc.layout } });
+  let sec;
+  if (typeof backend.recompileSection === "function") sec = await backend.recompileSection(rom, romSha1, opts);
+  else if (desc && desc.layout) sec = { json: { platform: a.platform, referenceCore: desc.referenceCore || backend.REFERENCE_CORE, romSha1, ...desc.layout } };
+  // Every cart names the emulator code it carries and that code's licence
+  // (licence.js): a recompiled cart is under the reference core's terms.
+  if (sec?.json && PLATFORM_BACKEND[a.platform]) sec = { ...sec, json: { ...sec.json, licence: cartLicence(a.platform, desc, opts) } };
+  const section = sec ? toCustomSection(sec) : undefined;
   const layout = section ? JSON.parse(Buffer.from(section.data).toString("utf8")) : undefined;
 
   // The bare module: the output itself for emit:'wasm'; for emit:'wasmcart' a

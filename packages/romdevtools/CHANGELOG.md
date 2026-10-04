@@ -6,6 +6,25 @@ the `romdev-mcp` bin is kept as an alias.)
 
 ## Unreleased
 
+### Recompiled carts say which emulator licence they carry
+
+NOTICE said a game built with romdev contains only its author's code. That is
+true for compiled games but not for recompiled carts: every WAT backend (and
+the sync32 Genesis backend) builds code ported from its reference core into
+the cart, so a recompiled cart is under that core's licence (fceumm GPL-2.0,
+gambatte GPL-2.0, mGBA MPL-2.0, Genesis Plus GX / Musashi / z80.c / snes9x
+non-commercial, with LGPL blip_buf and snes_spc parts). NOTICE now has a
+"Recompiled carts" section with the per-platform table, each backend
+directory has a NOTICE.txt naming its upstream, and the licence texts are in
+the new `LICENSES/` directory (shipped in the package).
+
+Every recompiled cart's `romdev.recompile` section (and a sync32 cart's
+rd_meta.c metadata) gains a `licence` entry: `spdx`, `terms`, `upstream`
+(name, url, pinned commit, spdx), `source` (romdevtools version and
+directory), `licenceTexts`, `romCode`, and `notices` (the notices that must
+travel with every copy). It depends only on the platform, the cart's chips
+and the romdev version, so builds stay byte-reproducible.
+
 ### Recompiled carts declare wasmcart ABI v4
 
 wasmcart 0.31 refuses any cart below ABI v4, so every cart the static

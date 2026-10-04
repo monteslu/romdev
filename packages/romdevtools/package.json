@@ -125,7 +125,8 @@
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
-    "NOTICE"
+    "NOTICE",
+    "LICENSES"
   ],
   "repository": {
     "type": "git",

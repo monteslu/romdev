@@ -1,0 +1,24 @@
+SMS / Game Gear recompiler backend: derived from Genesis Plus GX
+================================================================
+
+Upstream:  Genesis Plus GX, https://github.com/libretro/genesis-plus-gx
+Commit:    162c3439a697ffdfa00a5d3f44af103bf671f5dc (scripts/versions.json, cores.genesis_plus_gx)
+Licence:   Genesis Plus GX licence, NON-COMMERCIAL (redistributions may not be
+           sold nor used in a commercial product or activity).
+           Text: LICENSES/LicenseRef-GenesisPlusGX.txt.
+Also:      blip_buf (Shay Green, as modified for Genesis Plus GX),
+           LGPL-2.1-or-later. Text: LICENSES/LGPL-2.1.txt.
+
+What is derived:
+  hw.js          the VDP, I/O and frame order of genesis_plus_gx
+  psg.js         core/sound/psg.c (SN76489), core/sound/blip_buf.c and the
+                 frame hand-off of sound.c / system.c (also used by the
+                 Genesis backend)
+  cycles.js      Z80 timings checked against genesis_plus_gx's cc tables
+  gpgx-hcounter.json, gpgx-sms-db.json, gpgx-sound.json
+                 data extracted from genesis_plus_gx's source
+The Z80 lowering (z80.js, interp.js) is romdev's own.
+
+Every cart this backend builds contains that code: a recompiled SMS or Game
+Gear cart may not be sold or used commercially, and its blip_buf part is
+under the LGPL. See NOTICE at the package root.

@@ -1,0 +1,24 @@
+GBA recompiler backend: derived from mGBA
+=========================================
+
+Upstream:  mGBA 0.11 (libretro/mgba), https://github.com/libretro/mgba
+Commit:    6dce57eef127dc4cc292644f38196e0e7c58590c (scripts/versions.json, cores.mgba)
+Licence:   MPL-2.0. Text: LICENSES/MPL-2.0.txt.
+Also:      musl libm (Emscripten 4.0.18's copy): sin/cos (musl-trig.js) and
+           the exp2f data in mgba-data.json. MIT, with the FreeBSD msun
+           notice of Sun Microsystems. Texts: LICENSES/MIT-musl.txt and
+           LICENSES/msun-Sun.txt.
+
+What is derived (each file names the mGBA function it ports):
+  cpu.js         mGBA's ARM7TDMI handlers (src/arm/isa-arm.c, isa-thumb.c)
+  sys.js         bus, scheduler, timers, DMA, save chips, BIOS calls
+  video.js       the scanline renderer, matched to mGBA's output rules
+  audio.js       src/gba/audio.c, src/gb/audio.c, the resampler
+  gpio.js        src/gba/cart/gpio.c (GPIO, RTC)
+  musl-trig.js   musl sin/cos
+  mgba-data.json, mgba-audio.json   data extracted from mGBA (including its
+                 HLE BIOS image, src/gba/hle-bios.c) and musl
+
+MPL-2.0 is file-level copyleft: these files stay under MPL-2.0, and anyone
+who shares a recompiled GBA cart must make their source available (this
+package, at the version the cart names). See NOTICE at the package root.

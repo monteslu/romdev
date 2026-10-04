@@ -1,0 +1,21 @@
+Game Boy / Game Boy Color recompiler backend: derived from gambatte
+===================================================================
+
+Upstream:  gambatte (gambatte-libretro), https://github.com/libretro/gambatte-libretro
+Commit:    3262c2aa4adae8dba4f6d51cdd931c15cb11569f (scripts/versions.json, cores.gambatte)
+Licence:   GPL-2.0-only (libgambatte's files: "version 2 as published by the
+           Free Software Foundation"). Text: LICENSES/GPL-2.0.txt.
+Also:      blipper (libgambatte/libretro/blipper.c), Copyright (C) 2013
+           Hans-Kristian Arntzen, MIT. Text: LICENSES/MIT-blipper.txt.
+
+What is derived: the machine model is gambatte's:
+  apu.js         libgambatte sound.cpp and sound/*, gambatte-memory.cpp's
+                 $FF10-$FF3F rules, and the blipper resampler
+  ppu-shadow.js  libgambatte video/ppu.cpp's PPU state machine
+  hw-gbc.js, hw-gb.js, emit.js   memory map, MBCs, timers, HDMA, CGB I/O
+  apu-tables.json, initstate.json, ../gb-cycles.json   data from gambatte
+
+Every cart this backend builds contains that code: a recompiled GB/GBC cart
+is under GPL-2.0 (with the MIT blipper notice, which the cart carries).
+Sharing it requires offering its complete corresponding source (this
+package, at the version the cart names). See NOTICE at the package root.

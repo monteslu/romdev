@@ -117,5 +117,6 @@ export function readS32RecompileLayout(cart) {
     conventions: meta.conventions,
     native: { target: "sync32", profile: meta.profile, blocks: meta.blocks, descriptorFileOffset: at, stats: st, vdpReg: d.vdpReg, sat: d.sat, z80: d.z80 },
     license: meta.license,
+    licence: meta.licence,
   };
 }

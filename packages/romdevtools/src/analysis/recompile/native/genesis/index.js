@@ -28,6 +28,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tablesSource } from "./tables.js";
+import { cartLicence } from "../../licence.js";
 import { loadGpgxData } from "../../wat/genesis/gpgx-data.js";
 import { normalizeRom, cartMapper, sramConfig, eepromConfig, sixButtonPads, cartHardware, palTiming } from "../../wat/genesis/index.js";
 
@@ -181,6 +182,7 @@ function metaJson(d, extra = {}) {
     // cart presents exactly once per Genesis frame, so frame F is frame F
     conventions: { settleFrames: { cart: 5, reference: 5 }, cartFrameOffset: 0 },
     license: d.licenseNote,
+    licence: cartLicence("sync32-genesis"),
     ...extra,
   };
 }

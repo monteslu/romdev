@@ -1,0 +1,37 @@
+SNES recompiler backend: derived from snes9x (and ares for two chips)
+=====================================================================
+
+Upstream:  snes9x (libretro/snes9x), https://github.com/libretro/snes9x
+Commit:    185488cd83aaf274752a742c94d45561cbecb7af (scripts/versions.json, cores.snes9x)
+Licences:
+  snes9x licence, NON-COMMERCIAL; its licence information and copyright
+    notice must appear with all copies and derived works
+                                    LICENSES/LicenseRef-snes9x.txt
+  snes_spc S-DSP (apu/bapu/dsp/SPC_DSP.cpp, Shay Green), LGPL-2.1-or-later
+                                    LICENSES/LGPL-2.1.txt
+  SPC7110 emulator (spc7110emu.cpp, spc7110dec.cpp, byuu and neviksti),
+    ISC-style permissive (SPC7110 carts only)   LICENSES/ISC-spc7110.txt
+  musl libm via Emscripten (the CX4 unit's sin/cos/atan; CX4 carts only),
+    MIT                             LICENSES/MIT-musl.txt
+  ares (uPD96050 and ARM cores; ST011 / ST018 carts built with
+    options.firmware only), ISC, commit 4cb8d92b441557cb6bcaf133c4cbc7f6819b1122
+                                    LICENSES/ISC-ares.txt
+
+What is derived:
+  memmap.js, loader.js, romfixes.js   snes9x memmap.cpp (maps, ROM loading,
+                                      per-title fixes)
+  cpu-wat.js, frame-wat.js            snes9x's CPU timing, DMA/HDMA, frame
+  ppu-wat.js                          snes9x ppu.cpp, gfx.cpp, tileimpl.h
+  apu-wat.js, snes9x-apu.json         the SPC700 (snes9x bapu smp, including
+                                      its 64-byte IPL boot ROM) and the S-DSP
+  sa1.js, superfx.js, sdd1.js, cx4.js, spc7110.js, bsx.js, msu1.js,
+  chips-snes9x.js, chip-unit.js, snes9x-chips.json, snes9x-superfx.json
+                                      snes9x's coprocessors, compiled from or
+                                      ported from its source
+  chips-ares.js, ares-chips.json      ares's chip cores (see NOTICE)
+  snes9x-tables.json, snes9x-romfixes.json   data from snes9x's source
+The 65816 lowering (lower.js) and layout.js are romdev's own.
+
+Every cart this backend builds contains snes9x code: a recompiled SNES cart
+may not be sold or used commercially, carries snes9x's licence text, and its
+S-DSP part is under the LGPL. See NOTICE at the package root.

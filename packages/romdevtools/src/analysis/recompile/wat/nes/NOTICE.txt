@@ -1,0 +1,23 @@
+NES recompiler backend: derived from fceumm
+===========================================
+
+Upstream:  fceumm, https://github.com/libretro/libretro-fceumm
+Commit:    3a84a6fd0ba20dd4877c06b1d58741172148395f (scripts/versions.json, cores.fceumm)
+Licence:   GPL-2.0-or-later (fceumm's files are "version 2 of the License, or
+           (at your option) any later version"). Text: LICENSES/GPL-2.0.txt
+           in this package.
+
+What is derived: the machine model a recompiled NES cart runs on is a port
+of fceumm, so that the cart matches fceumm frame for frame:
+  ppu.js        fceumm src/ppu.c (the "old" PPU)
+  apu.js        fceumm src/sound.c (low-quality renderer) and src/filter.c
+  cpu.js        x6502.c's cycle rules (the instruction lowering is romdev's)
+  index.js      FCEUPPU_Loop / X6502_Run frame and IRQ order
+  mappers.js    fceumm's mapper behaviour for the supported boards
+  fceumm-tables.json, fceumm-ines-correct.json, ../m6502-cycles.json
+                data extracted from fceumm's source
+
+Every cart this backend builds contains that code, so a recompiled NES cart
+is under the GPL: sharing it requires offering its complete corresponding
+source (this package, at the version the cart names in its romdev.recompile
+section's `licence` entry). See NOTICE at the package root.

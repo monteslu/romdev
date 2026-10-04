@@ -1,11 +1,21 @@
 romdev - third-party component inventory
 ========================================
 
-TL;DR - Games you build with romdev are YOURS, including to sell commercially.
-A built ROM contains only your code + permissive runtime libraries, compiled by
-toolchains with runtime exceptions. The non-commercial caveat below applies ONLY
-to redistributing the romdev tool bundle (which contains two non-commercial
-emulator cores) - never to the games you make with it.
+TL;DR - Games you COMPILE with romdev from your own source are YOURS,
+including to sell commercially. A compiled ROM contains only your code +
+permissive runtime libraries, built by toolchains with runtime exceptions.
+
+RECOMPILED carts are different. The static recompiler
+(disasm({target:'recompile'}), emit 'wasmcart' or 'sync32') builds each cart
+around code ported from its reference emulator, so a recompiled cart is NOT
+unencumbered: it carries that emulator's licence (GPL-2.0 for NES and GB/GBC,
+MPL-2.0 for GBA, non-commercial for SMS/GG, Genesis and SNES), and it also
+contains the code of the game it was recompiled from. See "Recompiled carts"
+below.
+
+Apart from recompiled carts, the non-commercial caveat below applies only to
+redistributing the romdev tool bundle (which contains two non-commercial
+emulator cores), never to the games you compile with it.
 
 romdev's own code is MIT (see LICENSE). It bundles and redistributes
 third-party emulator cores, compiler toolchains, and game runtime libraries,
@@ -21,15 +31,18 @@ Two kinds of bundled component, governed differently:
     + pinned upstream source so anyone can reproduce the binary (see
     packages/romdev/scripts/ and BUILDING.md).
 
-  • EMULATOR CORES never touch the user's ROM - they are a dev instrument
-    (run + observe). Their license governs only OUR redistribution of the core
-    binary. Most are GPL (OSI open source, source available upstream). Two are
-    NON-COMMERCIAL (see below), which is why romdev as a whole is distributed
-    as SOURCE-AVAILABLE / FREE FOR NON-COMMERCIAL USE rather than OSI open
-    source. romdev's own code is MIT and the game runtime libraries are
-    permissive, so games you BUILD with romdev are unencumbered (see below);
-    the non-commercial terms apply only to redistributing the bundled core
-    binaries themselves.
+  • EMULATOR CORES are a dev instrument (run + observe): running a game on a
+    core puts none of the core's code into the game. Their license governs
+    OUR redistribution of the core binary. Most are GPL (OSI open source,
+    source available upstream). Two are NON-COMMERCIAL (see below), which is
+    why romdev as a whole is distributed as SOURCE-AVAILABLE / FREE FOR
+    NON-COMMERCIAL USE rather than OSI open source. romdev's own code is MIT
+    and the game runtime libraries are permissive, so games you COMPILE with
+    romdev are unencumbered.
+
+  • THE STATIC RECOMPILER is the exception: it copies code ported from the
+    reference cores INTO its output. Every recompiled cart carries the
+    licence of the core it was ported from (see "Recompiled carts" below).
 
 
 NON-COMMERCIAL COMPONENTS (why romdev is "free for non-commercial use")
@@ -37,16 +50,15 @@ NON-COMMERCIAL COMPONENTS (why romdev is "free for non-commercial use")
 These two cores are under custom NON-COMMERCIAL licenses. They forbid
 commercial redistribution of the core, so a distribution of romdev that
 bundles them is free for non-commercial use and is not labeled OSI open
-source. (Your code is MIT; your built games are unencumbered - this affects
-only redistribution of these emulator binaries.)
+source. (Your code is MIT and your compiled games are unencumbered; a cart
+the recompiler builds for SMS/GG, Genesis or SNES contains code from these
+cores and is non-commercial, see "Recompiled carts".)
 
   snes9x            SNES core           non-commercial (snes9x license)
   genesis_plus_gx   Genesis/SMS/GG core non-commercial (Genesis Plus GX license)
 
-  The native sync32 Genesis backend (packages/romdevtools/src/analysis/
-  recompile/native/genesis/runtime/gpgx) ships a subset of the Genesis Plus
-  GX source at the pinned commit, with ROMDEV_S32 guards (see UPSTREAM.txt
-  there); every .s32 it builds contains that code and is non-commercial.
+  romdevtools itself ships source derived from both (the recompiler backends
+  under src/analysis/recompile/, see "Recompiled carts"), under their terms.
 
 
 Emulator cores
@@ -84,8 +96,8 @@ ares chip code in the snes9x core and in recompiled SNES carts  (ISC)
       used when st011.rom / st018.rom is in the system directory.
   ares is under the ISC license, a permissive license whose only condition is
   keeping its notice, so it can sit with snes9x's non-commercial license and
-  with romdev's MIT code. A recompiled cart or a snes9x core build that
-  contains it carries this notice:
+  with romdev's MIT code. A recompiled cart (in its licence entry's notices)
+  or a snes9x core build that contains it carries this notice:
 
     ares
 
@@ -108,6 +120,115 @@ ares chip code in the snes9x core and in recompiled SNES carts  (ISC)
   license, as before; the ares code adds no condition of its own. No bsnes
   (GPL-3.0) code is compiled into snes9x or into a cart: bsnes ships only as
   its own core, romdev-core-bsnes. No coprocessor firmware ships with romdev.
+
+Recompiled carts (WAT and native backends)
+------------------------------------------
+  disasm({target:'recompile', emit:'wasmcart'}) turns a ROM into a wasmcart
+  (backends: romdevtools src/analysis/recompile/wat/<platform>/), and
+  emit:'sync32' turns a Genesis ROM into a sync32 .s32
+  (src/analysis/recompile/native/genesis/). A recompiled cart does not run on
+  an emulator: so that it matches its reference core frame for frame, the
+  backend builds the core's machine model INTO the cart, from code ported by
+  hand from the core's source or generated mechanically from it. Every cart
+  a backend builds contains that code, so the cart is under that code's
+  licence.
+
+  romdev's own parts of those directories (the CPU instruction lowerers, the
+  dispatch and layout code, the WAT assembler, the packer) are MIT, and each
+  backend directory's NOTICE.txt lists which files are ported. In a built
+  cart the two are combined, so the cart as a whole follows this table.
+  Commits are short here; the full ones are in romdevtools
+  scripts/versions.json and in every cart's licence entry.
+
+  NES (wat/nes)
+    from     fceumm: PPU, APU, CPU timing, mappers, frame loop
+             https://github.com/libretro/libretro-fceumm @ 3a84a6fd
+    licence  GPL-2.0-or-later
+    means    sharing the cart requires offering its complete corresponding
+             source under the GPL.
+
+  Game Boy / Game Boy Color (wat/gb)
+    from     gambatte: PPU, APU, MBCs, timers, CPU timing; blipper resampler
+             https://github.com/libretro/gambatte-libretro @ 3262c2aa
+    licence  GPL-2.0-only AND MIT (blipper)
+    means    sharing the cart requires offering its complete corresponding
+             source under the GPL; the MIT notice travels in the cart.
+
+  GBA (wat/gba)
+    from     mGBA 0.11: ARM7TDMI, bus, scheduler, DMA, timers, video, audio,
+             GPIO/RTC, its HLE BIOS; musl's sin/cos (Emscripten 4.0.18)
+             https://github.com/libretro/mgba @ 6dce57ee
+    licence  MPL-2.0 AND MIT (musl)
+    means    file-level copyleft: sharing the cart requires making the source
+             of the MPL-covered files available; the MIT notice travels in
+             the cart.
+
+  Master System / Game Gear (wat/sms)
+    from     Genesis Plus GX: VDP, I/O, frame order, SN76489 PSG, blip_buf
+             https://github.com/libretro/genesis-plus-gx @ 162c3439
+    licence  Genesis Plus GX licence (non-commercial) AND LGPL-2.1-or-later
+             (blip_buf, Shay Green)
+    means    no commercial distribution: the cart may not be sold or used in
+             a commercial product or activity; the blip_buf part's source
+             must be offered.
+
+  Genesis / Mega Drive (wat/genesis, and native/genesis for sync32)
+    from     Genesis Plus GX: VDP, memory map, Z80 bus, YM2612 (from MAME's
+             fm.c), PSG, blip_buf, frame loop; its Musashi 68000 core 3.32
+             and MAME z80.c 3.9 opcode handlers, evaluated into the cart;
+             SVP carts also get svp.c / ssp16.c (notaz). The sync32 backend
+             vendors the upstream C files (runtime/gpgx/, see UPSTREAM.txt).
+             https://github.com/libretro/genesis-plus-gx @ 162c3439
+    licence  Genesis Plus GX licence AND Musashi licence AND z80.c licence
+             (all non-commercial) AND LGPL-2.1-or-later (blip_buf); SVP carts
+             add the SVP code's licence (free for non-commercial use only)
+    means    no commercial distribution; Musashi's notice must stay in every
+             binary (the cart carries it); the blip_buf part's source must be
+             offered.
+
+  SNES (wat/snes)
+    from     snes9x: memory map and ROM loading, CPU timing, DMA/HDMA, PPU,
+             SPC700 (with its 64-byte IPL boot ROM as snes9x ships it), the
+             coprocessors (SA-1, SuperFX from fxinst.cpp, S-DD1, CX4, SPC7110,
+             DSP-1..4, ST010/011/018 HLE, OBC1, S-RTC, BS-X, MSU-1), and the
+             S-DSP from snes_spc (Shay Green)
+             https://github.com/libretro/snes9x @ 185488cd
+             SPC7110 carts: spc7110emu/dec (byuu and neviksti, ISC-style)
+             CX4 carts: musl's sin/cos/atan (MIT)
+             ST011 / ST018 carts built with options.firmware: ares (ISC,
+             https://github.com/ares-emulator/ares @ 4cb8d92b, see below)
+    licence  snes9x licence (non-commercial) AND LGPL-2.1-or-later (S-DSP),
+             plus ISC / MIT for those chips
+    means    no commercial distribution; snes9x's licence text must go with
+             every copy (the cart carries it); the S-DSP part's source must
+             be offered.
+
+  The cart says this itself. Its romdev.recompile custom section (for a
+  sync32 .s32, the metadata in rd_meta.c) has a `licence` entry:
+    spdx          the SPDX expression above, e.g. "GPL-2.0-or-later"
+    terms         one plain line per licence
+    upstream      [{name, url, commit, spdx}] of each transplanted component
+    source        the romdevtools version and directory holding the ported
+                  code: that package, at that version, is where the
+                  corresponding source of the emulator code is
+    licenceTexts  where the full licence texts are (romdevtools LICENSES/)
+    romCode       the reminder about the game's own code (below)
+    notices       verbatim, the notices that must travel with every copy
+                  (the non-commercial licences, Musashi, snes9x, and the
+                  MIT / ISC notices); the standard GPL, LGPL and MPL texts
+                  are named by SPDX id and found in LICENSES/
+  The entry depends only on the platform, the cart's chips and the romdev
+  version, so the same inputs still build a byte-identical cart.
+
+  The game inside. A cart recompiled from someone else's game also contains
+  that game's code (and any BIOS, firmware, MSU-1 data or add-on images built
+  into it). It can only be shared with the game owner's permission, whatever
+  the emulator licences allow.
+
+  blip_buf and snes_spc are LGPL-2.1 libraries inside non-commercial cores;
+  the carts combine them the same way the upstream cores do. This section
+  describes what each licence says; it is not legal advice. If you plan to
+  distribute recompiled carts, read the licences in LICENSES/.
 
 C64 ROMs - free replacements, not Commodore's
 ----------------------------------------------
@@ -146,6 +267,21 @@ Game runtime / SDK libraries  (linked into the user's game; shipped as source)
   hUGEDriver        GB/GBC music            MIT-style (see LICENSE-HUGEDRIVER)
   FamiTone2         NES music               permissive (see LICENSE-FAMITONE)
 
+Bundled data  (cheat database - used by gameCheats / applyCheat / makeCheat)
+----------------------------------------------------------------------------
+  romdev bundles a cheat database under packages/romdev/src/cheats/index/ - a
+  pre-parsed, per-platform index built from the community-aggregated RetroArch /
+  libretro-database cheat collection (the same data RetroArch, RetroDECK, and
+  Batocera ship). These cheat codes are an aggregation assembled over years from
+  Game Genie / Pro Action Replay code books and community cheat dumps; the
+  collection has no single uniform license and individual codes carry no stated
+  provenance. romdev redistributes a pre-parsed form (game name → decoded
+  address/value entries) rather than the raw .cht files, and uses it only as a
+  read/inspect aid + non-destructive cheat application. It is not linked into any
+  built game and does not affect the license of games you make. Source:
+  https://github.com/libretro/libretro-database (cht/). Rebuild the index from a
+  local .cht tree with packages/romdev/scripts/build-cheat-index.mjs.
+
 Decompilation tools  (dev instruments; they never touch the built ROM)
 ----------------------------------------------------------------------
   m2c               MIPS/PPC/ARM/SH -> C    GPL-3.0, packaged separately as
@@ -160,4 +296,6 @@ Decompilation tools  (dev instruments; they never touch the built ROM)
 Full license texts for the bundled SDK libraries live alongside their source
 under packages/romdev/src/platforms/*/lib/. Emulator-core and compiler license
 texts travel with their upstream source, which is fetched at build time from
-the pinned commits recorded in packages/romdev/scripts/versions.json.
+the pinned commits recorded in packages/romdev/scripts/versions.json. The
+licences of the emulator code the recompiler carries into carts are in
+romdevtools LICENSES/ (copied verbatim from the pinned upstream sources).

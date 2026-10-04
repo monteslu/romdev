@@ -1,0 +1,20 @@
+Genesis -> sync32 native recompiler backend: derived from Genesis Plus GX
+=========================================================================
+
+Upstream:  Genesis Plus GX, https://github.com/libretro/genesis-plus-gx
+Commit:    162c3439a697ffdfa00a5d3f44af103bf671f5dc (scripts/versions.json, cores.genesis_plus_gx)
+Licences:  the same as ../../wat/genesis/NOTICE.txt (Genesis Plus GX,
+           Musashi, MAME z80.c: non-commercial; blip_buf: LGPL-2.1-or-later).
+           runtime/gpgx/LICENSE.txt is Genesis Plus GX's licence file;
+           runtime/gpgx/UPSTREAM.txt lists what was changed.
+
+What is derived:
+  runtime/gpgx/        upstream gpgx source files, changed only inside
+                       ROMDEV_S32 guards
+  runtime/s32/         sync32 glue; several headers are gpgx's
+  blocks.js, ctrans-c.js, z80blocks.js, tables.js
+                       C generated from gpgx's Musashi and z80.c handlers and
+                       gpgx's tables
+Every .s32 this backend builds contains that code and is non-commercial; its
+metadata (rd_meta.c) carries the same `licence` entry as a WAT cart. See
+NOTICE at the package root.
