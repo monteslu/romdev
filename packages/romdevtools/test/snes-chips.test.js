@@ -54,9 +54,9 @@ async function runCart(rom, refFrames, opts = {}, onFrame = null) {
 
 const hex = (a) => Array.from(a, (v) => v.toString(16).padStart(2, "0")).join("");
 
-// The ST011 and ST018 run on bsnes's code from the chip's firmware now
-// (chips-bsnes.js); a cart without options.firmware is refused, which
-// chips-bsnes.test.js covers, and the firmware is not shipped, so the real
+// The ST011 and ST018 run on ares's code from the chip's firmware now
+// (chips-ares.js); a cart without options.firmware is refused, which
+// chips-ares.test.js covers, and the firmware is not shipped, so the real
 // carts are checked by the sms-wat snes-chips gate instead of here.
 const FIRMWARE_CHIPS = new Set(["ST011", "ST018"]);
 

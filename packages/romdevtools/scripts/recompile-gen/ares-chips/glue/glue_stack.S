@@ -1,5 +1,5 @@
 # romdev: the two stack functions romdev's libco backend calls
-# (scripts/patches/bsnes/libco-wasm.c), for a chip unit, which has no
+# (scripts/patches/libco-wasm/libco-wasm.c), for a chip unit, which has no
 # emscripten runtime: the same as emscripten's system/lib/compiler-rt/stack_ops.S.
 
 .globaltype __stack_pointer, i32

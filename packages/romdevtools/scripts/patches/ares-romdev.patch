@@ -1,0 +1,41 @@
+diff --git a/nall/nall/intrinsics.hpp b/nall/nall/intrinsics.hpp
+index e42110f..c521907 100644
+--- a/nall/nall/intrinsics.hpp
++++ b/nall/nall/intrinsics.hpp
+@@ -72,6 +72,16 @@ namespace nall {
+     static constexpr bool Linux   = 0;
+     static constexpr bool BSD     = 0;
+   };
++#elif defined(__EMSCRIPTEN__)
++  //romdev: WebAssembly (emscripten; ares's SNES coprocessor cores only)
++  #define PLATFORM_EMSCRIPTEN
++  struct Platform {
++    static constexpr bool Windows = 0;
++    static constexpr bool MacOS   = 0;
++    static constexpr bool Android = 0;
++    static constexpr bool Linux   = 0;
++    static constexpr bool BSD     = 0;
++  };
+ #elif defined(linux) || defined(__linux__)
+   #define PLATFORM_LINUX
+   struct Platform {
+@@ -255,6 +265,19 @@ namespace nall {
+     static constexpr bool rv64  = 0;
+     static constexpr bool rv32  = 1;
+   };
++#elif defined(__wasm32__)
++  //romdev: WebAssembly
++  #define ARCHITECTURE_WASM32
++  struct Architecture {
++    static constexpr bool x86   = 0;
++    static constexpr bool amd64 = 0;
++    static constexpr bool arm64 = 0;
++    static constexpr bool arm32 = 0;
++    static constexpr bool ppc64 = 0;
++    static constexpr bool ppc32 = 0;
++    static constexpr bool rv64  = 0;
++    static constexpr bool rv32  = 0;
++  };
+ #else
+   #error "unable to detect architecture"
+ #endif

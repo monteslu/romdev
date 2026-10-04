@@ -22,7 +22,9 @@ The build differs from upstream in three ways, all in romdev's patch:
   accurate PPU and DSP, no HLE preference.
 
 License: GPL-3.0 (bsnes; libco and nall are ISC). See NOTICE. Not intended for
-standalone use; loaded by romdev's core registry.
+standalone use; loaded by romdev's core registry. This core is a separate
+reference: none of its code is compiled into romdev's snes9x core or into
+recompiled carts (their firmware coprocessors come from ares, ISC).
 
 **Built by:** `romdevtools/scripts/build-bsnes.sh` + `bsnes-romdev.patch` (and
 `patches/bsnes/`). See `scripts/BUILD_MAP.md` in the romdev repo for the full

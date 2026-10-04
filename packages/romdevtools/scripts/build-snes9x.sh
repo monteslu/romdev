@@ -32,11 +32,11 @@ cd "$SNES9X_DIR"
 # Reset to clean state and reapply the patch idempotently. `git stash`
 # discards any prior partial apply attempts.
 require_git_toplevel
-# Two patches, in order: the memory regions, then the ST011 / ST018 on bsnes's
-# chips (scripts/patches/snes9x-bsnes-chips.patch, written against the first).
-BCHIP_PATCH="$PROJECT_DIR/scripts/patches/snes9x-bsnes-chips.patch"
+# Two patches, in order: the memory regions, then the ST011 / ST018 on ares's
+# chips (scripts/patches/snes9x-ares-chips.patch, written against the first).
+FWCHIP_PATCH="$PROJECT_DIR/scripts/patches/snes9x-ares-chips.patch"
 git checkout -- libretro/libretro.cpp getset.h cpuexec.cpp ppu.h gfx.cpp memmap.cpp cpu.cpp seta.h seta018.cpp libretro/Makefile.common 2>/dev/null || true
-for P in "$PATCH_FILE" "$BCHIP_PATCH"; do
+for P in "$PATCH_FILE" "$FWCHIP_PATCH"; do
   if ! git apply --recount --check "$P" 2>/dev/null; then
     # Accept "already applied" only when THIS patch reverse-applies cleanly; an older
     # revision of the patch carries the same sentinel symbols.
@@ -52,24 +52,19 @@ for P in "$PATCH_FILE" "$BCHIP_PATCH"; do
   fi
 done
 
-# ── the ST011 / ST018 on bsnes's chips ─────────────────────────────────────
-# bsnes's uPD96050 and ARM cores (the pinned bsnes tree, with the nall
-# platform line of scripts/patches/bsnes-romdev.patch) plus the drivers the
-# recompiler's chip units compile (scripts/recompile-gen/bsnes-chips/glue),
-# so this core and a recompiled cart run the same chip code. They are used
-# only when the chip's firmware is in the system directory
-# (scripts/patches/snes9x/romdev_bchip.cpp). bsnes is GPL-3.0.
-BSNES_DIR="$BUILD_DIR/bsnes/src"
-fetch_pinned cores.bsnes "$BSNES_DIR"
-BSNES_PATCH="$PROJECT_DIR/$(pin_get cores.bsnes patch)"
-if ! (cd "$BSNES_DIR" && patch_already_applied "$BSNES_PATCH"); then
-  (cd "$BSNES_DIR" && require_git_toplevel && git checkout -- . && git apply --recount "$BSNES_PATCH")
-  echo "Applied $BSNES_PATCH to $BSNES_DIR"
-fi
-BCHIP_GLUE="$PROJECT_DIR/scripts/recompile-gen/bsnes-chips/glue"
+# ── the ST011 / ST018 on ares's chips ──────────────────────────────────────
+# ares's uPD96050 and ARM cores (the pinned ares tree, fetched and patched by
+# scripts/fetch-ares.sh) plus the drivers the recompiler's chip units compile
+# (scripts/recompile-gen/ares-chips/glue), so this core and a recompiled cart
+# run the same chip code. They are used only when the chip's firmware is in
+# the system directory (scripts/patches/snes9x/romdev_fwchip.cpp). ares is
+# ISC-licensed (permissive), so its code may sit inside snes9x.
+bash "$SCRIPT_DIR/fetch-ares.sh"
+ARES_DIR="$BUILD_DIR/ares/src"
+FWCHIP_GLUE="$PROJECT_DIR/scripts/recompile-gen/ares-chips/glue"
 # the snes9x side is built by snes9x's Makefile (the patch lists it), next to its header
-cp "$PROJECT_DIR/scripts/patches/snes9x/romdev_bchip.cpp" "$SNES9X_DIR/romdev_bchip.cpp"
-cp "$BCHIP_GLUE/romdev_bsnes_chips.hpp" "$SNES9X_DIR/romdev_bsnes_chips.hpp"
+cp "$PROJECT_DIR/scripts/patches/snes9x/romdev_fwchip.cpp" "$SNES9X_DIR/romdev_fwchip.cpp"
+cp "$FWCHIP_GLUE/romdev_ares_chips.hpp" "$SNES9X_DIR/romdev_ares_chips.hpp"
 
 # ── romdev shared debug lib (0.80.0) ────────────────────────────────────────
 # The watchpoint/readwatch/range/coverage/pcbreak/watchdog machinery + exports now
@@ -111,18 +106,21 @@ RDBG_OBJ="$SNES9X_DIR/romdev_debug.o"
 emcc -c -O2 "$SNES9X_DIR/romdev_debug.c" -o "$RDBG_OBJ"
 emar rcs "$CORE_LIB" "$RDBG_OBJ"
 
-# The bsnes chips (see above): bsnes's sources with bsnes's language level
-# and the glue (the snes9x side, romdev_bchip.cpp, is in the archive already).
-BCHIP_OBJ_DIR="$SNES9X_DIR/romdev-bchip-obj"
-rm -rf "$BCHIP_OBJ_DIR"; mkdir -p "$BCHIP_OBJ_DIR"
-BCHIP_FLAGS=(-O2 -std=c++17 -Wno-invalid-specialization -Wno-everything -I"$BSNES_DIR" -I"$BSNES_DIR/bsnes" -I"$BCHIP_GLUE")
-em++ -c "${BCHIP_FLAGS[@]}" "$BSNES_DIR/bsnes/processor/upd96050/upd96050.cpp" -o "$BCHIP_OBJ_DIR/upd96050.o"
-em++ -c "${BCHIP_FLAGS[@]}" "$BSNES_DIR/bsnes/processor/arm7tdmi/arm7tdmi.cpp" -o "$BCHIP_OBJ_DIR/arm7tdmi.o"
-em++ -c "${BCHIP_FLAGS[@]}" "$BCHIP_GLUE/glue_necdsp.cpp" -o "$BCHIP_OBJ_DIR/glue_necdsp.o"
-em++ -c "${BCHIP_FLAGS[@]}" "$BCHIP_GLUE/glue_armdsp.cpp" -o "$BCHIP_OBJ_DIR/glue_armdsp.o"
-# the ARM is a cothread, as in bsnes: romdev's libco backend (Asyncify inside the module)
-emcc -c -O2 -I"$BSNES_DIR/libco" "$PROJECT_DIR/scripts/patches/bsnes/libco-wasm.c" -o "$BCHIP_OBJ_DIR/libco-wasm.o"
-emar rcs "$CORE_LIB" "$BCHIP_OBJ_DIR"/*.o
+# The ares chips (see above): ares's sources with ares's language level
+# (C++20) against romdev's stand-in for ares/ares.hpp (glue/romdev_ares.hpp,
+# staged as include/ares/ares.hpp ahead of the ares tree), and the glue (the
+# snes9x side, romdev_fwchip.cpp, is in the archive already).
+FWCHIP_OBJ_DIR="$SNES9X_DIR/romdev-fwchip-obj"
+rm -rf "$FWCHIP_OBJ_DIR"; mkdir -p "$FWCHIP_OBJ_DIR/include/ares"
+cp "$FWCHIP_GLUE/romdev_ares.hpp" "$FWCHIP_OBJ_DIR/include/ares/ares.hpp"
+FWCHIP_FLAGS=(-O2 -std=c++20 -Wno-everything -I"$FWCHIP_OBJ_DIR/include" -I"$FWCHIP_GLUE" -I"$ARES_DIR/nall" -I"$ARES_DIR" -I"$ARES_DIR/ares" -I"$ARES_DIR/libco")
+em++ -c "${FWCHIP_FLAGS[@]}" "$ARES_DIR/ares/component/processor/upd96050/upd96050.cpp" -o "$FWCHIP_OBJ_DIR/upd96050.o"
+em++ -c "${FWCHIP_FLAGS[@]}" "$ARES_DIR/ares/component/processor/arm7tdmi/arm7tdmi.cpp" -o "$FWCHIP_OBJ_DIR/arm7tdmi.o"
+em++ -c "${FWCHIP_FLAGS[@]}" "$FWCHIP_GLUE/glue_necdsp.cpp" -o "$FWCHIP_OBJ_DIR/glue_necdsp.o"
+em++ -c "${FWCHIP_FLAGS[@]}" "$FWCHIP_GLUE/glue_armdsp.cpp" -o "$FWCHIP_OBJ_DIR/glue_armdsp.o"
+# the ARM is a cothread, as in ares: romdev's libco backend (Asyncify inside the module)
+emcc -c -O2 -I"$ARES_DIR/libco" "$PROJECT_DIR/scripts/patches/libco-wasm/libco-wasm.c" -o "$FWCHIP_OBJ_DIR/libco-wasm.o"
+emar rcs "$CORE_LIB" "$FWCHIP_OBJ_DIR"/*.o
 
 # Final emcc link → WASM module. Flags mirror retroemu's snes9x.sh so the
 # core stays interchangeable with the rest of our bundled libretro cores.
@@ -132,9 +130,10 @@ EXPORTED_RUNTIME='["ccall","cwrap","addFunction","removeFunction","HEAPU8","HEAP
 mkdir -p "$OUT"
 # wasm-emcc runs the Asyncify pass for the ARM's cothread (the module imports
 # the intrinsics); only the functions that can be on a cothread's stack are
-# instrumented (bsnes's chip code, nall, the glue, co_switch and its leaf
-# co_suspend), so snes9x's own code is untouched.
-export ROMDEV_ASYNCIFY_ONLY="co_switch,co_suspend,romdev_bchip::*,SuperFamicom::*,Processor::*,nall::*"
+# instrumented (ares's chip code and the glue in namespace ares, nall, the
+# std::function machinery ARM7TDMI dispatches its instructions through,
+# co_switch and its leaf co_suspend), so snes9x's own code is untouched.
+export ROMDEV_ASYNCIFY_ONLY="co_switch,co_suspend,*ares::*,*nall::*,*std::__2::__function::*,*std::__2::function*,*std::__2::__invoke*"
 emcc "$CORE_LIB" \
   -O3 \
   -s WASM=1 \

@@ -1,13 +1,16 @@
-/* romdev: the little C/C++ runtime a bsnes chip unit needs inside a
- * recompiled cart (scripts/recompile-gen/bsnes-chips.mjs). A unit has no libc:
+/* romdev: the little C/C++ runtime an ares chip unit needs inside a
+ * recompiled cart (scripts/recompile-gen/ares-chips.mjs). A unit has no libc:
  * its memory is a block the cart places, so allocation is a bump allocator
  * over an arena in the unit's own .bss (zeroed by the unit's start function).
- * bsnes allocates only while a chip is built (the ARM's instruction tables,
- * once) and on a reset (a register's function object), so nothing is ever
- * given back. Only for chip units: the snes9x core links the chips against
- * emscripten's real libc instead. */
+ * ares allocates only while a chip is built (the ARM's instruction tables,
+ * once), on a reset (a register's function object, the ARM's cothread once)
+ * and while formatting a disassembly, which a unit never asks for, so nothing
+ * is ever given back. Only for chip units: the snes9x core links the chips
+ * against emscripten's real libc and libc++ instead. */
 #include <stddef.h>
 #include <new>
+#include <exception>
+#include <functional>
 
 #ifndef ROMDEV_UNIT_ARENA
 #define ROMDEV_UNIT_ARENA (64 * 1024)
@@ -71,7 +74,8 @@ int memcmp(const void* a, const void* b, size_t n) {
 }
 size_t strlen(const char* s) { size_t n = 0; while(s[n]) n++; return n; }
 
-/* what a chip never reaches: an exception (bsnes's nall throws only on misuse),
+/* what a chip never reaches: an exception (nall throws only on misuse, and
+ * std::function only when an empty one is called),
  * a failed assertion, a pure virtual call */
 void __assert_fail(const char*, const char*, unsigned, const char*) { __builtin_trap(); }
 void __cxa_pure_virtual() { __builtin_trap(); }
@@ -91,10 +95,22 @@ void operator delete[](void*) noexcept {}
 void operator delete(void*, size_t) noexcept {}
 void operator delete[](void*, size_t) noexcept {}
 
-/* type_info vtables nall's `any` names (RTTI is on for it; no chip uses it) */
+/* the out-of-line members of the two exception classes std::function names
+ * (libc++ keeps them in its library, which a unit does not link) */
+namespace std {
+exception::~exception() noexcept {}
+const char* exception::what() const noexcept { return "std::exception"; }
+bad_function_call::~bad_function_call() noexcept {}
+const char* bad_function_call::what() const noexcept { return "std::bad_function_call"; }
+}
+
+/* type_info vtables the RTTI of those classes and of the chip structs names
+ * (no chip uses RTTI) */
 namespace __cxxabiv1 {
 struct __class_type_info { virtual ~__class_type_info(); };
 struct __si_class_type_info { virtual ~__si_class_type_info(); };
+struct __vmi_class_type_info { virtual ~__vmi_class_type_info(); };
 __class_type_info::~__class_type_info() {}
 __si_class_type_info::~__si_class_type_info() {}
+__vmi_class_type_info::~__vmi_class_type_info() {}
 }

@@ -4,7 +4,7 @@
  * romdev_impl_*).
  *
  * 1. Cothreads. bsnes runs every chip as a libco cothread. romdev's libco
- *    backend for WebAssembly (libco/wasm.c, from scripts/patches/bsnes/
+ *    backend for WebAssembly (libco/wasm.c, from scripts/patches/libco-wasm/
  *    libco-wasm.c) switches inside romdev_co_run(), so every libretro entry
  *    point that can reach the scheduler runs through it.
  *

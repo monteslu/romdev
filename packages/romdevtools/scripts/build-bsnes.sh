@@ -10,15 +10,16 @@
 #
 # Built with romdev's Python-free emscripten driver (scripts/wasm-emcc), never
 # emsdk's emcc. bsnes runs every chip as a libco cothread; libco has no
-# WebAssembly backend, so the patch adds one (scripts/patches/bsnes/
+# WebAssembly backend, so the patch adds one (scripts/patches/libco-wasm/
 # libco-wasm.c, built as libco/wasm.c) that switches with binaryen's Asyncify
 # inside the module, and wraps the libretro entry points in its trampoline
 # (scripts/patches/bsnes/romdev_bsnes.cpp, which also serves the memory
 # regions). wasm-emcc runs the Asyncify pass when the linked module imports
 # the "asyncify" intrinsics.
 #
-# Licence: bsnes is GPL-3.0 (libco and nall ISC). The built core is GPL-3.0;
-# so is any recompiled cart that contains chip code transplanted from it.
+# Licence: bsnes is GPL-3.0 (libco and nall ISC). The built core is GPL-3.0.
+# No bsnes code is compiled into anything else: the snes9x core and
+# recompiled carts run ares's chips (ISC; scripts/recompile-gen/ares-chips.mjs).
 set -euo pipefail
 . "$(dirname "$0")/_lib.sh"
 require_cmd git
@@ -57,14 +58,14 @@ fi
 # no header dependencies, so the source that includes a changed file is
 # touched to make it rebuild.
 put() { cmp -s "$1" "$2" || { cp "$1" "$2"; touch "$3"; }; }
-put "$PROJECT_DIR/scripts/patches/bsnes/libco-wasm.c" "$SRC/libco/wasm.c" "$SRC/libco/libco.c"
+put "$PROJECT_DIR/scripts/patches/libco-wasm/libco-wasm.c" "$SRC/libco/wasm.c" "$SRC/libco/libco.c"
 put "$PROJECT_DIR/scripts/patches/bsnes/romdev_bsnes.cpp" "$SRC/bsnes/target-libretro/romdev_bsnes.cpp" "$SRC/bsnes/target-libretro/libretro.cpp"
 put "$PROJECT_DIR/scripts/patches/bsnes/romdev_bsnes_sfc.cpp" "$SRC/bsnes/sfc/interface/romdev_bsnes_sfc.cpp" "$SRC/bsnes/sfc/interface/interface.cpp"
-put "$PROJECT_DIR/scripts/recompile-gen/bsnes-chips/glue/romdev_bsnes_chipstate.h" "$SRC/bsnes/sfc/interface/romdev_bsnes_chipstate.h" "$SRC/bsnes/sfc/interface/interface.cpp"
+put "$PROJECT_DIR/scripts/patches/bsnes/romdev_bsnes_chipstate.h" "$SRC/bsnes/sfc/interface/romdev_bsnes_chipstate.h" "$SRC/bsnes/sfc/interface/interface.cpp"
 
 # The upstream Makefile tracks no header dependencies: when the patch or any
 # of romdev's files changed since the last build, every object is rebuilt.
-STAMP="$(cat "$PATCH_FILE" "$PROJECT_DIR"/scripts/patches/bsnes/* "$PROJECT_DIR/scripts/recompile-gen/bsnes-chips/glue/romdev_bsnes_chipstate.h" | sha256sum | cut -d' ' -f1)"
+STAMP="$(cat "$PATCH_FILE" "$PROJECT_DIR"/scripts/patches/bsnes/* "$PROJECT_DIR/scripts/patches/libco-wasm/libco-wasm.c" | sha256sum | cut -d' ' -f1)"
 if [ "$(cat .romdev-build-stamp 2>/dev/null)" != "$STAMP" ]; then
   find . -name '*.o' -delete
   echo "$STAMP" > .romdev-build-stamp

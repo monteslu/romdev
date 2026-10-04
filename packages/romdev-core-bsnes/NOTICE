@@ -13,12 +13,14 @@ which bsnes includes, are under the ISC license. The built core is therefore
 distributed under GPL-3.0; its corresponding source is the pinned bsnes commit
 plus the romdev patch and build script named above.
 
-Code transplanted from bsnes elsewhere in romdev: the recompiler's SNES chip
-units (romdevtools/src/analysis/recompile/wat/snes/bsnes-chips.json, built by
-romdevtools/scripts/recompile-gen/bsnes-chips.mjs) are bsnes's uPD96050 and
-ARM coprocessor code, and romdev's snes9x core build links the same code
-(romdevtools/scripts/patches/snes9x-bsnes-chips.patch). Those files are
-GPL-3.0, and a recompiled cart or core that contains them is GPL-3.0 too.
+No bsnes code is transplanted elsewhere in romdev: this core is the only
+place bsnes runs. The firmware coprocessors that romdev's snes9x core and its
+recompiled SNES carts run (the uPD96050 for the ST010/ST011, the ARM for the
+ST018) are compiled from ares instead, which is ISC-licensed (see romdev's
+NOTICE). The only file this build shares with that code is romdev's own
+libco backend for WebAssembly (romdevtools/scripts/patches/libco-wasm/, MIT);
+the chip state layout this core writes (patches/bsnes/romdev_bsnes_chipstate.h,
+romdev's own, MIT) is matched field for field by the ares side's own header.
 
 No coprocessor firmware is included. The ST010/ST011/ST018 firmware is not
 part of bsnes or romdev; a user supplies it.

@@ -274,8 +274,8 @@ export const SNES9X_HLE_CHIPS = [
 
 /**
  * The boards snes9x gives the ST011 and ST018 (InitROM's SRAM size and
- * initial value, the board name and map), for chips-bsnes.js, which runs
- * those chips on bsnes's code inside the same snes9x machine.
+ * initial value, the board name and map), for chips-ares.js, which runs
+ * those chips on ares's code inside the same snes9x machine.
  */
 export const SETA_BOARDS = {
   ST011: (({ board, boards, sramSize, sramInit, buildMap }) => ({ board, boards, sramSize, sramInit, buildMap }))(setaChip("ST011", ST_011)),

@@ -73,7 +73,7 @@ cothread_t co_active() {
 cothread_t co_derive(void* memory, unsigned int size, void (*entry)(void)) {
   if(!memory) return 0;
   co_ctx* co = (co_ctx*)memory;
-  /* bsnes re-derives a cothread in place (Thread::create on a thread that
+  /* bsnes and ares re-derive a cothread in place (Thread::create on a thread that
      exists) passing its nominal size: a block co_create made keeps its own */
   if(co->magic == CO_MAGIC && co->size > size) size = co->size;
   if(size < sizeof(co_ctx) + CO_ASYNCIFY_BYTES + 4096) return 0;

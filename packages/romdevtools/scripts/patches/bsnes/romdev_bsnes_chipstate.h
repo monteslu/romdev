@@ -2,10 +2,11 @@
  * byte string, so a recompiled cart and a reference core can be compared on
  * it (the snes_chipstate memory region).
  *
- * ONE definition, compiled everywhere the chip runs: the bsnes core
- * (scripts/patches/bsnes/romdev_bsnes.cpp), the snes9x core's transplanted
- * chips (scripts/patches/snes9x-bsnes-chips.patch) and the recompiler's chip
- * units (scripts/recompile-gen/bsnes-chips.mjs). It only reads bsnes's own
+ * Compiled into the bsnes reference core (scripts/patches/bsnes/
+ * romdev_bsnes_sfc.cpp). The snes9x core and the recompiler's chip units run
+ * ares's chips and write the same layout from ares's objects
+ * (scripts/recompile-gen/ares-chips/glue/romdev_ares_chipstate.h; only the
+ * trailing clock differs in meaning, see there). It only reads bsnes's own
  * objects (Processor::uPD96050, Processor::ARM7TDMI and the ArmDSP bridge),
  * field by field in declaration order (never a whole struct: padding and the
  * function objects inside ARM7TDMI's registers are not state), plus the

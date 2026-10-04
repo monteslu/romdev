@@ -724,7 +724,7 @@ function preprocess(ctx, file, expandMacros) {
  * romdev extension (not in emcc): cothreads that switch inside the module.
  * A module that imports binaryen's Asyncify intrinsics from module "asyncify"
  * (start_unwind / stop_unwind / start_rewind / stop_rewind; romdev's libco
- * backend, scripts/patches/bsnes/libco-wasm.c, is the user) gets the Asyncify
+ * backend, scripts/patches/libco-wasm/libco-wasm.c, is the user) gets the Asyncify
  * pass right after wasm-ld, before emscripten sees the module: the pass turns
  * those imports into the functions it adds, so the JS glue never has them.
  * Imports never unwind (asyncify-ignore-imports); the trampoline that unwinds

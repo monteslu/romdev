@@ -57,30 +57,57 @@ Emulator cores
   snes9x            SNES                non-commercial  ⚠ (see above)
   bsnes             SNES (reference)    GPL-3.0 (libco, nall: ISC); romdev-core-bsnes,
                                         the accuracy reference for the firmware
-                                        coprocessors (ST010/ST011, ST018)
+                                        coprocessors (ST010/ST011, ST018); a
+                                        separate core, linked into nothing else
+  ares (chips only) SNES coprocessors   ISC; its uPD96050 and ARM cores are
+                                        compiled into romdev's snes9x and into
+                                        recompiled carts (see below)
   mgba              GBA                 MPL-2.0
   vice (x64)        C64                 GPL-2.0  (see "C64 ROMs" below)
   stella2014        Atari 2600          GPL-2.0
   prosystem         Atari 7800          GPL-2.0
   handy             Atari Lynx          zlib
 
-bsnes chip code outside romdev-core-bsnes  ⚠ licence conflict to resolve
--------------------------------------------
-  bsnes's uPD96050 and ARM coprocessor code (with romdev's driver for it,
-  romdevtools/scripts/recompile-gen/bsnes-chips/) is GPL-3.0 and is compiled
-  into two places besides the bsnes core:
+ares chip code in the snes9x core and in recompiled SNES carts  (ISC)
+-------------------------------------------------------------------
+  The firmware-running SNES coprocessors (the ST010/ST011 NEC uPD96050 and the
+  ST018 ARM) are compiled from ares (https://github.com/ares-emulator/ares, at
+  the commit pinned in romdevtools/scripts/versions.json, cores.ares): its
+  processor cores ares/component/processor/upd96050 and arm7tdmi, the Super
+  Famicom driver files ares/sfc/coprocessor/necdsp/memory.cpp and
+  armdsp/memory.cpp and io.cpp, and the nall headers they use, with romdev's
+  glue (romdevtools/scripts/recompile-gen/ares-chips/glue/, MIT) restating the
+  rest of those drivers and ares's thread clock. That code is compiled into:
     - recompiled SNES carts built with options.firmware (ST011 / ST018): the
-      units in romdevtools/src/analysis/recompile/wat/snes/bsnes-chips.json.
-      Such a cart contains GPL-3.0 code, so the cart is GPL-3.0;
-    - romdev's snes9x core (romdev-platform-snes, snes9x-bsnes-chips.patch),
+      units in romdevtools/src/analysis/recompile/wat/snes/ares-chips.json;
+    - romdev's snes9x core (romdev-platform-snes, snes9x-ares-chips.patch),
       used when st011.rom / st018.rom is in the system directory.
-  Both also contain snes9x-derived code under snes9x's non-commercial
-  license (the snes9x core itself; a recompiled SNES cart's machine follows
-  snes9x and carries snes9x's own chip units). GPL-3.0 does not allow the
-  extra non-commercial restriction, so neither combination can be
-  redistributed as is; the conflict must be resolved (a licence decision)
-  before such a cart or that core build is distributed. No coprocessor
-  firmware ships with romdev.
+  ares is under the ISC license, a permissive license whose only condition is
+  keeping its notice, so it can sit with snes9x's non-commercial license and
+  with romdev's MIT code. A recompiled cart or a snes9x core build that
+  contains it carries this notice:
+
+    ares
+
+    Copyright (c) 2004-2025 ares team, Near et al
+
+    Permission to use, copy, modify, and/or distribute this software for any
+    purpose with or without fee is hereby granted, provided that the above
+    copyright notice and this permission notice appear in all copies.
+
+    THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+    WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+    MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+    ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+    WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+    ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+    OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+  A recompiled SNES cart's machine follows snes9x and carries snes9x's own
+  chip units, so those parts of a cart stay under snes9x's non-commercial
+  license, as before; the ares code adds no condition of its own. No bsnes
+  (GPL-3.0) code is compiled into snes9x or into a cart: bsnes ships only as
+  its own core, romdev-core-bsnes. No coprocessor firmware ships with romdev.
 
 C64 ROMs - free replacements, not Commodore's
 ----------------------------------------------

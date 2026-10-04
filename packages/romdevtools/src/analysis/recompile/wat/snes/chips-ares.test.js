@@ -1,8 +1,8 @@
-// bsnes's firmware chips as recompiled-cart units (bsnes-chips.json,
-// chips-bsnes.js): the units run tiny synthetic firmware, and the timing is
-// bsnes's lock step (a chip clock -= S-CPU clocks * chip frequency, the chip
-// runs while behind, adding the S-CPU frequency per chip clock). No
-// commercial firmware or ROM is needed.
+// ares's firmware chips as recompiled-cart units (ares-chips.json,
+// chips-ares.js): the units run tiny synthetic firmware, and the timing is
+// ares's scheduler (each thread's clock steps by 2^63 / frequency per clock of
+// its own; the chip runs while it is behind the S-CPU). No commercial firmware
+// or ROM is needed.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -11,7 +11,7 @@ import { placeUnit } from "../wasm-unit.js";
 import { assembleWatSync } from "../assemble.js";
 import { describe } from "./index.js";
 
-const UNITS = JSON.parse(readFileSync(new URL("./bsnes-chips.json", import.meta.url), "utf8")).units;
+const UNITS = JSON.parse(readFileSync(new URL("./ares-chips.json", import.meta.url), "utf8")).units;
 const BASE = 0x10000;
 
 /** One unit alone in a module, its exports exported, the firmware at `fw`. */
@@ -26,7 +26,7 @@ async function instance(name, firmware) {
   return { x: inst.exports, fw, mem: inst.exports.memory };
 }
 
-test("uPD96050 unit: bsnes's instructions, DR / SR / data RAM ports, one instruction per S-CPU master clock step at 15 MHz", async () => {
+test("uPD96050 unit: ares's instructions, DR / SR / data RAM ports, one instruction per S-CPU master clock step at 15 MHz", async () => {
   const fw = new Uint8Array(UNITS.necdsp.firmware);
   const word = (n, v) => { fw[n * 3] = v & 0xff; fw[n * 3 + 1] = (v >> 8) & 0xff; fw[n * 3 + 2] = (v >> 16) & 0xff; };
   word(0, (3 << 22) | (0xbeef << 6) | 6);   // LD #$BEEF -> DR (RQM = 1)
@@ -35,7 +35,8 @@ test("uPD96050 unit: bsnes's instructions, DR / SR / data RAM ports, one instruc
   const { x, fw: at } = await instance("necdsp", fw);
   x.romdev_necdsp_init(11, at);
   assert.equal(x.romdev_necdsp_read(0x600001, 0), 0x00, "SR before the chip ran: RQM clear");
-  // one master clock: clock = -15e6, one instruction brings it to +6477272
+  // one master clock (2^63 / 21477273) is less than one chip clock at 15 MHz
+  // (2^63 / 15000000): one instruction puts the chip ahead
   x.romdev_necdsp_line(1);
   assert.equal(x.romdev_necdsp_read(0x600001, 0) & 0x80, 0x80, "RQM after LD -> DR");
   assert.equal(x.romdev_necdsp_read(0x680000, 0), 0x00, "the second instruction has not run yet");
@@ -59,7 +60,7 @@ test("ARM unit: a cothread that yields inside its boot delay and its stores, the
   x.romdev_armdsp_init(at);
   assert.equal(x.romdev_armdsp_read(0x3804, 0), 0x00, "status at power-on: not ready");
   // the reset sequence delay is step(65536): ready only after the S-CPU has
-  // run 65536 ARM clocks' worth (65536 * 21477272 / 21440000 master clocks)
+  // run 65536 ARM clocks' worth (about 65536 * 21477273 / 21440000 master clocks)
   x.romdev_armdsp_line(60000);
   assert.equal(x.romdev_armdsp_read(0x3804, 0), 0x00, "still in the boot delay");
   x.romdev_armdsp_line(10000);

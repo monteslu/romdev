@@ -40,7 +40,7 @@ import { ppuDataWat, ppuWat, renderWat } from "./ppu-wat.js";
 import { apuWat, apuDataWat, apuGlobalsWat, APU_OFF } from "./apu-wat.js";
 import { regwatchWat, stepHeadWat, frameWat } from "./frame-wat.js";
 import { chipFor, chipWat, chipNeedsFirmware } from "./coproc.js";
-import { BSNES_FIRMWARE } from "./chips-bsnes.js";
+import { ARES_FIRMWARE } from "./chips-ares.js";
 import { findMsuPack, msuPages, msuDataWat } from "./msu1.js";
 import { readFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -152,20 +152,20 @@ export function describe(rom, opts = {}) {
   // ratio, $213F bit 4.
   layout.pal = L.pal;
   // A chip that runs firmware snes9x cannot run (the ST011, ST018) runs on
-  // bsnes's code from the firmware the build is given (options.firmware,
-  // chips-bsnes.js); without it the cart is refused.
+  // ares's code from the firmware the build is given (options.firmware,
+  // chips-ares.js); without it the cart is refused.
   let firmware = null, chipImpl = null;
   if (chipNeedsFirmware(L.coprocessor)) {
-    const need = BSNES_FIRMWARE[L.coprocessor];
+    const need = ARES_FIRMWARE[L.coprocessor];
     if (opts.firmware == null) {
-      if (!refusal) refusal = `cart uses the ${L.coprocessor}, which runs firmware snes9x does not emulate (its ${L.coprocessor === "ST018" ? "ST018 is a command stub" : "ST011 is an HLE that stops after the opening"}); build it with options.firmware: '<path to ${need.file}>' (${need.length} bytes: ${need.what}) to run the chip on bsnes's code`;
+      if (!refusal) refusal = `cart uses the ${L.coprocessor}, which runs firmware snes9x does not emulate (its ${L.coprocessor === "ST018" ? "ST018 is a command stub" : "ST011 is an HLE that stops after the opening"}); build it with options.firmware: '<path to ${need.file}>' (${need.length} bytes: ${need.what}) to run the chip on ares's code`;
     } else {
       const f = String(opts.firmware);
       if (!existsSync(f)) throw new Error(`snes recompile: options.firmware: no file at ${f}`);
       const bytes = new Uint8Array(readFileSync(f));
       if (bytes.length !== need.length) throw new Error(`snes recompile: options.firmware ${f} is ${bytes.length} bytes; the ${L.coprocessor}'s firmware (${need.file}) is ${need.length}: ${need.what}`);
       firmware = { chip: L.coprocessor, name: need.file, sha1: createHash("sha1").update(bytes).digest("hex"), length: bytes.length, bytes };
-      chipImpl = "bsnes";
+      chipImpl = "ares";
     }
   } else if (opts.firmware != null) {
     throw new Error(`snes recompile: options.firmware given, but this cart's ${L.coprocessor ? L.coprocessor : "board"} runs no firmware the recompiler loads (only the ST011 and ST018 do)`);
@@ -238,7 +238,7 @@ export function describe(rom, opts = {}) {
     mapMode: byte(0x15),
     chipset: L.romType,
     coprocessor: L.coprocessor,
-    // "bsnes" when the chip runs on bsnes's code (options.firmware)
+    // "ares" when the chip runs on ares's code (options.firmware)
     chipImpl,
     romSize: img.length,
     copierHeader: L.headerStripped ? 512 : 0,
@@ -261,7 +261,7 @@ export function describe(rom, opts = {}) {
       breakChip: "DEBUG / must-fail control: true flips bit 0 of every byte read from the coprocessor (CPU, B-bus, chip DMA)",
       saveRtc: "path to a battery-backed clock's saved registers (the 20-byte .rtc, RTCData) for an S-RTC or SPC7110+RTC cart; restored after the chip's reset, and the verifier writes it into the reference's rtc region (keep it beside the reference ROM)",
       saveRam: "path to a battery save (.srm, at most the cart's SRAM size) the cart powers on with; the verifier writes the same file into the reference's save_ram before its first frame (keep it beside the reference ROM under the same name)",
-      firmware: "path to the chip's firmware for an ST011 (st011.rom, 53248 bytes) or ST018 (st018.rom, 163840 bytes) cart, REQUIRED for those: the chip runs on bsnes's code (GPL-3.0, so the cart is too) from it; the verifier gives the reference core the same file (keep it beside the reference ROM, or in a firmware/ directory there)",
+      firmware: "path to the chip's firmware for an ST011 (st011.rom, 53248 bytes) or ST018 (st018.rom, 163840 bytes) cart, REQUIRED for those: the chip runs on ares's code (ISC-licensed) from it; the verifier gives the reference core the same file (keep it beside the reference ROM, or in a firmware/ directory there)",
     },
     saveRam: saveRam ? { name: saveRam.name, sha1: saveRam.sha1, length: saveRam.length } : null,
     saveRtc: saveRtc ? { name: saveRtc.name, sha1: saveRtc.sha1, length: saveRtc.length } : null,

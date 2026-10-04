@@ -100,6 +100,17 @@
       ],
       "note": "accuracy reference for the SNES coprocessors that run firmware (ST010/ST011 on the uPD96050, ST018 on the ARM); package romdev-core-bsnes"
     },
+    "ares": {
+      "kind": "git",
+      "url": "https://github.com/ares-emulator/ares.git",
+      "ref": "master",
+      "commit": "4cb8d92b441557cb6bcaf133c4cbc7f6819b1122",
+      "license": "ISC (ares; Copyright (c) 2004-2025 ares team, Near et al)",
+      "platforms": [
+        "snes"
+      ],
+      "note": "source of the SNES firmware coprocessors transplanted into snes9x and recompiled carts: ares component/processor/upd96050 (ST010/ST011) and arm7tdmi (ST018) with drivers re-derived from ares/sfc/coprocessor/necdsp and armdsp; scripts/recompile-gen/ares-chips.mjs, scripts/build-snes9x.sh. Fetched only, never built as a core."
+    },
     "stella2014": {
       "kind": "git",
       "url": "https://github.com/libretro/stella2014-libretro.git",
