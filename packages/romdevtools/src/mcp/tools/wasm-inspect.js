@@ -73,10 +73,18 @@ export function registerWasmInspectTools(server, z, sessionKey) {
     "annotations ({frame, id}) the cart emitted since the last drain. The navigable timeline of a run ('level " +
     "loaded at frame 312') - pull-model, clears on read. wasmcart 0.5.0+.\n" +
     "• 'save' - the cart's declared save-data bytes (savePtr/saveSize), to assert a game persisted what it should.\n" +
+    "• 'command' {text} - the DEBUG CHANNEL: ask a running cart a question it answers itself (scene tree, get/set a " +
+    "property by path, spawn/free nodes, stats...). Convention, no ABI change: the cart exposes bytes fields `dbg.cmd` " +
+    "and `dbg.reply` plus u32 fields `dbg.cmd_seq`, `dbg.reply_seq`, `dbg.reply_len` in its debug table; this op writes " +
+    "`text` to dbg.cmd, bumps dbg.cmd_seq, steps frames until dbg.reply_seq catches up (the cart answers at the start of " +
+    "its next frame, so ONE frame runs per command; pause the game first if that matters), and returns the reply " +
+    "(parsed as JSON when it is JSON). `help` lists a cart's commands. cartwheel carts with debug on implement it.\n" +
     "REFUSES on an emulator host (use disasm/symbols/memory there).",
     {
-      op: z.enum(["conformance", "info", "exports", "debugState", "events", "read", "write", "save"])
-        .describe("conformance = spec-validation verdict; info = running WCInfo; exports = module export list; debugState = the cart's opt-in named debug fields; events = drain the frame-stamped wc_log/wc_debug_mark trace; read/write = a named debug field (`name`) OR the raw heap (`offset`); save = declared save-data bytes."),
+      op: z.enum(["conformance", "info", "exports", "debugState", "events", "read", "write", "save", "command"])
+        .describe("conformance = spec-validation verdict; info = running WCInfo; exports = module export list; debugState = the cart's opt-in named debug fields; events = drain the frame-stamped wc_log/wc_debug_mark trace; read/write = a named debug field (`name`) OR the raw heap (`offset`); save = declared save-data bytes; command = send `text` over the cart's debug channel and return its reply."),
+      text: z.string().optional().describe("op=command: the request, e.g. 'tree', 'get /root/Level/Player position', 'set /root/Level/Player position vec3(0, 2, 0)', 'help'."),
+      maxFrames: z.number().int().min(1).max(600).default(8).describe("op=command: frames to step at most while waiting for the reply."),
       name: z.string().optional().describe("op=read/write: a debug field name from debugState (resolves to offset+type, reads/writes DECODED). Preferred over `offset` when the cart exposes debug state."),
       value: z.number().optional().describe("op=write: the value to write to the named scalar debug field (use with `name`)."),
       offset: z.number().int().min(0).optional().describe("op=read/write: RAW byte offset into the cart's WASM linear memory (fallback when there's no named field)."),
@@ -85,8 +93,37 @@ export function registerWasmInspectTools(server, z, sessionKey) {
       base64: z.string().optional().describe("op=write: bytes as base64 (alternative to hex) - raw-offset write."),
       inline: z.boolean().default(false).describe(`op=read: for reads >${INLINE_HEX_LIMIT}B, return hex in the response anyway.`),
     },
-    safeTool(async ({ op, name, value, offset, length, hex, base64, inline }) => {
+    safeTool(async ({ op, name, value, offset, length, hex, base64, inline, text, maxFrames }) => {
       const host = requireWasmHost(sessionKey);
+
+      if (op === "command") {
+        if (text == null) throw new Error("wasm({op:'command'}): pass `text` (try 'help').");
+        const fields = host.readDebugState?.() ?? [];
+        const f = (n) => fields.find((x) => x.name === n);
+        const missing = ["dbg.cmd", "dbg.cmd_seq", "dbg.reply", "dbg.reply_seq", "dbg.reply_len"].filter((n) => !f(n));
+        if (missing.length) {
+          throw new Error(`wasm({op:'command'}): this cart has no debug channel (missing ${missing.join(", ")} in its debug table). A cartwheel cart needs .debug = true in its app desc.`);
+        }
+        const cmd = f("dbg.cmd");
+        const bytes = Buffer.from(text + "\0", "utf8");
+        if (bytes.length > cmd.len) throw new Error(`wasm({op:'command'}): request is ${bytes.length} bytes; the cart's dbg.cmd holds ${cmd.len}.`);
+        const seq = ((host.readDebugValue("dbg.cmd_seq").value >>> 0) + 1) >>> 0;
+        host.writeMemory(cmd.valuePtr, new Uint8Array(bytes));
+        host.writeDebugValue("dbg.cmd_seq", seq);
+        let frames = 0;
+        while ((host.readDebugValue("dbg.reply_seq").value >>> 0) !== seq && frames < maxFrames) {
+          await host.stepFrames(1);
+          frames++;
+        }
+        if ((host.readDebugValue("dbg.reply_seq").value >>> 0) !== seq) {
+          throw new Error(`wasm({op:'command'}): no reply after ${frames} frames (is the cart paused by the host, or not processing its debug channel?).`);
+        }
+        const len = host.readDebugValue("dbg.reply_len").value >>> 0;
+        const reply = Buffer.from(host.readMemory(f("dbg.reply").valuePtr, Math.min(len, f("dbg.reply").len))).toString("utf8");
+        let parsed;
+        try { parsed = JSON.parse(reply); } catch { parsed = undefined; }
+        return jsonContent(parsed !== undefined ? { framesRun: frames, reply: parsed } : { framesRun: frames, reply });
+      }
 
       if (op === "conformance") {
         return jsonContent({
