@@ -6,6 +6,17 @@ the `romdev-mcp` bin is kept as an alias.)
 
 ## Unreleased
 
+### WebGPU wasmcart carts
+
+wasmcart 0.32.0 adds an optional WebGPU tier, and romdev runs it: a cart
+that imports WebGPU loads with the usual `loadMedia({platform:'wasmcart'})`,
+the load result and `catalog({op:'status'})` say `gpu:'webgpu'` (or `'gl'`,
+or null for 2D), and capabilities carry `hasWgpuRendering`. Frames step
+synchronously as for GL; pixels come back by an asynchronous GPU readback, so
+`frame` screenshots and the playtest window show the real frame. wasi-sdk
+carts (threads included) built through wasmcart's `wgpu-wasi/` run the same
+way. Needs the wasmcart pin moved to ^0.32.0 once it is published.
+
 ### Recompiled carts say which emulator licence they carry
 
 NOTICE said a game built with romdev contains only its author's code. That is
