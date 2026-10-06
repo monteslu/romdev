@@ -475,6 +475,9 @@ export class WasmcartHost {
     // "stubbed" is no longer reachable: the factory either supplies a context
     // or throws, so a loaded GL cart is always really rendering.
     this.status.gl = this.cart.usesGL ? "rendered" : null;
+    // WebGPU carts (wasmcart's `wgpu` tier) render on a device the cart host
+    // owns, and their frames come back by an async GPU readback.
+    this.status.gpu = this.cart.usesWgpu ? "webgpu" : this.cart.usesGL ? "gl" : null;
     // Deterministic clock: romdev steps frames, so frame N should be reproducible.
     // Feature-detect - setFixedStep is a newer CartHost addition; older published
     // versions fall back to wall-clock (still works, just non-deterministic timing).
@@ -504,7 +507,7 @@ export class WasmcartHost {
     if (typeof beforeSettle === "function") beforeSettle(this);
     // Settle a first frame so width/height and a framebuffer exist (carts often
     // finalize their resolution during the first render).
-    this.stepFrames(1);
+    await this.stepFrames(1);
     this.status.fbWidth = this.state.lastFrame?.width || 0;
     this.status.fbHeight = this.state.lastFrame?.height || 0;
     // A cart's display IS its framebuffer (square pixels, no CRT stretch) -
@@ -648,6 +651,7 @@ export class WasmcartHost {
   stepFrames(n) {
     if (!this.cart) throw new Error("no cart loaded - loadMedia first");
     if (this.status.paused) return 0;
+    if (this.cart.usesWgpu) return this._stepFramesWgpu(n);
     // Claim OUR context for this burst. native-gles is multi-context (another
     // cart, a bezel compositor, another session), so whoever rendered last
     // owns currency -- draws land in someone else's context otherwise.
@@ -730,6 +734,58 @@ export class WasmcartHost {
       }
     }
     return n;
+  }
+
+  /**
+   * stepFrames for a WebGPU cart. The frames run synchronously, exactly as on
+   * the GL path, so a caller that sets input, steps and releases without
+   * awaiting still gets its input on the right frames. The difference is the
+   * pixels: a GPU readback is asynchronous. The copy of the burst's last frame
+   * is encoded right here (so it is THAT frame, whatever runs next), and
+   * state.lastFrame is filled when it lands; the returned promise resolves
+   * then. Callers that await stepFrames (most do) see the new frame.
+   *
+   * A cart's own async results (buffer maps, error scopes) reach it when the
+   * event loop runs, i.e. between tool calls, not inside a burst: the
+   * contract allows that ("delivered between frames, when the host yields").
+   */
+  _stepFramesWgpu(n) {
+    let r = null;
+    for (let i = 0; i < n; i++) {
+      r = this.cart.runFrame(this._inputPorts);
+      this.status.frameCount++;
+      if (r?.audio && r.audio.length) {
+        const a = r.audio;
+        if (a instanceof Float32Array) {
+          const i16 = new Int16Array(a.length);
+          for (let k = 0; k < a.length; k++) {
+            const s = a[k] < -1 ? -1 : a[k] > 1 ? 1 : a[k];
+            i16[k] = s < 0 ? s * 0x8000 : s * 0x7fff;
+          }
+          this.state.audioRing.push(i16);
+        } else {
+          this.state.audioRing.push(new Int16Array(a));
+        }
+      }
+    }
+    if (r) this.state.lastAudio = r.audio || null;
+    const seq = (this._wgpuReadSeq = (this._wgpuReadSeq || 0) + 1);
+    return this.cart.readGpuFrame().then(f => {
+      // An older read landing after a newer one must not overwrite it.
+      if (!f || seq !== this._wgpuReadSeq) return n;
+      // Top-down RGBA already; WebGPU's alpha is whatever the cart wrote, so
+      // force opaque as the GL path does (alpha 0 composites to black).
+      const px = f.data;
+      for (let i = 3; i < px.length; i += 4) px[i] = 255;
+      this.state.lastFrame = {
+        width: f.width, height: f.height, pixels: px, pitch: f.width * 4,
+        format: ROMDEV_PIXEL_FORMAT_RGBA8888,
+      };
+      this.status.fbWidth = f.width;
+      this.status.fbHeight = f.height;
+      this.status.displayAspect = f.height > 0 ? f.width / f.height : 0;
+      return n;
+    });
   }
 
   /** Bring state.lastFrame up to date if a GL cart has stepped since the last
