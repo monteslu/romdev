@@ -16,6 +16,8 @@ synchronously as for GL; pixels come back by an asynchronous GPU readback, so
 `frame` screenshots and the playtest window show the real frame. wasi-sdk
 carts (threads included) built through wasmcart's `wgpu-wasi/` run the same
 way. Needs the wasmcart pin moved to ^0.32.0 once it is published.
+`loadMedia({gpuPower:'low-power'|'high-performance'})` picks the GPU on a
+two-GPU machine, and the load result's `gpuAdapter` says which one the cart got.
 
 ### Recompiled carts say which emulator licence they carry
 

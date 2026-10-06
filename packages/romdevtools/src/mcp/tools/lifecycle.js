@@ -34,7 +34,7 @@ export function registerLifecycleTools(server, z, sessionKey) {
   // slot:'b' targets the secondary comparison host (for frame sideBySide);
   // it gets its own fresh host and does NOT overwrite slot A's recovery
   // breadcrumb, since B is transient scratch, not the session's main ROM.
-  async function doLoadMedia({ platform, path, base64, mediaKind, virtualName, cheats, slot, deterministicSeed, deterministicStepMs, coreOptions, core, firmware, presentWindow, useActiveBezel, activeBezelPath, activeBezelConfig, activeBezelForce, activeBezelRenderer }) {
+  async function doLoadMedia({ platform, path, base64, mediaKind, virtualName, cheats, slot, deterministicSeed, deterministicStepMs, coreOptions, core, firmware, presentWindow, gpuPower, useActiveBezel, activeBezelPath, activeBezelConfig, activeBezelForce, activeBezelRenderer }) {
     if (!path && !base64) throw new Error("loadMedia: provide either `path` (file on disk) or `base64` (ROM bytes).");
     if (path && base64) throw new Error("loadMedia: provide `path` OR `base64`, not both.");
     if (deterministicSeed !== undefined && !NATIVE_RUNTIME_HOSTS[platform]) {
@@ -73,6 +73,10 @@ export function registerLifecycleTools(server, z, sessionKey) {
         // because the context is bound when the cart's wasm loads and cannot
         // be swapped afterward.
         ...(presentWindow ? { presentWindow: true } : {}),
+        // WebGPU carts: which GPU on a two-GPU machine (wasmcart's
+        // adapterOptions.powerPreference). Unset = WASMCART_WGPU_POWER from
+        // the server's environment, else the driver's default.
+        ...(gpuPower ? { gpuPower } : {}),
       });
       if (slotB) installHostB(sessionKey, host); else installHost(sessionKey, host);
       if (!slotB && (path || bytes)) rememberLastMedia(sessionKey, { platform, path, fromBase64: !!bytes });
@@ -86,6 +90,8 @@ export function registerLifecycleTools(server, z, sessionKey) {
         // wasmcart carts: which GPU API the cart runs on ('webgpu', 'gl', or
         // null for a 2D cart), so an agent knows how its frames come back.
         ...(host.status.gpu !== undefined ? { gpu: host.status.gpu } : {}),
+        // WebGPU carts: the GPU it actually got, to assert on (two-GPU machines).
+        ...(host.status.gpuAdapter ? { gpuAdapter: host.status.gpuAdapter } : {}),
         ...(deterministicSeed !== undefined ? { deterministicSeed: host.status.deterministicSeed } : {}),
         // A cart whose WCInfo leaves inputPtr/timePtr at 0 gets no input or
         // clock (the host refuses to write them over linear offset 0). Say so
@@ -250,6 +256,7 @@ export function registerLifecycleTools(server, z, sessionKey) {
       core: z.string().optional().describe("Run the platform on a second core instead of its default (snes: 'bsnes', the accuracy reference for the firmware coprocessors ST010/ST011/ST018, with the same memory region ids as snes9x). Omitted: the platform's own core."),
       firmware: z.string().optional().describe("Path to a coprocessor firmware file the core reads from its system directory (bsnes: st011.rom, st018.rom - the program ROM then the data ROM); copied there under its file name before the ROM loads."),
       coreOptions: z.record(z.string(), z.string()).optional().describe("Libretro core options applied before the ROM loads, overriding the core's defaults (e.g. {\"snes9x_layer_3\":\"disabled\"} hides a layer at the RENDERER so an Active Bezel can own it - game state and VRAM are untouched). Keys/values are core-specific and unvalidated: a wrong key is silently ignored by the core, so verify the effect visually."),
+      gpuPower: z.enum(["low-power", "high-performance"]).optional().describe("wasmcart WebGPU carts only: which GPU the cart runs on, on a machine with two ('low-power' = the integrated GPU, 'high-performance' = the discrete one). Unset: the server's WASMCART_WGPU_POWER, else the driver's default. The load result's gpuAdapter names the GPU the cart actually got ({vendor, architecture, device, description, featureLevel, powerPreference}); assert on it if your work must stay off a GPU. Must be set at load time. No effect on GL or 2D carts."),
       presentWindow: z.boolean().optional().describe("wasmcart GL carts only: load this cart on its OWN GL context so a later playtest({op:'open'}) can present it by GPU blit+swap instead of reading every frame back to the CPU. Measured on a 1080p 3D cart: convertMs 3.52 -> 0, window cost ~7.45ms -> ~2.0ms at a steady 60fps. Pass it when you intend to open a window for a HUMAN to play a 3D/GL cart; skip it for headless work, where the readback is what you want anyway. MUST be set at load time - the GL context binds when the cart's wasm loads and cannot be swapped afterward, so a cart already loaded without it keeps the readback path until reloaded. CAPTURES ARE UNAFFECTED BY CONTRACT: frame({op:'screenshot'}) and playtest({op:'framebuffer'}) return the full cart frame at the cart's resolution, byte-identical to a plain load, and capture dimensions are a function of the CART only - nothing a human does to the window (drag, F11) changes them. Costs one extra GL context per loaded cart; a cart loaded WITHOUT it shares the process-wide offscreen context, which can never be attached to a window (doing so would drag every other session's cart into that window). No effect on 2D carts or emulator cores."),
     },
     safeTool(doLoadMedia),

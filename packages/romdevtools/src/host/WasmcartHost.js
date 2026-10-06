@@ -313,7 +313,7 @@ export class WasmcartHost {
    * in-memory cart zip. Mirrors LibretroHost.loadMedia's post-conditions:
    * status.loaded + a first framebuffer so screenshot works immediately.
    */
-  async loadMedia({ platform, path: mediaPath, bytes, glBackend, deterministic, presentWindow, beforeSettle } = {}) {
+  async loadMedia({ platform, path: mediaPath, bytes, glBackend, deterministic, presentWindow, gpuPower, beforeSettle } = {}) {
     const source = bytes ?? mediaPath;
     if (!source) throw new Error("WasmcartHost.loadMedia: provide `path` or `bytes`.");
 
@@ -470,6 +470,7 @@ export class WasmcartHost {
       glBackend: glBackend ?? glFactory,
       ...(deterministic ? { deterministic } : {}),
       ...(savedData ? { saveData: savedData } : {}),
+      ...(gpuPower ? { adapterOptions: { powerPreference: gpuPower } } : {}),
     });
     if (glBackend && this.cart.usesGL) this._gl = glBackend;
     this._guardHostWrites();
@@ -480,6 +481,7 @@ export class WasmcartHost {
     // WebGPU carts (wasmcart's `wgpu` tier) render on a device the cart host
     // owns, and their frames come back by an async GPU readback.
     this.status.gpu = this.cart.usesWgpu ? "webgpu" : this.cart.usesGL ? "gl" : null;
+    this.status.gpuAdapter = this.cart.usesWgpu ? this.cart.getGpuAdapterInfo() : null;
     // Deterministic clock: romdev steps frames, so frame N should be reproducible.
     // Feature-detect - setFixedStep is a newer CartHost addition; older published
     // versions fall back to wall-clock (still works, just non-deterministic timing).
