@@ -17,20 +17,27 @@ const INLINE_HEX_LIMIT = 4096;
  *  into an object with one key per byte (a 256-byte command buffer printed
  *  as 256 lines). Render it as hex, plus the text up to the first NUL when
  *  that prefix is printable: most byte fields are strings. */
-function renderBytes(v) {
+const BYTES_LIST_CAP = 256;
+function renderBytes(v, cap = Infinity) {
   if (!v || !(v.bytes instanceof Uint8Array)) return v;
   const b = Buffer.from(v.bytes);
   const nul = b.indexOf(0);
   const head = b.subarray(0, nul < 0 ? b.length : nul);
   const printable = head.every((c) => c === 9 || c === 10 || c === 13 || (c >= 32 && c < 127));
   const { bytes: _b, ...rest } = v;
+  if (b.length > cap) {
+    // a listing of every field must stay readable: a 256 KB mailbox printed
+    // as hex overflowed tool output; read it by name for the full contents
+    return { ...rest, length: b.length, truncated: true, ...(printable ? { text: head.subarray(0, cap).toString("latin1") } : { hex: b.subarray(0, cap).toString("hex") }),
+      note: `${b.length} bytes: read it with wasm({op:'read', name}) for the whole field` };
+  }
   return { ...rest, length: b.length, hex: b.toString("hex"), ...(printable ? { text: head.toString("latin1") } : {}) };
 }
 
 /** Decode a named debug field to {value} or {values}/{bytes}, dropping the
  *  redundant name/type the caller already has from the field descriptor. */
 function decodeName(host, fieldName) {
-  const v = renderBytes(host.readDebugValue(fieldName));
+  const v = renderBytes(host.readDebugValue(fieldName), BYTES_LIST_CAP); /* the debugState listing */
   const { name: _n, type: _t, ...rest } = v;
   return rest;
 }

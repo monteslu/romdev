@@ -164,9 +164,12 @@ function inputSetCore({ ports }, sessionKey) {
       }
       getHost(sessionKey).setInput({ ports });
       const requested = ports.map((p) => Object.keys(p).filter((k) => p[k] === true && KNOWN_BUTTONS.has(k)));
+      // axes are input too: echo them, or an axis-only set reads as requested:[[]]
+      const requestedAxes = ports.map((p) => (p.axes && typeof p.axes === "object" ? p.axes : null));
       return {
         inputSet: true,
         requested,
+        ...(requestedAxes.some(Boolean) ? { requestedAxes } : {}),
         ...coDriveFields(sessionKey),
       };
 }
