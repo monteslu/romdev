@@ -290,6 +290,8 @@ export class WasmcartHost {
       // GL carts render on a real (offscreen) WebGL2 context and screenshots
       // show the actual draws. 2D carts: false (they never request a context).
       hasGlRendering: !!this._gl,
+      // wasmcart's WebGPU tier: frames come back by async GPU readback.
+      hasWgpuRendering: !!this.cart?.usesWgpu,
       // Named debug state (opt-in wasmcart debug ABI). True only when the cart
       // opted in AND the wasmcart build exposes the reader - feature-detected.
       hasDebugState: this.debugSupported(),

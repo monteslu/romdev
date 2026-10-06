@@ -83,6 +83,9 @@ export function registerLifecycleTools(server, z, sessionKey) {
         mediaKind: host.status.mediaKind,
         ...(bytes ? { bytes: bytes.length } : { path: host.status.mediaPath }),
         fbWidth: host.status.fbWidth, fbHeight: host.status.fbHeight,
+        // wasmcart carts: which GPU API the cart runs on ('webgpu', 'gl', or
+        // null for a 2D cart), so an agent knows how its frames come back.
+        ...(host.status.gpu !== undefined ? { gpu: host.status.gpu } : {}),
         ...(deterministicSeed !== undefined ? { deterministicSeed: host.status.deterministicSeed } : {}),
         // A cart whose WCInfo leaves inputPtr/timePtr at 0 gets no input or
         // clock (the host refuses to write them over linear offset 0). Say so
