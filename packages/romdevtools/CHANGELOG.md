@@ -18,6 +18,7 @@ carts (threads included) built through wasmcart's `wgpu-wasi/` run the same
 way. Needs the wasmcart pin moved to ^0.32.0 once it is published.
 `loadMedia({gpuPower:'low-power'|'high-performance'})` picks the GPU on a
 two-GPU machine, and the load result's `gpuAdapter` says which one the cart got.
+`loadMedia({wgpu:false})` runs a dual GL/WebGPU cart on GL.
 
 ### Recompiled carts say which emulator licence they carry
 

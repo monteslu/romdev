@@ -3,8 +3,10 @@
 // orange triangle on a background whose red channel is a compute shader's
 // result (21 * 2 = 42), read back by the cart with mapAsync.
 //
-// Needs wasmcart with the WebGPU tier and webgpu-node (its optional
-// dependency) with a working adapter; it fails rather than skips without one.
+// Needs wasmcart with the WebGPU tier and a working adapter for webgpu-node (a
+// dependency of wasmcart); it fails rather than skips without one.
+// fixtures/dualgpu.wasc (also wasmcart's) imports GL and WebGPU: green on
+// WebGPU, red on GL.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -15,6 +17,7 @@ import { WasmcartHost } from "../src/host/WasmcartHost.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WGPUCART = path.join(HERE, "fixtures", "wgpucart.wasc");
+const DUALGPU = path.join(HERE, "fixtures", "dualgpu.wasc");
 
 function pixel(f, x, y) {
   const i = y * f.pitch + x * 4;
@@ -60,4 +63,34 @@ test("wasmcart webgpu: a read issued for a burst is that burst's frame, even if 
   } finally {
     host.destroy();
   }
+});
+
+test("wasmcart webgpu: gpuPower picks the GPU and the status names it; wgpu:false runs a dual cart on GL", async () => {
+  const host = new WasmcartHost();
+  const status = await host.loadMedia({ platform: "wasmcart", path: DUALGPU, gpuPower: "low-power" });
+  try {
+    assert.equal(status.gpu, "webgpu");
+    assert.equal(status.gpuAdapter.powerPreference, "low-power");
+    assert.ok(status.gpuAdapter.device || status.gpuAdapter.description, "the adapter names itself");
+    await host.stepFrames(2);
+    await new Promise(resolve => setImmediate(resolve));
+    await host.stepFrames(1);
+    assert.deepEqual(pixel(host.getFramebuffer(), 64, 48), [0, 255, 0], "green on WebGPU");
+  } finally {
+    host.destroy();
+  }
+
+  const gl = new WasmcartHost();
+  const glStatus = await gl.loadMedia({ platform: "wasmcart", path: DUALGPU, wgpu: false });
+  try {
+    assert.equal(glStatus.gpu, "gl");
+    assert.equal(glStatus.gpuAdapter, null);
+    await gl.stepFrames(2);
+    assert.deepEqual(pixel(gl.getFramebuffer(), 64, 48), [255, 0, 0], "red on GL");
+  } finally {
+    gl.destroy();
+  }
+
+  await assert.rejects(new WasmcartHost().loadMedia({ platform: "wasmcart", path: WGPUCART, wgpu: false }),
+    /this cart is a WebGPU cart, but this host cannot provide WebGPU: the embedder disabled it/);
 });

@@ -313,7 +313,7 @@ export class WasmcartHost {
    * in-memory cart zip. Mirrors LibretroHost.loadMedia's post-conditions:
    * status.loaded + a first framebuffer so screenshot works immediately.
    */
-  async loadMedia({ platform, path: mediaPath, bytes, glBackend, deterministic, presentWindow, gpuPower, beforeSettle } = {}) {
+  async loadMedia({ platform, path: mediaPath, bytes, glBackend, deterministic, presentWindow, gpuPower, wgpu, beforeSettle } = {}) {
     const source = bytes ?? mediaPath;
     if (!source) throw new Error("WasmcartHost.loadMedia: provide `path` or `bytes`.");
 
@@ -471,6 +471,7 @@ export class WasmcartHost {
       ...(deterministic ? { deterministic } : {}),
       ...(savedData ? { saveData: savedData } : {}),
       ...(gpuPower ? { adapterOptions: { powerPreference: gpuPower } } : {}),
+      ...(wgpu === false ? { wgpu: false } : {}),
     });
     if (glBackend && this.cart.usesGL) this._gl = glBackend;
     this._guardHostWrites();
