@@ -6,6 +6,19 @@ the `romdev-mcp` bin is kept as an alias.)
 
 ## Unreleased
 
+### host({op:'play'}): real-time playback on the server
+
+`host({op:'play', seconds})` runs a session at its core's frame rate on the
+server from ONE call (default 60 s, max 600) and returns at once, so the
+`/livestream` shows a game moving without an agent looping
+`frame({op:'step'})` at it (one session made ~13k step calls in a few hours
+doing that). The run ends on time, on `host({op:'stop'})` (which reports
+`framesRun`), on any other tool call on the session (catalog status reads
+excepted), or when the media goes away; frames are stepped against wall time
+in small batches, so a slow cart falls behind instead of building a backlog.
+Refused while a playtest window is open. `catalog({op:'status'})` shows a
+running one as `play`.
+
 ### WebGPU wasmcart carts
 
 wasmcart 0.32.0 adds an optional WebGPU tier, and romdev runs it: a cart

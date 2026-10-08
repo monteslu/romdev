@@ -21,6 +21,8 @@ import { attachActiveBezel, detachActiveBezel, activeBezelStatus, notifyActiveBe
 import { readFile } from "node:fs/promises";
 import { registerMediaLoader } from "./fast-present.js";
 import { emitSessionEnd } from "../session-events.js";
+import { startPlay, stopPlay, PLAY_MAX_SECONDS } from "../autoplay.js";
+import { getPlaytestHumanStatus } from "./playtest.js";
 
 const MEDIA_KINDS = ["cartridge", "disk", "tape", "program"];
 
@@ -269,7 +271,7 @@ export function registerLifecycleTools(server, z, sessionKey) {
 
   server.tool(
     "host",
-    "Emulator host lifecycle. `op`: 'unload' | 'shutdown' | 'reset' | 'pause' | 'resume'. " +
+    "Emulator host lifecycle. `op`: 'unload' | 'shutdown' | 'reset' | 'pause' | 'resume' | 'play' | 'stop'. " +
     "(Loading media is the separate `loadMedia` tool.)\n" +
     "'unload': drop the current media but keep the core hot (for a fast ROM swap). 'shutdown': tear the host down " +
     "entirely (a later loadMedia makes a fresh one).\n" +
@@ -278,14 +280,22 @@ export function registerLifecycleTools(server, z, sessionKey) {
     "clears RAM + re-seeds boot state - use it when re-testing boot-time behavior (a soft reset boots the PREVIOUS " +
     "state).\n" +
     "'pause': halt emulation (stepFrames returns 0 until resume). 'resume': continue.\n" +
+    "'play': run this session in REAL TIME on the server for `seconds` (default 60, max " + PLAY_MAX_SECONDS + ") from ONE call, " +
+    "so the /livestream shows the game moving. Returns at once. Use it instead of looping frame({op:'step'}) to keep " +
+    "the stream alive - never poll. The run ends when its seconds elapse, on host({op:'stop'}), on ANY other tool " +
+    "call on this session (you are driving again; catalog status reads excepted), or if the media goes away. Input " +
+    "set beforehand with input({op:'set'}) stays held; a self-playing (autopilot/attract) cart plays itself. Refused " +
+    "while a human playtest window is open (it already runs in real time). 'stop': end a play run now and report " +
+    "framesRun.\n" +
     "`slot:'b'` targets the secondary comparison host (loaded via loadMedia({slot:'b'})). Slot-B ops never " +
     "touch the livestream.",
     {
-      op: z.enum(["unload", "shutdown", "reset", "pause", "resume"]).describe("unload media; shutdown the host; reset (soft/hard); pause; resume."),
+      op: z.enum(["unload", "shutdown", "reset", "pause", "resume", "play", "stop"]).describe("unload media; shutdown the host; reset (soft/hard); pause; resume; play = real-time run on the server for `seconds` (livestream); stop = end a play run."),
+      seconds: z.number().positive().max(PLAY_MAX_SECONDS).default(60).describe(`op=play: how long to run in real time (default 60, max ${PLAY_MAX_SECONDS}).`),
       hard: z.boolean().default(false).describe("op=reset: true = full power-cycle (reload the ROM; clears work RAM + boot-seeded state). false (default) = soft RESET-button reset (RAM persists)."),
       slot: z.enum(["a", "b"]).default("a").describe("'a' (default) = the primary host. 'b' = the secondary comparison host (frame sideBySide)."),
     },
-    safeTool(async ({ op, hard, slot }) => {
+    safeTool(async ({ op, hard, slot, seconds }) => {
       const slotB = slot === "b";
       const get = slotB ? getHostB : getHost;
       const getOrNull = slotB ? getHostBOrNull : getHostOrNull;
@@ -300,6 +310,7 @@ export function registerLifecycleTools(server, z, sessionKey) {
             // session/state mix-up (the agent thinks it unloaded media it never had).
             return textContent(`nothing to unload - no media is loaded in ${slotB ? "comparison slot B" : "this session"}`);
           }
+          if (!slotB) stopPlay(sessionKey, "unload");
           host.unloadMedia();
           // The package is bound to this ROM's hash; keeping it across an unload
           // would leave one game's map ready to composite over another's picture.
@@ -309,6 +320,7 @@ export function registerLifecycleTools(server, z, sessionKey) {
         case "shutdown":
           if (slotB) clearHostB(sessionKey);
           else {
+            stopPlay(sessionKey, "shutdown");
             detachActiveBezel(sessionKey);
             clearHost(sessionKey);
             // Shutdown means the SESSION is done, not just its emulator. The
@@ -342,6 +354,19 @@ export function registerLifecycleTools(server, z, sessionKey) {
         case "resume":
           get(sessionKey).resume();
           return textContent(`resumed${slotB ? " (slot B)" : ""}`);
+        case "play": {
+          if (slotB) throw new Error("host({op:'play'}): slot B never drives the livestream - play runs slot A only.");
+          const host = get(sessionKey);
+          if (!host.status?.loaded) throw new Error("host({op:'play'}): no media loaded - loadMedia first.");
+          if (getPlaytestHumanStatus(sessionKey).windowOpen) throw new Error("host({op:'play'}): a playtest window is open on this session and already runs it in real time.");
+          const r = startPlay(sessionKey, host, { seconds: seconds ?? 60 });
+          return jsonContent({ playing: true, seconds: r.seconds, fps: r.fps, endsAt: new Date(r.endsAt).toISOString(),
+            note: "runs on the server; any other call on this session (except catalog) or host({op:'stop'}) ends it" });
+        }
+        case "stop": {
+          const r = stopPlay(sessionKey, "stop");
+          return r ? jsonContent({ stopped: true, ...r }) : textContent("nothing playing on this session");
+        }
         default:
           throw new Error(`host: unknown op '${op}'`);
       }

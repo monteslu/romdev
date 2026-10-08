@@ -18,6 +18,7 @@
 // are fully usable.
 
 import { randomUUID } from "node:crypto";
+import { playStatus } from "../autoplay.js";
 import { autoSnapshotStatus } from "../auto-snapshot.js";
 import { activeBezelStatus } from "../active-bezel.js";
 import { registerLifecycleTools } from "./lifecycle.js";
@@ -395,6 +396,7 @@ export function registerTools(server, z, sessionKey) {
           // by failure (~4 dead calls/session). v0.41.0 feedback #2 (002129).
           ...hostCapabilities(host),
           playtestWindowOpen: human.windowOpen,
+          ...(playStatus(sessionKey) ? { play: playStatus(sessionKey) } : {}),
           ...(human.windowOpen
             ? {
                 humanInputActive: human.humanInputActive,

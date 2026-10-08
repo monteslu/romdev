@@ -6,6 +6,7 @@
 // Idempotent per server instance - installs once, repeats are no-ops.
 
 import { observer, extractImages, summarizeForLog, pushObserverFrame } from "./bus.js";
+import { noteToolCall } from "../mcp/autoplay.js";
 import { getHostOrNull } from "../mcp/state.js";
 import { floodWarning } from "./request-stats.js";
 
@@ -39,6 +40,9 @@ export function installObserverMiddleware(server, sessionKey) {
 
     const wrappedHandler = async (args, extra) => {
       const startedAt = Date.now();
+      // A real-time host({op:'play'}) run on this session ends when the agent
+      // drives again (autoplay.js).
+      try { noteToolCall(sessionKey, name, args); } catch { /* never blocks a call */ }
       let result;
       let thrown;
       try {

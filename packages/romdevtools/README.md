@@ -95,6 +95,10 @@ running server:
   that hides an error. romdev runs **locally** and tool path args (`path`,
   `outputPath`, ...) are **local filesystem paths**, not uploads - pass absolute
   paths on the same machine.
+- **Livestream playback:** `host({op:'play', seconds})` runs the session in real
+  time on the server (default 60 s, max 600) from one call, so `/livestream`
+  shows the game moving; it stops on time, on `host({op:'stop'})`, or on the
+  session's next tool call. Use it instead of a loop of `frame({op:'step'})`.
 - **Agent Skill:** **`GET /skills/romdev/SKILL.md`** is a portable [Agent
   Skills](https://agentskills.io) `SKILL.md` (works in Claude Code, opencode,
   OpenClaw, Hermes, ...). Drop it in your agent's skills dir; it costs ~100 tokens

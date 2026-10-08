@@ -18,6 +18,7 @@ import { z } from "zod";
 import { registerTools } from "../mcp/tools/index.js";
 import { withClearToolErrors } from "../mcp/util.js";
 import { observer, summarizeForLog, extractImages, pushObserverFrame } from "../observer/bus.js";
+import { noteToolCall } from "../mcp/autoplay.js";
 import { getHostOrNull } from "../mcp/state.js";
 import { floodWarning } from "../observer/request-stats.js";
 
@@ -92,6 +93,9 @@ export function buildToolRegistry(sessionKey) {
 export async function runTool(tool, args, sessionKey) {
   const a = args ?? {};
   const startedAt = Date.now();
+  // A real-time host({op:'play'}) run on this session ends when the agent
+  // drives again (autoplay.js) - the same rule as the MCP path.
+  try { noteToolCall(sessionKey, tool.name, a); } catch { /* never blocks a call */ }
   // Emit the SAME `call` event the MCP path's observer middleware emits, so the
   // /livestream view updates for HTTP/skill tool calls too (the MCP path wraps
   // server.tool with installObserverMiddleware; the HTTP path runs handlers
