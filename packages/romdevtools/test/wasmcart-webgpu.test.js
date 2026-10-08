@@ -94,3 +94,28 @@ test("wasmcart webgpu: gpuPower picks the GPU and the status names it; wgpu:fals
   await assert.rejects(new WasmcartHost().loadMedia({ platform: "wasmcart", path: WGPUCART, wgpu: false }),
     /this cart is a WebGPU cart, but this host cannot provide WebGPU: the embedder disabled it/);
 });
+
+test("wasmcart webgpu: a long burst yields to the event loop, and overlapping bursts run in order", async () => {
+  const host = new WasmcartHost();
+  await host.loadMedia({ platform: "wasmcart", path: WGPUCART });
+  try {
+    // Released GPU objects are only freed after an event-loop turn, so a burst
+    // longer than 16 frames must give the loop one.
+    let turns = 0;
+    const tick = setInterval(() => { turns++; }, 0);
+    const before = host.status.frameCount;
+    assert.equal(await host.stepFrames(64), 64);
+    clearInterval(tick);
+    assert.equal(host.status.frameCount - before, 64);
+    assert.ok(turns >= 1, "the event loop ran during the burst");
+
+    // Two bursts issued back to back finish in the order they were issued.
+    const order = [];
+    const a = host.stepFrames(40).then(() => order.push("a"));
+    const b = host.stepFrames(1).then(() => order.push("b"));
+    await Promise.all([a, b]);
+    assert.deepEqual(order, ["a", "b"]);
+  } finally {
+    host.destroy();
+  }
+});

@@ -754,9 +754,32 @@ export class WasmcartHost {
    * event loop runs, i.e. between tool calls, not inside a burst: the
    * contract allows that ("delivered between frames, when the host yields").
    */
+  // Bursts run in order: a call made while an earlier one is still yielding
+  // waits for it, so frames never interleave. A call made on an idle host
+  // starts its first frames synchronously, as before.
   _stepFramesWgpu(n) {
+    const run = () => this._wgpuBurst(n);
+    const p = this._wgpuPending ? this._wgpuTail.then(run) : run();
+    this._wgpuPending = (this._wgpuPending || 0) + 1;
+    const done = () => { this._wgpuPending--; };
+    this._wgpuTail = p.then(done, done);
+    return p;
+  }
+
+  async _wgpuBurst(n) {
+    if (!this.cart) return n;
     let r = null;
     for (let i = 0; i < n; i++) {
+      // An event-loop turn every 16 frames. Dawn objects a cart releases
+      // (textures, buffers) are freed only after V8 collects their JS wrappers
+      // AND a later turn runs the native finalizer; V8 cannot see GPU memory,
+      // so a long synchronous burst grew VRAM about 0.9 MiB per frame without
+      // bound (cliemu-43, RX 7600). Input timing is unchanged: ports are set
+      // before the burst and each frame still reads them.
+      if (i > 0 && i % 16 === 0) {
+        await new Promise(resolve => setImmediate(resolve));
+        if (!this.cart) return n;
+      }
       r = this.cart.runFrame(this._inputPorts);
       this.status.frameCount++;
       if (r?.audio && r.audio.length) {
