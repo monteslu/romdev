@@ -770,13 +770,17 @@ export class WasmcartHost {
     if (!this.cart) return n;
     let r = null;
     for (let i = 0; i < n; i++) {
-      // An event-loop turn every 16 frames. Dawn objects a cart releases
-      // (textures, buffers) are freed only after V8 collects their JS wrappers
-      // AND a later turn runs the native finalizer; V8 cannot see GPU memory,
-      // so a long synchronous burst grew VRAM about 0.9 MiB per frame without
-      // bound (cliemu-43, RX 7600). Input timing is unchanged: ports are set
-      // before the burst and each frame still reads them.
-      if (i > 0 && i % 16 === 0) {
+      // An event-loop turn between every two frames, as a browser or a native
+      // player gives a WebGPU cart. Asynchronous results (buffer maps, error
+      // scopes) then arrive before the next frame on this host too, so one
+      // step call of N frames matches N one-frame calls; callers used to step
+      // one frame per call to get that, thousands of calls per run. It also
+      // frees what the cart released: Dawn objects go only after V8 collects
+      // their JS wrappers AND a later turn runs the native finalizer, and a
+      // long synchronous burst grew VRAM about 0.9 MiB per frame (cliemu-43,
+      // RX 7600). Input timing is unchanged: ports are set before the burst
+      // and each frame still reads them.
+      if (i > 0) {
         await new Promise(resolve => setImmediate(resolve));
         if (!this.cart) return n;
       }
