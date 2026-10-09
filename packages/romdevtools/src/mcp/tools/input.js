@@ -204,12 +204,14 @@ function inputPressCore({ button, frames = 2, port: p = 0 }, sessionKey) {
 }
 
 /** op:'sequence' - scripted frame-by-frame inputs (ports shape per step). */
-function inputSequenceCore({ steps }, sessionKey) {
+async function inputSequenceCore({ steps }, sessionKey) {
       const host = getHost(sessionKey);
       let total = 0;
       for (const step of steps) {
         host.setInput(step.input);
-        host.stepFrames(step.frames);
+        // await: a WebGPU cart steps asynchronously (an event-loop turn per
+        // frame), so the next step's input must wait for this burst to end
+        await host.stepFrames(step.frames);
         total += step.frames;
       }
       return { stepsRun: steps.length, framesRun: total, frameCount: host.status.frameCount, ...coDriveFields(sessionKey) };
@@ -506,7 +508,7 @@ export function registerInputTools(server, z, sessionKey) {
         }
         case "sequence": {
           if (!args.steps) throw new Error("input({op:'sequence'}): `steps` is required.");
-          return attachObserverFrame(jsonContent(inputSequenceCore(args, sessionKey)), getHost(sessionKey), "input sequence");
+          return attachObserverFrame(jsonContent(await inputSequenceCore(args, sessionKey)), getHost(sessionKey), "input sequence");
         }
         case "timeline": {
           if (!args.timeline) throw new Error("input({op:'timeline'}): `timeline` is required - [{frame, buttons:[...], until?|holdFrames?, port?}].");
