@@ -311,7 +311,11 @@ export function registerLifecycleTools(server, z, sessionKey) {
             return textContent(`nothing to unload - no media is loaded in ${slotB ? "comparison slot B" : "this session"}`);
           }
           if (!slotB) stopPlay(sessionKey, "unload");
-          host.unloadMedia();
+          // Emulator hosts unload the ROM and keep the core; the native-runtime
+          // hosts (WasmcartHost, JsGameHost) have no separate unload, so tearing
+          // the cart down IS the unload (status.loaded goes false).
+          if (typeof host.unloadMedia === "function") host.unloadMedia();
+          else host.destroy();
           // The package is bound to this ROM's hash; keeping it across an unload
           // would leave one game's map ready to composite over another's picture.
           const hadBezel = slotB ? false : detachActiveBezel(sessionKey);

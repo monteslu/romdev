@@ -119,3 +119,70 @@ test("wasmcart webgpu: a long burst yields to the event loop, and overlapping bu
     host.destroy();
   }
 });
+
+// The MCP tool layer, not the cores: input press / timeline / navigate step a
+// WebGPU cart asynchronously (an event-loop turn between frames), so they must
+// await each step. They used to call stepFrames without awaiting, which wrote
+// the release before the pressed frames ran: the cart never saw the button.
+test("wasmcart webgpu: input press/timeline/navigate hold the button for the frames they claim", async () => {
+  const { z } = await import("zod");
+  const { registerInputTools } = await import("../src/mcp/tools/input.js");
+  const { _setHostForTest } = await import("../src/mcp/state.js");
+  const parse = res => JSON.parse(res.content.find(c => c.type === "text").text);
+  const handler = (register, name, key) => {
+    const map = {};
+    register({ tool: (n, _d, _s, h) => { map[n] = h; } }, z, key);
+    return map[name];
+  };
+
+  const host = new WasmcartHost();
+  await host.loadMedia({ platform: "wasmcart", path: WGPUCART });
+  const key = "wgpu-input-await";
+  _setHostForTest(key, host);
+  // What the cart saw each frame: the pad state in force when it ran.
+  const seen = [];
+  const run = host.cart.runFrame.bind(host.cart);
+  host.cart.runFrame = (ports) => {
+    seen.push(!!(ports?.[0]?.buttons));
+    return run(ports);
+  };
+  try {
+    const input = handler(registerInputTools, "input", key);
+    const f0 = host.status.frameCount;
+    seen.length = 0;
+    const r = parse(await input({ op: "press", button: "south", frames: 4 }));
+    // pre-release frame, 4 pressed frames, 1 release frame; all run by the
+    // time the call returns, with the button held on exactly the pressed ones
+    assert.equal(host.status.frameCount - f0, 6);
+    assert.equal(r.framesStepped, 6);
+    assert.deepEqual(seen, [false, true, true, true, true, false]);
+
+    seen.length = 0;
+    const f1 = host.status.frameCount;
+    await input({ op: "timeline", timeline: [{ frame: f1 + 2, buttons: ["south"], holdFrames: 3 }] });
+    assert.equal(seen.length, 5, "the timeline ran its frames before returning");
+    assert.deepEqual(seen, [false, false, true, true, true]);
+
+    seen.length = 0;
+    await input({ op: "navigate", steps: [{ button: "south", holdFrames: 2, maxWaitFrames: 3, settleFrames: 0 }] });
+    assert.deepEqual(seen.slice(0, 3), [true, true, false], "held for holdFrames, then released");
+  } finally {
+    host.destroy();
+  }
+});
+
+test("wasmcart webgpu: host({op:'unload'}) unloads a WebGPU cart session", async () => {
+  const { z } = await import("zod");
+  const { registerLifecycleTools } = await import("../src/mcp/tools/lifecycle.js");
+  const { _setHostForTest } = await import("../src/mcp/state.js");
+  const map = {};
+  registerLifecycleTools({ tool: (n, _d, _s, h) => { map[n] = h; } }, z, "wgpu-unload");
+
+  const host = new WasmcartHost();
+  await host.loadMedia({ platform: "wasmcart", path: WGPUCART });
+  _setHostForTest("wgpu-unload", host);
+  const res = await map.host({ op: "unload" });
+  const text = res.content.find(c => c.type === "text").text;
+  assert.match(text, /^unloaded/);
+  assert.equal(host.status.loaded, false);
+});

@@ -175,7 +175,7 @@ function inputSetCore({ ports }, sessionKey) {
 }
 
 /** op:'press' - press one named button N frames then release (port 0 default). */
-function inputPressCore({ button, frames = 2, port: p = 0 }, sessionKey) {
+async function inputPressCore({ button, frames = 2, port: p = 0 }, sessionKey) {
       const host = getHost(sessionKey);
       const resolved = resolveButtonAlias(button, host.status.platform);
       // GUARANTEE a released->pressed EDGE. If the button is already held
@@ -184,13 +184,13 @@ function inputPressCore({ button, frames = 2, port: p = 0 }, sessionKey) {
       // the "one-shot press didn't pause the game" report (0.27.0 #7).
       // One released frame first makes the edge unconditional.
       host.setInput({ ports: [{}, {}] });
-      host.stepFrames(1);
+      await host.stepFrames(1);
       const pressed = { ports: [{}, {}] };
       pressed.ports[p][resolved] = true;
       host.setInput(pressed);
-      host.stepFrames(frames);
+      await host.stepFrames(frames);
       host.setInput({ ports: [{}, {}] });
-      host.stepFrames(1);
+      await host.stepFrames(1);
       return {
         button,
         ...(resolved !== button ? { resolvedTo: resolved } : {}),
@@ -236,7 +236,7 @@ async function inputSequenceCore({ steps }, sessionKey) {
  *   - the schedule is absolute, so two runs with the same timeline are
  *     frame-identical regardless of how the entries are ordered or split.
  */
-function inputTimelineCore({ timeline, untilFrame }, sessionKey) {
+async function inputTimelineCore({ timeline, untilFrame }, sessionKey) {
   const host = getHost(sessionKey);
   const platform = host.status.platform;
   if (!Array.isArray(timeline) || timeline.length === 0) {
@@ -279,7 +279,7 @@ function inputTimelineCore({ timeline, untilFrame }, sessionKey) {
   // until then, and stepping in bulk is far cheaper than frame-at-a-time.
   if (firstFrame > startedAt) {
     host.setInput({ ports: [{}, {}] });
-    host.stepFrames(firstFrame - startedAt);
+    await host.stepFrames(firstFrame - startedAt);
   }
 
   let chordFrames = 0;
@@ -297,7 +297,7 @@ function inputTimelineCore({ timeline, untilFrame }, sessionKey) {
     }
     if (anyHeld) chordFrames++;
     host.setInput({ ports });
-    host.stepFrames(1);
+    await host.stepFrames(1);
   }
   // Release, so a following step cannot inherit the last frame's chord.
   host.setInput({ ports: [{}, {}] });
@@ -319,7 +319,7 @@ function inputTimelineCore({ timeline, untilFrame }, sessionKey) {
   };
 }
 
-function inputNavigateCore({ steps }, sessionKey) {
+async function inputNavigateCore({ steps }, sessionKey) {
       const host = getHost(sessionKey);
       const platform = host.status.platform;
       const results = [];
@@ -330,19 +330,19 @@ function inputNavigateCore({ steps }, sessionKey) {
         const pressed = { ports: [{}, {}] };
         pressed.ports[0][resolved] = true;
         host.setInput(pressed);
-        host.stepFrames(step.holdFrames);
+        await host.stepFrames(step.holdFrames);
         totalFrames += step.holdFrames;
         host.setInput({ ports: [{}, {}] });
-        host.stepFrames(1);
+        await host.stepFrames(1);
         totalFrames += 1;
         let waited = 0, consumed = false;
         for (let i = 0; i < step.maxWaitFrames; i++) {
-          host.stepFrames(1);
+          await host.stepFrames(1);
           waited++; totalFrames++;
           if (host.framebufferHash() !== before) { consumed = true; break; }
         }
         if (consumed && step.settleFrames) {
-          host.stepFrames(step.settleFrames);
+          await host.stepFrames(step.settleFrames);
           totalFrames += step.settleFrames;
         }
         results.push({
@@ -504,7 +504,7 @@ export function registerInputTools(server, z, sessionKey) {
         }
         case "press": {
           if (!args.button) throw new Error("input({op:'press'}): `button` is required.");
-          return attachObserverFrame(jsonContent(inputPressCore(args, sessionKey)), getHost(sessionKey), `press ${args.button}`);
+          return attachObserverFrame(jsonContent(await inputPressCore(args, sessionKey)), getHost(sessionKey), `press ${args.button}`);
         }
         case "sequence": {
           if (!args.steps) throw new Error("input({op:'sequence'}): `steps` is required.");
@@ -512,13 +512,13 @@ export function registerInputTools(server, z, sessionKey) {
         }
         case "timeline": {
           if (!args.timeline) throw new Error("input({op:'timeline'}): `timeline` is required - [{frame, buttons:[...], until?|holdFrames?, port?}].");
-          return attachObserverFrame(jsonContent(inputTimelineCore(args, sessionKey)), getHost(sessionKey), "input timeline");
+          return attachObserverFrame(jsonContent(await inputTimelineCore(args, sessionKey)), getHost(sessionKey), "input timeline");
         }
         case "navigate": {
           if (!args.steps) throw new Error("input({op:'navigate'}): `steps` is required.");
           // Fill per-step defaults the old navigate schema provided.
           const steps = args.steps.map((s) => ({ holdFrames: 2, maxWaitFrames: 120, settleFrames: 2, ...s }));
-          return attachObserverFrame(jsonContent(inputNavigateCore({ steps }, sessionKey)), getHost(sessionKey), "navigate");
+          return attachObserverFrame(jsonContent(await inputNavigateCore({ steps }, sessionKey)), getHost(sessionKey), "navigate");
         }
         case "layout": {
           if (!args.platform) throw new Error("input({op:'layout'}): `platform` is required.");
