@@ -1,5 +1,5 @@
-// toolchain.js - the decomp domain's WASM toolchain: IDO (romdev-toolchain-ido)
-// and the mips-linux-gnu binutils (romdev-toolchain-mips-gcc), run in romdev's
+// toolchain.js - the decomp domain's WASM toolchain: IDO (built by the user, see
+// idoDir) and the mips-linux-gnu binutils (romdev-toolchain-mips-gcc), run in romdev's
 // isolated WASM worker against the project's real tree. Nothing here spawns a
 // host binary.
 //
@@ -55,11 +55,24 @@ function packageDir(pkg) {
   }
 }
 
-/** Directory holding one IDO version's modules (and err.english.cc, which cc reads via USR_LIB). */
+/**
+ * Directory holding one IDO version's modules (and err.english.cc, which cc reads via USR_LIB).
+ *
+ * IDO is SGI's proprietary compiler, so romdev does not ship it. Build it from a
+ * romdev checkout with scripts/build-ido.sh (it lands in packages/romdev-toolchain-ido/wasm/,
+ * which a checkout finds on its own), or point ROMDEV_IDO_DIR at a directory holding
+ * the 5.3/ and 7.1/ module folders.
+ */
 export function idoDir(version) {
-  if (!IDO_VERSIONS.includes(version)) throw Object.assign(new Error(`IDO ${version} is not shipped (have ${IDO_VERSIONS.join(", ")})`), { code: "UNSUPPORTED_COMPILER" });
-  const dir = path.join(packageDir("romdev-toolchain-ido"), "wasm", version);
-  if (!existsSync(path.join(dir, "cc.wasm"))) throw Object.assign(new Error(`IDO ${version} WASM modules missing under ${dir} (scripts/build-ido.sh)`), { code: "TOOLCHAIN_MISSING" });
+  if (!IDO_VERSIONS.includes(version)) throw Object.assign(new Error(`IDO ${version} is not supported (have ${IDO_VERSIONS.join(", ")})`), { code: "UNSUPPORTED_COMPILER" });
+  let root = process.env.ROMDEV_IDO_DIR;
+  if (!root) {
+    try { root = path.join(packageDir("romdev-toolchain-ido"), "wasm"); } catch { root = null; }
+  }
+  const dir = root ? path.join(root, version) : null;
+  if (!dir || !existsSync(path.join(dir, "cc.wasm"))) {
+    throw Object.assign(new Error(`IDO ${version} is not installed${dir ? ` (no cc.wasm under ${dir})` : ""}. IDO is SGI's proprietary compiler and does not ship with romdev: build it to WASM from a romdev checkout with scripts/build-ido.sh, or set ROMDEV_IDO_DIR to a directory holding its 5.3/ and 7.1/ module folders.`), { code: "TOOLCHAIN_MISSING" });
+  }
   return dir;
 }
 
@@ -133,9 +146,9 @@ export async function decompGcc({ family, argv, cwd, tmpRoot, stdin, timeoutMs, 
   }
 }
 
-/** armips (RSP/MIPS assembler) glue, shipped beside IDO. */
+/** armips (RSP/MIPS assembler) glue, shipped in romdev-toolchain-mips-gcc. */
 export function armipsGlue() {
-  const p = path.join(packageDir("romdev-toolchain-ido"), "wasm", "armips.mjs");
+  const p = path.join(packageDir("romdev-toolchain-mips-gcc"), "wasm", "armips.mjs");
   if (!existsSync(p)) throw Object.assign(new Error(`${p} missing (scripts/build-armips.sh)`), { code: "TOOLCHAIN_MISSING" });
   return p;
 }

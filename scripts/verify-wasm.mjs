@@ -10,7 +10,7 @@
 // `prepublishOnly` AND as a preflight in publish-all.mjs.
 //
 // What it checks, for the package in `cwd` (or each path arg):
-//   - every *.wasm under the package's shipped `wasm/` dir exists
+//   - every *.wasm under the package's shipped `wasm/` dir (subfolders included) exists
 //   - none is suspiciously small (a stub / truncated / git-lfs pointer)
 //   - the JS/MJS glue each wasm pairs with is present
 //
@@ -40,8 +40,8 @@ function checkPackage(pkgDir) {
   const wasmDir = path.join(pkgDir, "wasm");
   if (!existsSync(wasmDir)) return [`${name}: declares "wasm" in files[] but ${wasmDir} does not exist (build the wasm before publishing)`];
 
-  const entries = readdirSync(wasmDir);
-  const wasms = entries.filter((f) => f.endsWith(".wasm"));
+  // Recursive: some packages ship modules in subfolders (wasm/<version>/, wasm/<tool>/).
+  const wasms = readdirSync(wasmDir, { recursive: true }).filter((f) => String(f).endsWith(".wasm"));
   if (wasms.length === 0) return [`${name}: wasm/ is present but contains NO .wasm files (build was wiped?)`];
 
   for (const w of wasms) {

@@ -1,6 +1,7 @@
 {
   "name": "romdev-toolchain-ido",
   "version": "0.1.0",
+  "private": true,
   "description": "IRIX IDO 5.3 and 7.1 C compilers (cc, cfe, uopt, ugen, as1 and the other passes), statically recompiled by ido-static-recomp and bundled as WASM for romdev's N64 matching-decompilation domain.",
   "type": "module",
   "main": "index.js",

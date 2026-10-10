@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Build armips (Kingcom) to WASM for the decomp domain: N64 decomp projects
 # assemble their RSP microcode from source with it. Ships as
-# packages/romdev-toolchain-ido/wasm/armips.{mjs,wasm} beside the other decomp
-# build tools; romdev runs it in its WASM worker over the project's real tree
+# packages/romdev-toolchain-mips-gcc/wasm/armips.{mjs,wasm} beside the mips-linux-gnu
+# binutils; romdev runs it in its WASM worker over the project's real tree
 # (NODERAWFS), so `.create`/`.incbin` paths resolve exactly as natively.
 #
 # Pin: versions.json toolchains.armips. std::filesystem is used
@@ -16,7 +16,7 @@ require_cmd cmake
 
 SRC="$BUILD_DIR/armips/src"
 BLD="$BUILD_DIR/armips/build-wasm"
-PKG_OUT="$PROJECT_DIR/../romdev-toolchain-ido/wasm"
+PKG_OUT="$PROJECT_DIR/../romdev-toolchain-mips-gcc/wasm"
 NCPU="$(nproc)"
 
 fetch_pinned toolchains.armips "$SRC"

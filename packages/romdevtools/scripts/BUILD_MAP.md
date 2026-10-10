@@ -67,8 +67,8 @@ each toolchain recipe the same `PKG_OUT` copy step the core recipes have.)
 | dasm | `build-dasm.sh` | `romdev-platform-atari2600` |
 | arm-none-eabi-gcc | `build-arm-wasm-tools.sh` (toolchain by `build-arm-toolchain.sh`) | `romdev-platform-gba` |
 | libtonc / libgba / maxmod | `build-libtonc.sh`, `build-libgba.sh`, `build-maxmod.sh` | GBA SDK libs (linked, ship as source/lib) |
-| IDO 5.3 / 7.1 (N64 decomp compilers; ido-static-recomp C, patch `ido-static-recomp-wasm.patch`) | `build-ido.sh` | `romdev-toolchain-ido` |
-| armips (N64 decomp RSP microcode assembler; patch `armips-wasm-single-thread.patch`) | `build-armips.sh` | `romdev-toolchain-ido` |
+| IDO 5.3 / 7.1 (N64 decomp compilers; ido-static-recomp C, patch `ido-static-recomp-wasm.patch`) | `build-ido.sh` | `romdev-toolchain-ido` (private: IDO is proprietary and never published; a checkout builds it locally) |
+| armips (N64 decomp RSP microcode assembler; patch `armips-wasm-single-thread.patch`) | `build-armips.sh` | `romdev-toolchain-mips-gcc` |
 | KMC gcc 2.7.2 + binutils 2.6 as (N64 decomp gcc projects; patches `kmc-gcc-2.7.2-wasm.patch`, `kmc-binutils-2.6-wasm.patch`, native build replayed with `emcc-replay.mjs`) | `build-decomp-gcc.sh kmc` | `romdev-toolchain-decomp-gcc` |
 | EGCS 1.1.2 + binutils 2.9.5 as (N64 iQue builds; patches `egcs-1.1.2-wasm.patch`, `egcs-binutils-2.9.5-wasm.patch`, native build replayed with `emcc-replay.mjs`) | `build-decomp-gcc.sh egcs` | `romdev-toolchain-decomp-gcc` |
 | gcc 2.6.3-psx driver + cc1 + cccp (PS1 decomps; driver via psx-gcc-2.6.3-wasm.patch; decompals/old-gcc recipe, generators run under node, everything emcc-built) | `build-decomp-gcc.sh psx` | `romdev-toolchain-decomp-gcc` |

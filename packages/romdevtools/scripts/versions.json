@@ -354,7 +354,7 @@
       "platforms": [
         "n64"
       ],
-      "note": "Assembler for the N64 RSP microcode a decomp project rebuilds from source. Built to WASM by build-armips.sh with std::filesystem (no ext/filesystem submodule); ships in romdev-toolchain-ido beside the other decomp build tools. The commit N64 decomp projects' armips install scripts pin."
+      "note": "Assembler for the N64 RSP microcode a decomp project rebuilds from source. Built to WASM by build-armips.sh with std::filesystem (no ext/filesystem submodule); ships in romdev-toolchain-mips-gcc beside the mips-linux-gnu binutils. The commit N64 decomp projects' armips install scripts pin."
     },
     "kmc_gcc": {
       "kind": "git",
@@ -507,7 +507,7 @@
       "platforms": [
         "n64"
       ],
-      "note": "IDO 5.3 + 7.1 statically recompiled to C by the pinned recomp, then compiled to WASM by build-ido.sh; ships via romdev-toolchain-ido. Same commit the decompals N64 projects pin as their submodule."
+      "note": "IDO 5.3 + 7.1 statically recompiled to C by the pinned recomp, then compiled to WASM by build-ido.sh into the private romdev-toolchain-ido package. IDO is proprietary and is never published; users build it themselves. Same commit the decompals N64 projects pin as their submodule."
     }
   },
   "heavy_toolchains": {

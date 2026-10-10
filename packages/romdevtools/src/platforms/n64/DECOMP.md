@@ -25,7 +25,9 @@ Makefile gives that object (read by romdev in JS, target- and
 pattern-specific flags included), then reports three independent verdicts.
 
 Every step runs as WASM inside romdev: IDO 5.3/7.1 (`cc` driving cfe, uopt,
-ugen and as1 as sibling modules), asm-processor (a JS port), the
+ugen and as1 as sibling modules; IDO is SGI's proprietary compiler, so romdev
+does not ship it: build it with `scripts/build-ido.sh` from a romdev checkout,
+or set `ROMDEV_IDO_DIR` to a directory holding its `5.3/` and `7.1/` modules), asm-processor (a JS port), the
 mips-linux-gnu binutils, and gcc's preprocessor for contexts. No host make,
 compiler, Python or binutils is needed; on a real checkout every object and
 the full ROM come out byte-identical to the project's own build. A recipe step

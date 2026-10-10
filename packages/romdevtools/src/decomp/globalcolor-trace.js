@@ -2,7 +2,7 @@
 //
 // The diagnostic uopt is a WASM module built from the IDO 5.3 static-recomp
 // uopt.c by the workbench's pinned instrumentation profile
-// (scripts/build-ido-globalcolor.sh -> romdev-toolchain-ido/wasm/5.3/
+// (scripts/build-ido-globalcolor.sh -> the locally built romdev-toolchain-ido/wasm/5.3/
 // uopt-globalcolor.mjs). The measured compile recipe runs unchanged through
 // romdev's WASM toolchain with that module standing in for the uopt pass; the
 // project's compiler is never replaced and no forced coloring is enabled.
