@@ -139,8 +139,10 @@ with romdev's patch, and shipped in the package named. 18 cores in 18 packages.
       (see "Firmware and BIOS" for the C64 ROMs)
   Geargrafx         PC Engine / TG-16    GPL-3.0            romdev-core-geargrafx
       https://github.com/drhelius/Geargrafx
-  blueMSX           MSX / MSX2           BSD-3-Clause       romdev-core-bluemsx
+  blueMSX           MSX / MSX2           blueMSX licence    romdev-core-bluemsx
       https://github.com/libretro/blueMSX-libretro
+      (zlib-style; some sound-chip files from openMSX and fMSX-SDL
+      are GPL, per upstream license.txt)
       (with C-BIOS, BSD-style; see "Firmware and BIOS")
   GameTank          GameTank             MIT                romdev-core-gametank
       https://github.com/monteslu/gametank-libretro (libretro core), built on
@@ -263,7 +265,10 @@ Compiler toolchains  (their licences do not encumber compiled ROMs)
                             and reassembly
   RGBDS                     GB/GBC (asm)            MIT               romdev-toolchain-rgbds
   vasm (m68k)               Genesis (asm)           vasm licence      romdev-toolchain-vasm
-                                                    (free for any use)
+                                                    (redistribution and
+                                                    non-commercial use;
+                                                    commercial use needs
+                                                    the authors' consent)
   m68k-elf gcc 14.2.0,      Genesis (C)             GPL-3.0 with the  romdev-toolchain-m68k-gcc
   binutils 2.42, newlib                             GCC Runtime
   4.4.0                                             Library Exception;
