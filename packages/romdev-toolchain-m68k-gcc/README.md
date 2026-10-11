@@ -2,7 +2,9 @@
 
 The m68k-elf gcc toolchain (`cc1`, `as`, `ld`, `objcopy`, `objdump`) for Sega
 Genesis C, as WebAssembly. The objdump also serves 68000 disassembly for
-`disasm({target:'rom'})` and byte-exact `disasm({target:'project'})`. The
+`disasm({target:'rom'})` and byte-exact `disasm({target:'project'})`, and the
+`as`, `ld` and `objcopy` also build Genesis assembly: romdevtools translates
+Motorola-syntax sources for them. The
 package also carries SGDK's Z80 tools (`sjasm`, `bintos`), the Genesis C
 library tree (`share/genesis/lib/`: SGDK and a minimal runtime) and the C build
 pipeline:

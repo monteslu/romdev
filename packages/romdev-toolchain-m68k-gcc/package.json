@@ -1,7 +1,7 @@
 {
   "name": "romdev-toolchain-m68k-gcc",
   "version": "0.4.2",
-  "description": "m68k-elf-gcc toolchain (cc1 / as / ld / objcopy / objdump) + Z80 tools (sjasm/bintos) + the Genesis C library share/ tree (SGDK + minimal runtime) for romdev Genesis C builds + disassembly. WASM.",
+  "description": "m68k-elf-gcc toolchain (cc1 / as / ld / objcopy / objdump) + Z80 tools (sjasm/bintos) + the Genesis C library share/ tree (SGDK + minimal runtime) for romdev Genesis C and assembly builds + disassembly. WASM.",
   "type": "module",
   "main": "index.js",
   "exports": {
