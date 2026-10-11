@@ -46,8 +46,8 @@ dependency. Other architectures need a WASM objdump registered with
 |---|---|
 | `romdev-permuter` | `permuter.py`: run the permuter on one or more directories |
 | `romdev-permuter-import` | `import.py`: create `nonmatchings/<func>/` from a C file and a function's assembly |
-| `romdev-permuter-<renamed>` | `pah.py`: the permuter@home client (`ping`, `setup`, `vouch`, `run-server`) |
-| `romdev-permuter-<renamed>` | the permuter@home control server (`run`, `setup`) |
+| `romdev-permuter-remote` | `pah.py`: the permuter@home client (`ping`, `setup`, `vouch`, `run-server`) |
+| `romdev-permuter-remote-controller` | the permuter@home control server (`run`, `setup`) |
 
 ```sh
 npx romdev-permuter nonmatchings/func_80001234 -j 4 --stop-on-zero

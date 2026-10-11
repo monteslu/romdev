@@ -40,7 +40,7 @@ tool.
   (`slinky-cli`), [pigment64](https://github.com/decompals/pigment64) and
   [crunch64](https://github.com/decompals/crunch64) command-line tools (MIT),
   and `raw-deflate`, vanilla zlib's raw deflate (zlib license).
-- `wasm/tools/<renamed>`, `<renamed>`, `<renamed>`: a PS1 decomp project's own
+- `wasm/tools/psx-str`, `psx-disk`, `psx-assets`: a PS1 decomp project's own
   setup tools (a string encoder in Rust, a disc image extractor and an asset
   tool in Go), built from that project's repository at the commit pinned in
   `versions.json` (AGPL-3.0). The Go tools are wasip1 modules run under

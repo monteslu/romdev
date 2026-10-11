@@ -244,8 +244,8 @@ the `romdev-mcp` bin is kept as an alias.)
 - armips ships in `romdev-toolchain-mips-gcc`, beside the mips-linux-gnu
   binutils.
 - `romdev-toolchain-decomp-gcc`'s PS1 asset and string tools get neutral
-  names (`<renamed>`), and `romdev-permuter`'s commands are renamed under the
-  `romdev-permuter-` prefix (`<renamed>`).
+  names (`psx-str`, `psx-disk`, `psx-assets`), and `romdev-permuter`'s commands are renamed under the
+  `romdev-permuter-` prefix (`romdev-permuter-remote`, `romdev-permuter-remote-controller`).
 - The `romdevtools` package licence field becomes `SEE LICENSE IN NOTICE`:
   the package is MIT, and the recompiler backends it ships carry their
   reference emulators' licences, as NOTICE and `LICENSES/` describe.
