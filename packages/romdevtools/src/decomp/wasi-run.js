@@ -9,7 +9,7 @@
 // scratch files under `tmpDir` (WASI takes host fds).
 //
 // WASI has no processes. A tool built with romdev's overlay hands the one
-// child it needs (sotn-assets' `cpp` for enum lookups) to the `romdev`
+// child it needs (psx-assets' `cpp` for enum lookups) to the `romdev`
 // imports: exec(reqPtr, reqLen) -> response length, take(ptr) -> copy it.
 // The request is JSON {argv, dir} (dir: the guest's working directory); the
 // response is a 4-byte little-endian exit status, then stdout. The program runs in a

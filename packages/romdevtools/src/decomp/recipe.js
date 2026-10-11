@@ -9,9 +9,10 @@
 //   armips                                  -> WASM armips
 //   mips-linux-gnu-gcc / -cpp                -> WASM gcc 14.2 (mips-linux-gnu)
 //   slinky-cli / pigment64 / crunch64       -> WASM builds of decompals' releases
-//   .../sotn_str (a PS1 project's encoder)   -> WASM build of the pinned project tool
-//   sotn-disk / sotn-assets / ./sotn.sh /
-//   go run ./tools/<tool>, dirt_patcher.py,
+//   a PS1 project's string encoder          -> psx-str, WASM build of the pinned project tool
+//   the project's disk/asset tools, its
+//   go-run wrapper, go run ./tools/<tool>,
+//   dirt_patcher.py,
 //   cat / truncate                          -> psx-setup.js (Go tools as wasip1, JS ports)
 //   mips-*-{as,ld,objcopy,objdump}         -> WASM mips-linux-gnu binutils
 //   <python> .../asm-processor/build.py      -> JS asm-processor
@@ -334,7 +335,7 @@ async function runOne(argv, cls, ctx) {
     }
     case "assemble-rsp": return assembleRsp(argv.slice(argv.indexOf(cls.script) + 1), ctx);
     case "decomp-tool": {
-      if (cls.tool === "sotn_str") {
+      if (cls.tool === "psx-str") {
         // a pipeline stage: stdin in, stdout out (bytes)
         const r = await decompTool(cls.tool, argv.slice(1), { cwd, stdin: ctx.stdin ?? undefined, stdoutBinary: true });
         return { code: r.exitCode, log: r.stderr ?? r.log, stdout: r.stdout };

@@ -449,14 +449,14 @@
       "platforms": ["n64"],
       "note": "decompals' N64 compression library (gzip/yay0/yaz0/mio0) behind a CLI; the same crunch64 release decomp projects' Python ROM compressors call. Built to WASM by build-decomp-rust-tools.sh; ships in romdev-toolchain-decomp-gcc (wasm/tools/)."
     },
-    "sotn_decomp_tools": {
+    "psx_decomp_tools": {
       "kind": "git",
       "url": "https://github.com/Xeeynamo/sotn-decomp.git",
       "ref": "master",
       "commit": "ea06850554ed29156cbabb1c7975c809b4cfef89",
       "license": "AGPL-3.0",
       "platforms": ["psx"],
-      "note": "A PS1 decomp project's own setup tools, built from the project tree at this commit: tools/sotn_str (Rust string encoder, cpp | sotn_str process | iconv) by build-decomp-rust-tools.sh, tools/sotn-disk (CD image extractor) and tools/sotn-assets (asset extract/build) (Go, go.work at the root) by build-decomp-go-tools.sh. Ship in romdev-toolchain-decomp-gcc (wasm/tools/)."
+      "note": "A PS1 decomp project's own setup tools, built from the project tree at this commit and shipped under neutral names: psx-str from tools/sotn_str (Rust string encoder, cpp | sotn_str process | iconv) by build-decomp-rust-tools.sh, psx-disk from tools/sotn-disk (CD image extractor) and psx-assets from tools/sotn-assets (asset extract/build) (Go, go.work at the root) by build-decomp-go-tools.sh. Ship in romdev-toolchain-decomp-gcc (wasm/tools/)."
     },
     "go_toolchain": {
       "kind": "tarball",

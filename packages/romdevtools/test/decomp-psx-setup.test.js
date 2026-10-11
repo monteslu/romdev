@@ -1,5 +1,6 @@
 // A PS1 decomp project's setup chain in romdev: its Go tools as wasip1 WASM
-// (sotn-disk, sotn-assets) run under node:wasi, its Rust sotn_str as WASM in
+// (shipped as psx-disk, psx-assets; recipes use the project names) run under
+// node:wasi, its Rust string encoder (psx-str) as WASM in
 // the compile pipeline, and JS ports of its Python steps (dirt_patcher,
 // gfxstage, png2bin), all reached through recipe.js.
 //
@@ -34,9 +35,9 @@ const sha1 = (b) => createHash("sha1").update(b).digest("hex");
 test("classify: the project's wrapper and scripts are recognised by content", () => {
   const d = dir("classify");
   fs.writeFileSync(path.join(d, "sotn.sh"), '#!/usr/bin/env sh\ngo run ./tools/sotn-assets "$@"');
-  assert.deepEqual(classifyPsxSetup(["./sotn.sh", "extract-assets", "config/assets.us.yaml"], d), { kind: "go-tool", tool: "sotn-assets", args: ["extract-assets", "config/assets.us.yaml"] });
-  assert.equal(classifyPsxSetup(["go", "run", "./tools/sotn-assets", "build-assets", "x"], d).tool, "sotn-assets");
-  assert.equal(classifyPsxSetup(["bin/sotn-disk", "extract", "a.cue", "out"], d).tool, "sotn-disk");
+  assert.deepEqual(classifyPsxSetup(["./sotn.sh", "extract-assets", "config/assets.us.yaml"], d), { kind: "go-tool", tool: "psx-assets", args: ["extract-assets", "config/assets.us.yaml"] });
+  assert.equal(classifyPsxSetup(["go", "run", "./tools/sotn-assets", "build-assets", "x"], d).tool, "psx-assets");
+  assert.equal(classifyPsxSetup(["bin/sotn-disk", "extract", "a.cue", "out"], d).tool, "psx-disk");
   assert.equal(classifyPsxSetup(["go", "build", "-C", "tools/sotn-disk", "-o", "../../bin/sotn-disk", "."], d).kind, "go-build-shipped");
   // a different wrapper is a different program
   fs.writeFileSync(path.join(d, "sotn.sh"), "#!/bin/sh\nexec something-else\n");
@@ -47,7 +48,7 @@ test("classify: the project's wrapper and scripts are recognised by content", ()
   assert.equal(classifyPsxSetup([".venv/bin/python3", "tools/gfxstage.py", "d", "a", "b"], d).kind, "unsupported"); // no-python-guard: classifier fixture - a changed project script must classify as unsupported, never launched
   assert.equal(classifyPsxSetup(["python3", "tools/unrelated.py"], d), null); // no-python-guard: classifier fixture - an unknown script is not this module's to classify
   // the compile pipeline's encoder is a decomp tool
-  assert.deepEqual(classifyCommand(["tools/sotn_str/target/release/sotn_str", "process"], d), { kind: "decomp-tool", tool: "sotn_str" });
+  assert.deepEqual(classifyCommand(["tools/sotn_str/target/release/sotn_str", "process"], d), { kind: "decomp-tool", tool: "psx-str" });
 });
 
 test("dirt_patcher: bytes at hex offsets, extending like seek+write", () => {
@@ -125,8 +126,8 @@ test("recipe: gen.py's shell forms (cat > out, truncate -c -s, echo a dynamic sp
   assert.equal(fs.readFileSync(path.join(d, "dyn.yaml"), "utf8"), "{options: { symbol_addrs_path: [ build/us/config/dyn_syms.dra.txt]}}\n");
 });
 
-const haveSotnStr = has(() => decompToolGlue("sotn_str"));
-test("sotn_str (WASM) in a pipeline encodes _S/_S2 strings like its own unit tests", { skip: !haveSotnStr && "sotn_str WASM not built (scripts/build-decomp-rust-tools.sh sotn_str)" }, async () => {
+const havePsxStr = has(() => decompToolGlue("psx-str"));
+test("psx-str (WASM) in a pipeline encodes _S/_S2 strings like its own unit tests", { skip: !havePsxStr && "psx-str WASM not built (scripts/build-decomp-rust-tools.sh psx-str)" }, async () => {
   const d = dir("sotnstr");
   fs.writeFileSync(path.join(d, "in.c"), '{_S("すで"), 1},\n_S2("ＡＴＴ")\nint x = 1;\n');
   const r = await runRecipeLine("cat in.c | tools/sotn_str/target/release/sotn_str process > out.c", { cwd: d, tmpRoot: d });
@@ -134,7 +135,7 @@ test("sotn_str (WASM) in a pipeline encodes _S/_S2 strings like its own unit tes
   assert.equal(fs.readFileSync(path.join(d, "out.c"), "utf8"), '{"\\xBD\\xC3\\xFF\\x9E\\xFF", 1},\n"\\x00\\x01\\x01\\xFF"\nint x = 1;\n');
 });
 
-const haveGo = has(() => goToolWasm("sotn-disk")) && has(() => goToolWasm("sotn-assets"));
+const haveGo = has(() => goToolWasm("psx-disk")) && has(() => goToolWasm("psx-assets"));
 test("Go tools (wasip1) run under node:wasi in the project directory", { skip: !haveGo && "Go tools not built (scripts/build-decomp-go-tools.sh)" }, async () => {
   const d = dir("go");
   const r = await runRecipeLine("bin/sotn-disk list missing.cue", { cwd: d, tmpRoot: d });

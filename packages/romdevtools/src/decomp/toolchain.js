@@ -41,9 +41,12 @@ export const DECOMP_GCC = {
 // Command-line tools decomp builds run (romdev-toolchain-decomp-gcc
 // wasm/tools/, scripts/build-decomp-rust-tools.sh): decompals' Rust tools,
 // plus vanilla zlib's raw deflate for ports of Python compressors.
-// A PS1 decomp project's own sotn_str (string encoder the compile pipeline
-// pipes through) is built from the pinned project tree the same way.
-export const DECOMP_TOOLS = ["slinky-cli", "pigment64", "crunch64", "raw-deflate", "sotn_str"];
+// A PS1 decomp project's own string encoder (the compile pipeline pipes
+// through it) is built from the pinned project tree the same way and ships as
+// psx-str; recipes name it by the project's binary name, mapped below.
+export const DECOMP_TOOLS = ["slinky-cli", "pigment64", "crunch64", "raw-deflate", "psx-str"];
+// Project binary names for shipped decomp tools.
+const PROJECT_DECOMP_TOOLS = { sotn_str: "psx-str" };
 
 function packageDir(pkg) {
   try {
@@ -114,7 +117,7 @@ export function decompGccPrograms(family) {
   return programs;
 }
 
-/** Glue for one of the decomp build tools (slinky-cli, pigment64, crunch64, raw-deflate). */
+/** Glue for one of the decomp build tools (slinky-cli, pigment64, crunch64, raw-deflate, psx-str). */
 export function decompToolGlue(name) {
   if (!DECOMP_TOOLS.includes(name)) throw new Error(`no WASM decomp tool '${name}'`);
   const p = path.join(packageDir("romdev-toolchain-decomp-gcc"), "wasm", "tools", `${name}.mjs`);
@@ -168,6 +171,7 @@ export function toolName(cmd) {
   if (bin && bin[1] && /mips/.test(bin[1])) return { kind: "binutils", tool: bin[2], prefix: bin[1] };
   if (base === "armips") return { kind: "armips" };
   if (DECOMP_TOOLS.includes(base)) return { kind: "decomp-tool", tool: base };
+  if (PROJECT_DECOMP_TOOLS[base]) return { kind: "decomp-tool", tool: PROJECT_DECOMP_TOOLS[base] };
   const fam = decompGccFamily(cmd);
   if (fam) return { kind: "decomp-gcc", family: fam, program: DECOMP_GCC[fam].aliases[base] ?? base };
   const ido = /(?:^|[/_-])(?:ido)?[/_-]?(5\.3|7\.1)(?:[/_]|$)/i.exec(cmd);

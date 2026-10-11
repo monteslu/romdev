@@ -1,13 +1,15 @@
 // psx-setup.js - a PS1 decomp project's setup/extract chain as WASM + JS.
 //
 // The project ships its own tools, which romdev builds from the pinned tree
-// (scripts/versions.json toolchains.sotn_decomp_tools):
+// (scripts/versions.json toolchains.psx_decomp_tools) and ships under neutral
+// names. A recipe still invokes them by the project's own names (its tools/
+// directory names, its Makefile variables and its wrapper script); those are
+// mapped onto the shipped modules here:
 //
-//   sotn-disk    (Go -> wasip1)  CD image extractor, the Makefile's $(SOTNDISK)
-//   sotn-assets  (Go -> wasip1)  asset extract/build, the project's ./sotn.sh
-//                                 (`go run ./tools/sotn-assets "$@"`) and
-//                                 bin/sotn-assets
-//   sotn_str     (Rust -> emscripten) string encoder in the compile pipeline;
+//   psx-disk     (Go -> wasip1)  CD image (cue/bin) extractor
+//   psx-assets   (Go -> wasip1)  asset extract/build, also reached through the
+//                                 project's go-run wrapper script
+//   psx-str      (Rust -> emscripten) string encoder in the compile pipeline;
 //                                 dispatched by toolchain.js as a decomp tool
 //
 // and a few Python steps, ported here (identified by sha256 of the exact
@@ -32,11 +34,22 @@ import { readPng, writePng } from "./png-raw.js";
 const HANDLER = fileURLToPath(new URL("./wasi-run.js", import.meta.url));
 
 /** Go tools shipped as wasip1 modules in romdev-toolchain-decomp-gcc/wasm/tools. */
-export const GO_TOOLS = ["sotn-disk", "sotn-assets"];
+export const GO_TOOLS = ["psx-disk", "psx-assets"];
 
-// The project's wrapper scripts and Python steps romdev runs, by sha256 of the
+// The project's own name for each shipped Go tool (its tools/<dir> and the
+// binary its Makefile builds), so recipes that use those names keep working.
+const PROJECT_GO_TOOLS = { "sotn-disk": "psx-disk", "sotn-assets": "psx-assets" };
+
+/** The shipped Go tool a command name refers to (shipped or project name), or null. */
+export function goToolFor(name) {
+  if (GO_TOOLS.includes(name)) return name;
+  return PROJECT_GO_TOOLS[name] ?? null;
+}
+
+// The project's wrapper script and Python steps romdev runs, by sha256 of the
 // exact bytes it was checked against.
-const SOTN_SH = ["a1afb51817ee468c46348f6322746106118ab5e47b0134dfab31643c151a1cf1"]; // go run ./tools/sotn-assets "$@"
+const ASSETS_WRAPPER = "sotn.sh"; // the project's name for its go-run wrapper
+const ASSETS_WRAPPER_SHA = ["a1afb51817ee468c46348f6322746106118ab5e47b0134dfab31643c151a1cf1"]; // go run ./tools/<assets tool> "$@"
 const PORTED = {
   "dirt_patcher.py": { kind: "dirt-patcher", sha256: ["66902465b02e1675823fd97a3a481d5a285fe594d9ed572739ea47c5c7a4ca3a"] },
   "gfxstage.py": { kind: "gfxstage", sha256: ["3979f4cb0769c2a58ee42ac88bfe7f0d5525f1d29215ad4e527ba5489b4d1fc9"] },
@@ -87,28 +100,28 @@ const PYTHON_RE = /(^|\/)(python[0-9.]*|pypy[0-9.]*)$/;
  */
 export function classifyPsxSetup(argv, cwd = process.cwd()) {
   const prog = argv[0] ?? "", base = path.basename(prog);
-  // ./sotn.sh ...  (checked by content: it must be the go-run wrapper)
-  if (base === "sotn.sh") {
+  // the wrapper script ...  (checked by content: it must be the go-run wrapper)
+  if (base === ASSETS_WRAPPER) {
     const got = sha256(path.resolve(cwd, prog));
-    if (!SOTN_SH.includes(got)) return { kind: "unsupported", reason: `${prog} (sha256 ${got ?? "unreadable"}) is not the sotn-assets wrapper romdev knows` };
-    return { kind: "go-tool", tool: "sotn-assets", args: argv.slice(1) };
+    if (!ASSETS_WRAPPER_SHA.includes(got)) return { kind: "unsupported", reason: `${prog} (sha256 ${got ?? "unreadable"}) is not the asset-tool wrapper romdev knows` };
+    return { kind: "go-tool", tool: "psx-assets", args: argv.slice(1) };
   }
-  if ((prog === "sh" || prog === "bash" || /\/(ba)?sh$/.test(prog)) && argv[1] && path.basename(argv[1]) === "sotn.sh") return classifyPsxSetup(argv.slice(1), cwd);
+  if ((prog === "sh" || prog === "bash" || /\/(ba)?sh$/.test(prog)) && argv[1] && path.basename(argv[1]) === ASSETS_WRAPPER) return classifyPsxSetup(argv.slice(1), cwd);
   // go run ./tools/<tool> ...  /  go run -C ... is not used by the project
   if (base === "go" && argv[1] === "run") {
     const pkg = argv[2] ?? "";
-    const tool = path.basename(pkg.replace(/\/+$/, ""));
-    if (GO_TOOLS.includes(tool) && /^(\.\/)?tools\//.test(pkg)) return { kind: "go-tool", tool, args: argv.slice(3) };
+    const tool = goToolFor(path.basename(pkg.replace(/\/+$/, "")));
+    if (tool && /^(\.\/)?tools\//.test(pkg)) return { kind: "go-tool", tool, args: argv.slice(3) };
     return { kind: "unsupported", reason: `go run ${pkg}: no WASM build of that package` };
   }
-  // go build -C tools/<tool> -o <out> .  (the Makefile's $(SOTNDISK) rule): the tool is shipped as WASM
+  // go build -C tools/<tool> -o <out> .  (the Makefile's disk-tool rule): the tool is shipped as WASM
   if (base === "go" && argv[1] === "build") {
     const c = argv.indexOf("-C");
-    const tool = c > 0 ? path.basename(argv[c + 1] ?? "") : "";
-    if (GO_TOOLS.includes(tool)) return { kind: "go-build-shipped", tool };
+    const tool = c > 0 ? goToolFor(path.basename(argv[c + 1] ?? "")) : null;
+    if (tool) return { kind: "go-build-shipped", tool };
     return { kind: "unsupported", reason: `go build: no WASM build of ${argv.slice(2).join(" ")}` };
   }
-  if (GO_TOOLS.includes(base)) return { kind: "go-tool", tool: base, args: argv.slice(1) };
+  if (goToolFor(base)) return { kind: "go-tool", tool: goToolFor(base), args: argv.slice(1) };
   if (PYTHON_RE.test(prog)) {
     const script = argv.find((a, i) => i > 0 && !a.startsWith("-")) ?? "";
     const spec = PORTED[path.basename(script)];

@@ -3,20 +3,21 @@
 # WASM (GOOS=wasip1 GOARCH=wasm), run by romdev's worker under node:wasi with
 # the project directory preopened:
 #
-#   sotn-disk    CD image (cue/bin) extractor: `sotn-disk extract <cue> <dir>`
-#   sotn-assets  asset extractor/builder: `extract-assets` / `build-assets
-#                <config/assets.<ver>.yaml>` (the project's ./sotn.sh is
-#                `go run ./tools/sotn-assets "$@"`)
+#   psx-disk     CD image (cue/bin) extractor: `psx-disk extract <cue> <dir>`
+#                (the project's tools/sotn-disk)
+#   psx-assets   asset extractor/builder: `extract-assets` / `build-assets
+#                <config/assets.<ver>.yaml>` (the project's tools/sotn-assets;
+#                its wrapper script is `go run ./tools/sotn-assets "$@"`)
 #
 # Both come from the project tree at the commit pinned in versions.json
-# (toolchains.sotn_decomp_tools), built through its go.work with the module
+# (toolchains.psx_decomp_tools), built through its go.work with the module
 # versions its go.sum locks. The Go toolchain itself is a build-time
 # dependency (toolchains.go_toolchain, the official linux-amd64 tarball,
 # sha256-pinned), unpacked under build/.
 #
 # wasip1 has no processes; the commands romdev runs (extract, extract-assets,
 # build-assets) never start one. The project's orchestration commands
-# (`sotn-assets build`, `format`, dependency download) exec git/ninja and the project interpreter
+# (`psx-assets build`, `format`, dependency download) exec git/ninja and the project interpreter
 # and fail cleanly with ENOSYS under WASI; romdev runs those steps itself.
 #
 # Ships in packages/romdev-toolchain-decomp-gcc/wasm/tools/<name>.wasm.
@@ -45,8 +46,8 @@ GO="$GOROOT_DIR/bin/go"
 export GOROOT="$GOROOT_DIR" GOPATH="$ROOT/gopath" GOCACHE="$ROOT/gocache" GOMODCACHE="$ROOT/gopath/pkg/mod"
 export GOTOOLCHAIN=local GOFLAGS=-mod=readonly GOENV=off GOTELEMETRY=off CGO_ENABLED=0
 
-SRC="$ROOT/sotn_decomp_tools"
-fetch_pinned "toolchains.sotn_decomp_tools" "$SRC"
+SRC="$ROOT/psx_decomp_tools"
+fetch_pinned "toolchains.psx_decomp_tools" "$SRC"
 
 # wasip1 build overlay (go build -overlay; the pinned tree is not edited):
 # - bindiff.go: an interactive tcell terminal viewer; tcell has no WASI
@@ -80,8 +81,8 @@ build_tool() { # <dir under tools/> <out name>
   ( cd "$SRC/tools/$1" && GOOS=wasip1 GOARCH=wasm "$GO" build -overlay "$OVL" -trimpath -ldflags="-s -w -buildid=" -o "$PKG_OUT/$2.wasm" . )
   echo "built $2.wasm ($(stat -c %s "$PKG_OUT/$2.wasm") bytes)"
 }
-build_tool sotn-disk sotn-disk
-build_tool sotn-assets sotn-assets
+build_tool sotn-disk psx-disk
+build_tool sotn-assets psx-assets
 
 # The tools' own Go tests, built for wasip1 with the same overlay and run the
 # way romdev runs the tools (src/decomp/wasi-run.js). Several read the
@@ -93,7 +94,7 @@ for p in . ./assets/cutsceneevents ./assets/enemydefs ./assets/graphics ./assets
   ( cd "$SRC/tools/sotn-assets" && GOOS=wasip1 GOARCH=wasm "$GO" test -overlay "$OVL" -c -o "$ROOT/tests/$n.test.wasm" "$p" )
 done
 if [ -n "${DECOMP_GO_TEST_TREE:-}" ]; then
-  [ "$(git -C "$DECOMP_GO_TEST_TREE" rev-parse HEAD)" = "$(pin_commit toolchains.sotn_decomp_tools)" ] || { echo "FATAL: $DECOMP_GO_TEST_TREE is not at the pinned commit" >&2; exit 1; }
+  [ "$(git -C "$DECOMP_GO_TEST_TREE" rev-parse HEAD)" = "$(pin_commit toolchains.psx_decomp_tools)" ] || { echo "FATAL: $DECOMP_GO_TEST_TREE is not at the pinned commit" >&2; exit 1; }
   mkdir -p "$ROOT/test-tmp"
   node --no-warnings "$SCRIPT_DIR/src/decomp-go-wasip1/run-go-tests.mjs" "$ROOT/tests" "$DECOMP_GO_TEST_TREE/tools/sotn-assets" "$ROOT/test-tmp"
   rm -rf "$ROOT/test-tmp"
