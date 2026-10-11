@@ -1,6 +1,6 @@
 {
   "name": "romdev-core-parallel-n64",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "ParaLLEl-N64 libretro core (Nintendo 64), GL-rendered through glide64, for romdev, bundled as WASM with romdev's CPU + AI + live-debug exports.",
   "type": "module",
   "main": "index.js",

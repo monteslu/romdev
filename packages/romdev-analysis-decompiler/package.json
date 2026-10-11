@@ -1,6 +1,6 @@
 {
   "name": "romdev-analysis-decompiler",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Ghidra C++ decompiler (pseudocode) for romdev, compiled to WASM, with SLEIGH specs for the retro CPUs romdev supports.",
   "type": "module",
   "main": "index.js",

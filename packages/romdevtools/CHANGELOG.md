@@ -45,6 +45,19 @@ the `romdev-mcp` bin is kept as an alias.)
 - **sync32 `video`.** An unknown `build({platform:'sync32', video})` value now
   fails the build naming the valid values (`'240'`, `'180'`, `'128'`). It used
   to pack silently as mode 1.
+- **SNES chip data is user-supplied.** snes9x, bsnes and recompiled SNES
+  carts no longer carry any chip data ROM. A DSP-1, DSP-3 or ST010 cart needs
+  the chip's data ROM in the system directory (`dsp1b.data.rom` or
+  `dsp1b.rom`, `dsp3.data.rom` or `dsp3.rom`, `st010.data.rom` or
+  `st010.rom`; `loadMedia({firmware})` copies one there), and `options.firmware`
+  when recompiling. Without it the cart is refused with the file and its size
+  named. On bsnes the Super Game Boy needs `sgb_boot.bin` / `sgb2_boot.bin`,
+  and a Cx4 cart uses bsnes's high-level emulation unless `cx4.data.rom` is
+  there.
+- **SNES boot timing.** The SPC700 boot ROM is romdev's own (see Licensing).
+  Its upload loop takes about 33 SPC700 cycles a byte, so a game's boot-time
+  sound upload finishes slightly later than before and the frames after it
+  shift. Recorded frame numbers for SNES games may need updating.
 - **GL carts get a private GL context.** Every GL wasmcart session has its own
   context, which fixes server crashes with parallel GL sessions. Set
   `ROMDEV_SHARED_GL=1` to restore the shared context.
@@ -70,8 +83,8 @@ the `romdev-mcp` bin is kept as an alias.)
   - SNES (snes9x): LoROM, HiROM and ExHiROM, SPC700 and S-DSP audio, hires,
     interlace and PAL, battery saves, and the coprocessors SA-1, SuperFX,
     DSP-1 to DSP-4, ST010, ST011, ST018, OBC1, S-RTC, MSU-1, S-DD1, SPC7110,
-    CX4, BS-X and Sufami Turbo. ST011 and ST018 need `options.firmware` (the
-    chip program ROMs are not shipped).
+    CX4, BS-X and Sufami Turbo. DSP-1, DSP-3, ST010, ST011 and ST018 carts
+    need `options.firmware` (chip program and data ROMs are not shipped).
   - GB and GBC (gambatte): the PPU dot for dot, timers, HDMA, OAM DMA,
     MBC1/2/3/5 and HuC1, the MBC3 clock, APU audio sample-exact.
   - GBA (mGBA): ARM and Thumb, audio, mosaic, the OBJ budget, GPIO with
@@ -239,8 +252,14 @@ the `romdev-mcp` bin is kept as an alias.)
 ### Licensing and packaging
 
 - The SNES SPC700 boot ROM is replaced by romdev's own clean-room
-  reimplementation. The DSP-1 data ROM becomes user-supplied firmware, like
-  the ST011 and ST018 program ROMs.
+  reimplementation (MIT, `scripts/spc700-ipl/`), in snes9x, bsnes and
+  recompiled carts. The chip data ROMs and boot ROMs upstream snes9x and bsnes
+  embed (DSP-1, DSP-3, ST010, Cx4, Super Game Boy) are removed at build time
+  and become user-supplied, like the ST011 and ST018 program ROMs.
+- `romdev-platform-gba` ships the libgba and libtonc licence files.
+- Shipped toolchain and core binaries no longer contain build-machine paths:
+  the GBA, m68k, MIPS, SH and decomp toolchains, cc65's libraries and
+  flycast are rebuilt with mapped paths. Built ROMs are unchanged.
 - armips ships in `romdev-toolchain-mips-gcc`, beside the mips-linux-gnu
   binutils.
 - `romdev-toolchain-decomp-gcc`'s PS1 asset and string tools get neutral
@@ -249,11 +268,8 @@ the `romdev-mcp` bin is kept as an alias.)
 - The `romdevtools` package licence field becomes `SEE LICENSE IN NOTICE`:
   the package is MIT, and the recompiler backends it ships carry their
   reference emulators' licences, as NOTICE and `LICENSES/` describe.
-- The cores and toolchains rebuilt for this release (fceumm, gambatte,
-  genesis_plus_gx, s32core, flycast, the GBA, SNES and sync32 platform
-  packages, and the SDCC, m68k, SH and MIPS toolchains) and
-  `romdev-core-host`/`romdev-core-runner` get new versions, and romdevtools
-  pins them.
+- Every published package whose contents changed gets a new version, and
+  romdevtools pins them.
 
 ## 0.149.1 - 2026-09-16
 
