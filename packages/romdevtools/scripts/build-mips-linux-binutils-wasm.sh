@@ -25,7 +25,7 @@ ROOT="$BUILD_DIR/mips-linux-binutils"
 SRC="$ROOT/binutils-$VER"
 BLD="$ROOT/build-wasm"
 PKG_OUT="$PROJECT_DIR/../romdev-toolchain-mips-gcc/wasm"
-NCPU="$(nproc)"
+NCPU="${JOBS:-$(nproc)}"
 mkdir -p "$ROOT" "$PKG_OUT"
 
 fetch_pinned_tarball $KEY "$ROOT/binutils-$VER.tar.xz"
@@ -39,11 +39,13 @@ fi
 if [ ! -f "$BLD/gas/as-new" ] || [ ! -f "$BLD/ld/ld-new" ] || [ ! -f "$BLD/binutils/objcopy" ]; then
   mkdir -p "$BLD"; cd "$BLD"
   # -ffile-prefix-map keeps the builder's path out of the binaries (never
-  # scrub it afterwards: see never-byte-edit-prebuilt-binaries).
+  # scrub it afterwards: see never-byte-edit-prebuilt-binaries). The prefix is
+  # baked in too (ld's default SEARCH_DIRs, the bfd plugin dir) and is never
+  # installed to, so it is a fixed /romdev rather than a dir on this machine.
   [ -f Makefile ] || emconfigure "$SRC/configure" \
     CFLAGS="-O2 -ffile-prefix-map=$SRC=/src" \
     CXXFLAGS="-O2 -ffile-prefix-map=$SRC=/src" \
-    --target=mips-linux-gnu --prefix="$ROOT/install" \
+    --target=mips-linux-gnu --prefix=/romdev \
     --host=wasm32-unknown-emscripten --build="$(gcc -dumpmachine)" \
     --disable-nls --disable-werror --disable-multilib --disable-gdb \
     --disable-gprofng --disable-sim --disable-plugins --without-zstd

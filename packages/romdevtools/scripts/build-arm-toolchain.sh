@@ -52,7 +52,7 @@ TARGET=arm-none-eabi
 ROOT="$BUILD_DIR/arm-toolchain"
 SRC_DIR="$ROOT/src"
 PREFIX="$ROOT/install"
-NCPU="$(nproc)"
+NCPU="${JOBS:-$(nproc)}"
 
 mkdir -p "$SRC_DIR" "$PREFIX"
 cd "$SRC_DIR"
@@ -142,14 +142,19 @@ if [ ! -f "$PREFIX/$TARGET/lib/libc.a" ]; then
       --enable-newlib-io-long-long \
       --with-cpu=arm7tdmi
   fi
-  make -j"$NCPU"
+  # -O2 without -g: the shipped libc.a carries no DWARF. -ffile-prefix-map:
+  # newlib's assert() strings bake __FILE__ into .rodata, so without it the
+  # builder's absolute source path ships inside libc.a.
+  make -j"$NCPU" CFLAGS_FOR_TARGET="-O2 -ffile-prefix-map=$SRC_DIR=/newlib"
   make install
 fi
 
 # ── 4. gcc stage 2 - libgcc + crtbegin/crtend against newlib ──
 if [ ! -f "$PREFIX/lib/gcc/$TARGET/$GCC_VER/libgcc.a" ]; then
   cd "$ROOT/build-gcc"
-  make -j"$NCPU" all-target-libgcc
+  # libgcc keeps the configure default -g -O2; its DWARF records the source,
+  # build and install dirs, so map the whole tree.
+  make -j"$NCPU" all-target-libgcc CFLAGS_FOR_TARGET="-g -O2 -ffile-prefix-map=$ROOT=/romdev"
   make install-target-libgcc
 fi
 

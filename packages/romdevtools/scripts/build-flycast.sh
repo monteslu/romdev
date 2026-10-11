@@ -11,7 +11,8 @@
 #   - CMakeLists: emscripten libretro build runs asio single-threaded
 #     (ASIO_DISABLE_THREADS) so it doesn't need POSIX signal_blocker/tss_ptr.
 #   - Vulkan OFF (WASM uses WebGL/GLES); networking/UPnP stubbed.
-# Output: src/cores/wasm/flycast_libretro.{js,wasm} (gitignored dev staging).
+# Output: src/cores/wasm/flycast_libretro.{js,wasm} (gitignored dev staging),
+# copied into the romdev-core-flycast package.
 set -euo pipefail
 command -v emcc >/dev/null || { echo "emcc not found (source emsdk_env.sh)"; exit 1; }
 
@@ -19,12 +20,26 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUILD_DIR="${ROMDEV_BUILD_DIR:-$PROJECT_DIR/build}/flycast"
 OUT="$PROJECT_DIR/src/cores/wasm"
-REPO="https://github.com/flyinghead/flycast.git"
-mkdir -p "$(dirname "$BUILD_DIR")" "$OUT"
+PKG_OUT="$PROJECT_DIR/../romdev-core-flycast/wasm"
+# Upstream pin: cores.flycast in versions.json (pin_* / fetch_pinned helpers).
+# shellcheck source=/dev/null
+. "$SCRIPT_DIR/_versions.sh"
+mkdir -p "$(dirname "$BUILD_DIR")" "$OUT" "$PKG_OUT"
 
-[ -d "$BUILD_DIR" ] || git clone --depth 1 "$REPO" "$BUILD_DIR"
+fetch_pinned cores.flycast "$BUILD_DIR"
 cd "$BUILD_DIR"
 git submodule update --init --recursive --depth 1
+
+# Core-side changes the WASM dynarec backend needs (see the patch header).
+PATCH="$PROJECT_DIR/$(pin_get cores.flycast patch)"
+if git apply --reverse --check "$PATCH" 2>/dev/null; then echo "flycast: romdev dynarec patch already applied"
+else git apply "$PATCH"; fi
+grep -q "wasm_dynarec_init" core/hw/sh4/dyna/driver.cpp || { echo "FATAL: $PATCH not applied" >&2; exit 1; }
+
+# Compile flags shared by every flycast and romdev source: map the checkout and
+# the scripts dir to fixed prefixes so __FILE__ (flycast logs and verify()
+# messages carry it) does not bake the builder's paths into the wasm.
+PREFIX_MAP="-ffile-prefix-map=$BUILD_DIR=/flycast -ffile-prefix-map=$SCRIPT_DIR=/romdev-scripts"
 
 # ── romdev WASM patches (idempotent) ────────────────────────────────────────
 # 1. CMake arch detection: emscripten → "wasm" (no rec sources).
@@ -187,17 +202,17 @@ if [ "${ROMDEV_FLYCAST_SHADOW:-0}" = "1" ]; then
 fi
 rm -rf build-em && mkdir build-em && cd build-em
 emcmake cmake .. -DLIBRETRO=ON -DUSE_VULKAN=OFF -DUSE_GLES=ON -DUSE_GLES2=OFF -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_CXX_FLAGS="$JIT_CXX_FLAGS" -DCMAKE_C_FLAGS="$JIT_C_FLAGS"
+  -DCMAKE_CXX_FLAGS="$JIT_CXX_FLAGS $PREFIX_MAP" -DCMAKE_C_FLAGS="$JIT_C_FLAGS $PREFIX_MAP"
 
-emmake make flycast_libretro -j"$(nproc)"
+emmake make flycast_libretro -j"${JOBS:-$(nproc)}"
 
 # pthread no-op wrapper (single-threaded build): compile it + --wrap the pthread fns.
-emcc -O2 -c "$SCRIPT_DIR/patches/romdev-snippets/flycast-pthread-noop.c" -o /tmp/flycast-pthread-noop.o
+emcc -O2 $PREFIX_MAP -c "$SCRIPT_DIR/patches/romdev-snippets/flycast-pthread-noop.c" -o "$BUILD_DIR/build-em/flycast-pthread-noop.o"
 
 # romdev debug exports (cpuState SH-4 + audioDebug AICA). Compiled C++ against the
 # flycast core headers (Sh4cntx in sh4_if.h, aica_reg in aica_mem.h). em++ so the
 # extern "C" exports link cleanly into the module.
-em++ -O2 -c "$SCRIPT_DIR/patches/romdev-snippets/flycast-debug.c" -o /tmp/flycast-debug.o \
+em++ -O2 $PREFIX_MAP -c "$SCRIPT_DIR/patches/romdev-snippets/flycast-debug.c" -o "$BUILD_DIR/build-em/flycast-debug.o" \
   -I"$BUILD_DIR/core" -I"$BUILD_DIR/core/deps" -I"$BUILD_DIR/core/deps/nowide/include" \
   -I"$BUILD_DIR/core/deps/glm" -I"$BUILD_DIR/core/deps/stb" -I"$BUILD_DIR/core/deps/xxHash" \
   -std=c++17 -DTARGET_NO_OPENMP -DLIBRETRO -DTARGET_NO_THREADS
@@ -218,11 +233,12 @@ if [ "$FLYCAST_JIT" = "1" ]; then
 fi
 EXPORTED="[$BASE_EXPORTS]"
 EXPORTED_RT="[$BASE_RT]"
-emcc /tmp/flycast-pthread-noop.o /tmp/flycast-debug.o $LIBS -O3 $JIT_LINK_FLAGS -Wl,--wrap=pthread_create -Wl,--wrap=pthread_join -Wl,--wrap=pthread_detach -s WASM=1 -s MODULARIZE=1 -s EXPORT_ES6=1 -s "EXPORT_NAME=create_flycast" \
+emcc flycast-pthread-noop.o flycast-debug.o $LIBS -O3 $JIT_LINK_FLAGS -Wl,--wrap=pthread_create -Wl,--wrap=pthread_join -Wl,--wrap=pthread_detach -s WASM=1 -s MODULARIZE=1 -s EXPORT_ES6=1 -s "EXPORT_NAME=create_flycast" \
   -s "ENVIRONMENT=node,web" -s ALLOW_MEMORY_GROWTH=1 -s INITIAL_MEMORY=536870912 \
   -s MAXIMUM_MEMORY=1073741824 -s STACK_SIZE=4194304 -s ALLOW_TABLE_GROWTH=1 \
   -s EXPORTED_FUNCTIONS="$EXPORTED" -s EXPORTED_RUNTIME_METHODS="$EXPORTED_RT" \
   -s FILESYSTEM=1 -s NODERAWFS=1 -s INVOKE_RUN=0 -s USE_ZLIB=1 -s MIN_WEBGL_VERSION=2 -s MAX_WEBGL_VERSION=2 \
   -s FULL_ES3=1 -s GL_ENABLE_GET_PROC_ADDRESS=1 -lGL -s ERROR_ON_UNDEFINED_SYMBOLS=0 -o "$OUT/flycast_libretro.js"
 sed -i 's/var GL={/var GL=Module.GL={/' "$OUT/flycast_libretro.js" 2>/dev/null || true
-echo "Built: $OUT/flycast_libretro.{js,wasm}"
+cp "$OUT/flycast_libretro.js" "$OUT/flycast_libretro.wasm" "$PKG_OUT/"
+echo "Built: $OUT/flycast_libretro.{js,wasm} (copied to $PKG_OUT)"
