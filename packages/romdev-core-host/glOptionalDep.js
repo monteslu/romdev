@@ -1,20 +1,20 @@
-// glOptionalDep.js - lazy, optional loader for the native GL stack.
+// glOptionalDep.js - lazy loader for the native GL stack.
 //
 // The HW-render cores (N64 ParaLLEl, PS1 Beetle-PSX) need a real headless GL
 // context. romdev provides it through `native-gles` (EGL/GLES via a prebuilt
 // .node) and `webgl-node` (a WebGL2 context object for the minified Emscripten
-// cores). Both are OPTIONAL dependencies: the 14 software-rendered cores never
-// touch them, and a headless user who never boots N64/PS1 doesn't need them
-// installed. We load them lazily and, if absent, throw ONE clear, actionable
-// error instead of a cryptic module-not-found.
+// cores). Both are regular dependencies of this package. They are loaded lazily,
+// only when a HW-render core boots, so the software-rendered cores never load
+// them; if the install is broken, ONE clear, actionable error replaces a cryptic
+// module-not-found.
 
 let _gl = null;
 let _webgl = null;
 
 const INSTALL_HINT =
-  "N64/PS1 emulation needs the optional native GL module. Install it with:\n" +
-  "  npm install native-gles webgl-node\n" +
-  "(the other 14 platforms are software-rendered and don't require it).";
+  "N64/PS1/Dreamcast emulation needs the native GL modules (native-gles, webgl-node),\n" +
+  "which are dependencies of romdev-core-host but did not load. Reinstall them with:\n" +
+  "  npm install native-gles webgl-node";
 
 /**
  * Load the `native-gles` default export (the EGL/GLES binding). Cached.

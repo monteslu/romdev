@@ -323,8 +323,10 @@ export function searchBaseline(r) {
     firstDiagnostic: (r.diagnostics ?? []).find(d => d.severity === "error")?.message?.slice(0, 200) ?? null };
 }
 
-/** Only a recorded intentional stop can explain a shutdown KeyboardInterrupt.
- * Other tracebacks/errors, including ones preceding the stop, stay failures. */
+/** Count error lines in a search log. Logs of jobs run by the earlier Python
+ * permuter end an intentional stop with a KeyboardInterrupt traceback; only a
+ * recorded intentional stop can explain one. Other tracebacks/errors, including
+ * ones preceding the stop, stay failures. The JS permuter writes no tracebacks. */
 export function searchLogErrors(log, termination, exit) {
   const count = text => (text.match(/(Traceback|Error:|error:)/g) ?? []).length;
   const expectedStop = ["no-improvement-budget", "normalized-zero-nonexact-baseline"].includes(termination?.reason)

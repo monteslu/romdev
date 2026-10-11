@@ -63,7 +63,7 @@ int main(bool hard) {
                 cx, cy);
 
     VDP_drawText("HELLO SEGA GENESIS", 10, 12);
-    VDP_drawText("BUILT WITH ROM-DEV-MCP", 8, 14);
+    VDP_drawText("BUILT WITH ROMDEV", 8, 14);
 
     /* Game loop. SYS_doVBlankProcess blocks until vblank, then runs
      * SGDK's per-frame housekeeping. */

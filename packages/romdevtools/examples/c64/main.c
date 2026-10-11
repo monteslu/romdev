@@ -13,16 +13,13 @@
 #define SCREEN_RAM  ((volatile uint8_t*)0x0400)
 #define COLOR_RAM   ((volatile uint8_t*)0xD800)
 
-// PETSCII screen codes for "HELLO ROM-DEV-MCP" (uppercase character set,
+// PETSCII screen codes for "HELLO ROMDEV" (uppercase character set,
 // where 'A' = 0x01, 'B' = 0x02, ...). The space character is 0x20.
 static const uint8_t MESSAGE[] = {
   0x08, 0x05, 0x0C, 0x0C, 0x0F,        // HELLO
   0x20,
   0x12, 0x0F, 0x0D,                    // ROM
-  0x2D,                                // -
   0x04, 0x05, 0x16,                    // DEV
-  0x2D,                                // -
-  0x0D, 0x03, 0x10,                    // MCP
 };
 #define MESSAGE_LEN (sizeof(MESSAGE) / sizeof(MESSAGE[0]))
 
@@ -35,7 +32,7 @@ static void clear_screen(void) {
 }
 
 static void draw_message(uint8_t row) {
-  // Center on the row: row starts at offset row*40, center = +12.
+  // Center on the row: row starts at offset row*40.
   uint16_t base;
   uint8_t i;
   base = row * 40 + (40 - MESSAGE_LEN) / 2;

@@ -1,13 +1,11 @@
 // romdev-core-parallel-n64 - binary package: ParaLLEl-N64 libretro core (N64).
-// HEADLESS-ANGRYLION software build: GL is compiled OUT and the angrylion software
-// RDP is forced, so raw CPU-rendered VI framebuffers DISPLAY (the GL/glide64 build
-// only presents RDP display-lists). This is what lets romdev's software-3D homebrew
-// render. CUSTOM romdev build: upstream core + romdev's debug exports
+// GL-rendered build: the RDP runs on the real GPU through glide64 (GL HLE) and
+// romdev-core-host's native-gles bridge. CUSTOM romdev build: upstream core + romdev's debug exports
 // (romdev_mips_regs_get, watchpoint/pcbreak/range live-debug, romdev_ai_get for the
 // Audio Interface) + a clean-room IPL3 so build({platform:n64}) self-boots.
 // Built reproducibly by scripts/build-parallel-n64.sh.
 //
-// Loaded with hwRender:false (the renderer presents via video_cb, not a GL FBO).
+// Loaded with hwRender:true (glide64 renders into the host's GL framebuffer).
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -16,10 +14,10 @@ const WASM = path.join(__dirname, "wasm");
 
 export const platform = "n64";
 
-// Emulator core (libretro) - glue .js + .wasm. Software renderer (no GL bridge).
+// Emulator core (libretro) - glue .js + .wasm. GL renderer (glide64).
 export const core = {
   name: "parallel_n64",
   jsPath: path.join(WASM, "parallel_n64_libretro.js"),
   wasmPath: path.join(WASM, "parallel_n64_libretro.wasm"),
-  hwRender: false,
+  hwRender: true,
 };

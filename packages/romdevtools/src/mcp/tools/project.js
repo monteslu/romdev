@@ -901,7 +901,7 @@ const TEMPLATES = {
   // ── Nintendo 64 (mips-elf-gcc R4300) - software 3D engine helper lib + examples ──
   // The N64 was a 3D-first machine, so ALL 5 examples are 3D (even the puzzle -
   // rendered as a 3D well of cubes). Same software-3D lib as PS1 (n64.{h,c}), a
-  // framebuffer backend the headless-angrylion core scans out.
+  // framebuffer backend the VI scans out.
   n64: (() => {
     const N64_RUNTIME = [
       { src: "lib/c/n64.h", dst: "n64.h" },
@@ -909,9 +909,9 @@ const TEMPLATES = {
     ];
     const mk = (name, describe) => ({ main: `${name}/main.c`, runtime: N64_RUNTIME, lang: "C (mips-elf-gcc)", ext: ".z64", describe });
     return {
-      default: mk("shmup", "STARFALL 64 - the canonical N64 3D starter: a vertical shooter where enemies fly in from depth and scale up under perspective. Exercises the whole software-3D lib (camera, transform, culled cubes) + SI/PIF pad + HUD, presented through angrylion's VI scanout. Same as 'shmup'."),
+      default: mk("shmup", "STARFALL 64 - the canonical N64 3D starter: a vertical shooter where enemies fly in from depth and scale up under perspective. Exercises the whole software-3D lib (camera, transform, culled cubes) + SI/PIF pad + HUD, presented through the VI scanout. Same as 'shmup'."),
       shmup: {
-        ...mk("shmup", "STARFALL 64 - a 3D Nintendo 64 vertical shooter (the N64 twin of the PS1 STARFALL). Enemy cubes fly in from the far distance and grow under perspective; stream bullets into Z, AABB collision, xorshift wave spawner, starfield, title/play/game-over with score + lives. Software 3D pipeline (n64_camera/n64_model/n64_quad3d) rendered to an RDRAM framebuffer the headless-angrylion core scans out."),
+        ...mk("shmup", "STARFALL 64 - a 3D Nintendo 64 vertical shooter (the N64 twin of the PS1 STARFALL). Enemy cubes fly in from the far distance and grow under perspective; stream bullets into Z, AABB collision, xorshift wave spawner, starfield, title/play/game-over with score + lives. Software 3D pipeline (n64_camera/n64_model/n64_quad3d) rendered to an RDRAM framebuffer the VI scans out."),
         players: "1 (N64 has 4 controller ports; 2-4P can hook the other ports later)",
         sram: "none in this starter - N64 saves go to Controller Pak / EEPROM / SRAM via the PI; the lib keeps hi-score in-session (stated in-file).",
         mechanics: ["3D perspective playfield", "depth-scaled enemies", "projectile pools", "wave spawner", "AABB collision", "lives + score", "title/play/game-over state machine"],
@@ -2309,7 +2309,7 @@ TEMPLATES.gba = {
 //   paddle         - paddle-and-ball: two paddles + ball + walls
 //   single_screen  - dodge-the-falling-pixels using P0 + M0
 //   music_demo     - two-voice TIA chiptune
-//   mini_invaders  - gallery shooter via P0 cannon + P1/NUSIZ1 invaders + M0 shot
+//   gallery_shooter - gallery shooter via P0 cannon + P1/NUSIZ1 invaders + M0 shot
 TEMPLATES.atari2600 = {
   default: {
     main: "templates/default.asm",
@@ -2339,8 +2339,8 @@ TEMPLATES.atari2600 = {
     ext: ".a26",
     describe: "Two-voice TIA chiptune scaffold. Voice 0 = 32-note melody, voice 1 = 16-note bass ostinato, both driven from hand-authored (AUDF, length_frames) note tables in ROM. AUDC0=AUDC1=$04 (pure tone). Music updates happen during VBLANK (never during visible scanlines). Display is minimal - blue BG + a centered playfield band - because the point IS the audio. The note tables ARE the song; edit them and you're writing chiptune.",
   },
-  mini_invaders: {
-    main: "templates/mini_invaders.asm",
+  gallery_shooter: {
+    main: "templates/gallery_shooter.asm",
     runtime: [],
     lang: "6507 assembly (dasm)",
     ext: ".a26",

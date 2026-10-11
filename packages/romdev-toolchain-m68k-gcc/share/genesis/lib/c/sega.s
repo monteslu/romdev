@@ -38,8 +38,8 @@ _rom_header:
 	.ascii	"SEGA MEGA DRIVE "        | $100..$10F  system name
 	.ascii	"(C)ROMDEV 2026.MAY"      | $110..$121  copyright
 	.byte	0,0                       | $122..$123  pad
-	.ascii	"ROM-DEV-MCP C BUILD                             "  | $124..$153  domestic title (48 chars)
-	.ascii	"ROM-DEV-MCP C BUILD                             "  | $154..$183  overseas title (48 chars)
+	.ascii	"ROMDEV C BUILD                                  "  | $124..$153  domestic title (48 chars)
+	.ascii	"ROMDEV C BUILD                                  "  | $154..$183  overseas title (48 chars)
 	.ascii	"GM ROMDEV-01-00"         | $184..$192  serial number (game id + revision)
 	.byte	0,0                       | $193..$194  checksum (patched later)
 	.ascii	"J               "        | $195..$1A4  device support (joypad)

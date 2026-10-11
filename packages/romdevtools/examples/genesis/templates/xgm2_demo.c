@@ -50,7 +50,7 @@ int main(bool hard) {
 
     /* Title screen text - drawn into VDP plane A's default font region. */
     VDP_drawText("XGM2 MUSIC DEMO",        12, 10);
-    VDP_drawText("ROM-DEV-MCP / SGDK",     10, 12);
+    VDP_drawText("ROMDEV / SGDK",          10, 12);
     VDP_drawText("PSG ARPEGGIO (CC0)",     10, 14);
     VDP_drawText("PLAYING...",             14, 17);
 

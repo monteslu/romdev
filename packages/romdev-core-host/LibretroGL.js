@@ -59,9 +59,9 @@ export class LibretroGL {
   }
 
   /**
-   * Load the optional native GL module (lazy). MUST be awaited before the core
-   * boots, since the 14 software cores never call this and the module is an
-   * optional dependency. Populates the module-level `gl` used by
+   * Load the native GL module (lazy). MUST be awaited before the core
+   * boots. Software-rendered cores never call this, so the module loads only
+   * for HW-render cores. Populates the module-level `gl` used by
    * createContext/readbackFrame/destroy.
    * @returns {Promise<void>}
    */

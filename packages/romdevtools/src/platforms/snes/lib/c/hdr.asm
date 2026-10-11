@@ -22,7 +22,7 @@
 
 .SNESHEADER
   ID "ROMD"                   ; 4-char cart id
-  NAME "ROM-DEV-MCP C BUILD  " ; 21-char title - padded with spaces
+  NAME "ROMDEV C BUILD       " ; 21-char title - padded with spaces
   SLOWROM
   LOROM
   CARTRIDGETYPE $00           ; ROM only

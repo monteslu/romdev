@@ -79,7 +79,7 @@ int main(void) {
      * (BG_MODE1 BG0 is 32 cols × 28 rows in a 256x224 viewport).
      */
     consoleDrawText(10, 10, "Hello SNES");
-    consoleDrawText( 6, 14, "BUILT WITH ROM-DEV-MCP");
+    consoleDrawText( 6, 14, "BUILT WITH ROMDEV");
 
     /* ── 4. Turn the screen on ────────────────────────────────────
      * Until setScreenOn fires, the SNES forces blank (INIDISP $80).

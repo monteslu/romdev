@@ -8,7 +8,7 @@
  *
  * Build: build({ platform:"n64", language:"c" }) → a self-booting .z64. Controls:
  * d-pad/stick move, A fires, START begins/restarts. Renders through the software
- * rasterizer + angrylion VI scanout (no GL).
+ * rasterizer into an RDRAM framebuffer that the VI scans out.
  */
 #include "n64.h"
 

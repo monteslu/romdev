@@ -15,7 +15,8 @@ import { createHash } from "node:crypto";
 const here = dirname(fileURLToPath(import.meta.url));
 const pkgRoot = join(here, "..");
 
-const srcPath = process.argv[2] ?? "/home/monteslu/code/cliemu/decomp-scratch/splat-port/spimdisasm/cpython/3.13/mappings_jp.h";
+const srcPath = process.argv[2];
+if (!srcPath) { console.error("usage: node scripts/gen-cjk-tables.mjs <path/to/mappings_jp.h> [cpythonTag]"); process.exit(2); }
 const tag = process.argv[3] ?? "3.13";
 
 const text = readFileSync(srcPath, "latin1");

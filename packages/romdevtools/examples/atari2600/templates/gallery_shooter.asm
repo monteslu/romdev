@@ -1,4 +1,4 @@
-; ── mini_invaders.asm - Atari 2600 gallery-shooter scaffold ─────────
+; ── gallery_shooter.asm - Atari 2600 gallery-shooter scaffold ───────
 ;
 ; A fixed-shooter / gallery-shooter 2600 game that uses the RIGHT TIA
 ; objects instead of playfield "barcode" bars (see the note at the bottom).

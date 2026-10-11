@@ -305,7 +305,7 @@ export class LibretroHost {
    * @param {string} [wasmPath]
    * @param {Object} [opts]
    * @param {boolean} [opts.hwRender] this core HW-renders (GL) - n64/ps1. Loads the
-   *   optional native GL stack and creates a headless context BEFORE the core boots
+   *   native GL stack and creates a headless context BEFORE the core boots
    *   (GL calls happen during init/load). The 14 software cores omit this.
    */
   /** Infer the platform from a core's js filename stem (e.g.

@@ -25,7 +25,7 @@ int main(void) {
   assert.equal(r.binary.length, 32 * 1024, "expected 32KB LoROM, got " + r.binary.length);
   // LoROM header NAME field lives at $7FC0..$7FD4 (21 bytes).
   const name = Buffer.from(r.binary.subarray(0x7FC0, 0x7FC0 + 21)).toString("ascii");
-  assert.match(name, /^ROM-DEV-MCP C BUILD/);
+  assert.match(name, /^ROMDEV C BUILD/);
 });
 
 test("buildSnesC pvsneslib:true (default): bare main() links against PVSnesLib runtime", async () => {
