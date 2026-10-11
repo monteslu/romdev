@@ -18,7 +18,7 @@ Each example fits the convention:
 | atari7800    | `atari7800/main.c`   | cc65      | Minimal MARIA bring-up: DLL pointing at a single-zone DL, palette load, CHARBASE = 0. cc65 can't constant-fold pointer→int for static initializers, so the DL/DLL addresses are patched in at runtime in `main()`. |
 | lynx         | `lynx/main.c`        | cc65      |                                      |
 | snes         | `snes/main.asm`      | asar      |                                      |
-| genesis      | `genesis/main.s`     | vasm68k   |                                      |
+| genesis      | `genesis/main.s`     | m68k-elf-as |                                      |
 | gb           | `gb/main.c` (default) or `gb/main.asm` (`language:"asm"`) | sdcc sm83 port (C, default) / rgbds (asm) | C example cycles the BG palette every 32 frames. Asm example shows yellow 'H' on light BG, scrollable with A. SDCC GB hardware-register header: `gb_hardware.h` (copied in by `examples({op:'fork'})`). |
 | gbc          | `gbc/main.asm`       | rgbds (asm) / sdcc sm83 (C) | The bundled example is an asm CGB-color demo (yellow 'H' on a true-blue BG, only possible on GBC). C is also supported via SDCC sm83 - same as GB. |
 | sms          | `sms/main.c` (or `sms/templates/*.c`) | sdcc | Pair with the bundled `sms_crt0.s` (passed via `crt0` arg) - boots into a real cartridge with vector table + SP=$DFF0 + IM 1. Yellow 'H' on blue, scrollable with P1-B1. The 10 examples under `sms/templates/` (default, hello_sprite, tile_engine, shmup, shmup_2p, platformer, puzzle, sports, racing, music_demo) all use this crt0 - `examples({op:'fork'})` copies it in automatically. |

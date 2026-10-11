@@ -1,4 +1,4 @@
-; Hello, Genesis - a real hello-world scaffold for vasm68k_mot.
+; Hello, Genesis - a real hello-world scaffold in Motorola-syntax 68000 assembly.
 ;
 ; What this does:
 ;   1. Vector table (SP + reset, rest stubs).
@@ -12,9 +12,10 @@
 ; BUILD:
 ;   build({ output: "rom",  platform: "genesis", source: /* this file */ });
 ;
-; vasm syntax gotchas (in case you go beyond this scaffold):
-;   - NO space after commas in operands: `move.w #$2700, sr` FAILS.
-;     Write `move.w #$2700,sr` instead.
+; Motorola syntax gotchas (in case you go beyond this scaffold):
+;   - Whitespace ends the operand field; the rest of the line is a comment.
+;     A space after a comma is fine, but write expressions without spaces:
+;     `dc.w 1+2`, not `dc.w 1 + 2` (which assembles as `dc.w 1`).
 ;   - WRAM at $FF0000-$FFFFFF: use `equ` for variable addresses, not
 ;     `org $00FF0000` (that produces a 16MB ROM).
 ;   - VDP control reg ($C00004) takes 16-bit writes; VDP data ($C00000)
@@ -67,7 +68,7 @@ Exception:
 ; -----------------------------------------------------------------------
 ; Reset entry point.
 Start:
-        move.w  #$2700,sr               ; disable interrupts (NO space after comma!)
+        move.w  #$2700,sr               ; disable interrupts
 
         ; Wait a few cycles for the Z80 to settle.
         ; (Real code grants Z80 bus and resets it - omitted here for brevity.)

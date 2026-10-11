@@ -60,8 +60,7 @@ each toolchain recipe the same `PKG_OUT` copy step the core recipes have.)
 | cc65 (ca65/cc65/ld65/da65) | `build-cc65.sh` | `romdev-toolchain-cc65` |
 | SDCC | `build-sdcc.sh` (+ `build-z80-binutils-wasm.sh`) | `romdev-toolchain-sdcc` |
 | RGBDS | `build-rgbds.sh` | `romdev-toolchain-rgbds` |
-| vasm (m68k) | `build-vasm68k.sh` | `romdev-toolchain-vasm` |
-| m68k GCC + sjasm | `build-m68k-wasm-tools.sh`, `build-sjasm.sh` (toolchain built by `build-m68k-toolchain.sh`) | `romdev-toolchain-m68k-gcc` |
+| m68k GCC + sjasm (its GNU as also assembles Genesis Motorola-syntax sources, through `src/toolchains/m68k-asm/`) | `build-m68k-wasm-tools.sh`, `build-sjasm.sh` (toolchain built by `build-m68k-toolchain.sh`) | `romdev-toolchain-m68k-gcc` |
 | asar (65816) | `build-asar.sh` | `romdev-platform-snes` |
 | tcc816, wla-dx | `build-tcc816.sh`, `build-wladx.sh` | `romdev-platform-snes` |
 | dasm | `build-dasm.sh` | `romdev-platform-atari2600` |

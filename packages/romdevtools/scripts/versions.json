@@ -280,18 +280,6 @@
         "atari2600"
       ]
     },
-    "vasm68k": {
-      "kind": "tarball",
-      "url": "http://sun.hasenbraten.de/vasm/release/vasm.tar.gz",
-      "ref": "rolling-release (no archived versions)",
-      "version": "rolling (sha-pinned 2026-05-29; upstream tarball carries no version label)",
-      "sha256": "c73702574e8d6a154a7d64f22d7b618d0b85ace98ec9eb63d5e7c5ec696e3a6b",
-      "license": "vasm (free for any use)",
-      "note": "Upstream serves only a rolling 'latest' tarball with no version in the URL. sha256 is our only drift detector \u2014 fill it after the next clean build and treat a mismatch as a deliberate bump.",
-      "platforms": [
-        "genesis"
-      ]
-    },
     "rgbds": {
       "kind": "git",
       "url": "https://github.com/gbdev/rgbds.git",

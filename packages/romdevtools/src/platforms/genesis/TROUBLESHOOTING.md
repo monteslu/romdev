@@ -11,14 +11,44 @@ going on" version (via `platform({op:'doc', platform:"genesis", name:"mental_mod
 
 ## "My C build is throwing 68000 assembler errors (identifier expected / missing reset vector)"
 
-That means the file was assembled as 68k by vasm68k instead of compiled as
-C. **Genesis C builds through m68k-elf-gcc + SGDK** (`#include <genesis.h>`),
-**not** vasm68k - vasm68k is only for hand-written 68000 assembly. You do NOT
+That means the file was assembled as 68k assembly instead of compiled as
+C. **Genesis C builds through m68k-elf-gcc + SGDK** (`#include <genesis.h>`);
+the assembly path is only for hand-written 68000 assembly. You do NOT
 need to write assembly. The build now infers the language from your source
 (a `.c` file / C content → gcc), so the common cause is forcing it the wrong
 way: if you passed `language:"asm"`, drop it; if your source has no `.c`
 filename AND no obvious C tokens, pass `language:"c"` explicitly. (Reverse case:
-a `.s` asm file builds via vasm68k - that's correct.)
+a `.s` asm file builds as Motorola-syntax assembly - that's correct.)
+
+## "My 68000 assembly built differently after romdevtools 0.150.0"
+
+Genesis assembly is Motorola syntax (`$hex`, `%binary`, labels in column 0,
+`;`/`*` comments, `org`, `dc.b`/`dc.w`/`dc.l`, `dcb`, `ds`, `equ`, `set`,
+`=`, `rs`/`rsreset`, `offset`, `rept`/`endr` with `REPTN`, `macro` with
+`\1`..`\9`, `\0`, `\@`, `\#` and `NARG`, `mexit`, `if`/`ifeq`/`ifd`/`ifc`/...,
+`include`, `incdir`, `incbin`, `.local` and `1$` labels, `equr`/`reg`,
+`even`/`align`/`cnop`). Since 0.150.0 it is assembled by GNU as from the bundled
+m68k-elf toolchain, through a front end that reads that syntax and keeps the
+encoding choices of the assembler romdev used before (moveq/addq/lea forms,
+shortest branches, short absolute addresses for labels below $8000), so
+existing sources build to the same bytes. The differences:
+
+- An underscore between digits is a digit separator: `$7000_0083` is
+  $70000083. It used to be read as $7000 with a warning.
+- `0x1234` is accepted as hex. It used to be read as 0 with the rest ignored.
+- A space after a comma inside an instruction's operands is skipped
+  (`move.w #$2700, sr`). It used to be an error.
+- `suba.w #$8000,An` stays a `suba`; it was rewritten into a `lea` that
+  subtracted in the wrong direction.
+- `rorg`, `comm`, `dr.b/w/l` and `dc.x`/`dc.p` floating point are reported as
+  unsupported. Section directives (`section`, `text`, `data`, `bss`) are
+  accepted and have no effect: the ROM is one flat image laid out by `org`.
+- Assembler options: `-D NAME=VALUE` (or `--define`), `-I dir` and
+  `-m68000`..`-m68060` are honored; other options are ignored with a note.
+- Diagnostics read `main.s:12: error: undefined symbol plyer_x` with
+  `issues[].stage` = `"m68k-as"`. Errors inside a macro add
+  `(in macro NAME called from file:line)`.
+- The build result now carries `symbols`: every label with its address.
 
 ## "I drive the game with input({op:'set'}) but the jump/action button doesn't fire"
 

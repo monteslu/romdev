@@ -3,7 +3,7 @@
 ; Genesis has 64 KB of work RAM at $00FF0000-$00FFFFFF. To use it for
 ; game variables, you declare LABELS at addresses in that range.
 ;
-; ** DO NOT use `org` for WRAM. ** vasm pads the ROM out to the
+; ** DO NOT use `org` for WRAM. ** The build pads the ROM out to the
 ; highest `org` it sees, so `org $00FF0000` produces a 16 MB ROM file
 ; mostly full of zeros, and the variables you "wrote" there aren't
 ; actually stored anywhere - they're just labels pointing into space

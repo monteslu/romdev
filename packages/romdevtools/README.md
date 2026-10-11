@@ -12,7 +12,7 @@ The server listens on `http://127.0.0.1:7331` (`PORT` and `HOST` override it). N
 
 38 tools, each a verb with an operation axis (`memory({op:'search'})`, `disasm({target:'cfg'})`, `build({output:'run'})`):
 
-- **Build.** cc65, SDCC, RGBDS, asar, vasm, dasm, gcc for m68k, ARM, MIPS and SH, with SGDK, PVSnesLib, libtonc/libgba and other SDKs. Fork an example game with `examples({op:'fork'})`; `build({output:'run'})` builds, loads, runs and screenshots in one call. ROMs come out with the headers and checksums real hardware checks.
+- **Build.** cc65, SDCC, RGBDS, asar, dasm, gcc and binutils for m68k, ARM, MIPS and SH, with SGDK, PVSnesLib, libtonc/libgba and other SDKs. Fork an example game with `examples({op:'fork'})`; `build({output:'run'})` builds, loads, runs and screenshots in one call. ROMs come out with the headers and checksums real hardware checks.
 - **Run, see, drive.** libretro cores as WebAssembly: step frames, screenshots, controller input, save states. The 3D consoles render on the GPU through [native-gles](https://github.com/monteslu/native-gles) (headless OpenGL ES): N64 through parallel-n64's glide64, PlayStation through Beetle PSX HW with OpenBIOS embedded, Dreamcast through Flycast with its reios HLE BIOS and an SH-4 recompiler. Dreamcast support is experimental.
 - **Inspect and romhack.** CPU, video and save RAM; value search; write, read and execution breakpoints; single-step; coverage; a bundled cheat database used as a labeled RAM map; mapper-aware disassembly; `disasm({target:'project'})` plus `build({output:'reassemble'})` for a byte-identical rebuild on the 15 classic platforms; ROM patching with re-injection of compressed assets; custom-font text tools.
 - **Analysis.** Rizin and Ghidra compiled to WebAssembly on 18 platforms (all but sync32), including the 3D consoles' MIPS and SH-4: functions, control-flow graphs, cross-references, reachable blocks, a structural map and C pseudocode (`disasm({target:'functions'|'cfg'|'xrefs'|'reachable'|'decompile'})`, `symbols({op:'analyze'})`). `breakpoint({on:'jumptable'})` resolves computed-jump dispatchers by running the game.
@@ -50,7 +50,7 @@ Exact-pinned, so one install is a matched set:
 - Emulator cores: `romdev-core-{fceumm,gambatte,gpgx,vice,handy,prosystem,geargrafx,bluemsx,gametank,bsnes,fake08,s32core}` and the GPU cores `romdev-core-{parallel-n64,beetle-psx-hw,flycast}`. `romdev-core-bsnes` is an alternate SNES core (`loadMedia({platform:'snes', core:'bsnes'})`), the accuracy reference for the ST010/ST011/ST018 coprocessors.
 - Core runtime: `romdev-core-host`, `romdev-core-runner`.
 - Platform bundles: `romdev-platform-{snes,gba,atari2600,sync32}`.
-- Toolchains: `romdev-toolchain-{cc65,sdcc,rgbds,vasm,m68k-gcc,mips-gcc,sh-gcc,decomp-gcc}`.
+- Toolchains: `romdev-toolchain-{cc65,sdcc,rgbds,m68k-gcc,mips-gcc,sh-gcc,decomp-gcc}`.
 - Analysis: `romdev-analysis` (Rizin) and `romdev-analysis-decompiler` (Ghidra decompiler and SLEIGH specs).
 - Decomp: `romdev-m2c`, `romdev-permuter` and `romdev-splat`, which bring in `romdev-spimdisasm`, `romdev-rabbitizer` and `romdev-pycparser`.
 - Audio: `romdev-famitone`, `romdev-maxmod`, `romdev-xgm2`, `romdev-audio-resampler`.

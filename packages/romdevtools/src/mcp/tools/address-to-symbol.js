@@ -15,7 +15,7 @@
 // Parsers supported:
 //   - SDCC sdld .map (Z80 / sm83): `<4-hex addr><whitespace><name>`
 //   - cc65 ld65 .sym ("VICE-style"): `al 0xNNNN .Lname`
-//   - Future: vasm listings, asar symbol tables
+//   - Future: asar symbol tables
 
 import { readFile } from "node:fs/promises";
 import { parseGnuLdMap, isGnuLdMap } from "../../toolchains/gnu-ld-map.js";

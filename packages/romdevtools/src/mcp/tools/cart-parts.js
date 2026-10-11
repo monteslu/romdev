@@ -518,7 +518,7 @@ ${chr ? `\n.segment "CHR"\n  .incbin "${chr}"\n` : ""}
 
 /**
  * Genesis wrapper template. Genesis just needs vectors + header + body
- * concatenated in a flat ROM. We emit a vasm68k wrapper that incbins each.
+ * concatenated in a flat ROM. We emit a Motorola-syntax wrapper that incbins each.
  */
 function wrapGenesis({ vectorsPath, headerPath, bodyPath }) {
   const wrapperSource =
@@ -667,7 +667,7 @@ export async function wrapRomFromPartsCore(args) {
 }
 
 /**
- * Wrap C64 parts back into a .prg. Just emits a vasm/ca65 wrapper that
+ * Wrap C64 parts back into a .prg. Just emits a ca65 wrapper that
  * sets the load address and includes the body.
  */
 function wrapC64({ loadAddress, bodyPath, romPath }) {

@@ -189,7 +189,7 @@ export function registerRomIdTools(server, z, _sessionKey) {
     "assembleSnippet",
     "Use this to assemble a tiny chunk of asm to raw bytes - no header/linker/segments, just the bytes " +
     "at `origin`. With patchFile this is the whole byte-patch workflow in 2 calls. `cpu` routes to the " +
-    "right assembler (6502/65c02/huc6280→ca65, 65816→asar, 68k→vasm, z80→sdasz80, sm83→rgbasm; spc700 " +
+    "right assembler (6502/65c02/huc6280→ca65, 65816→asar, 68k→m68k-elf-as (Motorola syntax), z80→sdasz80, sm83→rgbasm; spc700 " +
     "unsupported). Set `origin` to where the code will live so branches/absolute refs encode right. " +
     "GOTCHA: z80 immediates need a `#` prefix (`ld a,#5`, not `ld a,5`). Returns `{hex, bytes(base64), " +
     "log}` - feed `bytes` straight into patchFile.base64.",

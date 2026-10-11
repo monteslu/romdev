@@ -50,18 +50,18 @@ export const TOOLCHAINS = {
     tier: 1,
     source: "bundled:asar",
   },
-  vasm68k: {
-    id: "vasm68k",
-    displayName: "vasm (68k assembler)",
+  "m68k-elf-as": {
+    id: "m68k-elf-as",
+    displayName: "GNU as (68k assembler, Motorola syntax)",
     platforms: ["genesis"],
     tier: 1,
-    source: "bundled:vasm68k",
+    source: "bundled:romdev-toolchain-m68k-gcc",
   },
-  vasmarm: {
-    id: "vasmarm",
-    displayName: "vasm (ARM assembler)",
+  "arm-none-eabi-gcc": {
+    id: "arm-none-eabi-gcc",
+    displayName: "arm-none-eabi gcc (GBA C compiler)",
     platforms: ["gba"],
     tier: 1,
-    source: "bundled:vasmarm",
+    source: "bundled:romdev-platform-gba",
   },
 };

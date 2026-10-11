@@ -81,7 +81,7 @@ for (const c of SCAFFOLD_CHECKS) {
 // ── A single end-to-end build test per new platform that confirms the
 // scaffolded project actually compiles. Picks SMS (cleanest hw.h) +
 // C64 (cc65 path) + SNES (asar path with incsrc snippets) + Genesis
-// (vasm68k path with incsrc snippets) - covers all four toolchain
+// (68k asm path with include snippets) - covers all four toolchain
 // flavors among the new templates. The other Z80 platform (gg) shares
 // the SDCC z80 path validated by SMS. ───────────────────────────────
 

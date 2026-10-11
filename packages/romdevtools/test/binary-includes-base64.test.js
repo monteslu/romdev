@@ -7,7 +7,7 @@
 // embedded ~4/3-inflated garbage into the ROM. Every MCP route delivers strings
 // (inline binaryIncludes AND binaryIncludePaths both arrive base64), so every
 // server-side GBA soundbank was corrupt while direct Uint8Array callers were
-// fine - "same source, different ROM" between sessions. asar/cc65/vasm68k/wladx
+// fine - "same source, different ROM" between sessions. asar/cc65/wladx
 // each carried their own either/or guard; binaryFile now carries it too, which
 // also covers the generic gcc runner (Genesis/MIPS/SH .incbin paths).
 

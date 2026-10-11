@@ -130,7 +130,6 @@
     "romdev-toolchain-sh-gcc/wasm/sh-elf-ld.wasm": "81e35ed71f183a2f903f84f7e340eeebbddec90e75ebbbe38b3d2eba12662136",
     "romdev-toolchain-sh-gcc/wasm/sh-elf-objcopy.wasm": "f07228f0a2c90eb6812493e75b35f5a40cec40404475bb9ffdf740320093208d",
     "romdev-toolchain-sh-gcc/wasm/sh-elf-objdump.wasm": "5a3908ab34c1aa24b5455fce0c123096a5451416849d774346c41bc2a308bacd",
-    "romdev-toolchain-vasm/wasm/vasm68k.wasm": "5ba708430ffd6954d6ef9458f59aff84dd6b9e2cf7300881511174e7207a7825",
     "romdevtools/.romdev-build/mgba/src/mgba_libretro_emscripten.a": "a8b16f08b49af50c1f73048ac85c63bb77e43d0d9f03e5e31f7c466ce2a4cf5d",
     "romdevtools/src/analysis/decompiler/wasm/decompile.wasm": "2dd4ef4da24713f95052ab80658082356ca8806060890b074dcd218364b6c76f",
     "romdevtools/src/analysis/wasm/rizin.wasm": "d3f3b2a1ab5e5a34899a37fb53d58ea3eb41b58920758eea98c225facd1a0610",

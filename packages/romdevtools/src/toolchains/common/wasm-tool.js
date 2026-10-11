@@ -19,7 +19,7 @@ import path from "node:path";
 /**
  * Resolve a single tool glue FILE from its package, falling back to a local
  * in-tree copy. This is the arm/m68k/mips/sh-gcc + asar + wladx + rgbds + dasm +
- * vasm68k + sjasm + tcc816 shape (one .js/.mjs glue per tool).
+ * sjasm + tcc816 shape (one .js/.mjs glue per tool).
  *
  * @param {Object} a
  * @param {string} a.pkg        npm package the glue ships in (e.g. "romdev-platform-gba")

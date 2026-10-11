@@ -2333,7 +2333,7 @@ function chunkFlatRegion(body, start, platform) {
 /** Emit a known-data region as a clean, byte-exact `.byte` dump (GAS/cc65 both
  *  accept `.byte` with `.org`). 16 bytes per line, with the address in a comment. */
 // Emit a byte-exact `.byte` dump for a known-DATA region (e.g. a cartridge
-// header). The syntax must match the platform's reassembler: ca65/vasm
+// header). The syntax must match the platform's reassembler: ca65/asar
 // (6502/65816) take `$`-prefixed hex and a bare `.org $...`; GNU `as`
 // (z80/sm83/m68k/arm) take `0x` hex and reject a `$` operand (`$2E` reads as an
 // undefined symbol → the link fails). `family` comes from CPU_FAMILY; default to

@@ -35,7 +35,7 @@ You drive the work. The human directs: they may want a game, a disassembly, a ro
 
 ## The one hard rule: never install a compiler or emulator
 
-You never need, and must never install, a compiler or emulator to build or run a ROM here. Every compiler, assembler and linker (cc65, sdcc, gcc for m68k/arm/mips/sh, tcc, wla, rgbds, vasm, asar, dasm), every SDK (SGDK, PVSnesLib, libtonc/libgba, cc65 libs) and every emulator core is bundled as WASM and runs through these tools: `build`, `loadMedia`, `frame`, the inspectors, `playtest`.
+You never need, and must never install, a compiler or emulator to build or run a ROM here. Every compiler, assembler and linker (cc65, sdcc, gcc and binutils for m68k/arm/mips/sh, tcc, wla, rgbds, asar, dasm), every SDK (SGDK, PVSnesLib, libtonc/libgba, cc65 libs) and every emulator core is bundled as WASM and runs through these tools: `build`, `loadMedia`, `frame`, the inspectors, `playtest`.
 
 If a compiler or emulator install is invoked or prompted (`clang`, `gcc`, Xcode or Command Line Tools, `node-gyp`, devkitPro, `brew`/`apt install <compiler>`), that is a defect. Do not install it, do not investigate it with host commands, and report it ("romdev should provide this"), for example with `feedback({op:'record'})`. `platform({op:'list'})` and `platform({op:'toolchains'})` show what is bundled.
 

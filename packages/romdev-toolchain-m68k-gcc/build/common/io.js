@@ -31,7 +31,7 @@ function bytesToBase64(u8) {
 /** Convert binary (Uint8Array / Buffer / base64 string) → InputFile spec. */
 export function binaryFile(vfsPath, bytes) {
   // Accept EITHER raw bytes OR a base64 STRING - the same either/or contract the
-  // toolchain wrappers honor individually (asar/cc65/vasm68k/wladx all guard with
+  // toolchain wrappers honor individually (asar/cc65/wladx all guard with
   // `x instanceof Uint8Array ? x : Buffer.from(x, "base64")`). The MCP
   // `binaryIncludes` schema delivers base64 STRINGS; decoding them as UTF-8 (the
   // old bug) made the base64 TEXT itself the file bytes - .incbin then embedded
