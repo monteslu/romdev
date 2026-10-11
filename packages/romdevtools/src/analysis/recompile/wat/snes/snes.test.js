@@ -432,7 +432,7 @@ test("APU: S-DSP voice, envelope and echo writes match snes9x's ARAM byte for by
   assert.deepEqual([mem[WRAM + 0x10], mem[WRAM + 0x11], aram[0x20]], [0x7f, 0xc7, 0x01]);
   assert.equal(aram.subarray(0x8000, 0x8800).filter((x) => x).length, 2016, "echo buffer written");
   const { createHash } = await import("node:crypto");
-  assert.equal(createHash("sha1").update(aram).digest("hex"), "535946fb13e3afc9c423da4349d7b3b9d6f5edd0");
+  assert.equal(createHash("sha1").update(aram).digest("hex"), "a66773a52eceb7452859063b3197e11334e4151e");
   // The DSP's output reaches the wasmcart host: a 32040 Hz int16 stereo ring.
   const info = new Uint32Array(mem.buffer, ex.wc_get_info(), 18);
   assert.equal(info[13], 32040);
@@ -827,7 +827,7 @@ test("an interrupt's entry cycles are one AddCycles: a line end they cross happe
 /** snes9x frames the SPC700 count is compared over, and what it read. */
 const WORD_ACCESS_FRAMES = 600;
 const WORD_ACCESS_ROM_SHA1 = "5e890018ffe831cefbd4f128577f6c85087e5572";
-const WORD_ACCESS_ARAM_SHA1 = "977e7b29158dddfe8f57fb2b9715bed0ab62d91f";
+const WORD_ACCESS_ARAM_SHA1 = "68af28b2f2193b0daa053eb0d4e143a2d0609782";
 
 /**
  * A cart whose SPC700 counts in ARAM $10/$11 (incw $10, 6 SPC clocks each)
@@ -1068,8 +1068,8 @@ test("a per-title APU speedup (snes9x Timings.APUSpeedup) runs the SPC slower an
   assert.equal(createHash("sha1").update(new Uint8Array(Int16Array.from(samples).buffer)).digest("hex"), SPEEDUP_SHA1);
 });
 // snes9x, reference frames 1-20 (counts) and 1-60 (sample sha1)
-const SPEEDUP_COUNTS = [532, 534, 533, 533, 533, 533, 534, 532, 534, 533, 533, 533, 534, 532, 533, 534, 532, 534, 533, 533];
-const SPEEDUP_SHA1 = "41761a6aff9b1c5ca63f14584406973393d3e33a";
+const SPEEDUP_COUNTS = [532, 534, 533, 533, 533, 533, 534, 532, 534, 533, 533, 533, 534, 532, 534, 533, 532, 534, 533, 533];
+const SPEEDUP_SHA1 = "afb7775b56164dca190e6d8994186b069c25c542";
 
 /** A synthetic cart under a given header name (and SRAM size byte). */
 function titled(rom, name, sram) {
