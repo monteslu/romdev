@@ -294,7 +294,7 @@ const TEMPLATES = {
       describe: "REDLINE - top-down road racer: moving lane stripes, rival cars to dodge, distance score, crash + lives.",
     },
   },
-  // sync32 - monteslu's RP2350 console. No PPU/tilemap/OAM/banking: a cart is
+  // sync32 - an RP2350-based console. No PPU/tilemap/OAM/banking: a cart is
   // game_main(api) drawing into a flat 8-bit canvas, so these templates carry
   // no runtime/crt0/linker files at all (the SDK ships in
   // romdev-platform-sync32 and build({platform:'sync32'}) supplies it).

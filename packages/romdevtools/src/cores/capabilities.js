@@ -245,7 +245,7 @@ export const CAPABILITIES = {
     },
   },
   sync32: {
-    // monteslu's RP2350 console (Cortex-M33 games as .s32 ROMs), emulated by
+    // sync32, an RP2350-based console (Cortex-M33 games as .s32 ROMs), emulated by
     // s32core - a first-party pure-C interpreter (11-cart byte-exact
     // differential suite against the Unicorn reference emulator lives in the
     // s32core repo). tier:"arm" - new 32-bit tier, analysis/inspectors land

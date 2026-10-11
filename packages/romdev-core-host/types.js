@@ -192,7 +192,7 @@ export const RetroMemory = {
   LYNX_CPU_REGS:      0x190,
   LYNX_HW_REGS:       0x191,
 
-  // sync32 (s32core). The console is monteslu's own, so the core exposes
+  // sync32 (s32core). sync32 is a homebrew-only console, so the core exposes
   // exactly what a game DEVELOPER needs to debug their own cart - there are no
   // commercial ROMs here to reverse-engineer.
   SYNC32_CPU_REGS:    0x1A0,   // Cortex-M33: r0-r15, APSR, s0-s31, ITSTATE

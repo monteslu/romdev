@@ -1,7 +1,7 @@
 /* ── shmup.c - sync32 vertical shooter (complete example game) ───────────────
  *
  * A COMPLETE, working game - title screen, lives, score + persistent hi-score
- * (save slot 0), enemy waves, and a HUD - on monteslu's RP2350 console.
+ * (save slot 0), enemy waves, and a HUD - on sync32, an RP2350-based console.
  *
  * THIS FILE IS MEANT TO BE FORKED AND MODIFIED into your own game - even a
  * very different one. The markers tell you what's what:

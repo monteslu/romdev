@@ -1,7 +1,7 @@
 /* ── puzzle.c - sync32 match-4 gravity puzzle (complete example game) ──────────────
  *
  * A COMPLETE, working game - title screen, scoring, persistent hi-score
- * (save slot 0) - on monteslu's RP2350 console.
+ * (save slot 0) - on sync32, an RP2350-based console.
  *
  * THIS FILE IS MEANT TO BE FORKED AND MODIFIED into your own game. Markers:
  *   HARDWARE IDIOM (load-bearing) - how the sync32 ABI actually works.
