@@ -38,7 +38,7 @@
     "claude"
   ],
   "author": "monteslu",
-  "license": "MIT",
+  "license": "SEE LICENSE IN NOTICE",
   "engines": {
     "node": ">=24"
   },
@@ -107,6 +107,8 @@
     "!src/**/*.test.js",
     "!src/cores/wasm/**",
     "!src/toolchains/*/wasm/**",
+    "!src/analysis/wasm/**",
+    "!src/analysis/decompiler/**",
     "examples",
     "!examples/**/*.build.log",
     "!examples/**/*.gba",
