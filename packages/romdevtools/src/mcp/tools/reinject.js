@@ -370,7 +370,7 @@ const PLATFORM_REGISTRY = {
   nes:       { forms: nesPointerForms,       verdict: "raw", formats: ["raw", "packbits", "konami-rle"],
                note: "CHR-ROM tiles are stored uncompressed (2bpp planar) - raw is the common case. PackBits / Konami-RLE literal runs cover the common NES RLE dialects." },
   gb:        { forms: gbPointerForms,        verdict: "raw", formats: ["raw"],
-               note: "2bpp planar tiles often uncompressed. Pokémon-gen RLE is bit/plane-granular - NO clean byte stored escape; relocate to uncompressed space instead." },
+               note: "2bpp planar tiles often uncompressed. Some GB RLE formats are bit/plane-granular - NO clean byte stored escape; relocate to uncompressed space instead." },
   gbc:       { forms: gbPointerForms,        verdict: "raw", formats: ["raw"],
                note: "Same as GB." },
   sms:       { forms: smsPointerForms,       verdict: "literal-escape", formats: ["raw", "sega-rle"],

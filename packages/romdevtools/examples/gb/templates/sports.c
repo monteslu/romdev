@@ -1,7 +1,7 @@
 /* ── sports.c - CAROM COAST: Game Boy versus court game (complete example) ──
  *
  * A COMPLETE, working game - press-start title, 1P vs a beatable CPU on a
- * seaside court (Pong lineage), first-to-5 match flow into a result screen,
+ * seaside court (paddle-and-ball lineage), first-to-5 match flow into a result screen,
  * a PRNG rally "spin" so an idle match provably ENDS, GB APU music + SFX, a
  * window-layer fixed HUD, and a persistent RECORD in battery cart RAM (the
  * longest win streak vs the CPU - the stat a returning player chases).

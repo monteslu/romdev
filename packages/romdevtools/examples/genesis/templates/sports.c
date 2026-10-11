@@ -1,6 +1,6 @@
 /* ── sports.c - Genesis versus sports game (complete example game) ───────────
  *
- * A COMPLETE, working game - VOLT VOLLEY, a head-to-head court game (Pong
+ * A COMPLETE, working game - VOLT VOLLEY, a head-to-head court game (paddle-and-ball
  * lineage): title screen, 1P vs a beatable CPU and 2P simultaneous versus
  * (player 2 on CONTROLLER 2), first-to-5 match flow with a result screen,
  * a hardware-fixed WINDOW-plane HUD, PSG music + SFX, and a battery-backed

@@ -8,7 +8,7 @@
  * fixed HUD strip over the playfield, timed by the VDP's programmable line
  * counter.
  *
- * The game: Pong's lineage - two paddles, a bouncing ball, a netted court.
+ * The game: a paddle-and-ball game - two paddles, a bouncing ball, a netted court.
  * UP/DOWN move your paddle; deflect the ball back, score when it passes the
  * far paddle, first to 5 wins the match. The deflection angle depends on
  * WHERE the ball hits the paddle (centre = flat, edges = steep) - and a steep

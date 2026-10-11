@@ -1,4 +1,4 @@
-; ── paddle.asm - Atari 2600 Pong-style paddle scaffold ────────────────
+; ── paddle.asm - Atari 2600 paddle-and-ball scaffold ────────────────
 ;
 ; Two paddles (player 0 = left, player 1 = right), one ball (BL),
 ; symmetric playfield with top + bottom walls. Joystick port A up/down
@@ -260,7 +260,7 @@ MAIN:
   ; TWO scanlines and splits the work across two WSYNCs, doubling the
   ; budget to ~152 cycles. 96 passes × 2 lines = 192 visible lines.
   ; Y counts 192→2 in steps of 2; paddles/ball move in 2px steps (fine
-  ; for Pong). The branchless "LDA #off / CMP / BCS skip / LDA #on" form
+  ; for a paddle game). The branchless "LDA #off / CMP / BCS skip / LDA #on" form
   ; also drops the JMPs the old code paid every line.
   LDY #192
 .draw:

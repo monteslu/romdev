@@ -732,7 +732,7 @@ const TEMPLATES = {
         ],
       },
       sports: {
-        ...mk("sports", "SPIKE SURGE - complete PC Engine versus court game (Pong lineage): title/1P-vs-CPU/2P-simultaneous-versus shell, first-to-5 match flow with a result screen, beatable chase-AI CPU, PRNG rally spin so idle matches provably END, in-session best-win-streak record (a bare HuCard can't save - BRAM is peripheral-only; documented in-file), 3-song PSG music + SFX. Real 2P simultaneous versus: P2 on the TurboTap (host-enabled port 1, verified). Court is the VDC BAT tilemap; paddles + ball are SATB sprites."),
+        ...mk("sports", "SPIKE SURGE - complete PC Engine versus court game (paddle-and-ball lineage): title/1P-vs-CPU/2P-simultaneous-versus shell, first-to-5 match flow with a result screen, beatable chase-AI CPU, PRNG rally spin so idle matches provably END, in-session best-win-streak record (a bare HuCard can't save - BRAM is peripheral-only; documented in-file), 3-song PSG music + SFX. Real 2P simultaneous versus: P2 on the TurboTap (host-enabled port 1, verified). Court is the VDC BAT tilemap; paddles + ball are SATB sprites."),
         players: "1-2 (1P vs beatable CPU, or 2P simultaneous versus; P2 via TurboTap port 1, host-enabled - verified port-1 reaches P2)",
         sram: "none - a bare HuCard cannot save; BRAM (bank $F7) is PERIPHERAL-ONLY on real hardware (CD-ROM² unit / Tennokoe Bank / Memory Base 128). In-session best-win-streak only, like the 2600/Lynx; the BRAM mapping + write-lock are documented in-file as the real-hardware path.",
         mechanics: ["paddle/ball court physics", "edge-deflection parry angle", "1P beatable chase-AI CPU", "2P simultaneous versus", "first-to-5 match + result screen", "PRNG rally spin (idle matches end)", "in-session win-streak record (HuCards can't save)"],
@@ -1072,7 +1072,7 @@ TEMPLATES.gbc = {
   sports: {
     main: "templates/sports.c", runtime: GBC_RUNTIME,
     lang: GBC_LANG, ext: ".gbc",
-    describe: "HUE HUSTLE - Game Boy Color versus court game (Pong lineage) to the full contract: press-start title, 1P vs a beatable chase-AI CPU, first-to-5 match flow into a result screen, a PRNG +/-1 rally spin so an idle match provably ENDS, GB APU ch1 music + ch2 SFX, window-layer fixed HUD - and the GBC SIGNATURE: TRUE per-tile color. The two paddles are told apart by distinct CGB OBJ PALETTE (azure you / red CPU via OCPS), not DMG shade; the court is a real color scene (teal floor / gold rails / violet net) as CGB palettes assigned per BG cell through the VRAM bank-1 attribute map. Longest 1P win streak persists to battery SRAM (MBC1+RAM+BATTERY, magic+checksum, verified across power cycles). HUD/result commits write bank-0 tiles only and stage text out of the vblank slice. dataLoc 0xC200. 1P by design (link-cable 2P not emulatable single-instance).",
+    describe: "HUE HUSTLE - Game Boy Color versus court game (paddle-and-ball lineage) to the full contract: press-start title, 1P vs a beatable chase-AI CPU, first-to-5 match flow into a result screen, a PRNG +/-1 rally spin so an idle match provably ENDS, GB APU ch1 music + ch2 SFX, window-layer fixed HUD - and the GBC SIGNATURE: TRUE per-tile color. The two paddles are told apart by distinct CGB OBJ PALETTE (azure you / red CPU via OCPS), not DMG shade; the court is a real color scene (teal floor / gold rails / violet net) as CGB palettes assigned per BG cell through the VRAM bank-1 attribute map. Longest 1P win streak persists to battery SRAM (MBC1+RAM+BATTERY, magic+checksum, verified across power cycles). HUD/result commits write bank-0 tiles only and stage text out of the vblank slice. dataLoc 0xC200. 1P by design (link-cable 2P not emulatable single-instance).",
     players: "1 (handheld - link-cable 2P not emulatable single-instance)",
     sram: "MBC1+RAM+BATTERY, 8KB at $A000 ($0A-gated, magic+checksum), verified across hardReset",
     mechanics: ["paddle/ball physics with edge-deflection", "beatable chase-AI CPU", "first-to-5 match flow", "PRNG rally spin (idle match ends)", "battery win-streak record", "title/play/result state machine"],
@@ -1517,7 +1517,7 @@ TEMPLATES.c64 = {
   sports: {
     main: "templates/sports.c", runtime: C64_RUNTIME, runtimeDirs: C64_VENDOR_DIRS,
     lang: C64_LANG, ext: ".prg",
-    describe: "DELTA DUEL - complete C64 head-to-head court sports (Pong lineage): title shell with 1P-vs-beatable-CPU / 2P-SIMULTANEOUS-versus select (P1 control port 2, P2 control port 1), first-to-5 match flow into a result screen, beatable chase-AI CPU, a +/-1 PRNG deflection spin so idle 1P rallies provably END, best 1P-vs-CPU win-streak record persisted via 1541 disk save when run from a .d64 (in-session as a bare .prg), 2-voice SID music with the filter sweep + SFX, raster-IRQ split fixed HUD. Paddles + ball are VIC-II HARDWARE SPRITES (9th-X-bit staging for the right paddle past X=255); the court is static screen-RAM chars painted once per match (no per-frame repaint).",
+    describe: "DELTA DUEL - complete C64 head-to-head court sports (paddle-and-ball lineage): title shell with 1P-vs-beatable-CPU / 2P-SIMULTANEOUS-versus select (P1 control port 2, P2 control port 1), first-to-5 match flow into a result screen, beatable chase-AI CPU, a +/-1 PRNG deflection spin so idle 1P rallies provably END, best 1P-vs-CPU win-streak record persisted via 1541 disk save when run from a .d64 (in-session as a bare .prg), 2-voice SID music with the filter sweep + SFX, raster-IRQ split fixed HUD. Paddles + ball are VIC-II HARDWARE SPRITES (9th-X-bit staging for the right paddle past X=255); the court is static screen-RAM chars painted once per match (no per-frame repaint).",
     players: "1-2 (2P = simultaneous versus; P1 control port 2, P2 control port 1)",
     sram: "1541 DISK SAVE - the honest C64 medium (no battery SRAM): the game writes a 2-byte record to a SEQ file 'HI' on drive 8 via the KERNAL (cbm_open/read/write), VICE commits it into the live .d64 (true-drive write-back). Requires running from a .d64 (state({op:exportDisk}) captures the save; reload restores it); as a bare .prg the save is a silent no-op (in-session only). (record = longest 1P win streak vs the CPU).",
     mechanics: ["1P vs beatable chase-AI CPU", "2P simultaneous versus", "first-to-5 match flow + result screen", "PRNG deflection spin (rallies END)", "longest-win-streak record", "title/play/result state machine"],
@@ -2228,7 +2228,7 @@ TEMPLATES.gba = {
     runtimeDirs: GBA_LIBTONC_RUNTIME_DIRS,
     lang: GBA_TONC_LANG,
     ext: ".gba",
-    describe: "RALLY ROVER - complete GBA versus court game (Pong lineage): press-start title, 1P vs a beatable CPU (chases at a third your speed with a dead-zone - steep edge-deflections beat it), first-to-5 match flow into a result screen, a PRNG +/-1 rally spin so an idle match provably ENDS (the deterministic-versus footgun, taught in-file), DMA/PSG music + SFX, vivid 15-bit court (blue vs red teams via OBJ palbank, white net/rails/ball). Persistent RECORD = longest win streak vs the CPU in cartridge SRAM ('SRAM_V' marker, byte-wide bus, magic+checksum, verified across power cycles). KEY IDIOM: the score is surfaced onto hardware as BG score-pip tiles so headless verification reads it from VRAM (GBA C globals are not host-readable). 1P by design - link-cable 2P not emulatable single-instance (stated honestly in-file).",
+    describe: "RALLY ROVER - complete GBA versus court game (paddle-and-ball lineage): press-start title, 1P vs a beatable CPU (chases at a third your speed with a dead-zone - steep edge-deflections beat it), first-to-5 match flow into a result screen, a PRNG +/-1 rally spin so an idle match provably ENDS (the deterministic-versus footgun, taught in-file), DMA/PSG music + SFX, vivid 15-bit court (blue vs red teams via OBJ palbank, white net/rails/ball). Persistent RECORD = longest win streak vs the CPU in cartridge SRAM ('SRAM_V' marker, byte-wide bus, magic+checksum, verified across power cycles). KEY IDIOM: the score is surfaced onto hardware as BG score-pip tiles so headless verification reads it from VRAM (GBA C globals are not host-readable). 1P by design - link-cable 2P not emulatable single-instance (stated honestly in-file).",
     players: "1 (handheld - link-cable 2P not emulatable single-instance)",
     sram: "cartridge SRAM record at 0x0E000000 - longest CPU-mode win streak ('SRAM_V' marker, byte-wide bus, magic+checksum; survives power cycles)",
     mechanics: ["versus match flow (first-to-5, result screen)", "beatable CPU opponent (speed-capped ball chase with dead zone)", "edge-hit ball deflection with PRNG spin", "serve pause + alternating serve angle", "battery win-streak record"],
@@ -2306,7 +2306,7 @@ TEMPLATES.gba = {
 // forces "race the beam" rendering. Three templates here that ARE
 // idiomatic 2600:
 //   default        - single sprite, blue background, joystick movement
-//   paddle         - Pong-style: two paddles + ball + walls
+//   paddle         - paddle-and-ball: two paddles + ball + walls
 //   single_screen  - dodge-the-falling-pixels using P0 + M0
 //   music_demo     - two-voice TIA chiptune
 //   mini_invaders  - gallery shooter via P0 cannon + P1/NUSIZ1 invaders + M0 shot
@@ -2323,7 +2323,7 @@ TEMPLATES.atari2600 = {
     runtime: [],
     lang: "6507 assembly (dasm)",
     ext: ".a26",
-    describe: "Pong-style scaffold. Two 8-pixel paddles (P0 + P1), one 2-pixel ball (BL), top + bottom walls (PF). Left paddle on joystick, right paddle AI chases ball Y. Demonstrates multi-object positioning via RESP0/RESP1/RESBL.",
+    describe: "Paddle-and-ball scaffold. Two 8-pixel paddles (P0 + P1), one 2-pixel ball (BL), top + bottom walls (PF). Left paddle on joystick, right paddle AI chases ball Y. Demonstrates multi-object positioning via RESP0/RESP1/RESBL.",
   },
   single_screen: {
     main: "templates/single_screen.asm",
@@ -2344,11 +2344,11 @@ TEMPLATES.atari2600 = {
     runtime: [],
     lang: "6507 assembly (dasm)",
     ext: ".a26",
-    describe: "Gallery-shooter (Space-Invaders-shaped) done with the RIGHT TIA objects, not playfield 'barcode' bars: P0 = double-width cannon, P1 + NUSIZ1=%011 = a row of THREE hardware-replicated invaders (one GRP1 write draws all three), M0 = the player shot. Aliens march left/right and drop a step at the edges; fire with the joystick button. The honest 2600-idiomatic way to do this genre - extend by reusing P1 lower for shields or adding M1 as an alien bomb. Verified: marches + renders cannon/aliens/shot.",
+    describe: "Gallery-shooter (marching-formation) done with the RIGHT TIA objects, not playfield 'barcode' bars: P0 = double-width cannon, P1 + NUSIZ1=%011 = a row of THREE hardware-replicated invaders (one GRP1 write draws all three), M0 = the player shot. Aliens march left/right and drop a step at the edges; fire with the joystick button. The honest 2600-idiomatic way to do this genre - extend by reusing P1 lower for shields or adding M1 as an alien bomb. Verified: marches + renders cannon/aliens/shot.",
   },
   // ── Genre games (all five, complete to the contract) ───────────────
-  // shmup + sports are the console's native idioms (Space Invaders /
-  // Pong); racing (top-down) and platformer (single-screen) are honest,
+  // shmup + sports are the console's native idioms (gallery shooter /
+  // paddle-and-ball); racing (top-down) and platformer (single-screen) are honest,
   // period-correct fits. puzzle is a MEMORY MATCH-PAIRS game (TILE TWINS),
   // NOT match-3: a 6x12 multi-colour falling-block grid is not renderable
   // on a tilemap-less, one-COLUPF-per-line TIA - but a static, turn-based
@@ -2412,7 +2412,7 @@ TEMPLATES.atari2600 = {
     runtime: [],
     lang: "6507 assembly (dasm)",
     ext: ".a26",
-    describe: "PERCH PATROL - complete Atari 2600 single-screen platformer (Pitfall! / Montezuma / Kangaroo idiom) to the full contract: a drawn PERCH/PATROL title banner (asymmetric playfield, not text mode), title/play/game-over state machine, P0 hero with fixed-point gravity + a jump arc (FIRE), land-on-ledge collision tested in CODE against a per-row playfield LEVEL table (the same table the kernel draws, so picture and physics never disagree), a bouncing coin (BL) to grab and a patrolling spike (M0) to dodge via TIA hardware-collision, score + in-session hi-score on the title (honest no-battery), TIA SFX + a title jingle + game-over tune, RIOT-timer pacing, SBC-#15 RESP/HMOVE positioning. The 2600 has NO hardware scroll/tilemap - the honest platformer is a FIXED screen (real games flip whole screens), so this one is too.",
+    describe: "PERCH PATROL - complete Atari 2600 single-screen platformer (the classic 2600 single-screen idiom) to the full contract: a drawn PERCH/PATROL title banner (asymmetric playfield, not text mode), title/play/game-over state machine, P0 hero with fixed-point gravity + a jump arc (FIRE), land-on-ledge collision tested in CODE against a per-row playfield LEVEL table (the same table the kernel draws, so picture and physics never disagree), a bouncing coin (BL) to grab and a patrolling spike (M0) to dodge via TIA hardware-collision, score + in-session hi-score on the title (honest no-battery), TIA SFX + a title jingle + game-over tune, RIOT-timer pacing, SBC-#15 RESP/HMOVE positioning. The 2600 has NO hardware scroll/tilemap - the honest platformer is a FIXED screen (real games flip whole screens), so this one is too.",
     players: "1 (honest - single-screen kernel budget; an enemy/second hero is left as a fork)",
     sram: "none - no persistent storage on real 2600 hardware; hi-score is in-session only",
     mechanics: ["gravity + jump arc", "land-on-ledge collision in CODE (PF LEVEL table)", "coin pickup (BL) + spike dodge (M0) via TIA collision", "score + session hi-score", "title/play/game-over state machine"],
@@ -2539,7 +2539,7 @@ TEMPLATES.atari7800 = {
     runtime: ATARI7800_SFX_RUNTIME,
     lang: "C (cc65)",
     ext: ".a78",
-    describe: "FLUX FENCE - complete Atari 7800 versus court game (Pong lineage): title/1P-vs-beatable-CPU/2P-simultaneous-versus shell (P2 on joystick port 1), first-to-5 match flow with a result screen, PRNG rally spin so an idle match always ENDS, two-voice TIA music with SFX voice-stealing, in-session record (longest 1P-vs-CPU win streak). The two paddles, the ball, and the dashed centre net are all MARIA display-list objects emitted into the per-scanline pool - a court is the sparse/easy case of the same object budget the 7800 shmup spends on a swarm. HONEST CAVEATS: no hardware tilemap; prosystem has no HSC, so the record is in-session only (the HSC path is documented in-file). #pragma optimize(on) is load-bearing.",
+    describe: "FLUX FENCE - complete Atari 7800 versus court game (paddle-and-ball lineage): title/1P-vs-beatable-CPU/2P-simultaneous-versus shell (P2 on joystick port 1), first-to-5 match flow with a result screen, PRNG rally spin so an idle match always ENDS, two-voice TIA music with SFX voice-stealing, in-session record (longest 1P-vs-CPU win streak). The two paddles, the ball, and the dashed centre net are all MARIA display-list objects emitted into the per-scanline pool - a court is the sparse/easy case of the same object budget the 7800 shmup spends on a swarm. HONEST CAVEATS: no hardware tilemap; prosystem has no HSC, so the record is in-session only (the HSC path is documented in-file). #pragma optimize(on) is load-bearing.",
     players: "1-2 (1P vs beatable CPU; 2P simultaneous versus, P1 port 0 / P2 port 1)",
     sram: "none - prosystem has no High Score Cart (SAVE_RAM size 0); in-session win-streak record with the HSC path documented",
     mechanics: ["1P vs beatable CPU", "2P simultaneous versus", "first-to-5 match -> result screen", "PRNG rally spin (idle match ends)", "angle-deflection paddle physics", "in-session win-streak record"],

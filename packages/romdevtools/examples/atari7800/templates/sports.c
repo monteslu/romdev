@@ -3,7 +3,7 @@
  * FLUX FENCE - a COMPLETE, working game: title screen, 1P vs a beatable CPU
  * and 2P SIMULTANEOUS VERSUS (P2 on JOYSTICK PORT 1), first-to-5 match flow
  * with a result screen, two-voice TIA music + SFX, and an in-session record
- * (longest win streak vs the CPU). It's the Pong lineage rebuilt on MARIA: the
+ * (longest win streak vs the CPU). It's the paddle-and-ball lineage rebuilt on MARIA: the
  * two paddles, the ball, and the centre net are all just display-list OBJECTS
  * MARIA DMAs per scanline - the same per-line object pool the 7800 shmup uses
  * for a swarm, here spent on a sparse court (≤2 objects ever share a line, so

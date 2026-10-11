@@ -1,6 +1,6 @@
 /* ── sports.c - SNES head-to-head court game (complete example game) ─────────
  *
- * A COMPLETE, working game - NET SURGE, a head-to-head court duel (Pong
+ * A COMPLETE, working game - NET SURGE, a head-to-head court duel (paddle-and-ball
  * lineage): title screen, 1P vs a beatable CPU and 2P simultaneous versus
  * (controller 2), first-to-5 match flow with a result screen, SPC music +
  * SFX, a PRNG that keeps rallies from looping forever, and a battery-SRAM

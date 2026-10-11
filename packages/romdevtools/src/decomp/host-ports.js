@@ -274,7 +274,7 @@ export async function buildAssetContainer(layoutPath) {
   return Buffer.concat(parts);
 }
 
-// -- Dr. Mario 64-style N64 build scripts (decompals tooling) --------------
+// -- decompals-style N64 build scripts ---------------------------------------
 
 /** inc_from_bin.py: bytes as a C initializer, 8 per line with offsets. */
 export function incFromBin(bytes) {

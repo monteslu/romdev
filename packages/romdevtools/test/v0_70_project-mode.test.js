@@ -1,6 +1,6 @@
 // v0.70.0 feedback: project mode ergonomics for an existing disassembly.
 //  #2 - honor `options`/`defines` (asar --define was silently dropped)
-//  #3 - `entry` override for a top file that isn't main.* (e.g. smw.asm)
+//  #3 - `entry` override for a top file that isn't main.* (e.g. game.asm)
 //  #4 - stage subdirectory assets recursively (col/misc/x.pal wasn't read)
 // These live in the SHARED project path (readProjectDir/buildProjectCore), so
 // the fixes benefit every platform, not just SNES.
@@ -18,21 +18,21 @@ function parse(res) { return JSON.parse(res.content.find((c) => c.type === "text
 test("project mode: entry override + --define + recursive subdir asset (SNES asar)", { timeout: 120000 }, async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "romdev-v70-"));
   await mkdir(path.join(dir, "gfx"), { recursive: true });
-  // entry is smw.asm (NOT main.asm); uses !_VER from a --define; incbins a subdir asset
-  await writeFile(path.join(dir, "smw.asm"),
+  // entry is game.asm (NOT main.asm); uses !_VER from a --define; incbins a subdir asset
+  await writeFile(path.join(dir, "game.asm"),
     "lorom\norg $008000\nprint \"VER=\", dec(!_VER)\nStart:\n  sei\n  incbin \"gfx/blob.bin\"\n.loop:\n  jmp .loop\norg $00FFFC\ndw Start\n");
   // a sibling .asm must route as an include, not a second source TU
   await writeFile(path.join(dir, "extra.asm"), "; sibling, not a 2nd source\n");
   await writeFile(path.join(dir, "gfx", "blob.bin"), Buffer.from([1, 2, 3, 4]));
 
   const res = await buildProjectCore({
-    path: dir, platform: "snes", entry: "smw.asm",
+    path: dir, platform: "snes", entry: "game.asm",
     defines: { _VER: 1 }, outputPath: path.join(dir, "out.smc"),
   });
   const j = parse(res);
   try {
     assert.equal(j.ok, true, "build should succeed:\n" + (j.log || ""));
-    assert.deepEqual(j.sourcesBuilt, ["smw.asm"], "only the entry is a source");
+    assert.deepEqual(j.sourcesBuilt, ["game.asm"], "only the entry is a source");
     assert.ok((j.binaryIncludes || []).includes("gfx/blob.bin"), "subdir asset must be staged: " + JSON.stringify(j.binaryIncludes));
     assert.ok(/VER=1/.test(j.log || ""), "--define _VER=1 must reach asar (log shows VER=1):\n" + (j.log || ""));
   } finally {

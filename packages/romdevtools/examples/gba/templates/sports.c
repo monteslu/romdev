@@ -1,7 +1,7 @@
 /* ── sports.c - Game Boy Advance versus court game (complete game) ────────────
  *
  * RALLY ROVER - a COMPLETE, working game: press-start title, 1P vs a beatable
- * CPU on a netted court (Pong lineage), first-to-5 match flow with a result
+ * CPU on a netted court (paddle-and-ball lineage), first-to-5 match flow with a result
  * screen, a PRNG rally "spin" so an idle match provably ENDS, music + SFX, and
  * a persistent RECORD in cartridge SRAM (longest win streak vs the CPU). The
  * court and sprites are VIVID - the GBA's 15-bit palette gives 32768 colours,

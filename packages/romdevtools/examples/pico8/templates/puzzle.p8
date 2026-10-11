@@ -1,7 +1,7 @@
 pico-8 cartridge // http://www.pico-8.com
 version 18
 __lua__
--- color drop - a falling-column match puzzle (Columns-style) scaffold
+-- color drop - a falling-column match puzzle scaffold
 -- genre example for romdev/pico8. THE GAME: a vertical column of 3 jewels
 -- falls into an 8-wide well. move left/right, soft-drop (down), hard-drop
 -- (x), and CYCLE the 3 colors (o). match 3+ of one color horizontally,

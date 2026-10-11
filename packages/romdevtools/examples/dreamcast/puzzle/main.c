@@ -1,4 +1,4 @@
-/* Dreamcast PUZZLE demo - a falling-block (Tetris-like) board that fills + clears
+/* Dreamcast PUZZLE demo - a falling-block board that fills + clears
  * rows on a loop. Self-animating (no input). Renders on the PowerVR2 framebuffer. */
 #include "dc.h"
 

@@ -4,7 +4,7 @@
  * 1P time trial and 2P relay duel, lap timing, persistent best time (battery
  * SRAM), music + SFX, and the SNES's signature hardware feature done for
  * real: a ROTATING PERSPECTIVE Mode 7 ground plane. Steering yaws the
- * camera and the whole world swings around the car, F-Zero style.
+ * camera and the whole world swings around the car, like the classic Mode 7 racers.
  *
  * THIS FILE IS MEANT TO BE FORKED AND MODIFIED into your own game - even a
  * very different one. The markers tell you what's what:

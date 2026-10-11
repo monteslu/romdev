@@ -252,7 +252,7 @@ export function decodeGenesisPSG(blob) {
 //
 // gpgx's YM2612 internal struct is large and implementation-private. We
 // decode what's safely reachable: the dacen flag + dacout value (DAC sample
-// stream - the "PCM voice" Genesis games like Streets of Rage 2 use). Full
+// stream - the "PCM voice" many Genesis games use). Full
 // per-channel envelope state requires walking FM_CH/FM_SLOT internals
 // whose layout isn't stable across gpgx versions; that's deferred.
 //

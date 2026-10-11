@@ -1,6 +1,6 @@
 /* ── sports.c - C64 head-to-head court sports (complete example game) ─────────
  *
- * DELTA DUEL - a COMPLETE, working game (Pong lineage): a title screen with
+ * DELTA DUEL - a COMPLETE, working game (paddle-and-ball lineage): a title screen with
  * 1P vs a BEATABLE CPU and 2P SIMULTANEOUS VERSUS (both paddles live at once,
  * P1 on CONTROL PORT 2, P2 on CONTROL PORT 1), a first-to-5 match into a
  * result screen, in-session best 1P-vs-CPU win streak behind the gated
@@ -101,7 +101,7 @@ static const uint8_t ball_sprite[64] = {   /* a small round-ish blob */
  * THE RASTER-IRQ SPLIT - the C64's classic "fixed status bar over a moving
  * world" trick (and the gateway drug to all raster effects). Here it pins a
  * HUD bar at the top while the court lives below it. The VIC-II has ONE
- * $D016 fine-scroll for the whole frame; we don't scroll the court (a Pong
+ * $D016 fine-scroll for the whole frame; we don't scroll the court (a paddle
  * arena holds still), but the split is STILL the idiomatic way to guarantee
  * the HUD's first rows render in a known, fixed scroll state regardless of
  * what the rest of the frame does - and it gives you the per-frame heartbeat
@@ -540,7 +540,7 @@ static void draw_bar_stats(void) {
  * match start (a static screen - free to write directly), never during play.
  * Top + bottom rails frame the court; a dashed net runs down the centre; a
  * faint floor speckle so the arena reads as a court instead of a black void.
- * (Compare the puzzle template's cell-diff: a Pong court doesn't change during
+ * (Compare the puzzle template's cell-diff: a paddle court doesn't change during
  * play, so it needs NO per-frame repaint machinery at all.) ── */
 #define CH_RAIL  0xA0   /* reverse-space solid block = rail */
 #define CH_NET   0x5D   /* vertical-bar glyph = centre net */

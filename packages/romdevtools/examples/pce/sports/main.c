@@ -1,6 +1,6 @@
 /* ── main.c - PC Engine versus court game (complete example game) ────────────
  *
- * SPIKE SURGE - a COMPLETE, working head-to-head court game (Pong lineage):
+ * SPIKE SURGE - a COMPLETE, working head-to-head court game (paddle-and-ball lineage):
  * title screen, 1P vs a beatable CPU and 2P SIMULTANEOUS VERSUS (P1 on the
  * stock pad, P2 on the TurboTap's second pad), first-to-5 match flow with a
  * result screen, PSG music + SFX, and an in-session record (your longest win

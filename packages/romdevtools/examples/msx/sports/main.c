@@ -8,7 +8,7 @@
  * from the three independent screen-2 color thirds plus a one-tile vertical
  * "pulse" gradient down the net - costing zero extra tiles.
  *
- * The game (Pong lineage): a ball rallies between two paddles on a netted
+ * The game (paddle-and-ball lineage): a ball rallies between two paddles on a netted
  * court. UP/DOWN move your paddle; where the ball strikes the paddle sets the
  * return angle (centre = flat, edges = steep). Steep edge returns outrun the
  * half-speed CPU - that is exactly how a human beats it. First side to 5 wins.

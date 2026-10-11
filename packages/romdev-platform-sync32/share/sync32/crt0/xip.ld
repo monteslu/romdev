@@ -5,7 +5,7 @@ MEMORY {
   /* The top of the game region is the stack, which grows DOWN from
      0x20080000. S32_STACK is how much is reserved for it; the default 16 KB
      suits a game whose call depth is its own, but a ported engine can want
-     far more (Doom's BSP recursion measured over 23 KB), so a cart can raise
+     far more (one BSP renderer's recursion measured over 23 KB), so a cart can raise
      it with -Wl,--defsym=S32_STACK=N at the cost of its own RAM. */
   GAME (rwx) : ORIGIN = 0x20030000, LENGTH = 0x50000 - S32_STACK
 }

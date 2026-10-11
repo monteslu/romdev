@@ -1,6 +1,6 @@
 /* ── sports.c - Atari Lynx 1P-vs-CPU court game (complete example game) ───────
  *
- * A COMPLETE, working game - PULSE PARRY, a head-to-head court game (Pong
+ * A COMPLETE, working game - PULSE PARRY, a head-to-head court game (paddle-and-ball
  * lineage) fit to the Lynx's tiny 160x102 screen: title screen, 1P vs a
  * beatable CPU, first-to-N match flow with a result screen, in-session
  * record, MIKEY music + SFX, AND the Lynx's signature party trick:

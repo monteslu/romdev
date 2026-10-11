@@ -1,6 +1,6 @@
 /* ── sports.c - NES versus sports game (complete example game) ───────────────
  *
- * A COMPLETE, working game - COURT CLASH, a head-to-head court game (Pong
+ * A COMPLETE, working game - COURT CLASH, a head-to-head court game (paddle-and-ball
  * lineage): title screen, 1P vs CPU and 2P simultaneous versus, first-to-5
  * match flow with a result screen, queued-text HUD, music + SFX, and a
  * battery-backed record (longest win streak vs the CPU).

@@ -10,7 +10,7 @@
 ;
 ;   1. NUSIZ REPLICATION (the enemy formation) - ONE GRP1 write paints
 ;      THREE invaders. NUSIZ1 = %011 (three medium-spaced copies) is how
-;      Space Invaders / Galaxian / Demon Attack drew a whole row of aliens
+;      classic 2600 gallery shooters drew a whole row of aliens
 ;      from a single 8-pixel sprite. This is the genre's defining idiom and
 ;      the reason the 2600 is GOOD at this genre - playfield "barcode" bars
 ;      would read as stripes, not invaders. We replicate a 2x2 BLOCK of six

@@ -93,7 +93,7 @@ function svpPlacement(img) {
 
 /**
  * gpgx pads the ROM to a power of two of at least 64KB with $FF and mirrors
- * it (md_cart_init: cart.mask); the Sonic & Knuckles cart is not mirrored.
+ * it (md_cart_init: cart.mask); the lock-on cart is not mirrored.
  * @param {Uint8Array} img
  */
 function padRom(img) {
@@ -157,7 +157,7 @@ function realChecksum(img) {
  * Backup RAM as gpgx's sram_init + md_cart_init set it up: from the "RA"
  * header block, the product-code fixes, or by default 64KB at $200000 for a
  * ROM of 2MB or less; mapped at power-on when it does not overlap the ROM
- * (Sonic 3 excepted), otherwise switched in by $A130F1.
+ * (one product-code exception), otherwise switched in by $A130F1.
  * @param {Uint8Array} img normalised ROM
  */
 export function sramConfig(img) {

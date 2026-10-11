@@ -5,7 +5,7 @@
  * control and a steerable car, a best-distance record, MIKEY music + SFX, AND
  * the Lynx's signature party trick: HARDWARE SPRITE SCALING used for PSEUDO-3D
  * DEPTH. Obstacle cars are Suzy scalable sprites that ENTER tiny at the far
- * horizon and SWELL as they rush toward you - an OutRun-ish "coming at you"
+ * horizon and SWELL as they rush toward you - an arcade-racer "coming at you"
  * read built from real hardware scaling, not Mode-7 (the Lynx has no affine
  * background; this is honest sprite scaling, see the HARDWARE IDIOM note).
  *

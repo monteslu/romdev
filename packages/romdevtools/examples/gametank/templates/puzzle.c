@@ -1,7 +1,7 @@
 /* ── puzzle.c - CHROMA WELL: GameTank falling-jewel matcher (complete example) ──
  *
  * A COMPLETE, working game on the bundled GameTank SDK draw-queue runtime, in the
- * Columns mold: a vertical COLUMN OF 3 JEWELS falls as a unit into an 8-wide ×
+ * falling-column match mold: a vertical COLUMN OF 3 JEWELS falls as a unit into an 8-wide ×
  * 13-tall well. Move it left/right, CYCLE the three colors (A / B), soft-drop
  * (Down), hard-drop (Start). Line up 3+ of one color horizontally, vertically, or
  * DIAGONALLY to clear them; gravity pulls survivors down, which can CHAIN into

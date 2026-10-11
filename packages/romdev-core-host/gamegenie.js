@@ -114,7 +114,7 @@ export function encodeNesGameGenie({ address, value, compare }) {
      * (GATKGATX-style spellings) is a mis-published code, not a convention.
      * An earlier version left it clear on the strength of that outlier,
      * which made every emitted 8-letter code differ from its canonical
-     * published spelling by exactly this bit (SLZPLOVS for Contra's
+     * published spelling by exactly this bit (SLZPLOVS for a published
      * SLXPLOVS, and so on).
      *
      * Decoders are forgiving - fceumm branches on length and masks the bit
