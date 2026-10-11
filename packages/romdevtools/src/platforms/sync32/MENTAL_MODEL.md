@@ -1,6 +1,7 @@
 # sync32 - mental model
 
-A 32-bit console with a **flat framebuffer and a function-pointer API**. If you
+sync32 is an open RP2350-based console: a 32-bit machine with a **flat
+framebuffer and a function-pointer API** (cart extension `.s32`). If you
 have written for the 8- and 16-bit platforms in this tree, unlearn the reflexes:
 there are no hardware registers to poke, no VRAM to bank, no tilemap, no
 scanline timing to hit. A game is an ARM binary that receives a struct of
@@ -126,10 +127,48 @@ Compilation is the WASM `arm-none-eabi` toolchain targeting Cortex-M33; the SDK
 crt0, linker scripts and `sync32.h` ship in `romdev-platform-sync32`, so nothing
 external is needed. The result is a launchable `.s32`.
 
+`mode` is `'ram'` (default) or `'xip'` (see "Memory modes" below). The whole
+pipeline is WASM (cc1/as/ld/objcopy plus a JS packer): no native gcc, no Python.
+
 A game with **resources** passes `data` (or `dataPaths`) and gets the archive
 form instead - `main.s32e` + `info.txt` + your files in one tar, because a game
 that reads through the disk API needs its namespace to travel with it. Set
-`api: 2` when you use `disk_*`.
+`api: 2` when you use `disk_*`. **To RUN such a game in romdev, build it with
+`form:'folder'`**: the core loads a bare executable plus a sibling `<name>/`
+data directory and does not unpack the `archive` tar you would ship.
+
+**Start from an example.** All five genre games ship
+(`sync32/shmup|platformer|puzzle|sports|racing`). Fork one, then build the
+project in one call:
+
+```js
+examples({ op:'fork', example:'sync32/shmup', name:'mygame', path:'/abs/path/to/projects' })
+build({ output:'project', path:'/abs/path/to/projects/mygame' })
+```
+
+## Inspecting a running cart
+
+- **`memory({op:'read', region:'system_ram'})`** is the live 520 KB SRAM at
+  `0x20000000` (globals, stack, and in `ram` mode the code), so
+  `memory({op:'snapshot'|'diff'|'search'})` and watchpoints all work on it.
+  `sync32_canvas` is the framebuffer, `sync32_palette` the palette.
+- **`cpu({op:'read'})`** decodes r0-r15 + APSR + the FPv5-SP registers. There
+  is **no `execPc`**: the core is an interpreter, so r15 is already the next
+  instruction.
+- **`palette({source:'live'})`** reads the 256-entry RGB565 table.
+- **Sprite sheets** are memory regions: the first is `sync32_sheet0`, and sheet
+  n is region id `0x1B0+n`.
+- **Not available:** `sprites({op:'inspect'})`, `background` and `decompile`.
+  There is no OAM or tilemap to decode, and no commercial ROMs to
+  reverse-engineer.
+
+### Driving input over MCP
+
+The core maps `input({op:'set'})` button names **straight through** to the
+`S32_PAD_*` bits: `{a}`→`S32_PAD_A`, `{b}`→`S32_PAD_B`, `{x}`/`{y}`, `{l}`/`{r}`,
+`{start}`/`{select}` and the d-pad. Spatial names resolve as east→A, south→B,
+north→X, west→Y. Ports 0-3 are the four pads. `input({op:'layout',
+platform:'sync32'})` has the exact map.
 
 ## Freestanding, and what that means
 

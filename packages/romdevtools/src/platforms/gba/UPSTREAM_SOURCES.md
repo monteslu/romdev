@@ -1,12 +1,12 @@
 # GBA - source you can read
 
-Trust hierarchy (try in order before filing a feedback round):
+Trust hierarchy (try in order before filing an issue):
 
 1. **Bundled examples** (`examples/gba/templates/*.c`) - verified
    compile + run. Start here.
 2. **Bundled runtime source** (`(shipped in romdev-platform-gba) share/gba/c/gba_sfx.c`) -
-   our APU wrapper. Read when sfx isn't doing what you expect.
-3. **Bundled library source** - libtonc + libgba + maxmod (R58):
+   the bundled APU wrapper. Read when sfx isn't doing what you expect.
+3. **Bundled library source** - libtonc + libgba + maxmod:
 
    | Library | Local source | Read this when |
    |---|---|---|
@@ -37,5 +37,5 @@ Trust hierarchy (try in order before filing a feedback round):
 - "What does `irqInit` install?" → `libgba/src/interrupt.c` (gnu_as section)
 - "How does maxmod's IRQ-driven mixer work?" → `maxmod/asm/mp_mixer_gba.s`
 - "Why does my BG3 show garbage on mGBA?" → GBATEK section 8 (Video)
-- "Does the bundled `gba_sfx_tone` set the trigger bit?" → our
+- "Does the bundled `gba_sfx_tone` set the trigger bit?" → the bundled
   `gba_sfx.c` source (50 lines).

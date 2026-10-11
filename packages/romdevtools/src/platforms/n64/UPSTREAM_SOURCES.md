@@ -1,6 +1,6 @@
 # Nintendo 64 - source you can read
 
-Trust hierarchy (try in order before filing a feedback round):
+Trust hierarchy (try in order before filing an issue):
 
 1. **Bundled examples** (`examples/n64/{shmup,platformer,puzzle,racing,sports}/main.c`) -
    verified building + rendering on the GPU. Start here for "how do I draw / animate / use

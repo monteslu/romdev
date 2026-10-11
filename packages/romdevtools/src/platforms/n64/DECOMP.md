@@ -6,9 +6,10 @@ for a splat-based project (IDO or GCC). It is a different job from
 understanding: nothing there is compiled or compared, and it is never counted
 as matched.
 
-## The loop, in the calls you actually make
+## The loop
 
 ```
+decomp({op:'setup',    project:'myproj', root:'/abs/checkout'})          once, on a fresh checkout
 decomp({op:'import',   project:'myproj', root:'/abs/checkout'})          once
 decomp({op:'resolve',  project:'myproj', symbol:'func_801DEB08'})         segment, ROM offset, TU, target asm
 decomp({op:'generate', project:'myproj', symbol:'func_801DEB08'})         m2c draft with the TU's real type context
@@ -19,20 +20,54 @@ decomp({op:'integrate',project:'myproj', symbol:'func_801DEB08', candidatePath:'
 decomp({op:'progress', project:'myproj'})
 ```
 
+`setup` runs a fresh checkout's own setup and extract Makefile goals (ROM
+decompression, splat, segment and asset extraction) inside romdev: splat is
+romdev-splat (a JS port at the versions the project pins), the project's setup
+scripts are JS ports matched by content hash, and native tools run as WASM.
+Run it before `import` on a checkout whose `asm/` has not been split yet.
+
+Other ops cover the late stage of a function and the campaign around it:
+
+- `skill`: check or regenerate the installed romdev agent skill against the
+  live op list (`action:'preview'|'write'`).
+- `workbench`: run a late-stage workbench command in process (object
+  diagnosis, allocator and scheduler traces, compiler instrumentation).
+  Omit `wbCommand` to list the catalog. Its field guide (numbered source
+  levers) and IDO 5.3/7.1 compiler-laws pages ship in the package under
+  `src/decomp/workbench/data/docs/`.
+- `dispatch`: triage many functions in parallel under a measured memory
+  ceiling. It never integrates.
+- `experiment`: record one falsifiable hypothesis, its controls, candidates
+  and conclusion, so exhausted source families stay queryable.
+- `diagnose` and `layout`: read a stored comparison and name the mechanism
+  behind the residual.
+- `variants`: measure a bounded list of named source variants against one
+  baseline under one dependency snapshot.
+- `assets`: identify non-code ROM ranges and round-trip them
+  (`action:'unpack'|'repack'`, verified by decoding again).
+
 `compare` is the operation that matters. It compiles the candidate INSIDE
 its real translation unit with the exact per-file recipe the project's own
 Makefile gives that object (read by romdev in JS, target- and
 pattern-specific flags included), then reports three independent verdicts.
 
-Every step runs as WASM inside romdev: IDO 5.3/7.1 (`cc` driving cfe, uopt,
-ugen and as1 as sibling modules; IDO is SGI's proprietary compiler, so romdev
-does not ship it: build it with `scripts/build-ido.sh` from a romdev checkout,
-or set `ROMDEV_IDO_DIR` to a directory holding its `5.3/` and `7.1/` modules), asm-processor (a JS port), the
-mips-linux-gnu binutils, and gcc's preprocessor for contexts. No host make,
-compiler, Python or binutils is needed; on a real checkout every object and
-the full ROM come out byte-identical to the project's own build. A recipe step
-with no WASM/JS equivalent (a Python asset packer, armips) is not delegated to
-the host: `verify`/`integrate` keep that step's existing output and list it
+Every step runs as WASM inside romdev:
+
+- IDO 5.3/7.1: `cc` driving cfe, uopt, ugen and as1 as sibling modules. IDO is
+  SGI's proprietary compiler, so romdev does not ship it. Build it with
+  `scripts/build-ido.sh` from a romdev source checkout (a checkout finds the
+  result on its own), or set `ROMDEV_IDO_DIR` to a directory holding its
+  `5.3/` and `7.1/` module folders.
+- GCC-based projects: KMC gcc 2.7.2, EGCS 1.1.2 and mips-linux-gnu gcc 14
+  ship in romdev-toolchain-decomp-gcc; the mips-linux-gnu binutils ship in
+  romdev-toolchain-mips-gcc.
+- armips ships as WASM in romdev-toolchain-mips-gcc.
+- asm-processor (a JS port) and gcc's preprocessor for contexts.
+
+No host make, compiler, Python or binutils is needed; on a real checkout every
+object and the full ROM come out byte-identical to the project's own build. A
+recipe step with no WASM/JS equivalent (a Python asset packer, for example) is
+not delegated to the host: `verify`/`integrate` keep that step's existing output and list it
 in `keptPrebuilt`. A project whose Makefile cannot be read can declare
 per-TU recipes in its manifest (`build.recipes`).
 
@@ -87,7 +122,7 @@ invalidates on any header change).
 are the symbols m2c had to invent. Keep both out of the source until the
 compare says exact.
 
-## Search honesty
+## Search results
 
 A search job ends `complete-zero` (a zero-score candidate exists - confirm it
 with `compare`, the permuter's score is not romdev's strict test),

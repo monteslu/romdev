@@ -21,13 +21,13 @@ order of work is the transferable part.
 
 Everything here is **IDO 7.1** (`cc` → `cfe` → `uopt` → `ugen` → `as1`) at
 `-O2 -mips2 -G 0`, as invoked by decomp.me's `ido7.1` preset and by the
-`ssb-decomp-re` Makefile (which adds `-Wab,-r4300_mul`; the captured `as1`
+project Makefile the measurements came from (which adds `-Wab,-r4300_mul`; the captured `as1`
 command line is otherwise the ordinary `-G 0 -p0 -mips2 -EB -g0 -O2`). No law
 on this page has been tested on another IDO release except where a law is
 explicitly a *comparison* between releases.
 
-The measurements come predominantly from one procedure -- SSB64
-`func_ovl0_800CEF4C` (`lbParticleUpdateStruct`), 1,868 instructions, a −168
+The measurements come predominantly from one procedure in an IDO 7.1 project,
+`func_ovl0_800CEF4C`, 1,868 instructions, a −168
 frame, and a two-cluster jump-table dispatch over a bytecode opcode -- taken
 from a 99.9948% / one-word frontier to **words=0, exact=true** over two
 sessions and roughly 8,000 compiled-and-scored variants. So "always" below
@@ -35,9 +35,7 @@ means "in every case observed in that procedure and its probe grids", never
 "provably, in all programs". Two laws (L5, L17) were additionally exercised on
 patched Ucode streams, which is a broader base than one source.
 
-Laws L1–L19 come from the cef4c campaign (2026-08-23/24). The campaign's
-after-action review is
-[the hotwash](../history/postmortem-2026-08-24-cef4c-exact.md).
+Laws L1–L19 come from that campaign (2026-08-23/24).
 
 ## Evidence tiers
 
@@ -72,10 +70,10 @@ missing. No clause on this page is provisional: the two that shipped
 provisional (L9's owning pass, L11's survival condition) were closed by
 directed probes the same day, and their receipts are inline.
 
-**Artifact paths** are campaign-private (the `ssb-decomp-re` checkout's
-`.workbench/cef4c/` tree, the Codex worktree's `ref10-rom0j/` tree, and the
-`cef4c` frontier handoff repository). They are cited by name so a future reader
-can ask for the exact file, not so they can be opened from this repository.
+**Record names.** Receipts name the campaign's own record files (for example
+`AS1_OPTION_CONTROL.md` or a `tu-probe/` grid). Those records belong to the
+project the measurements came from and are not distributed with this package;
+the names identify which record holds the full data.
 
 ---
 
@@ -103,7 +101,7 @@ dispatched at `0x418bf0`–`0x418d18`, and action 5 -- "one nonzero input" -- st
 the alias at `0x418ce8`–`0x418cf4`. `decode`'s property word is `0x02150300`
 for `move` and `0x00200200` for `addiu`. The live confirmation is stock `as1`'s
 own `-peepdbg` log: `Peepreg (INST 1) changed rs 2 => 3`. Recorded in
-`ref10-rom0j/AS1_PEEP_REG_ROW49_MECHANISM.md`.
+`AS1_PEEP_REG_ROW49_MECHANISM.md`.
 
 **Falsifies.** The reading that `repl_reg` -- a separate routine -- owned the
 rewrite, and the reading that the donor spelling worked because `as1` treats
@@ -148,7 +146,7 @@ does.
 record: `move v0,v1` survives the filter (bit 3 clear in the low target's mask)
 and the fallthrough subtract is rewritten to `v1`; `move v0,a1` is cleared (bit
 5 set) and the subtract keeps `v0`.
-`ref10-rom0j/AS1_PEEP_REG_ROW49_MECHANISM.md`.
+`AS1_PEEP_REG_ROW49_MECHANISM.md`.
 
 **Falsifies.** The campaign's long-running belief that the healing `if
 (!command);` donor worked by *allocation* -- it was believed to be an allocator
@@ -186,9 +184,8 @@ destroy), then deletes as a redundant self-copy.
 `peep_reg`; dependent-fact scan `0x418a40`–`0x418bc0`; the three `do_passI_opt`
 full-reset record paths at `0x41c978`–`0x41ca04`; the `decode`-property barrier
 at `0x418148`–`0x41816c`). Bounded stock re-runs for the outcomes:
-`ref10-rom0j/AS1_ZERO_FINAL_CODE_TRANSITIONS.md`,
-`binasm-copyback-ctnt-results.json`, `run_binasm_copyback_ctnt_probe.py`, and
-the twelve-barrier matrix in the frontier repository's `FABLE_HANDOFF.md`.
+`AS1_ZERO_FINAL_CODE_TRANSITIONS.md`,
+`binasm-copyback-ctnt-results.json`, and the campaign's twelve-barrier matrix.
 
 **Falsifies.** The rule of thumb that a zero-instruction source construct
 cannot change codegen. It can, and here it was the *only* thing that could:
@@ -222,7 +219,7 @@ reads that one boolean at `0x0042191C` and, when set, runs **both**
 `-no_const_opts`, `-no_lui_opts`, `-no_div_rem_opts` are byte-identical to
 baseline; `-nobopt` `w=129`, `-no_at_compression` `w=333`, `-aggr_xbb` `w=443`,
 `-no_branch_target` `w=453`, `-noxbb` `w=1330`, `-noglobal` `w=1861`.
-`ref10-rom0j/AS1_OPTION_CONTROL.md`.
+`AS1_OPTION_CONTROL.md`.
 
 **Falsifies.** The hope -- pursued across a 25-form source grid -- that a
 compiler flag or a `#pragma` could disable the one transform. It also closes
@@ -265,10 +262,9 @@ captured 48,872-byte Ucode stream (SHA-256 `942e60ba…`), then stock 7.1
 `ugen` + `as1`: `words=0 opcodes=0 gaps=0 regs=0 fp=0 insns=1868 frame=-168`.
 UGEN's output grows 41,552 → 41,584 bytes; the surviving records are visible at
 Binasm `0x980`/`0x990` and the synthesized subtract moves from `0x980` to
-`0x9a0`. Reproduced from the same base by a second agent from a separate
-worktree: `FJP_BARRIER_PROOF.md`, `fjp-minimality-results.json`,
-`ref10-rom0j/FJP_X3_INDEPENDENT_REPRO.md`,
-`ref10-rom0j/reproduce_fjp_x3_proof.py`.
+`0x9a0`. Reproduced independently from the same base in a separate
+checkout: `FJP_BARRIER_PROOF.md`, `fjp-minimality-results.json`,
+`FJP_X3_INDEPENDENT_REPRO.md`.
 
 **Falsifies.** Every earlier barrier probe in the campaign -- 25 pragma and
 label forms, unconditional `Uujp` separators, trampolines, `Uloc`/`Unop`
@@ -302,10 +298,9 @@ nowhere in between.
 at `L41107c`, `f_translate` at `L431b48`) against the retained Ucode; the
 resulting tree and the Binasm ownership map (`0x950` LOC, `0x960` copy, `0x970`
 explicit `blt`, `0x980` synthesized subtract, `0x990` guard branch, `0x9a0`–`0x9c0`
-XJP) are tabulated in `ref10-rom0j/UGEN_XJP_LOWERING.md`. Seven Ucode topology
+XJP) are tabulated in `UGEN_XJP_LOWERING.md`. Seven Ucode topology
 probes -- alternate default targets, trampolines, and barriers with every legal
-separator -- produced byte-identical control Binasm (SHA-256 `c3e38fa2…`);
-`run_ugen_xjp_topology_probe.py`, `run_ugen_xjp_separator_probe.py`.
+separator -- produced byte-identical control Binasm (SHA-256 `c3e38fa2…`).
 
 **Falsifies.** The plan to reach the boundary by respelling the *selector*.
 UOPT wraps a selector in `binopwithconst(Uadd, expr, 0)` only when its internal
@@ -317,8 +312,8 @@ comma/assignment forms) confirmed the split: forms erased early enough to
 preserve the schedule erase back to the baseline, and forms that keep an
 indirect expression through UOPT change the register/frame regime globally
 (w128 with frame −176, or w1809–w1846).
-`ref10-rom0j/XJP_SELECTOR_SOURCE_REACHABILITY.md`,
-`ref10-rom0j/ROW49_NATURAL_IDENTITY_AUDIT.md`.
+`XJP_SELECTOR_SOURCE_REACHABILITY.md`,
+`ROW49_NATURAL_IDENTITY_AUDIT.md`.
 
 ---
 
@@ -341,7 +336,7 @@ but it feeds feedback-frequency assignment, not the layout DFS.)
 `uoptinput.c` lines 3382–3399 (edge creation), 3408–3459 (empty-`if`
 recognition and `Unop` rewrite), `uoptemit.c` 5315–5316 (`Unop` emits nothing),
 `uoptcontrolflow.c` 88–107 (`empty_bb`). Recorded with line-anchored links in
-`ref10-rom0j/UOPT_PARTITION_LAYOUT_AUDIT.md`.
+`UOPT_PARTITION_LAYOUT_AUDIT.md`.
 
 **The exception worth knowing.** If `has_volt_ovfw()` is true, the empty
 conditional becomes `Upop`, not `Unop`: the evaluation is preserved and the
@@ -393,7 +388,7 @@ crossing a fold threshold into `words=1804`. The Duff-nesting family:
 change -- scores `words=9 opcodes=0 gaps=0 insns=1868 frame=−168`, text
 `fd6f35253f3f`, with **every** layout word already correct and the entire
 residual being one register (row 49) plus eight stack offsets.
-`ref10-rom0j/UOPT_PARTITION_LAYOUT_AUDIT.md`, `PARTITION_BARRIER.md`.
+`UOPT_PARTITION_LAYOUT_AUDIT.md`, `PARTITION_BARRIER.md`.
 
 **Falsifies.** Two claims from the partition campaign: that the relocation was
 a broad "nontrivial trampoline" test, and that a `Uloc`/`Unop`/bare-label
@@ -425,7 +420,7 @@ are the same lever seen from two ends: the copy fact follows the fallthrough.
 **Receipt -- T2**, measured with `compare --json` against the campaign target,
 every candidate at `insns=1868 gaps=0 frame=−168`:
 
-| shape (`.workbench/cef4c/tu-probe/`) | text sha1 | words | opcodes | regs |
+| shape (`tu-probe/`) | text sha1 | words | opcodes | regs |
 |---|---|---:|---:|---:|
 | `part8/p8__ge-plain` -- goto pair + Duff nesting, no statement | `fd6f35253f3f` | 9 | 0 | 1 |
 | `part8/p8__ge-o3` -- plus `if (x&&x&&x);` on the **high** arm | `60ac03f5e694` | 13 | 1 | 1 |
@@ -488,7 +483,7 @@ consequence, not assumed: the two spill pairs at rows 1696/1698 (`swc1
 f16,84(sp)`) and 1751/1753 (`swc1 f12,80(sp)`) follow from one web holding
 `f16` at block 243, which is what forces the split there.
 `ALLOCATOR_MODEL.md`; instrumentation under
-`.workbench/cef4c/ido71-instrumented/` (`uopt-trace2.c`, `build/uopt2`).
+`ido71-instrumented/` (`uopt-trace2.c`, `build/uopt2`).
 
 **Falsifies.** The `opcodes` metric as an allocator fitness function: variants
 with a "broken" opcode score can carry exactly the right colouring. Fitness
@@ -532,7 +527,7 @@ roughly 60 variants in the `tu-probe/dial2..dial9` grids: the headline cell
 `dial8/t8__o3-none.c` reaches `words=3 opcodes=2 gaps=0 insns=1868 frame=−168`
 with the complete target integer-web rotation and **no donor at all**.
 `O3AND_COUNTERDIAL.md`; a second, independent 261-variant closure with per-basin
-priorities in `ref10-rom0j/ROW49_SHORT_CIRCUIT_COUNTERDIAL.md`.
+priorities in `ROW49_SHORT_CIRCUIT_COUNTERDIAL.md`.
 
 **Falsifies.** Three claims. That the healing donor's rotation was the only
 integer-web lever (a donor-free spelling reproduces it). That conditional
@@ -629,8 +624,7 @@ The reconstructed macro body is otherwise byte-locked: the ternary and
 empty-`else` respellings of the same body break.
 
 **Receipt -- T2**, from the macro-boundary grids
-(`gen_macro_boundary_reads.py`, `gen_macro_alias_variants.py`), recorded in
-`ALLOCATOR_MODEL.md`.
+recorded in `ALLOCATOR_MODEL.md`.
 
 **Scope.** T2 and single-function. The 5.3 page carries the read-from-the-pass
 version of the mechanism; this is the 7.1 observation that it is still live.
@@ -642,8 +636,7 @@ or per-region optimisation pragma. `asm`, `__asm` and `__asm__` are parsed as
 ordinary **implicit function calls**, not as inline assembly. A 25-form source
 grid over every accepted pragma spelling emitted byte-identical UGEN streams.
 
-**Receipt -- T1** (pragma table read) **+ T2** (the 25-form grid);
-`FABLE_HANDOFF.md`.
+**Receipt -- T1** (pragma table read) **+ T2** (the 25-form grid).
 
 **Falsifies.** The assumption that L3's proven assembler-mode barriers
 (`.set nomove` and friends) had *any* source spelling under this compiler.
@@ -743,7 +736,7 @@ laws L1–L3 are 7.1 laws, and a 5.3 reading of them would be wrong.
 **Receipt -- T2**, 415 executable phase paths inventoried and hashed across the
 workspace (68 toolchain roots, 35 unique phase signatures, 14 unique `as1`
 hashes); all crossings compiled serially at nice 10 and compared statically.
-`ref10-rom0j/COMPILER_PROVENANCE_MATRIX.md`,
+`COMPILER_PROVENANCE_MATRIX.md`,
 `compiler-provenance-{as1,mix,whole}-results.json`.
 
 **Falsifies.** The mixed-provenance hypothesis -- that the original object came
@@ -788,7 +781,7 @@ reproduced the rotation exactly
 ([L11](#l11-the-dead-read-dial-calculus)). Empty-read *positions* were recorded
 as saturated; the composition under
 [L16](#l16-a-x--x--x-selector-reshapes-the-switch-selector-temp-at-zero-codegen-cost)
-used a position from inside that closed set. Both original sweeps were honest
+used a position from inside that closed set. Both original sweeps were valid
 and bounded; neither was entitled to the word "exhausted".
 
 **The corollary for scalar metrics.** `words` over-charges layout: one

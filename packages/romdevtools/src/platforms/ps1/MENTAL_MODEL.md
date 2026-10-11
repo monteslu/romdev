@@ -46,8 +46,8 @@ homebrew.)
 ## Input
 
 Homebrew reads the pad from **hardware** - the SIO handshake at `0x1F80_1040`
-(transfer `0x01`, `0x42`, read the button halfword). The host's `setInput`/`run`
-holdInputs drive the emulated pad; the game polls SIO. The helper lib has a
+(transfer `0x01`, `0x42`, read the button halfword). `input({op:'set'})` and
+`build({output:'run', holdInputs})` drive the emulated pad; the game polls SIO. The helper lib has a
 `pad_read()`.
 
 ## Sound
@@ -57,19 +57,19 @@ via the voice registers. The helper lib has a minimal tone path.
 
 ## MCP debug & inspection tooling - current state
 
-- **`memory({op:'read', region:'system_ram'})`** - main RAM. ✅
-- **`disasm` / `decompile`** - MIPS via rizin/Ghidra; `decompile` loads the PS-EXE at its `t_addr` (or a splat psx project's segment at its VA with `project`/`splatYaml`), so calls, globals and jump tables resolve during analysis and `provenance` says `loadedAt`. ✅ (R3000A `jal` targets are
+- **`memory({op:'read', region:'system_ram'})`** - main RAM. Works.
+- **`disasm` / `decompile`** - MIPS via rizin/Ghidra; `decompile` loads the PS-EXE at its `t_addr` (or a splat psx project's segment at its VA with `project`/`splatYaml`), so calls, globals and jump tables resolve during analysis and `provenance` says `loadedAt`. Works. (R3000A `jal` targets are
   absolute VAs - the analysis buffer is base-aligned so call-following works; see
   TROUBLESHOOTING if a fixed-VA image misbehaves.)
-- **`frame({op:'verify'})` / screenshot** - render-health + capture. ✅
-- **`cart` extract/wrap** - PS-EXE. ✅
+- **`frame({op:'verify'})` / screenshot** - render-health + capture. Works.
+- **`cart` extract/wrap** - PS-EXE. Works.
 - **`cpu({op:'read'})`** - live R3000A register file (`romdev_mips_regs_get`: r0..r31,
-  LO, HI, PC). ✅
+  LO, HI, PC). Works.
 - **`audioDebug({op:'inspect', chip:'spu'})`** - the SPU register block at `0x1F80_1C00`
-  (`romdev_spu_get`, the 1 KB window). ✅
+  (`romdev_spu_get`, the 1 KB window). Works.
 - **`breakpoint` / `watch`** - not yet (those need interpreter-step + memory-path hooks
-  patched into beetle; cpuState/audioDebug are plain reads and ARE wired).
-- **`renderingContext`** is **N/A** (false) - 3D GPU machine, no 2D tile VDP to decode.
+  patched into beetle; cpu({op:'read'}) and audioDebug are plain reads and are wired).
+- **`background({view:'renderState'})`** (the `renderingContext` capability) is **N/A** (false) - 3D GPU machine, no 2D tile VDP to decode.
 
 ## Build pipeline
 
@@ -81,8 +81,8 @@ the LE side), then `wrapPsExe` produces the bootable PS-EXE. `#include` the bund
 ## What's NOT bundled / hardware limits
 
 - No CD-ROM/XA/streaming or MDEC video.
-- `breakpoint`/`watch` not yet (need interpreter-step hooks; cpuState/audioDebug ARE wired).
-- `renderingContext` is N/A (3D GPU, no tile VDP).
+- `breakpoint`/`watch` not yet (need interpreter-step hooks; cpu({op:'read'}) and audioDebug are wired).
+- `background({view:'renderState'})` is N/A (3D GPU, no tile VDP).
 
 ## Matching decompilation
 
@@ -92,3 +92,17 @@ has NOT been run on a real PS1 checkout yet: `import` records
 `platformVerified:false` and the capability manifest keeps `decomp:false`
 for ps1 until a known-matching PS1 function compares exact through it. The
 loop itself is documented at `platform({op:'doc', platform:'n64', name:'decomp'})`.
+
+The PS1 toolchain runs inside romdev like the N64 one, with no host tools:
+
+- gcc 2.6.3-psx (the `cc1-psx-26` PS1 decomp projects pin) ships as WASM in
+  romdev-toolchain-decomp-gcc, and assembles with the mips-linux-gnu binutils
+  from romdev-toolchain-mips-gcc.
+- maspsx, the projects' assembly post-processor, is a JS port in romdevtools.
+- `decomp({op:'setup', project, root})` runs a fresh checkout's setup and
+  extract chain in process: splat as romdev-splat, the project's own disc
+  extractor, asset tool and string encoder as WASM modules shipped in
+  romdev-toolchain-decomp-gcc, and the project's small Python steps (byte
+  patcher, stage-graphics staging, PNG packing) as JS ports matched by content
+  hash. A step romdev has no port for is reported and fails that target; it
+  is never run on the host.

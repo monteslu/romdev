@@ -1,9 +1,8 @@
 # Late-stage doctrine
 
 Practices earned in the last percent of a campaign, where every remaining
-mechanism is small, interacting, and easy to mis-measure. Source:
-`docs/history/postmortem-2026-08-24-cef4c-exact.md` and its linked campaign
-dossiers.
+mechanism is small, interacting, and easy to mis-measure. Source: the IDO 7.1
+campaign recorded in `docs/compiler-laws/ido-7.1.md`.
 
 ## Compose mechanisms late
 
@@ -13,7 +12,7 @@ before trying to combine it with any other lever. A residual that survives
 every single-lever probe is not evidence that no lever works; it can mean the
 final source needs several at once.
 
-The cef4c endgame's exact source composed four independently proven
+That campaign's exact source composed four independently proven
 mechanisms, no one of which produced the exact object alone: a phase-boundary branch
 barrier, a goto-pair fallthrough inversion, a dispatch-layout construct, and a
 selector-temp reshape. Each had its own isolated probe and its own dossier
@@ -38,7 +37,7 @@ dimension you held fixed.
 
 Re-open every closed dial after any schedule or equilibrium change, even one
 that looks unrelated to the closed family. Two independently produced
-"exhausted" verdicts in the cef4c campaign -- a donor-rotation sweep and an
+"exhausted" verdicts in that campaign -- a donor-rotation sweep and an
 empty-read placement sweep -- were each falsified after the surrounding
 schedule shifted for an unrelated reason; the closed family was never
 re-examined until it became the next attack line by accident. Treat a
@@ -77,12 +76,11 @@ literal pools, whether function-owned data was externalized into a neighbor
 symbol, whether the extraction boundary matches the function's real extent --
 before spending any variant budget on it.
 
-The cef4c campaign reached a genuine `words=0` / `exact=true` local result
+The same campaign reached a genuine `words=0` / `exact=true` local result
 and still saw a nonzero hosted score, because the hosted target object's
 `.rodata` extraction had been cut 20 bytes short of the function's real
 literal pool (four identical constants belonged to the function and were
-mis-attributed to an external symbol; see
-`hosted-fix/TARGET_RODATA_FIX.md` in the campaign dossiers). Ten days of
+mis-attributed to an external symbol). Ten days of
 prior campaigning had assumed the target's scope was correct; the mismatch
 was provable in one minute against ROM bytes once anyone checked. Audit the
 target before the search, not after a words=0 that still won't confirm.

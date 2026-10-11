@@ -1,7 +1,7 @@
 # Sega Genesis / Mega Drive - mental model
 
 One page. Read once before you write your first Genesis game. The
-TROUBLESHOOTING.md alongside this file is for when something's broken;
+troubleshooting doc (`platform({op:'doc', platform:'genesis', name:'troubleshooting'})`) is for when something's broken;
 this is the "what's going on" version.
 
 ## CPU memory map ($000000-$FFFFFF, 68000 24-bit)
@@ -30,7 +30,7 @@ A few quirks worth knowing:
   write "SEGA" to $A14000 within the first few seconds, or the
   console refuses to start the VDP. SGDK's sega.s does this.
 
-## Reading your C globals headlessly - assert state, don't screenshot ⭐
+## Reading your C globals headlessly - assert state, don't screenshot
 
 Every "did the score go up / did HP drop / did the level change?" check is one
 byte of RAM, not a screenshot. Build with debug, resolve the symbol, read it:
@@ -53,10 +53,8 @@ memory({op:'read', region:'system_ram', offset: sym.ramOffset, length:2})
 - **WRAM (`system_ram`) is normalized to CPU byte order** - offset X is the
   byte the 68k sees at $FF0000+X, words read big-endian as expected, and
   offsets line up with disassembly addresses and cheat-DB maps. (gpgx stores
-  work RAM host-LE word-swapped internally; the host un-swaps it. Before
-  0.28.0 the raw swapped layout leaked through - value-search/diff loops were
-  self-consistent, but any offset cross-referenced against a `move.b $FFxxxx`
-  in a disassembly was off-by-XOR-1.)
+  work RAM host-LE word-swapped internally; the host un-swaps it, so an offset
+  cross-referenced against a `move.b $FFxxxx` in a disassembly lines up.)
 - **PC → which function?** `symbols({op:'addr', pc, symbolsText: b.mapText})` maps
   a live `cpu({op:'read'}).pc` to the enclosing C function.
 
@@ -113,8 +111,7 @@ non-contiguous VRAM tiles in column-major order. Don't crop a screenshot
 or a tile sheet - use `sprites({op:'capture', platform:"genesis", slots|rect})`
 which reads the live SAT, copies the referenced tiles in hardware order,
 and emits tiles + palette + layout + an SGDK `_draw()` helper. Use
-`sprites({op:'group'})` first to find which slots form one character. See
-AGENTS.md → "Lifting a Genesis CHARACTER".
+`sprites({op:'group'})` first to find which slots form one character.
 
 ## Tiles
 
@@ -165,13 +162,13 @@ while (1) {
 your sprite updates never appear on screen. It's the single most
 important call in any SGDK game loop.
 
-## Scrolling, parallax & the feel trap ⭐
+## Scrolling, parallax & the feel trap
 
 This is the section to read before you build a side-scroller. The #1
 "my horizontal movement feels choppy/juddery" bug on Genesis is a
 software mistake, not a hardware limit:
 
-> ### ⚠️ DO NOT rewrite full tilemaps in the frame loop.
+> ### DO NOT rewrite full tilemaps in the frame loop.
 > The Genesis scrolls in HARDWARE. Moving the world is **two register
 > writes** (`VDP_setHorizontalScroll`), which are free. If instead you
 > redraw the plane each frame (a big `VDP_setTileMapXY`/`VDP_loadTileMap`
@@ -246,7 +243,7 @@ streaming); add the column-stream above to go wider. (Real large-scroller engine
 splits the screen with H-blank raster effects for independent strips -
 that's an IRQ/raster topic, see the `asm` template.)
 
-## Why does horizontal movement feel choppy? - motion-trace it headlessly ⭐
+## Why does horizontal movement feel choppy? - motion-trace it headlessly
 
 When movement feels off, don't trial-and-error with screenshots. Sample
 the player's world-X, the camera scroll, and the actual VDP scroll
@@ -285,14 +282,14 @@ recordSession({
 
 Read the columns: `player_x` should ramp smoothly; `hscrollA` should
 move 1:1 with the camera and `hscrollB` at the parallax ratio; both
-should be **monotone** (no jumps) while RIGHT is held. ⚠ Genesis WRAM +
+should be **monotone** (no jumps) while RIGHT is held. Note: Genesis WRAM +
 VRAM read **word-byte-swapped** in gpgx (a 16-bit `0x00F0` reads as
 bytes `F0 00`) - account for the swap, or read single bytes. For a
 compact value-vs-frame curve of just the HSCROLL table use
 `watch({on:'mem', region:'video_ram', offset:0xF000, length:4,
 format:'series', pressDuring:[{frame:0, button:'right', holdFrames:180}]})`.
 
-## Is the loop doing too much VDP work? - per-frame DMA budget ⭐
+## Is the loop doing too much VDP work? - per-frame DMA budget
 
 The render-side cause of choppy scroll is **too many VDP/DMA bytes per
 frame** (a tilemap rewrite, an asset re-upload). Measure it directly,
@@ -343,7 +340,7 @@ BUTTON_RIGHT= 0x0008    BUTTON_START = 0x0080
 `JOY_1` is the first controller, `JOY_2` the second. Edge-detect by
 xor-ing this frame against last frame and AND-ing with the new state.
 
-### Driving input over MCP - the Genesis button map is INVERTED ⚠
+### Driving input over MCP - the Genesis button map is INVERTED
 
 When you drive the game headlessly with `input({op:'set'})`/`input({op:'press'})`, the raw
 libretro button names are **NOT** the Genesis A/B/C labels. genesis_plus_gx
@@ -358,7 +355,7 @@ against the core). So:
 | `BUTTON_START`    | `{ start: true }`                   | -            |
 | X / Y / Z (6-btn) | `{ x: true }` / `{ north: true }` / `{ l: true }` | - |
 
-**The trap:** `input({op:'set'})` presses Genesis **C**, *not* A - so an
+**The trap:** `input({op:'set', a:true})` presses Genesis **C**, *not* A - so an
 SGDK jump bound to `BUTTON_A` won't fire from `{a:true}`. Use `{ y: true }` (or
 the spatial `{ west: true }`) for `BUTTON_A`. The **spatial names**
 (north/east/south/west) and `input({op:'press'})` resolve correctly per
@@ -379,7 +376,7 @@ SGDK exposes both via the XGM2 driver. For music:
 
 ```c
 extern const u8 my_music[];   // COMPILED XGM2 blob (.incbin'd) - NOT raw VGM
-XGM2_play(my_music);          // the R58 fn is XGM2_play (there is NO XGM2_startPlay)
+XGM2_play(my_music);          // the fn is XGM2_play (there is NO XGM2_startPlay)
 XGM2_stop();
 ```
 
@@ -437,25 +434,24 @@ Video is deeply readable; the FM audio chip is only partially exposed:
   (`system_ram`) is NOT affected: it's normalized to CPU byte order (see
   "Reading your C globals headlessly").
 
-## Break-instant truth: registersAtHit + pure calls (0.28.0)
+## Break-instant truth: registersAtHit + pure calls
 
-gpgx schedules its CPUs per scanline, so a `breakpoint` hit mid-frame used to
-leave the LIVE register file hundreds of instructions past the hit by the time
-you could read it - chasing pointer registers read that way burned a real
-session for ~2h. Fixed two ways:
+gpgx schedules its CPUs per scanline, so by the time a tool call returns after a
+mid-frame `breakpoint` hit, the LIVE register file can be hundreds of
+instructions past the hit. Two things handle that:
 
-- **`registersAtHit`** - `breakpoint({on:'pc'|'write'|'read'})` hits now carry
+- **`registersAtHit`** - `breakpoint({on:'pc'|'write'|'read'})` hits carry
   the FULL register file (d0-d7/a0-a7/pc/sr/sp) frozen by the core at the hit
   instant. Use it, never a follow-up `cpu({op:'read'})`. The reported `pc` for
-  write/read hits is the EXECUTING instruction's first byte (pre-0.28.0 it was
-  the post-prefetch PC - one instruction late). On a pc-break the 68k also
+  write/read hits is the EXECUTING instruction's first byte (not the
+  post-prefetch PC). On a pc-break the 68k also
   stays FROZEN for the rest of the frame, so even live reads agree.
 - **`cpu({op:'call', pure:true})`** - steps ONLY the 68k: no VDP lines, no
   Z80, no interrupts raised. Without it, a driven routine that spans frames
   runs the game's own VBlank logic concurrently - which can stomp the output
-  buffer you're capturing (a real session diffed a CORRECT codec
-  reimplementation against that poisoned "ground truth" for hours). Prefer
-  `pure:true` for every decompressor/codec call; non-pure results carry a ⚠
+  buffer you're capturing, so a correct codec reimplementation compared
+  against that output looks wrong. Prefer
+  `pure:true` for every decompressor/codec call; non-pure results carry a
   caveat when frame logic ran. (SMS/GG get the same via the shared core; the
   OTHER platforms get the same guarantee via interrupt blocking -
   `pureMode:'irq-blocked'` - so the technique transfers everywhere.)
@@ -519,8 +515,16 @@ When you call `build({output:'rom'})`:
 
 Loadable via genesis_plus_gx (`loadMedia`).
 
+## Static recompilation
+
+Genesis ROMs can be recompiled whole into a wasmcart with
+`disasm({target:'recompile', emit:'wasmcart', platform:'genesis', path, outputPath})`. The cart's hardware is a port of genesis_plus_gx, the
+reference core it is verified against with `frame({op:'verifyRecompile', cart, reference})`; the Z80 runs from Z80 RAM
+through gpgx's own handlers, and SVP carts carry gpgx's SSP1601 DSP code.
+Full guide: `platform({op:'doc', platform:'guide', name:'recompile'})`.
+
 ## Reverse-engineering & decompilation
 
 The Rizin/Ghidra analysis engine works here like everywhere: `disasm({target:'functions'})` to carve the program, `disasm({target:'cfg'|'xrefs'})` to trace it, `symbols({op:'analyze'})` for a one-shot structural map.
 
-**Decompiler quality on 68000: EXCELLENT.** An orthogonal ISA with real stack frames decompiles close to readable C - lean on it. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. See the cross-platform ROM-hacking playbook §5f for the full loop.
+**Decompiler quality on 68000: HIGH.** An orthogonal ISA with real stack frames decompiles close to readable C - lean on it. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. The full loop is in the ROM-hacking playbook, section 5f (`platform({op:'doc', platform:'romhacking', name:'playbook'})`).

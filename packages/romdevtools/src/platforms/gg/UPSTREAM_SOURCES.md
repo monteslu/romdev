@@ -33,4 +33,4 @@ Trust hierarchy:
   (most pages have GG addendum or work identically)
 - **GG-specific extensions** (CRAM depth, START): SMS Power's GG section
 
-For everything else, see `../sms/UPSTREAM_SOURCES.md`.
+For everything else, see `platform({op:'doc', platform:'sms', name:'upstream_sources'})`.

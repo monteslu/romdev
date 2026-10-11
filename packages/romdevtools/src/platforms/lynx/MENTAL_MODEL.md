@@ -182,12 +182,9 @@ declared non-const so it matches the cc65 signature without warning.
 If you build your own bytestream and want to mark it `const`, you'll
 need a `(unsigned char *)` cast at the call site.
 
-### Audio + TGI interaction (R29 diagnosed → R57 fixed)
+### Audio + TGI interaction (why `sfx_update()` runs in vblank)
 
-Earlier round-28/29 reports of "calling sfx_init / sfx_tone wedges
-TGI rendering" were a real bug, now resolved in `lynx_sfx.c`.
-
-**Root cause:** writing the MIKEY voice CTL register ($FD25 / $FD2D /
+**The hazard:** writing the MIKEY voice CTL register ($FD25 / $FD2D /
 $FD35 / $FD3D) with the ENABLE_COUNT bit set triggers handy's
 `gNextTimerEvent = gSystemCycleCount` (mikie.cpp:1676) - a SYNCHRONOUS
 timer-event sweep at the next CPU instruction. That sweep can preempt
@@ -195,14 +192,13 @@ an in-flight Suzy blit operation and the partially-blitted sprite
 gets corrupted. Symptom: HUD + score render (Suzy was idle for those),
 playfield sprites missing (Suzy was mid-blit when the sweep landed).
 
-**Fix (R57):** `sfx_tone` and `sfx_noise` now stage their config in
+**How `lynx_sfx.c` avoids it:** `sfx_tone` and `sfx_noise` stage their config in
 shadow RAM and DEFER the MIKEY writes until `sfx_update()` is called.
 The contract is: **`sfx_update()` MUST be called during vblank** -
 typically right after `tgi_updatedisplay()`. The timer-event sweep
 then lands during vblank where Suzy is idle.
 
-Canonical loop is unchanged in shape; just be sure `sfx_update` runs
-after the vblank wait:
+In the canonical loop, be sure `sfx_update` runs after the vblank wait:
 
 ```c
 for (;;) {
@@ -216,9 +212,8 @@ for (;;) {
 }
 ```
 
-`lynx_snd_play` (cc65's full music engine) hasn't been re-verified
-against R57 yet - it installs a 240Hz IRQ that's a different
-mechanism. If you need music, the per-frame `sfx_tone()` melody
+`lynx_snd_play` (cc65's full music engine) is not verified against
+this hazard - it installs a 240Hz IRQ, a different mechanism. If you need music, the per-frame `sfx_tone()` melody
 pattern remains a known-safe alternative:
 
 ```c
@@ -245,7 +240,7 @@ for multi-Lynx multiplayer but no second controller on one unit.
 handy maps `input({op:'set'})` button names **straight through** - verified live, no
 inversion: `{a}`→A (outer), `{b}`→B (inner). Spatial east→A, south→B; Opt1/Opt2
 map to `{start}`/`{select}`. So `input({op:'set', a: true})` presses Lynx A as
-expected. ⚠ Note: the Lynx hardware register `$FCB0` is **active-HIGH** (1 =
+expected. Note: the Lynx hardware register `$FCB0` is **active-HIGH** (1 =
 pressed, opposite most platforms) - that only matters if you read the register
 directly; the `input({op:'set'})` names themselves are normal.
 
@@ -277,4 +272,4 @@ into `.lnx`. handy accepts both.
 
 The Rizin/Ghidra analysis engine works here like everywhere: `disasm({target:'functions'})` to carve the program, `disasm({target:'cfg'|'xrefs'})` to trace it, `symbols({op:'analyze'})` for a one-shot structural map.
 
-**Decompiler quality on 65C02: ROUGH.** Carry-flag idioms and 16-bit math on an 8-bit CPU decompile to noise that only reads cleanly once an LLM folds it - on this CPU the disassembly is often more honest than the pseudocode. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. See the cross-platform ROM-hacking playbook §5f for the full loop.
+**Decompiler quality on 65C02: ROUGH.** Carry-flag idioms and 16-bit math on an 8-bit CPU decompile to noise that only reads cleanly once an LLM folds it - on this CPU the disassembly is often clearer than the pseudocode. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. The full loop is in the ROM-hacking playbook, section 5f (`platform({op:'doc', platform:'romhacking', name:'playbook'})`).

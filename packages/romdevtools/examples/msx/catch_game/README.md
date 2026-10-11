@@ -42,27 +42,18 @@ BIOS one is live.
 
 ## Build + run
 
-`.c`/`.s` go in `sources`, `.h` in `includes`:
-
-```js
-import { buildForPlatform } from "romdev/src/toolchains/index.js";
-const build = await buildForPlatform({
-  platform: "msx",
-  sources:  { "main.c": SRC, "msx_vdp.c": LIB, "msx_crt0.s": CRT0 },
-  includes: { "msx_hw.h": HDR },
-  crt0: ".module empty\n",
-  sourceName: "main.c",
-});
 ```
-
-`_verify.mjs` is the runnable harness used to verify this example: it builds,
-steps past the C-BIOS logo (~300 frames), screenshots, then drives RIGHT and
-LEFT input and confirms the basket sprite's bright-pixel centroid actually moves
-(`shot_before.png` → `shot_after_right.png` → `shot_after_left.png`).
-
+examples({op:'fork', example:'msx/catch_game', name:'mygame', path:'/abs/path/to/projects'})
+build({output:'project', path:'/abs/path/to/projects/mygame'})
 ```
-node examples/msx/catch_game/_verify.mjs   # prints VERIFIED_OK
-```
+The fork copies `main.c` plus the helper lib (`msx_vdp.c`, `msx_hw.h`) and the cart
+crt0 (`msx_crt0.s`) into the project, so it builds before you change a line.
+
+To check it: step past the C-BIOS logo (about 300 frames,
+`frame({op:'step', frames:300})`), take a screenshot, then hold RIGHT and LEFT
+with `input({op:'set', ports:[{right:true}]})` and step again; the basket sprite
+moves (read its position from the sprite attribute table with
+`sprites({op:'inspect'})`).
 
 Verified on the bluemsx core: HUD + both sprites render, the basket tracks
 left/right input, and catching coins increments the on-screen score

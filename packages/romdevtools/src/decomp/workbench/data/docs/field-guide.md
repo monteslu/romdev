@@ -4,8 +4,27 @@
 
 This is the manual path. No permuter, no agent, no trace -- just the mechanisms
 that were found by matching real functions, written down so you can apply them
-by hand. [Start here](START_HERE.md) explains the loop these fit into; this page
+by hand. [Start here](https://github.com/akratch/n64-decomp-workbench/blob/main/docs/START_HERE.md) explains the loop these fit into; this page
 is what you consult once `view` has named a mechanism.
+
+**Running these commands in romdev.** romdev does not install a
+`decomp-workbench` executable; the workbench runs inside the romdev server.
+A command written here as `decomp-workbench <group> <command> ARGS` runs as
+`decomp({op:'workbench', project, wbGroup:'<group>', wbCommand:'<command>',
+wbArgs:[ARGS]})`. Call `decomp({op:'workbench', project})` with no
+`wbCommand` to list every group and command the server carries (object,
+trace, instrument, pass, probe, sweep, permute, oracle, campaign, experiment,
+toolchain and more). A command the catalog marks destructive needs
+`allowDestructive:true`; one that reaches the network needs
+`allowNetwork:true`. Common steps also have their own decomp ops:
+`compare` (compile and score a candidate inside its translation unit),
+`diagnose` and `layout` (read a stored comparison), `variants` (measure a
+bounded list of source variants), `search` and `job` (bounded permuter
+runs), `experiment` (hypothesis, control and conclusion records), `gate`,
+`rank`, `dispatch` (parallel triage), `integrate` and `verify`.
+The `guide` command has no server op: a `guide <number>` pointer names a
+numbered section of this page, and `guide laws <era>` names a page under
+`compiler-laws/`.
 
 Levers 1-19 were each proven on a real IDO 5.3 `-O2 -g3 -mips2` function, and
 the measured effect is quoted so you can calibrate how much to believe it.
@@ -36,7 +55,7 @@ and opcode schedule have stopped moving.
 
 Any section here can be printed in the terminal:
 `decomp-workbench guide <playbook>`, `guide <verdict>`, or `guide <number>`.
-[From verdict to edit](from-verdict-to-edit.md) takes one lever from this page
+[From verdict to edit](https://github.com/akratch/n64-decomp-workbench/blob/main/docs/from-verdict-to-edit.md) takes one lever from this page
 to a source change and back.
 
 - [Cheap first -- one variant each](#cheap-first--one-variant-each)
@@ -166,7 +185,7 @@ schedule and branch-likely selection on their own.
 
 **Do this before any source search on a ported function:** diff your flag line
 against the project's real build rules, and compare against the full-TU build
-rather than a harness. See [Minute 1 of Start here](START_HERE.md#minute-1--do-i-need-to-isolate-the-function-first).
+rather than a harness. See [Minute 1 of Start here](https://github.com/akratch/n64-decomp-workbench/blob/main/docs/START_HERE.md#minute-1--do-i-need-to-isolate-the-function-first).
 
 **See also:** lever 24 audits the same missing-context family when it takes
 the shape of an `#if`/`#elif` guard rather than a flag or `ctx.c` diff.
@@ -189,11 +208,11 @@ case DRAW_SOMETHING:
 the C preprocessor substitutes `0` for both, and `0 >= 0` is true -- the guard
 silently compiles the region in. Nothing about the source *reads* as wrong:
 both names are plausible macros, and the mistake is legible only to the
-preprocessor, not to a person scanning the diff. This kept SSB64's
-`drawbitmap` unmatched for years: the undefined-vs-undefined
+preprocessor, not to a person scanning the diff. This kept one IDO 7.1
+project's `drawbitmap` unmatched for years: the undefined-vs-undefined
 `#if BUILD_VERSION >= VERSION_J` compiled in an extra switch case -- +109
 instructions and a jump table nobody asked for -- and the resulting structure
-diff gave no honest hint that a stale conditional was the entire cause. One
+diff gave no hint that a stale conditional was the entire cause. One
 `#include <PR/os_version.h>`, which defines `BUILD_VERSION`, collapsed the
 residual to size-exact. The general trap is any `#if`/`#elif` whose
 expression's identifiers are *all* undefined: comparisons and equality
@@ -629,7 +648,7 @@ register cheaper; it is to make the register you do *not* want **illegal**, by
 giving the value a live range that crosses a call pinning it. Zero instructions,
 frame unchanged.
 
-**Measured:** GE007 `mp_watch_menu_display` -- a two-statement diff moved one
+**Measured:** an IDO 5.3 project's `mp_watch_menu_display` -- a two-statement diff moved one
 web's forbidden mask `0x70000000 → 0x7a000000`, the web from `a1` to `a2`, and
 six sites to register-for-register exact at parity. Six earlier certificates in
 that campaign had each looked for an *arithmetic* route to the same flip and
@@ -960,8 +979,7 @@ from `regclassof`, not the save class -- the class-1/class-2 verdict that
 decides whether a web is a colouring candidate at all is decided earlier, in
 `compute_save`, and no shipped record reports it.
 
-This distinction mattered in the recorded SSSV
-[`func_802963D0_6A7A80`](https://github.com/akratch/n64-decomp-workbench/blob/main/case-studies/sssv-func-802963D0.md)
+This distinction mattered in one recorded `func_802963D0_6A7A80`
 campaign. A
 cancelled hot use formed a hidden web before the visible pointer and gave it
 `totalsave=101`; a side-effecting bridge formed it later and raised it to
@@ -987,12 +1005,12 @@ go straight to a forced-color probe rather than more variants --
 `decomp-workbench diagnose ... --trace uopt.log --trace-proc N` will read that
 trace for you and print an `ownership:` line saying which pass owns the
 residual and whether a lever reaches it at all, with `ownership_basis=trace`
-rather than `heuristic` ([the ownership line](view.md#reading-the-screen)). If
+rather than `heuristic` ([the ownership line](https://github.com/akratch/n64-decomp-workbench/blob/main/docs/view.md#reading-the-screen)). If
 it does not, this class is a legitimate stopping point for **hand** search --
 but hand search is not the whole search. No *hand* lever found means a permuter
 target: run `decomp-workbench permute-doctor <function>` and then
 `decomp-workbench permute-sweep` before recording anything
-([permuter sweeps](permute-sweep.md)). Two residuals argued unmatchable from verdict prose -- an
+([permuter sweeps](https://github.com/akratch/n64-decomp-workbench/blob/main/docs/permute-sweep.md)). Two residuals argued unmatchable from verdict prose -- an
 interference-forbidden colour and a list-scheduler slot-fill with no source
 lever -- were matched by a twenty-minute permuter run after a bespoke
 instrumentation build had been funded to explain why they could not be. An
@@ -1008,7 +1026,7 @@ A sweep is exhaustive only if it covers both. A `p1`-only sweep once produced a
 confident "this is ugen's fault" conclusion when the answer was a `p2` web, one
 force from exact. The workbench now requires phase-qualified force keys
 (`p2:w55=c2`) for exactly this reason. See
-[Trace analysis](trace-analysis.md).
+[Trace analysis](https://github.com/akratch/n64-decomp-workbench/blob/main/docs/trace-analysis.md).
 
 **A second trap, now defused:** forcing a color the web's interference mask
 already forbids used to abort the compiler. The pass now declines the force,
@@ -1016,7 +1034,7 @@ records `force_declined … forbidden=0x…`, and lets the natural coloring stan
 so a sweep runs to completion and the declines tell you which endpoints do not
 exist. Read them ahead of time from `trace-globalcolor`'s `forbidden_colors`
 on any logging run. See
-[Compiler instrumentation](compiler-instrumentation.md#a-forbidden-color-is-declined-not-fatal).
+[Compiler instrumentation](https://github.com/akratch/n64-decomp-workbench/blob/main/docs/compiler-instrumentation.md#a-forbidden-color-is-declined-not-fatal).
 
 ---
 
@@ -1054,7 +1072,7 @@ proof, and spent one build to confirm it: the carrier coalesced away
 byte-identically, exactly as the proof says. The build was the cost of printing
 a met proof as background.
 
-**And the honest `none-known` is worth as much.** In the same field test
+**And a correct `none-known` is worth as much.** In the same field test
 `func_8003A2C8` returned `none-known`, `routing=permuter-first`,
 `reachability=permuter-target`, with the note that one of its five
 substitutions wants `t6` -- a register the era's colouring pass never hands out
@@ -1065,7 +1083,7 @@ tool that can. Declining to guess is an output, not a gap.
 
 **And "unreachable" is still not a wall.** Every one of these is a statement
 about *hand* levers. Run
-[the permuter](permute-sweep.md) before recording any of them as final.
+[the permuter](https://github.com/akratch/n64-decomp-workbench/blob/main/docs/permute-sweep.md) before recording any of them as final.
 
 **Points here:** `lever_class=unreachable` from `diagnose`, and
 [L75](compiler-laws/ido-5.3.md#l75-the-temp-order-at-a-pointer-add-what-moves-it-and-what-the-record-says-does-not),
@@ -1195,7 +1213,7 @@ between two candidates or two flag sets on such a function.
 The differing-word metric is positional: it compares row *n* against row *n*.
 A single inserted or deleted instruction renumbers every row after it, so a
 candidate that is correct everywhere except for one early insertion scores as
-though it were wrong everywhere. The metric is honest about identity and
+though it were wrong everywhere. The metric is accurate about identity and
 misleading about magnitude, and it is **actively wrong for ranking**.
 
 Two measurements from one campaign day, on different functions:
@@ -1483,8 +1501,8 @@ so the deviant TU can share the byte-exact backend with the rest of the
 ROM. Run the fingerprint atlas first (thresholds, chain order and layout,
 const-first compares, the s16 strength-reduction signature); porting whole
 functions comes after a fingerprint matches. See
-[Alternate authentic frontends](alternate-frontends.md). On SSB64 ovl8
-this turned a proven-impossible `sltiu at,a0,4` into words=0 through
+[Alternate authentic frontends](https://github.com/akratch/n64-decomp-workbench/blob/main/docs/alternate-frontends.md). On one IDO 7.1
+project's ovl8 this turned a proven-impossible `sltiu at,a0,4` into words=0 through
 unmodified, community-archived binaries.
 
 ### 21. accom line placement
@@ -1563,7 +1581,7 @@ and the acpp build read:
 Only the second scheduled the store *between* the `lui`/`ori` halves of the
 next statement's constant -- which is what the retail ROM does.
 
-**Measured:** SSB64 `drawbitmap`, 1479 instructions: 59 schedule-swapped words
+**Measured:** an IDO 7.1 project's `drawbitmap`, 1479 instructions: 59 schedule-swapped words
 → 0 under `acpp` preprocessing. Every IDO era tested (5.2, 5.3, 6.0, 7.1,
 MIPSpro 7.4.4) and every `as1` flag and pipeline model produced identical
 output given the same `.i`, so this lever -- not the compiler version -- owned
@@ -1622,7 +1640,7 @@ a number from *inside* the block -- the one thing a one-statement-per-line layou
 cannot express. Two forms, one effect: `} sp134 = …;` on one physical line
 produces the identical object.
 
-**Measured:** SSB64 `unref_800036B4`, 339 instructions, IDO 7.1 `-O2 -mips2`. A
+**Measured:** `unref_800036B4`, 339 instructions, IDO 7.1 `-O2 -mips2`. A
 four-word residue split into two independent pairs. Hoisting `var_s3 = sp14C;`
 above `bytecsr = out_buf;` fixed one pair and left the other at 2 words;
 splicing the `if` block onto the following statement fixed the other pair and
@@ -1653,8 +1671,6 @@ score-regressing corpse of one -- is a warning.
 
 **See also:** lever 21 bisects whitespace for the same reason under accom
 lineage; lever 23 is the same variable one stage earlier, at macro expansion.
-The full campaign is
-[Case study: SSB64 `unref_800036B4`](https://github.com/akratch/n64-decomp-workbench/blob/main/case-studies/ssb64-unref-800036B4.md).
 
 **Points here:** `verdict=schedule-mismatch` with identical allocation,
 `playbook=line-assignment-probe`, and any campaign whose line-number sweep found
@@ -1798,7 +1814,7 @@ and a registerizable local appears out of nothing.
 **Check first, with the census, not by reading the C:** the array is eligible
 only if the object references its base and never an interior offset.
 
-**Measured:** GE007 `mp_watch_menu_display`. `[16] → [12]` plus one `s32`
+**Measured:** an IDO 5.3 project's `mp_watch_menu_display`. `[16] → [12]` plus one `s32`
 declared immediately before it: frame unchanged, nine register rows dead,
 because the function finally had a second symbol for a split role. It scales --
 `[8]` plus *two* new locals, one never referenced, is byte-identical to the
@@ -1895,7 +1911,7 @@ use stderr, so capture both or the log comes back empty.
 The object built with `-R` is `cmp`-identical to the object built without it, so
 no instrumented assembler is needed for this era.
 
-**Measured:** GE007 `mp_watch_menu_display` -- 2688 recorded selections, 59
+**Measured:** an IDO 5.3 project's `mp_watch_menu_display` -- 2688 recorded selections, 59
 decided by `lineno`; eight differing rows, all of them `lineno` decisions, all
 eight killed by folding four `if/else` groups onto one physical line each. The
 token stream is byte-identical after whitespace normalisation, and instruction
@@ -2279,7 +2295,7 @@ If two traces have different semantic fingerprints but `decision outcome:
 status=identical`, report carrier substitution: different hidden webs recreated
 the same ordered register endpoints.
 
-The SSSV `func_802963D0_6A7A80` cleanup is the model. The first exact source used
+One campaign's `func_802963D0_6A7A80` cleanup is the model. The first exact source used
 three artificial statics and three empty controls. A later source kept only the
 cancelled static read and replaced two static carriers with duplicate
 `if (width == height) {}` controls at the same loop boundary. Stock IDO emitted
@@ -2382,27 +2398,27 @@ Each of these was searched exhaustively at real cost; skip them.
 | `lever: pool-rotation` / `pool-population` from `diagnose --ladder` | 44, then 7-13 |
 | `lever: unreachable`, or a `see_also` proof | 43, then the permuter |
 | function exact; fake-match scaffolding remains / `post-match-cleanup` | 27 |
-| TU-clustered impossible dispatch | 20, 22, then the atlas in [alternate-frontends](alternate-frontends.md) |
+| TU-clustered impossible dispatch | 20, 22, then the atlas in [alternate-frontends](https://github.com/akratch/n64-decomp-workbench/blob/main/docs/alternate-frontends.md) |
 | token-identical variants stall (accom lineage) | 21 |
 
 ## See also
 
-- [Start here](START_HERE.md) -- the loop these levers fit into.
-- [From verdict to edit](from-verdict-to-edit.md) -- one worked example of
+- [Start here](https://github.com/akratch/n64-decomp-workbench/blob/main/docs/START_HERE.md) -- the loop these levers fit into.
+- [From verdict to edit](https://github.com/akratch/n64-decomp-workbench/blob/main/docs/from-verdict-to-edit.md) -- one worked example of
   taking a lever from this page to a source change and back.
-- [The `guide` command](guide-command.md) -- `decomp-workbench guide <playbook>`
+- [The `guide` command](https://github.com/akratch/n64-decomp-workbench/blob/main/docs/guide-command.md) -- `decomp-workbench guide <playbook>`
   prints any section below without leaving the terminal.
-- [Working a backlog of near matches](walkthrough-30-near-matches.md) -- how to
+- [Working a backlog of near matches](https://github.com/akratch/n64-decomp-workbench/blob/main/docs/walkthrough-30-near-matches.md) -- how to
   apply this guide to thirty functions instead of one.
-- [Aligned mechanism view](view.md) -- the command that names the mechanism.
+- [Aligned mechanism view](https://github.com/akratch/n64-decomp-workbench/blob/main/docs/view.md) -- the command that names the mechanism.
 - [Compiler laws: IDO 5.3](compiler-laws/ido-5.3.md) and
   [IDO 7.1](compiler-laws/ido-7.1.md) -- what the compiler does, as opposed to
   what to do about it. Levers 34-44 each name their law there, L83-L86 are the
   newest four, and `decomp-workbench guide laws ido-5.3 L80` prints one law
   instead of the page.
-- [Permuter sweeps](permute-sweep.md) -- when no hand lever is left:
+- [Permuter sweeps](https://github.com/akratch/n64-decomp-workbench/blob/main/docs/permute-sweep.md) -- when no hand lever is left:
   `permute-doctor` before the search, `permute-sweep` for it, `permute classify`
   for the class it measured, and `ranking stamp`/`ranking check` so the order
   the queue is worked in is still a measurement of this tree.
-- [Final-function campaign lessons](final-function-campaigns.md) -- the longer
+- [Final-function campaign lessons](https://github.com/akratch/n64-decomp-workbench/blob/main/docs/final-function-campaigns.md) -- the longer
   reasoning behind several of these entries.

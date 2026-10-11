@@ -20,19 +20,17 @@ Shows `msx_psg_tone(chan, period, vol)` / `msx_psg_off(chan)`, multi-channel PSG
 mixing, and trigger input. AY note period = 1789772 / (16 × freq); period 0 =
 silent.
 
-Build (link the helper lib):
+Build (fork, then build the project):
 
-```js
-buildForPlatform({
-  platform: "msx",
-  sources:  { "main.c": ..., "msx_vdp.c": ..., "msx_crt0.s": ... },
-  includes: { "msx_hw.h": ... },
-  crt0: ".module empty\n", sourceName: "main.c",
-})
 ```
+examples({op:'fork', example:'msx/music_sfx', name:'mygame', path:'/abs/path/to/projects'})
+build({output:'project', path:'/abs/path/to/projects/mygame'})
+```
+The fork copies `main.c` plus the helper lib (`msx_vdp.c`, `msx_hw.h`) and the cart
+crt0 (`msx_crt0.s`) into the project, so it builds before you change a line.
 
 Verified on the bluemsx core: chA cycles 6 distinct note periods, chB 3 bass
 periods, chC stays silent until the trigger is held then sweeps through 17
 descending periods. Screenshots before/after a held trigger confirm the ring
 indicator flips white → red and the sequencer beat lights - see
-`audioDebug({op:'inspect', chip:"ay8910"})` and `memory({op:'read'}, "msx_psg_regs", ...)`.
+`audioDebug({op:'inspect', chip:"ay8910"})` and `memory({op:'read', region:'msx_psg_regs'})`.

@@ -7,11 +7,10 @@ workbench already reads -- the records `trace-cascade --grammar` marks
 CAMPAIGN-LOCAL -- kept as diffs so that the reader side never again outlives the
 producer side.
 
-That has happened. The retained, non-redistributable ssb64 IRIX4 campaign log
-records the original CDX patch as **lost**: the instrumented `uopt` binary
-survived, the source that made it did not, and two later campaigns paid for the
-recovery. That private archive is provenance, not a published workbench
-dependency. These files are the receipt, not the compiler.
+That has happened. An earlier campaign lost the original CDX patch: the
+instrumented `uopt` binary survived, the source that made it did not, and two
+later campaigns paid for the recovery. These files are the receipt, not the
+compiler.
 
 | Patch | Adds | Record grammar |
 |---|---|---|
@@ -93,7 +92,7 @@ An entry whose record pointer is not an emulated pointer prints
 `[CDX] symtab proc=%d idx=%u rec=0x%08x nil` and nothing else.
 
 `decomp-workbench trace-frame` reads these records; see
-[the frame ladder](../../../docs/cdx-cascade.md#the-frame-ladder).
+[the frame ladder](https://github.com/akratch/n64-decomp-workbench/blob/main/docs/cdx-cascade.md#the-frame-ladder).
 
 ### What the fields mean
 
@@ -153,5 +152,5 @@ Two cautions, both recorded rather than remembered:
   `libc_impl.c`). The listing is complete before the abort, but no `.o` is
   produced -- so it is a listing tool there, not a build.
 - The same family of built-in traces exists in `as1`. See
-  [compiler instrumentation](../../../docs/compiler-instrumentation.md) on
+  [compiler instrumentation](https://github.com/akratch/n64-decomp-workbench/blob/main/docs/compiler-instrumentation.md) on
   `cc -Wa,-R`, which needs no patched assembler at all.

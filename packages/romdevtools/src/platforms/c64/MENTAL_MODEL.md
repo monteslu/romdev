@@ -1,7 +1,7 @@
 # Commodore 64 - mental model
 
 One page. Read once before you write your first C64 game. The
-TROUBLESHOOTING.md alongside this file is for when something's broken.
+troubleshooting doc (`platform({op:'doc', platform:'c64', name:'troubleshooting'})`) is for when something's broken.
 
 The C64 is the architectural outlier of romdev's 6502-class platforms.
 It has KERNAL + BASIC ROMs mapped into the address space (and your code
@@ -172,10 +172,10 @@ ignores it. This is how you tell a romdev problem from a game-flow problem.
 **Controller-alone (playtest):** a human in `playtest` needs no keyboard - the
 pad's spare buttons map to the C64 keys (X=Space, L2=Run/Stop, R2=Return,
 right-stick=F1/F3/F5/F7, top face=F1; d-pad+Fire=joystick). The same mapping
-applies to the agent's `setInput`, so e.g. `input({op:'set', c64_f1:true})` also
+applies to `input({op:'set'})` too, so e.g. `input({op:'set', c64_f1:true})` also
 presses F1. `playtest({op:'open'})` returns `c64Controls` to relay to the user.
 
-⚠ A cc65 `.prg` only starts after BASIC auto-`RUN`s it - step ~70+ frames past
+Note: A cc65 `.prg` only starts after BASIC auto-`RUN`s it - step ~70+ frames past
 load before input/reads register.
 
 ## SID - three voices of fame
@@ -347,4 +347,4 @@ indexes your world map for which columns are on screen.
 
 The Rizin/Ghidra analysis engine works here like everywhere: `disasm({target:'functions'})` to carve the program, `disasm({target:'cfg'|'xrefs'})` to trace it, `symbols({op:'analyze'})` for a one-shot structural map.
 
-**Decompiler quality on 6502: ROUGH.** Carry-flag idioms and 16-bit math on an 8-bit CPU decompile to noise that only reads cleanly once an LLM folds it - on this CPU the disassembly is often more honest than the pseudocode. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. See the cross-platform ROM-hacking playbook §5f for the full loop.
+**Decompiler quality on 6502: ROUGH.** Carry-flag idioms and 16-bit math on an 8-bit CPU decompile to noise that only reads cleanly once an LLM folds it - on this CPU the disassembly is often clearer than the pseudocode. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. The full loop is in the ROM-hacking playbook, section 5f (`platform({op:'doc', platform:'romhacking', name:'playbook'})`).

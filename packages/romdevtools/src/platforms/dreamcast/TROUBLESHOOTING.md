@@ -53,10 +53,10 @@ base-address misalignment. (Same class of trap as the PS1 rebase issue.)
 
 `cpu({op:'read'})` and `audioDebug({op:'inspect', chip:'aica'})` ARE wired on DC (the
 flycast core exports `romdev_sh4_regs_get` + `romdev_aica_get`). `breakpoint`/`watch`
-are not yet - those need interpreter-step + memory-path hooks in flycast (cpuState/
+are not yet - those need interpreter-step + memory-path hooks in flycast (cpu({op:'read'})/
 audioDebug are plain register reads). Use `cpu`/`audioDebug` + `memory` +
 `disasm`/`decompile` meanwhile.
 
-## "renderingContext returns N/A"
+## "background({view:'renderState'}) returns N/A"
 
 Correct - DC is a 3D TA machine with no 2D tile/sprite VDP for that op. Not a bug.

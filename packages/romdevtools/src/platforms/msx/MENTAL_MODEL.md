@@ -1,7 +1,7 @@
 # MSX / MSX2 - mental model
 
-One page. Read once before you write your first MSX game. The TROUBLESHOOTING.md
-alongside this file is for when something's broken; this is the "what's going on"
+One page. Read once before you write your first MSX game. The troubleshooting doc
+(`platform({op:'doc', platform:'msx', name:'troubleshooting'})`) is for when something's broken; this is the "what's going on"
 version.
 
 ## Start here - don't hand-write the VDP/PSG plumbing
@@ -96,7 +96,7 @@ exactly this.
   TWO streams: `pattern.bin` (1bpp) + `color.bin` (per-row fg/bg nibbles into the
   fixed 16-color TMS9918 palette). Each 8-pixel row is limited to 2 colors -
   that's the classic MSX constraint. DMA pattern.bin to the pattern-generator
-  base and color.bin to the color-table base (getRenderingContext shows both).
+  base and color.bin to the color-table base (`background({view:'renderState'})` shows both).
 - `input({op:'layout', platform: "msx"})` - the joystick path via BIOS GTSTCK
   ($00D5) + GTTRIG ($00D8). **Driving input over MCP:** bluemsx maps `input({op:'set'})`
   straight through (verified live, no inversion): `{a}`→trigger 1 (east),
@@ -137,24 +137,16 @@ PSG-channel decode means `audioDebug({op:'inspect', chip:'ay8910'})` gives
 you the 3 square-wave channels plus the shared noise generator and envelope
 without poking at `msx_psg_regs` by hand.
 
-### ColecoVision shares this core family - but is bring-up only
-
-ColecoVision runs the same toolchain family and exposes only the **standard**
-introspection: `system_ram` + `save_ram` + `video_ram`. It has **no deep
-inspectors** (no `palette` / `sprites` / `background` / `audioDebug` decode)
-and **no MENTAL_MODEL of its own** - treat it as a bring-up target, not a
-finished Tier-1 platform.
-
 ### Extending introspection (for whoever adds a platform)
 
 Deeper, decoded inspectors are not free - each is implemented by **patching
 the emulator core** to expose the extra register/VRAM regions, then wiring a
-decoder. To add deep introspection to ColecoVision (or any thin platform),
+decoder. To add deep introspection to a thin platform,
 follow the existing core-patch pattern used for snes9x / gpgx / fceumm / vice
-under **`scripts/patches/`**.
+under `packages/romdevtools/scripts/patches/` in the source repository.
 
 ## Reverse-engineering & decompilation
 
 The Rizin/Ghidra analysis engine works here like everywhere: `disasm({target:'functions'})` to carve the program, `disasm({target:'cfg'|'xrefs'})` to trace it, `symbols({op:'analyze'})` for a one-shot structural map.
 
-**Decompiler quality on Z80: GOOD.** Register-rich hand asm decompiles cleanly at the block level. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. See the cross-platform ROM-hacking playbook §5f for the full loop.
+**Decompiler quality on Z80: GOOD.** Register-rich hand asm decompiles cleanly at the block level. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. The full loop is in the ROM-hacking playbook, section 5f (`platform({op:'doc', platform:'romhacking', name:'playbook'})`).

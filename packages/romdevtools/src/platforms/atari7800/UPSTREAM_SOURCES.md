@@ -6,7 +6,7 @@ Trust hierarchy:
 2. **Bundled runtime** - `src/platforms/atari7800/lib/c/
    atari7800_sfx.c`, `atari7800_music.c`, asm helpers in `lib/*.asm`,
    `maria_registers.h`.
-3. **Bundled cc65 atari7800 libsrc** (R58) at `src/platforms/
+3. **Bundled cc65 atari7800 libsrc** at `src/platforms/
    atari7800/lib/cc65-src/`. cc65's 7800 target - joystick, conio,
    MARIA helpers.
 4. **Upstream**:
@@ -20,7 +20,7 @@ Trust hierarchy:
 
 - **7800 Software Guide** (Atari official, scanned): https://atariage.com/2600/archives/index.html#7800
 - **MARIA programming**: https://atariage.com/forums/forum/51-atari-7800-programming/
-- **TIA audio** (same chip as 2600): see `../atari2600/UPSTREAM_SOURCES.md`
+- **TIA audio** (same chip as 2600): see `platform({op:'doc', platform:'atari2600', name:'upstream_sources'})`
 
 ## MARIA is unusual
 

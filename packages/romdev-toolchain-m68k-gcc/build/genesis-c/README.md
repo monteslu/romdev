@@ -1,61 +1,50 @@
-# Genesis C toolchain - pipeline overview
+# Genesis C build pipeline
 
-This directory will host the JS-side glue for the Genesis C build path
-once the WASM artifacts ship. Pipeline shape:
+`genesis-c.js` exports `buildGenesisC()` and `finalizeGenesisRom()`, the C
+build path for Sega Genesis ROMs. Each stage is a WebAssembly tool from this
+package, run in its own worker, so a crash in one stage cannot take down the
+caller:
 
 ```
-                  ┌─── cc1 (WASM)    ──┐
-   main.c ──────► │   m68k-elf-as (WASM)│ ──► .o ──► m68k-elf-ld (WASM) ──► ELF ──► objcopy ──► .bin
-                  └─ JS driver orchestrates ─┘                            (Genesis raw ROM)
-                                              ▲
-                                              │ links against
-                                              libgcc.a + libc.a (newlib) + libmd.a (SGDK)
-                                              - all built natively as PURE target artifacts
-                                              and shipped as binary blobs (no native code
-                                              ever runs at user-build time).
+main.c --cc1--> main.s --as--> main.o --ld--> main.elf --objcopy--> main.bin
+                                        ^
+                                        | links against
+             crt0 + libmd.a (SGDK) or a minimal runtime, libc.a, libm.a (newlib), libgcc.a
 ```
 
-## Status
+No native code runs at build time. The JS driver orchestrates the WASM tools in
+place of gcc's own driver, so gcc's fork/exec of its passes is not needed. The
+target libraries (`libgcc.a`, newlib's `libc.a` and `libm.a`, SGDK's runtime)
+are prebuilt target artifacts under `share/genesis/lib/`. SGDK's `libmd.a`
+ships as a prebuilt seed built from the bundled SGDK source; pass
+`rebuildSdk: true` to compile it from source instead (cached by source hash).
+If the SGDK source no longer matches the seed and no rebuild was asked for, the
+result carries an `sdkEditIgnored` warning naming the changed file.
 
-- **Native cross-toolchain build (stage 1)**: in progress -
-  `scripts/build-m68k-toolchain.sh` produces binutils + gcc + newlib +
-  libgcc into `build/m68k-toolchain/install/`.
-- **WASM port of cc1/as/ld (stage 2)**: pending.
-- **SGDK native build against the cross-toolchain (stage 3)**: pending.
-- **JS driver `buildGenesisC()`**: pending.
-- **build({output:'rom'}) wiring**: pending.
+## Two runtime modes
 
-## Why a 3-stage build
+- `sgdk: true` (default): links the bundled SGDK runtime (`libmd.a`, the
+  `sega.s` crt0, the `md.ld` linker script and the SGDK header tree), so
+  `#include <genesis.h>` works and the standard SGDK API (`VDP_drawText`,
+  `SYS_doVBlankProcess`, `SPR_addSprite` and the rest) is available.
+- `sgdk: false`: gcc, newlib and libgcc only, with a small `sega.s` and
+  `genesis.ld`. The program drives the VDP registers directly.
 
-GCC's build is bootstrapping: gcc-the-binary builds libgcc.a using
-gcc-the-binary, and libgcc.a is a TARGET artifact (m68k object file),
-not a host one. Emscripten can't host the native gcc bootstrap because
-gcc spawns its own subprocesses (cc1, as, ld) during the build.
+## Running outside Node
 
-Solution:
-1. **Stage 1 (native)** builds the cross-toolchain on the build host.
-   The output is a native Linux/Mac binary that produces m68k-elf
-   objects. Plus libgcc.a, libc.a, crt0.o, etc. - pure target artifacts.
-2. **Stage 2 (WASM)** re-compiles cc1, m68k-elf-as, m68k-elf-ld via
-   emcc, sourcing from the same upstream gcc/binutils trees but
-   building only the components users invoke at runtime. Each becomes
-   a `Module` we can `callMain` on, identical to wla-65816 / tcc-65816
-   from R15/R16/R18.
-3. **Stage 3 (native against stage 1)** builds SGDK once on the build
-   host using the native stage-1 toolchain. Output: `libmd.a` +
-   `sega.s` (crt0) + `md.ld` (linker script) + the SGDK include tree.
-   These are TARGET artifacts - they ship as binary blobs alongside
-   our WASM tools and never re-build on user machines.
+Pass `env` to run the same pipeline in a browser Web Worker. Every seam is
+optional; omitting `env` uses the Node defaults (worker pool and file reads):
 
-User builds (stage 4, at runtime) wire it together:
-- JS driver calls cc1.wasm with the user's main.c → .s
-- JS driver calls as.wasm with the .s → .o
-- JS driver calls ld.wasm linking [crt0.o, user .o(s), libmd.a,
-  libc.a, libgcc.a] against md.ld → main.elf
-- JS driver calls objcopy.wasm with main.elf → main.bin (raw Genesis ROM)
+- `env.runTool`: runs the gcc tools (see `common/gcc-toolchain.js`, `ToolJob`).
+- `env.loadGlue`: the sjasm and bintos module factories (see `sjasm/sjasm.js`).
+- `env.share`: the `share/genesis/lib` tree as a `{relPath: string|Uint8Array}`
+  manifest; stage it with `common/share-fs.js` `buildShareManifest` so the key
+  order matches Node's (it determines compile order, archive member order and
+  so the ROM bytes).
+- `env.hash`: an async `{name: text} -> hex digest` used for the SDK seed check
+  (required when `env` is given; in a browser, `crypto.subtle`).
+- `env.sdkCache`: an optional `{get(key), put(key, bytes)}` cache for the
+  rebuilt SDK archive.
 
-The "fork/exec" problem that historically blocked gcc-in-the-browser
-goes away because **we don't ship gcc-the-driver**. The driver is JS,
-running in Node, orchestrating WASM tools via our existing worker pool
-(R12). Each WASM tool sees a clean MEMFS, runs a single callMain,
-returns its output.
+`finalizeGenesisRom(binary)` pads the ROM and writes the header checksum at
+`$18E`, SGDK's post-link step.

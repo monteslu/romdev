@@ -1,6 +1,6 @@
 # PlayStation (PS1) - source you can read
 
-Trust hierarchy (try in order before filing a feedback round):
+Trust hierarchy (try in order before filing an issue):
 
 1. **Bundled examples** (`examples/ps1/{shmup,platformer,puzzle,racing,sports}/main.c` +
    `sprite_move/`) - verified building + rendering on the GPU. Start here.
@@ -16,7 +16,7 @@ Trust hierarchy (try in order before filing a feedback round):
    | beetle-psx (Mednafen PSX, libretro, HW renderer) | https://github.com/libretro/beetle-psx-libretro |
    | R3000A CPU / SPU / GPU internals | (in the beetle tree: `mednafen/psx/cpu.c`, `spu.c`, `gpu.cpp`) |
 
-   The cpuState/audioDebug exports we patch in (`romdev_mips_regs_get`,
+   The cpu({op:'read'}) and audioDebug exports romdev patches in (`romdev_mips_regs_get`,
    `romdev_spu_get`) live in `scripts/patches/romdev-snippets/beetle-psx-regsnap.c` +
    `beetle-psx-spu.c`.
 

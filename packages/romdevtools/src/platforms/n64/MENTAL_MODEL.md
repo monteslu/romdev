@@ -47,7 +47,7 @@ don't write the header/IPL3 - the toolchain does (`wrapN64Rom`).
 ## Input
 
 Homebrew reads controllers from **hardware** (the PIF/JoyBus), not via injection. The
-host's `setInput`/`run` holdInputs drive the emulated pad; the game polls JoyBus and
+host's `input({op:'set'})` / `build({output:'run', holdInputs})` drive the emulated pad; the game polls JoyBus and
 sees them. The helper lib exposes a `pad_read()`.
 
 ## Sound
@@ -67,7 +67,7 @@ N64 is at **full parity** with the tile systems wherever the hardware allows:
 - **`memory({op:'read', region:'system_ram'})`** - RDRAM.
 - **`disasm` / `decompile`** - MIPS via rizin/Ghidra (R4300 is well-supported).
 - **`frame({op:'verify'})`** - render-health (nearlyBlank guard) for no-vision agents.
-- **`renderingContext`** is **N/A** (false) - that decodes 2D tile/sprite VDP state,
+- **`background({view:'renderState'})`** (the `renderingContext` capability) is **N/A** (false) - that decodes 2D tile/sprite VDP state,
   which a 3D framebuffer machine doesn't have. Not a missing feature.
 
 ## Build pipeline
@@ -81,7 +81,7 @@ endian libs, then `wrapN64Rom` produces the bootable image. `#include` the bundl
 
 - No custom RSP microcode path (glide64 HLEs the standard F3DEX-style display lists).
 - No real-hardware Expansion Pak detection beyond the standard 4/8 MB split.
-- `renderingContext` is N/A (3D, no tile VDP).
+- `background({view:'renderState'})` is N/A (3D, no tile VDP).
 
 ## Reverse engineering and matching decompilation
 
@@ -92,5 +92,5 @@ that segment at its true VA and names the project's symbols; without
 `project` it falls back to the boot-segment formula and says so in
 `provenance.warning`. The full matching loop - the project's own IDO/GCC,
 compile-and-compare with one aggregate verdict, permuter search, integrate
-with full-ROM verify, live trace/coverage (real PC breaks since core 0.3.0)
+with full-ROM verify, live trace/coverage (real PC breaks)
 - is `decomp({op})`: read `platform({op:'doc', platform:'n64', name:'decomp'})`.

@@ -1,18 +1,12 @@
 # SDCC sm83 / z80 - known gotchas
 
-> **2026-05-25: The big one - `dbuf_append_str(NULL)` crashes - is FIXED.**
->
-> What was reported across many sessions as "SDCC sm83 register
-> allocator crash on for-loops with function calls", patterns #37/#38/#39,
-> the entire #1..#10 family - none of that was an SDCC codegen bug.
-> The WASM build's default 64KB stack was overflowing past `__data_end`
-> into the static `sm83_regs[]` table, zeroing out the register-name
-> pointers, which then propagated to `aopGet → dbuf_append_str(NULL)`.
->
-> Fix: `-s STACK_SIZE=8388608` (8 MB) in the emscripten link flags.
-> Now compiles for-loops, parallel array writes, function calls in
-> loops, nested ifs, multi-array indexed reads, etc. - every previously
-> documented "crash pattern" - without complaint.
+> **SDCC itself is stable here.** Failures that look like an "SDCC sm83
+> register allocator crash on for-loops with function calls" come from an
+> undersized stack in a WASM build of SDCC overflowing into the compiler's
+> register-name table (`aopGet → dbuf_append_str(NULL)`), not from codegen.
+> The bundled SDCC links with an 8 MB stack (`-s STACK_SIZE=8388608`), so
+> for-loops, parallel array writes, function calls in loops, nested ifs and
+> multi-array indexed reads all compile.
 >
 > The `unroll.h` macros are still around if you find a case that needs
 > them, but you almost certainly don't.
@@ -78,9 +72,8 @@ extern undefined / typo:
 2. Reduce to a minimal 4-10 line repro.
 3. Capture the exact SDCC error message + the .i (preprocessed) input.
 4. Open an issue with the repro at https://github.com/monteslu/romdev/issues
-   so we can investigate. **Don't paper over it with workarounds** - with the
-   stack-overflow fix in place, real codegen bugs are much rarer and
-   each one is worth chasing to root cause.
+   so it can be investigated. **Don't paper over it with workarounds** - real
+   codegen bugs are rare and each one is worth chasing to root cause.
 
 ## Writes to VRAM / OAM / I/O regs need `volatile` (or use the bundled helpers)
 
@@ -108,13 +101,13 @@ If you need to write a custom VRAM block-copy:
 - **OR** mark the writes as side-effecting another way (e.g. read
   the value back). This is fragile.
 
-This is independent of the R26 OAM-alignment fix (`shadow_oam __at
-(0xC100)`) and the header CGB-flag fix (now applied automatically by
+This is independent of the OAM-alignment rule (`shadow_oam __at
+(0xC100)`) and the header CGB flag (applied automatically by
 `build({output:'rom'})` / `build({output:'run'})`, not a manual `romPatch({op:'gbHeader'})` step). All
 three are silent-failure bugs that look like "did my changes even
 land?" and need different fixes.
 
-## OAM DMA must run from HRAM (R55 fix - applies to ALL GB code, not just SDCC)
+## OAM DMA must run from HRAM (applies to ALL GB code, not just SDCC)
 
 This isn't an SDCC issue - it's a GB hardware rule that any bundled
 OAM DMA wrapper must respect:
@@ -139,25 +132,24 @@ called automatically by `lcd_init_default()`. If you bypass
 `lcd_init_default` you MUST call `oam_dma_init_hram()` yourself
 before any `oam_dma_flush()` / `oam_dma_copy()`. Otherwise sprites
 will appear to work, then corrupt VRAM after a few hundred frames
-under load - diagnosis time ~3 hours per agent who hits this
-(round 27).
+under load.
 
 If you write your own OAM DMA path, the same rule applies: the
 spin-loop bytes MUST be in HRAM. Don't spin in ROM. Don't spin in
 WRAM. ONLY HRAM.
 
-## gb_crt0.s zeros BSS correctly (R55 - bundled fix; only matters if you bring your own crt0)
+## gb_crt0.s zeros BSS (only matters if you bring your own crt0)
 
-Pre-r55's `gsinit:` had a typo that zeroed `_INITIALIZED` (the
-runtime shadow of init-value statics) instead of `_DATA` (actual
-BSS). The copy loop right after overwrote `_INITIALIZED` with the
-`_INITIALIZER` ROM image anyway - making the zero a no-op. Net
-effect: every `static uint8_t flag;` in your code booted with
-whatever WRAM byte was there at power-on. Hard to spot because
-your initialized statics (`static uint8_t lives = 3;`) WORK
-correctly; only the uninitialized ones boot with garbage.
+A `gsinit:` that zeroes `_INITIALIZED` (the runtime shadow of
+init-value statics) instead of `_DATA` (actual BSS) does nothing
+useful: the copy loop right after overwrites `_INITIALIZED` with the
+`_INITIALIZER` ROM image anyway. Net effect: every
+`static uint8_t flag;` boots with whatever WRAM byte was there at
+power-on. Hard to spot because your initialized statics
+(`static uint8_t lives = 3;`) WORK correctly; only the uninitialized
+ones boot with garbage.
 
-The fixed crt0 zeros `s__DATA..s__DATA + l__DATA` (the actual BSS).
+The bundled crt0 zeros `s__DATA..s__DATA + l__DATA` (the actual BSS).
 If you bring your own crt0, model the gsinit on the bundled one -
 and at minimum add a test like:
 
@@ -173,7 +165,7 @@ void main(void) {
 Independent of any compiler issues, splitting your project into
 multiple `.c` files via `sourcesPaths` helps with iteration speed
 (fewer lines for sdcc to re-parse on each rebuild) and makes the code
-easier to navigate. It's not a workaround anymore, just good hygiene.
+easier to navigate. It's not a workaround, just good hygiene.
 
 ```js
 build({
@@ -194,7 +186,7 @@ build({
 Every footgun above is about VRAM / OAM-DMA / the cart header - the stuff
 that makes sprites vanish. This section is the opposite: **plain WRAM game
 logic** - PRNGs, collision grids, score math. Two such "miscompiles" were
-reported from a real GBC Columns build session and chased to ground here.
+reported while building a GBC falling-block puzzle and traced here.
 **Verdict: neither was an sm83 codegen bug.** They are documented so you
 don't burn hours blaming the compiler for what is actually a memory-layout
 or static-init trap.
@@ -263,19 +255,16 @@ both looped and hand-unrolled, for 8 straddling `(col,topy)` inputs, gets
 collision check "floats," look first at the WRAM-collision trap above (a
 clobbered `grid[]`), at off-by-one row/col limits, or at signed/unsigned
 mix-ups - not at loop codegen. **Don't pre-emptively unroll loops as a
-compiler workaround; with the stack-overflow fix in place, sm83 loops with
-indexed array reads are reliable.**
+compiler workaround; sm83 loops with indexed array reads are reliable.**
 
-### z80 (SMS/GG) ONLY - fixed: value-initialised statics booted as 0
+### z80 (SMS/GG) ONLY: value-initialised statics must be ROM-placed
 
-Investigating the above on the **z80** port (SMS/GG share the SDCC family)
-surfaced a real bug - but a **crt0** bug, not codegen. The bundled
-`sms_crt0.s` / `gg_crt0.s` placed `_INITIALIZER` (the ROM image of
-value-initialised statics) *after* the `_DATA` RAM block in the area list,
-so sdld put it in RAM; the gsinit `ldir` then copied uninitialised RAM onto
-itself and **every `static uint8_t x = 5;` booted as 0** (and BSS wasn't
-zeroed either). On z80 *this* is what made the xorshift PRNG monochrome
-(seed `rng` booted 0 → stayed 0). Fixed 2026-06-08 by ROM-placing
-`_INITIALIZER` + adding a `_DATA` zero loop, mirroring this sm83 crt0 (which
-was already correct - hence sm83 was never affected). If you bring your own
-z80 crt0, model gsinit on `gb_crt0.s`.
+On the **z80** port (SMS/GG share the SDCC family) the same symptom has a
+**crt0** cause, not a codegen one. If `_INITIALIZER` (the ROM image of
+value-initialised statics) sits *after* the `_DATA` RAM block in the crt0's
+area list, sdld puts it in RAM; the gsinit `ldir` then copies uninitialised
+RAM onto itself and **every `static uint8_t x = 5;` boots as 0** (and BSS
+is not zeroed either). That is what turns an xorshift PRNG monochrome (seed
+`rng` boots 0 and stays 0). The bundled `sms_crt0.s` / `gg_crt0.s` ROM-place
+`_INITIALIZER` and add a `_DATA` zero loop, mirroring the sm83 crt0. If you
+bring your own z80 crt0, model gsinit on `gb_crt0.s`.

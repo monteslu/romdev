@@ -32,7 +32,7 @@ If you copied an SMS example that uses PAUSE-as-START semantics
 (SMS pause button is at port $DD bit 4 IIRC), it won't work on GG;
 swap to JOY_START.
 
-## "I drive the game with setInput but the fire/action button doesn't fire"
+## "I drive the game with input({op:'set'}) but the fire/action button doesn't fire"
 
 The GG button map is **inverted** vs the libretro names (same genesis_plus_gx
 core as SMS). Button 1 (main fire) is libretro **b**, button 2 is libretro **a**
@@ -86,7 +86,7 @@ two-byte little-endian CRAM entry.
 ## "Linking error: undefined reference to sms_joypad_read_p2"
 
 GG only has one controller. The SMS examples use `sms_joypad_read_p2`
-for the two-controller patterns (Pong, 2P shmup). When porting, drop
+for the two-controller patterns (2P paddle game, 2P shmup). When porting, drop
 the P2 read + force `p2 = 0` so the AI fallback always engages.
 
 The bundled GG `sports.c` already does this - copy that pattern when

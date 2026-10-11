@@ -19,10 +19,10 @@ memory({op:'read', region:"gb_io", offset:0x40, length:1})  // LCDC byte
 // 0x80+ = on, 0x00-0x7F = off
 ```
 
-**Cause #2: stuck in `wait_vblank()` with LCD off.** Before the
-2026-05-25 runtime fix the helper hung forever in this case; now it
-returns immediately. If you've inlined your own `while (LY < 144)`
-wait, replace it with `wait_vblank()` from `gb_runtime.h`.
+**Cause #2: stuck in a vblank wait with LCD off.** With the LCD off, LY
+never advances, so an inlined `while (LY < 144)` wait hangs forever.
+`wait_vblank()` from `gb_runtime.h` returns immediately in this case;
+use it instead.
 ```js
 cpu({op:'read'})  // PC stuck inside your wait loop? You hit this bug.
 ```
@@ -53,7 +53,7 @@ Check in this order:
    sprites({op:'inspect', platform:"gbc"})   // shows what the LCD sees right now
    ```
 
-## ⚠ "Sprites/tiles never show AND the CPU crashed (PC near $002B)" - the #1 SDCC footgun
+## "Sprites/tiles never show AND the CPU crashed (PC near $002B)" - the #1 SDCC footgun
 
 **The single most common way a GB/GBC C game silently dies.** SDCC's sm83
 backend **miscompiles a byte-copy loop that writes through an `__xdata`
@@ -61,7 +61,7 @@ pointer** - the canonical "copy my tiles into VRAM" pattern:
 
 ```c
 uint8_t *dst = (uint8_t *)0x8000;   // VRAM
-for (uint8_t i = 0; i < 16; i++) dst[i] = src[i];   // ☠ MISCOMPILES
+for (uint8_t i = 0; i < 16; i++) dst[i] = src[i];   // BUG: MISCOMPILES
 ```
 
 SDCC emits code that writes to the **return address** instead of `dst`,
@@ -79,11 +79,11 @@ bytes into VRAM ($8000-$9FFF) or another `__xdata` region, call it instead of
 hand-rolling a for-loop. (`build({output:'rom'})` with `lint:"strict"` will also flag the
 raw pattern as a preflight error.)
 
-## ⚠ "Loop never ends / all code after a loop is dead" - uint8 loop-bound trap
+## "Loop never ends / all code after a loop is dead" - uint8 loop-bound trap
 
 ```c
 uint8_t i;
-for (i = 0; i < 32 * 32; i++) { ... }   // ☠ 255 < 1024 is ALWAYS true → infinite
+for (i = 0; i < 32 * 32; i++) { ... }   // BUG: 255 < 1024 is ALWAYS true → infinite
 ```
 A `uint8_t` counter can't reach a bound >255, so the loop never exits and
 everything after it is dead code. SDCC does **not** warn. Use `uint16_t` for any
@@ -174,28 +174,7 @@ pokes the BG map "whenever the state changes" will have SOME of those pokes
 land mid-frame and vanish: stale cells, a piece that visually lags the
 logical grid, glitches that move around as code timing shifts.
 
-The robust pattern (used by the bundled puzzle example games):
-
-1. **COLLECT** - during the frame, don't touch VRAM. Append (addr, tile)
-   pairs to a small RAM queue whenever game state changes a cell.
-2. **FLUSH** - immediately after `wait_vblank()` (right after the OAM DMA),
-   drain the queue with pure writes. No scanning, no logic - vblank is only
-   ~1140 cycles, so the flush must be writes only and bounded.
-3. **Scrub** - repaint one or two rows per frame round-robin as insurance,
-   so any cell that ever got dropped self-heals within a second.
-
-If you must write outside that structure, turn the LCD off first (only
-acceptable during init/load screens - mid-game it flashes white).
-
-## "BG map updates randomly don't stick" / a tile updates one frame late forever
-
-The core (like real hardware mid-frame) DROPS writes to VRAM ($8000-$9FFF)
-that land outside vblank while the LCD is on - silently. A game loop that
-pokes the BG map "whenever the state changes" will have SOME of those pokes
-land mid-frame and vanish: stale cells, a piece that visually lags the
-logical grid, glitches that move around as code timing shifts.
-
-The robust pattern (used by the bundled puzzle example games):
+The reliable pattern (used by the bundled puzzle example games):
 
 1. **COLLECT** - during the frame, don't touch VRAM. Append (addr, tile)
    pairs to a small RAM queue whenever game state changes a cell.
@@ -264,7 +243,7 @@ A single `%` per event - e.g. per enemy spawn - is fine.
 
 ## Debug recipes
 
-A few high-leverage tools you might not know exist:
+A few tools you might not know exist:
 
 - **`sprites({op:'inspect', platform:"gbc"})`** - pretty-prints all 40 OAM
   slots showing which are on-screen + tile index + attributes.

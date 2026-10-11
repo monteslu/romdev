@@ -41,8 +41,8 @@ const c    = emitC(blob, "bgm_level1");
 
 ## In romdev
 
-`romdev-mcp` wraps this as `encodeAudio({target:'xgm2', vgmPath, name})` - emits
-the C array directly. See the Genesis MENTAL_MODEL "music how-to".
+romdevtools wraps this as `encodeAudio({target:'xgm2', vgmPath, name})`, which
+emits the C array directly.
 
 ## Provenance
 

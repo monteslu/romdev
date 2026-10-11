@@ -21,11 +21,16 @@ The build differs from upstream in three ways, all in romdev's patch:
 - the reference defaults are deterministic and accurate: no entropy, the
   accurate PPU and DSP, no HLE preference.
 
-License: GPL-3.0 (bsnes; libco and nall are ISC). See NOTICE. Not intended for
+License: GPL-3.0-only (bsnes; libco and nall are ISC). See NOTICE. Not intended for
 standalone use; loaded by romdev's core registry. This core is a separate
 reference: none of its code is compiled into romdev's snes9x core or into
 recompiled carts (their firmware coprocessors come from ares, ISC).
 
-**Built by:** `romdevtools/scripts/build-bsnes.sh` + `bsnes-romdev.patch` (and
-`patches/bsnes/`). See `scripts/BUILD_MAP.md` in the romdev repo for the full
-recipe to package map.
+No coprocessor firmware ships in this package: supply your own dumps, for
+example with `loadMedia({platform:'snes', core:'bsnes', firmware})`, which copies the
+file into the system directory before the ROM loads.
+
+**Built by:** `packages/romdevtools/scripts/build-bsnes.sh` with
+`bsnes-romdev.patch` (plus `patches/bsnes/` and `patches/libco-wasm/`). See
+[BUILD_MAP.md](https://github.com/monteslu/romdev/blob/main/packages/romdevtools/scripts/BUILD_MAP.md)
+for the recipe-to-package map.

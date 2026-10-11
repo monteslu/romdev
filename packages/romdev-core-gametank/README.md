@@ -1,20 +1,33 @@
 # romdev-core-gametank
 
-gametank - GameTank (Clyde Shaffer's open W65C02S console) emulator core (libretro), as WebAssembly.
+The GameTank libretro core (GameTank: Clyde Shaffer's open-source 8-bit
+console, a WDC 65C02 main CPU with a second 65C02 driving audio), compiled to
+WebAssembly.
 
-A binary package for [romdev](https://github.com/monteslu/romdev) - it ships the
-prebuilt WebAssembly + JS glue and is resolved by the main `romdev` package on
-demand. You normally install `romdev`, not this package directly.
+A binary package for [romdev](https://github.com/monteslu/romdev). It ships the
+prebuilt WebAssembly and JS glue, and the main `romdevtools` package loads it on
+demand for `loadMedia({platform:'gametank'})`. You normally install
+`romdevtools` (`npx romdevtools`), not this package directly.
 
-## Upstream & license
+## Upstream and license
 
-Bundles: **handy**.
+Bundles: **gametank-libretro** (https://github.com/monteslu/gametank-libretro),
+a libretro wrapper around the hardware-emulation units of Clyde Shaffer's
+[GameTankEmulator](https://github.com/clydeshaffer/GameTankEmulator) (CPU,
+blitter, audio coprocessor, bus).
 
-**License:** Zlib
+**License:** MIT (gametank-libretro and GameTankEmulator, Copyright (c) 2020
+Clyde Shaffer; the vendored mos6502 CPU core is MIT, Copyright (c) 2017
+Gianluca Ghettini).
 
-This package redistributes the upstream binary built to WebAssembly; the source
-is fetched from a pinned upstream commit at build time (see the romdev repo's
-`scripts/versions.json` and `BUILDING.md`). See the romdev repo `NOTICE` for the
-full third-party inventory.
+romdev's build adds its shared live-debug instrumentation (write and read
+watchpoints, PC breakpoints, register get/set, coverage) through a small shim
+appended to the core's `libretro.cpp`. This core is built from a local checkout
+of gametank-libretro; it has no pinned commit in
+`packages/romdevtools/scripts/versions.json`.
 
-**Built by:** `romdevtools/scripts/build-handy.sh` + patch(es) `handy-romdev-watchpoint.patch`. See `scripts/BUILD_MAP.md` in the romdev repo for the full recipe→package map.
+**Built by:** `packages/romdevtools/scripts/build-gametank.sh` (shim:
+`scripts/patches/romdev-snippets/gametank-debug.cpp`). Set `GAMETANK_SRC` to
+the gametank-libretro checkout. See
+[BUILD_MAP.md](https://github.com/monteslu/romdev/blob/main/packages/romdevtools/scripts/BUILD_MAP.md)
+for the recipe-to-package map.

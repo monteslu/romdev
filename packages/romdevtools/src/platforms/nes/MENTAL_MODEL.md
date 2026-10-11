@@ -1,7 +1,7 @@
 # NES - mental model
 
 One page. Read once before you write your first game. The
-TROUBLESHOOTING.md alongside this file is for when something's broken;
+troubleshooting doc (`platform({op:'doc', platform:'nes', name:'troubleshooting'})`) is for when something's broken;
 this is the "what's going on" version.
 
 ## CPU memory map ($0000-$FFFF)
@@ -22,7 +22,7 @@ $8000-$FFFF  PRG ROM (32 KB on NROM-256, fixed)
 The cc65 runtime claims:
 - ZP $00-$01 reserved (cc65 internal)
 - ZP $02-$1B: cc65 C runtime (`c_sp`, tmp1-4, ptr1-4, sreg)
-- ZP $1C+ available to your game (with our chr-ram crt0)
+- ZP $1C+ available to your game (with the bundled chr-ram crt0)
 - `$0500-$07FF` (3 pages): cc65 C parameter stack
 
 > **cc65 zero-page starts at $02, not $00 (applies to every cc65 platform -
@@ -244,8 +244,7 @@ move whenever a change "did nothing" on screen.
 
 ## Five footguns to know before you start
 
-Read these BEFORE writing your game-loop. Each one cost a previous
-agent several rounds.
+Read these BEFORE writing your game-loop.
 
 ### 1. Framebuffer is 256×224, not 256×240
 
@@ -261,7 +260,7 @@ prompts at **row 27** or earlier.
 
 The bundled crt0 writes `$FF` to every byte of `_shadow_oam`
 ($0200-$02FF) at boot - canonical sprite-Y off-screen sentinel.
-`memory({op:'read'}, nes_oam)` returning all `$FF` after a few frames can
+`memory({op:'read', region:'nes_oam'})` returning all `$FF` after a few frames can
 mean "DMA copied the source page faithfully because the source
 was all `$FF` when NMI fired" - NOT "DMA broken."
 
@@ -357,12 +356,30 @@ instead of guessing:
   PPUCTRL/PPUMASK and resolves the active CHR bank (plus its file offset) -
   this is what tells you which pattern table BG vs sprites are fetching from
   (the bit-4 footgun above).
-- **Memory regions:** `memory({op:'read'})` exposes OAM, Palette,
-  Nametables (CIRAM - including the 2-bit-per-16x16 attribute data that
-  selects each tile group's sub-palette, decoded by `inspectBackgroundMap`),
-  CHR (live MMC1-banked CHR - don't parse the iNES file), CPU_REGS,
-  PPU_REGS, and APU_REGS (the synthesized $4000-$4017 snapshot consumed by
-  `audioDebug`).
+- **Memory regions:** the patched fceumm core exposes these beyond the
+  libretro standard, all readable with `memory({op:'read', region, offset, length})`:
+
+  | Region | Contents |
+  |---|---|
+  | `system_ram` | 2 KB CPU RAM ($0000-$07FF) |
+  | `nes_chr` | 8 KB CHR as the PPU sees it now, gathered from the 8 live 1 KB CHR pages (so MMC1/MMC3-banked CHR reads correctly; don't parse the iNES file) |
+  | `nes_nametables` | 2 KB CIRAM: the background tile maps, including the 2-bit attribute data that picks each 16x16 group's sub-palette |
+  | `nes_palette` | 32 bytes ($3F00-$3F1F) |
+  | `nes_oam` | 256 bytes: 64 sprites x 4 bytes, each `[y, tileIndex, attributes, x]` |
+
+  The core also exposes CPU_REGS, PPU_REGS and APU_REGS (the synthesized
+  $4000-$4017 snapshot that `audioDebug` reads).
+- **Background composite:** `background({view:'map', render:true})` composites
+  the active CHR + nametable + palette into a 256x240 PNG: what the BG layer
+  would look like even while rendering is disabled.
+
+## Static recompilation
+
+NES ROMs can be recompiled whole into a wasmcart with
+`disasm({target:'recompile', emit:'wasmcart', platform:'nes', path, outputPath})`. The cart's
+hardware is a port of fceumm, the reference core it is verified against with
+`frame({op:'verifyRecompile', cart, reference})`. Full guide:
+`platform({op:'doc', platform:'guide', name:'recompile'})`.
 
 ## Rebuilding a CHR-ROM NROM image (reverse-engineering)
 
@@ -413,13 +430,13 @@ exact `build({...})` call, with absolute paths) and a `BUILD.md`. NROM gets the
 multi-bank `.cfg` referenced via `linkerConfigPath`. Either way: feed
 `rebuild.json` straight back to `build` and you get a byte-identical ROM. This
 is the RE workhorse loop: `disasm({target:'project'})` → edit the `.asm` →
-rebuild → `diffRoms` to confirm your patch landed.
+rebuild → `romPatch({op:'diff'})` to confirm your patch landed.
 
 ## Reverse-engineering & decompilation
 
 The Rizin/Ghidra analysis engine works here like everywhere: `disasm({target:'functions'})` to carve the program, `disasm({target:'cfg'|'xrefs'})` to trace it, `symbols({op:'analyze'})` for a one-shot structural map.
 
-**Decompiler quality on 6502: ROUGH.** Carry-flag idioms and 16-bit math on an 8-bit CPU decompile to noise that only reads cleanly once an LLM folds it - on this CPU the disassembly is often more honest than the pseudocode. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. See the cross-platform ROM-hacking playbook §5f for the full loop.
+**Decompiler quality on 6502: ROUGH.** Carry-flag idioms and 16-bit math on an 8-bit CPU decompile to noise that only reads cleanly once an LLM folds it - on this CPU the disassembly is often clearer than the pseudocode. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. The full loop is in the ROM-hacking playbook, section 5f (`platform({op:'doc', platform:'romhacking', name:'playbook'})`).
 
 ## When to drop to asm
 

@@ -2,19 +2,21 @@
 
 ProSystem - Atari 7800 emulator core (libretro), as WebAssembly.
 
-A binary package for [romdev](https://github.com/monteslu/romdev) - it ships the
-prebuilt WebAssembly + JS glue and is resolved by the main `romdev` package on
-demand. You normally install `romdev`, not this package directly.
+A binary package for [romdev](https://github.com/monteslu/romdev). It ships the
+prebuilt WebAssembly and JS glue, and the main `romdevtools` package loads it on
+demand. You normally install `romdevtools` (`npx romdevtools`), not this package
+directly.
 
-## Upstream & license
+## Upstream and license
 
-Bundles: **prosystem**.
+Bundles: **ProSystem**, https://github.com/libretro/prosystem-libretro.
 
 **License:** GPL-2.0-or-later
 
-This package redistributes the upstream binary built to WebAssembly; the source
-is fetched from a pinned upstream commit at build time (see the romdev repo's
-`scripts/versions.json` and `BUILDING.md`). See the romdev repo `NOTICE` for the
-full third-party inventory.
+This package redistributes the upstream source built to WebAssembly. The
+upstream version is pinned in `packages/romdevtools/scripts/versions.json` in the
+romdev repo, and the repo's `NOTICE` has the full third-party inventory.
 
-**Built by:** `romdevtools/scripts/build-prosystem.sh` + patch(es) `prosystem-romdev-memory-regions.patch`. See `scripts/BUILD_MAP.md` in the romdev repo for the full recipe→package map.
+**Built by:** `packages/romdevtools/scripts/build-prosystem.sh` with patch(es) `prosystem-romdev-memory-regions.patch`. See
+[BUILD_MAP.md](https://github.com/monteslu/romdev/blob/main/packages/romdevtools/scripts/BUILD_MAP.md)
+for the recipe-to-package map.

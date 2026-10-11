@@ -55,11 +55,10 @@ scheduler decision, a branch eliminator), do not start a source-spelling sweep
 on a guess. Capture the phase streams around the boundary, decode them, and
 patch-and-replay the suspected fix directly at that boundary through the stock
 pass. A replay that reaches `words=0` proves the mechanism is real and exactly
-where it lives, before a single C variant is written for it -- the cef4c
-campaign's conditional branch-to-next barrier was proven `words=0` by stream
-surgery a full session before any source spelling reached it
-(`docs/history/postmortem-2026-08-24-cef4c-exact.md`, "What worked" and "New
-compiler knowledge earned"). Only then search for the source shape that makes
+where it lives, before a single C variant is written for it. In one IDO 7.1
+campaign the conditional branch-to-next barrier was proven `words=0` by stream
+surgery a full session before any source spelling reached it (see
+`docs/compiler-laws/ido-7.1.md`). Only then search for the source shape that makes
 the compiler emit the proven record on its own; a proven-but-unreachable
 mechanism is still worth recording; it bounds how much source search remains
 worth doing.

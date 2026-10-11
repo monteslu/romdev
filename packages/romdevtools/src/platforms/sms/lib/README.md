@@ -26,13 +26,12 @@ catches these with the right file:line before SDCC's own (misleading)
 error messages get a chance to confuse you. See
 [`../../gb/lib/c/SDCC_GOTCHAS.md`](../../gb/lib/c/SDCC_GOTCHAS.md).
 
-The previously-documented "register-allocator crash family"
-(`dbuf_append_str NULL` assertion on for-loops with function calls,
-parallel array writes, multi-array indexed reads, etc.) was diagnosed
-on 2026-05-25 as the emscripten 64 KB default stack overflowing past
-`__data_end` and zeroing out the static `sm83_regs[]` table. Fixed by
-bumping the WASM stack to 8 MB. Those patterns compile cleanly now -
-no workarounds needed.
+The "register-allocator crash family" (a `dbuf_append_str NULL`
+assertion on for-loops with function calls, parallel array writes,
+multi-array indexed reads, etc.) comes from an undersized WASM stack in
+SDCC overflowing into its register table, not from codegen. The bundled
+SDCC links with an 8 MB stack, so those patterns compile cleanly - no
+workarounds needed.
 
 ## Snippets shipped in this directory
 
@@ -46,8 +45,8 @@ no workarounds needed.
 | `load_tiles.s` | Bulk OTIR into VRAM at an arbitrary destination. Handles >256 byte transfers (loops on outer page count). |
 | `sprite_table.s` | Uploads shadow OAM (256 bytes WRAM) → SAT VRAM region. Includes the (X,tile) pairs layout at $3F80. |
 
-Fetch any with `getStarterSnippet({platform:"sms", name:"<file>"})`.
-Pull them all at once with `getAllStarterSnippets({platform:"sms"})`.
+Fetch any with `examples({op:'snippets', platform:'sms', mode:'get', snippetName:'<file>'})`.
+Pull them all at once with `examples({op:'snippets', platform:'sms', mode:'getAll', inline:true})`.
 
 ## The five gotchas that cost the most time
 
@@ -87,8 +86,8 @@ invisible - you waste a sprite slot.
 CRAM bytes are 2-2-2 BGR. So $3F is white (all channels max), $3 is
 pure red, $C is pure green, $30 is pure blue. Don't pass 0xFFFFFF and
 expect white - it'll truncate to $3F. Use `palette({source:'platformMaster', platform:"sms"})`
-to see all 64 distinct colors and dither input art against them with
-imagemagick.
+to see all 64 distinct colors, and `encodeArt({stage:'quantize', platform:"sms", path, outputPath})`
+to snap input art to them.
 
 ### 5. Game Gear CRAM is 4-4-4 (12-bit BGR), 2 bytes per entry
 

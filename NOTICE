@@ -1,99 +1,184 @@
-romdev - third-party component inventory
-========================================
+romdevtools - licence statement and third-party inventory
+==========================================================
 
-TL;DR - Games you COMPILE with romdev from your own source are YOURS,
-including to sell commercially. A compiled ROM contains only your code +
-permissive runtime libraries, built by toolchains with runtime exceptions.
+This file is the licence of the romdevtools npm package (package.json:
+"SEE LICENSE IN NOTICE"). It has three parts:
 
-RECOMPILED carts are different. The static recompiler
-(disasm({target:'recompile'}), emit 'wasmcart' or 'sync32') builds each cart
-around code ported from its reference emulator, so a recompiled cart is NOT
-unencumbered: it carries that emulator's licence (GPL-2.0 for NES and GB/GBC,
-MPL-2.0 for GBA, non-commercial for SMS/GG, Genesis and SNES), and it also
-contains the code of the game it was recompiled from. See "Recompiled carts"
-below.
+  1. romdev's own code is MIT. The full text is in LICENSE.
 
-Apart from recompiled carts, the non-commercial caveat below applies only to
-redistributing the romdev tool bundle (which contains two non-commercial
-emulator cores), never to the games you compile with it.
+  2. Third-party components. romdevtools contains some third-party code
+     itself (listed under "Third-party code inside romdevtools"), and it
+     depends on separate npm packages (romdev-core-*, romdev-platform-*,
+     romdev-toolchain-*, romdev-analysis*, and the decompilation ports) that
+     redistribute emulator cores, compiler toolchains and tools, each under
+     its own licence. This file lists all of them. Each component's own
+     licence governs that component.
 
-romdev's own code is MIT (see LICENSE). It bundles and redistributes
-third-party emulator cores, compiler toolchains, and game runtime libraries,
-each under its own license. This file inventories them.
+  3. Recompiled carts. The static recompiler (disasm({target:'recompile'}),
+     emit 'wasmcart' or 'sync32') builds code ported from a reference
+     emulator into every cart it makes. A recompiled cart carries that
+     emulator's licence: GPL-2.0 for NES and GB/GBC, MPL-2.0 for GBA, and
+     non-commercial for SMS/GG, Genesis and SNES. It also contains the code
+     of the game it was recompiled from. See "Recompiled carts" below.
 
-Two kinds of bundled component, governed differently:
+In short:
 
-  • COMPILERS / TOOLCHAINS produce the user's ROM. Several are GPL/LGPL, but
-    compilers carry a RUNTIME EXCEPTION: the license of the compiler does NOT
-    extend to its output. A game compiled with GPL gcc/cc65/sdcc is the
-    author's own work, freely licensable. The GPL obligation falls on US (we
-    redistribute the compiler binary) - satisfied by shipping the build recipe
-    + pinned upstream source so anyone can reproduce the binary (see
-    packages/romdev/scripts/ and BUILDING.md).
+  - Games you COMPILE with romdev from your own source are yours, including
+    to sell commercially. A compiled ROM contains only your code plus
+    permissive runtime libraries, built by toolchains whose licences do not
+    extend to their output.
+  - RECOMPILED carts are not unencumbered (part 3).
+  - The non-commercial terms of two emulator cores apply to redistributing
+    the romdev tool bundle that contains them (and to recompiled carts built
+    from their code), never to games you compile.
 
-  • EMULATOR CORES are a dev instrument (run + observe): running a game on a
-    core puts none of the core's code into the game. Their license governs
-    OUR redistribution of the core binary. Most are GPL (OSI open source,
-    source available upstream). Two are NON-COMMERCIAL (see below), which is
-    why romdev as a whole is distributed as SOURCE-AVAILABLE / FREE FOR
-    NON-COMMERCIAL USE rather than OSI open source. romdev's own code is MIT
-    and the game runtime libraries are permissive, so games you COMPILE with
-    romdev are unencumbered.
-
-  • THE STATIC RECOMPILER is the exception: it copies code ported from the
-    reference cores INTO its output. Every recompiled cart carries the
-    licence of the core it was ported from (see "Recompiled carts" below).
+This section describes what each licence says; it is not legal advice.
 
 
-NON-COMMERCIAL COMPONENTS (why romdev is "free for non-commercial use")
------------------------------------------------------------------------
-These two cores are under custom NON-COMMERCIAL licenses. They forbid
-commercial redistribution of the core, so a distribution of romdev that
-bundles them is free for non-commercial use and is not labeled OSI open
-source. (Your code is MIT and your compiled games are unencumbered; a cart
-the recompiler builds for SMS/GG, Genesis or SNES contains code from these
-cores and is non-commercial, see "Recompiled carts".)
+How the kinds of component are governed
+---------------------------------------
 
-  snes9x            SNES core           non-commercial (snes9x license)
-  genesis_plus_gx   Genesis/SMS/GG core non-commercial (Genesis Plus GX license)
+  COMPILERS / TOOLCHAINS produce the user's ROM. Several are GPL or LGPL, but
+  their licences do not reach the compiled output: gcc's runtime library
+  carries the GCC Runtime Library Exception, SDCC's runtime libraries carry a
+  linking exception, and the other assemblers and linkers place no
+  conditions on what they produce. A game compiled with GPL gcc, cc65 or
+  sdcc is the author's own work, freely licensable. The GPL obligation falls
+  on romdev as the redistributor of the compiler binaries. It is met by
+  publishing the build recipes, romdev's patches and the pinned upstream
+  sources in the source repository (https://github.com/monteslu/romdev):
+  see packages/romdevtools/scripts/BUILD_MAP.md (which recipe builds which
+  package) and packages/romdevtools/scripts/versions.json (every upstream
+  URL and pinned commit). The recipes and patches are not in the npm
+  tarballs.
 
-  romdevtools itself ships source derived from both (the recompiler backends
-  under src/analysis/recompile/, see "Recompiled carts"), under their terms.
+  EMULATOR CORES are a development instrument: running a game on a core puts
+  none of the core's code into the game. A core's licence governs the
+  redistribution of the core binary. Most are GPL. Two are non-commercial
+  (below), which is why a romdev distribution that bundles them is free for
+  non-commercial use rather than OSI open source.
+
+  THE STATIC RECOMPILER is the exception: it copies code ported from the
+  reference cores into its output. Every recompiled cart carries the licence
+  of the core it was ported from (see "Recompiled carts").
+
+
+Non-commercial components
+-------------------------
+These two cores are under custom non-commercial licences that forbid
+commercial redistribution of the core. Your own code and the games you
+compile are unencumbered; a cart the recompiler builds for SMS/GG,
+Genesis or SNES contains code from these cores and is non-commercial.
+
+  snes9x            SNES                 snes9x licence (non-commercial)
+  genesis_plus_gx   Genesis / SMS / GG   Genesis Plus GX licence
+                                         (non-commercial)
+
+romdevtools itself ships source derived from both (the recompiler backends
+under src/analysis/recompile/), under their terms. Their licence texts are in
+LICENSES/ in this package.
+
+
+Third-party code inside romdevtools
+-----------------------------------
+Everything in this package not listed here is romdev's own code (MIT).
+
+  src/analysis/recompile/   recompiler backends: code ported or generated
+                            from fceumm, gambatte, mGBA, Genesis Plus GX,
+                            snes9x, ares and musl. Each backend directory's
+                            NOTICE.txt lists the ported files; licences in
+                            "Recompiled carts" and LICENSES/.
+  src/decomp/asm-processor.js
+                            JS port of asm-processor
+                            (https://github.com/simonlindholm/asm-processor),
+                            public domain (Unlicense).
+  src/decomp/maspsx.js      JS port of maspsx (https://github.com/mkst/maspsx),
+                            MIT, Copyright (c) 2023 Mark Street.
+  src/decomp/workbench/     JS port of n64-decomp-workbench 0.8.0
+                            (https://github.com/akratch/n64-decomp-workbench)
+                            and its bundled data (field guide, compiler-law
+                            notes, skills, fingerprints), CC0-1.0.
+  src/git/wildmatch.js      port of git's wildmatch.c (Rich Salz, Wayne
+                            Davison), public domain.
+  src/platforms/*/lib/      game runtime libraries, shipped as source (see
+                            "Game runtime / SDK libraries").
 
 
 Emulator cores
 --------------
-  fceumm            NES                 GPL-2.0
-  gambatte          GB / GBC            GPL-2.0
-  genesis_plus_gx   Genesis / SMS / GG  non-commercial  ⚠ (see above)
-  snes9x            SNES                non-commercial  ⚠ (see above)
-  bsnes             SNES (reference)    GPL-3.0 (libco, nall: ISC); romdev-core-bsnes,
-                                        the accuracy reference for the firmware
-                                        coprocessors (ST010/ST011, ST018); a
-                                        separate core, linked into nothing else
-  ares (chips only) SNES coprocessors   ISC; its uPD96050 and ARM cores are
-                                        compiled into romdev's snes9x and into
-                                        recompiled carts (see below)
-  mgba              GBA                 MPL-2.0
-  vice (x64)        C64                 GPL-2.0  (see "C64 ROMs" below)
-  stella2014        Atari 2600          GPL-2.0
-  prosystem         Atari 7800          GPL-2.0
-  handy             Atari Lynx          zlib
+Each core is built to WebAssembly from its upstream source (at the commit
+pinned in versions.json in the source repository, where one is pinned),
+with romdev's patch, and shipped in the package named. 18 cores in 18 packages.
 
-ares chip code in the snes9x core and in recompiled SNES carts  (ISC)
--------------------------------------------------------------------
+  Core              Platform             Licence            Package
+  ----------------  -------------------  -----------------  ------------------------
+  fceumm            NES                  GPL-2.0            romdev-core-fceumm
+      https://github.com/libretro/libretro-fceumm
+  gambatte          GB / GBC             GPL-2.0            romdev-core-gambatte
+      https://github.com/libretro/gambatte-libretro
+  genesis_plus_gx   Genesis / SMS / GG   non-commercial     romdev-core-gpgx
+      https://github.com/libretro/genesis-plus-gx
+  snes9x            SNES                 non-commercial     romdev-platform-snes
+      https://github.com/libretro/snes9x
+      (with ares's chip cores, ISC; see below)
+  bsnes             SNES (accuracy       GPL-3.0 (libco,    romdev-core-bsnes
+                    reference for the    nall: ISC)
+                    firmware chips)
+      https://github.com/libretro/bsnes
+      A separate core, linked into nothing else.
+  mGBA              GBA                  MPL-2.0            romdev-platform-gba
+      https://github.com/libretro/mgba
+  stella2014        Atari 2600           GPL-2.0            romdev-platform-atari2600
+      https://github.com/libretro/stella2014-libretro
+  ProSystem         Atari 7800           GPL-2.0            romdev-core-prosystem
+      https://github.com/libretro/prosystem-libretro
+  Handy             Atari Lynx           zlib               romdev-core-handy
+      https://github.com/libretro/libretro-handy
+  VICE (x64)        C64                  GPL-2.0            romdev-core-vice
+      https://github.com/libretro/vice-libretro
+      (see "Firmware and BIOS" for the C64 ROMs)
+  Geargrafx         PC Engine / TG-16    GPL-3.0            romdev-core-geargrafx
+      https://github.com/drhelius/Geargrafx
+  blueMSX           MSX / MSX2           blueMSX licence    romdev-core-bluemsx
+      https://github.com/libretro/blueMSX-libretro
+      (zlib-style; some sound-chip files from openMSX and fMSX-SDL
+      are GPL, per upstream license.txt)
+      (with C-BIOS, BSD-style; see "Firmware and BIOS")
+  GameTank          GameTank             MIT                romdev-core-gametank
+      https://github.com/monteslu/gametank-libretro (libretro core), built on
+      GameTankEmulator (https://github.com/clydeshaffer/GameTankEmulator,
+      MIT, Copyright 2020 Clyde Shaffer) and its mos6502 core (MIT,
+      Copyright 2017 Gianluca Ghettini)
+  FAKE-08           PICO-8 carts         MIT                romdev-core-fake08
+      https://github.com/jtothebell/fake-08 (with z8lua, MIT)
+      A clean-room PICO-8 player; not Lexaloffle's PICO-8.
+  ParaLLEl-N64      N64                  GPL-2.0            romdev-core-parallel-n64
+      https://github.com/libretro/parallel-n64
+      Built with the glide64 GPU renderer (GL).
+  Beetle PSX HW     PlayStation          GPL-2.0            romdev-core-beetle-psx-hw
+      https://github.com/libretro/beetle-psx-libretro (a Mednafen PSX fork),
+      GLES3 hardware renderer, with OpenBIOS embedded (see "Firmware and
+      BIOS")
+  Flycast           Dreamcast            GPL-2.0            romdev-core-flycast
+      https://github.com/flyinghead/flycast, with its reios HLE BIOS
+  s32core           sync32               MIT                romdev-core-s32core
+      First-party interpreter for sync32, an open RP2350-based console.
+
+The SNES coprocessor code from ares
+-----------------------------------
   The firmware-running SNES coprocessors (the ST010/ST011 NEC uPD96050 and the
   ST018 ARM) are compiled from ares (https://github.com/ares-emulator/ares, at
-  the commit pinned in romdevtools/scripts/versions.json, cores.ares): its
-  processor cores ares/component/processor/upd96050 and arm7tdmi, the Super
-  Famicom driver files ares/sfc/coprocessor/necdsp/memory.cpp and
-  armdsp/memory.cpp and io.cpp, and the nall headers they use, with romdev's
-  glue (romdevtools/scripts/recompile-gen/ares-chips/glue/, MIT) restating the
-  rest of those drivers and ares's thread clock. That code is compiled into:
+  the commit pinned in versions.json, cores.ares): its processor cores
+  ares/component/processor/upd96050 and arm7tdmi, the Super Famicom driver
+  files ares/sfc/coprocessor/necdsp/memory.cpp and armdsp/memory.cpp and
+  io.cpp, and the nall headers they use, with romdev's glue (MIT) restating
+  the rest of those drivers and ares's thread clock. That code is compiled
+  into:
     - recompiled SNES carts built with options.firmware (ST011 / ST018): the
-      units in romdevtools/src/analysis/recompile/wat/snes/ares-chips.json;
-    - romdev's snes9x core (romdev-platform-snes, snes9x-ares-chips.patch),
-      used when st011.rom / st018.rom is in the system directory.
+      units in src/analysis/recompile/wat/snes/ares-chips.json in this
+      package;
+    - romdev's snes9x core (romdev-platform-snes), used when st011.rom /
+      st018.rom is in the system directory.
   ares is under the ISC license, a permissive license whose only condition is
   keeping its notice, so it can sit with snes9x's non-commercial license and
   with romdev's MIT code. A recompiled cart (in its licence entry's notices)
@@ -117,14 +202,237 @@ ares chip code in the snes9x core and in recompiled SNES carts  (ISC)
 
   A recompiled SNES cart's machine follows snes9x and carries snes9x's own
   chip units, so those parts of a cart stay under snes9x's non-commercial
-  license, as before; the ares code adds no condition of its own. No bsnes
-  (GPL-3.0) code is compiled into snes9x or into a cart: bsnes ships only as
-  its own core, romdev-core-bsnes. No coprocessor firmware ships with romdev.
+  license; the ares code adds no condition of its own. No bsnes (GPL-3.0)
+  code is compiled into snes9x or into a cart: bsnes ships only as its own
+  core, romdev-core-bsnes.
+
+
+Firmware and BIOS
+-----------------
+romdev ships no console manufacturer's BIOS or firmware. Where a system
+needs one, romdev uses a free replacement or its own code, or the user
+supplies the image.
+
+  C64         MEGA65 Open ROMs (https://github.com/MEGA65/open-roms),
+              GPL-3.0 / LGPL-3.0, a clean-room KERNAL, BASIC and CHARGEN,
+              in romdev-core-vice roms/ with their licence files. Upstream
+              vice-libretro compiles Commodore's ROMs into the core; romdev
+              builds VICE with that disabled and redistributes none of them.
+              Set ROMDEV_C64_ROM_DIR to use original ROMs you own instead.
+  MSX         C-BIOS (https://cbios.sourceforge.net), BSD-style licence, in
+              romdev-core-bluemsx bios/ (licence in each cbios.txt).
+  PlayStation OpenBIOS from PCSX-Redux (https://github.com/grumpycoders/
+              pcsx-redux), MIT, embedded in romdev-core-beetle-psx-hw.
+  Dreamcast   Flycast's reios HLE BIOS (part of Flycast, GPL-2.0).
+  GBA         mGBA's own HLE BIOS (part of mGBA, MPL-2.0).
+  N64         build({platform:'n64'}) adds romdev's own minimal IPL3 boot
+              stub (MIT) to the ROM it produces.
+  SNES        The SPC700 boot program in recompiled SNES carts and in
+              romdev's SNES path is romdev's own code (MIT), written from
+              the documented behaviour of the console's boot ROM.
+              Coprocessor firmware is supplied by the user and never ships
+              with romdev: the ST010/ST011 and ST018 programs (for
+              recompiled carts through options.firmware; for the snes9x and
+              bsnes cores as st011.rom / st018.rom in the system directory),
+              and likewise the DSP-1 data ROM, which a DSP-1 cart needs
+              supplied as firmware.
+  PICO-8      FAKE-08 needs no BIOS.
+
+
+Analysis engines
+----------------
+  Rizin (CFG, xrefs, functions)   LGPL-3.0   romdev-analysis
+      https://github.com/rizinorg/rizin
+  Ghidra decompiler and SLEIGH    Apache-2.0 romdev-analysis-decompiler
+      https://github.com/NationalSecurityAgency/ghidra, built via rz-ghidra
+      (https://github.com/rizinorg/rz-ghidra, LGPL-3.0), plus the SLEIGH
+      specs GhidraBoy (SM83, Apache-2.0), ghidra-snes (65816, MIT) and
+      Ghidra_HuC6280 (HuC6280, Apache-2.0). Each package's NOTICE has the
+      full attribution.
+
+
+Compiler toolchains  (their licences do not encumber compiled ROMs)
+-------------------------------------------------------------------
+  Toolchain                 Used for                Licence           Package
+  ------------------------  ----------------------  ----------------  ---------------------------
+  cc65                      NES, 2600, 7800, C64,   zlib              romdev-toolchain-cc65
+                            Lynx, PC Engine,
+                            GameTank
+  SDCC 4.4.0                GB/GBC, SMS/GG, MSX     GPL-2.0 (runtime  romdev-toolchain-sdcc
+                                                    libs: GPL with a
+                                                    linking exception)
+  binutils 2.42, z80-elf    Z80/SM83 disassembly    GPL-3.0           romdev-toolchain-sdcc
+                            and reassembly
+  RGBDS                     GB/GBC (asm)            MIT               romdev-toolchain-rgbds
+  vasm (m68k)               Genesis (asm)           vasm licence      romdev-toolchain-vasm
+                                                    (redistribution and
+                                                    non-commercial use;
+                                                    commercial use needs
+                                                    the authors' consent)
+  m68k-elf gcc 14.2.0,      Genesis (C)             GPL-3.0 with the  romdev-toolchain-m68k-gcc
+  binutils 2.42, newlib                             GCC Runtime
+  4.4.0                                             Library Exception;
+                                                    newlib BSD-style
+  sjasm (from SGDK)         Genesis Z80 driver asm  zlib              romdev-toolchain-m68k-gcc
+  bintos (from SGDK)        Z80 blob embedding      MIT               romdev-toolchain-m68k-gcc
+  asar                      SNES (asm)              LGPL-3.0          romdev-platform-snes
+  tcc816 (alekmaul/tcc)     SNES (C)                LGPL-2.1          romdev-platform-snes
+  wla-dx (wla-65816,        SNES (asm, link)        GPL-2.0           romdev-platform-snes
+  wlalink)
+  dasm                      Atari 2600 (asm)        GPL-2.0           romdev-platform-atari2600
+  arm-none-eabi gcc 14.2.0, GBA, sync32 (C)         GPL-3.0 with the  romdev-platform-gba
+  binutils 2.42, newlib                             GCC Runtime
+  4.4.0                                             Library Exception;
+                                                    newlib BSD-style
+  mips-elf gcc 14.2.0,      N64, PS1 (C)            GPL-3.0 with the  romdev-toolchain-mips-gcc
+  binutils 2.42, newlib                             GCC Runtime
+  4.4.0                                             Library Exception;
+                                                    newlib BSD-style
+  mips-linux-gnu binutils   N64 decomp builds       GPL-3.0           romdev-toolchain-mips-gcc
+  2.46
+  armips                    N64 decomp RSP          MIT               romdev-toolchain-mips-gcc
+                            microcode
+  sh-elf gcc 14.2.0,        Dreamcast (C)           GPL-3.0 with the  romdev-toolchain-sh-gcc
+  binutils 2.42, newlib                             GCC Runtime
+  4.4.0                                             Library Exception;
+                                                    newlib BSD-style
+  mips-linux-gnu gcc 14.2.0 N64 decomp data TUs,    GPL-3.0; glibc's  romdev-toolchain-decomp-gcc
+                            .s and linker-script    stdc-predef.h
+                            preprocessing           LGPL-2.1
+  KMC gcc 2.7.2 +           N64 decomp (N64 SDK     GPL-2.0           romdev-toolchain-decomp-gcc
+  binutils 2.6 as           compiler)
+  EGCS 1.1.2 (gcc 2.91.66)  N64 decomp (iQue        GPL-2.0           romdev-toolchain-decomp-gcc
+  + binutils 2.9.5 as       builds)
+  gcc 2.6.3 (PS1 recipe of  PS1 decomp              GPL-2.0           romdev-toolchain-decomp-gcc
+  decompals/old-gcc)
+  slinky-cli 0.5.0,         decomp builds (linker   MIT               romdev-toolchain-decomp-gcc
+  pigment64 0.6.3,          scripts, textures,
+  crunch64                  compression)
+  raw-deflate (zlib 1.3.1)  decomp builds           zlib              romdev-toolchain-decomp-gcc
+  A PS1 decomp project's    PS1 decomp setup        AGPL-3.0          romdev-toolchain-decomp-gcc
+  own setup tools (string                           (Go runtime:
+  encoder, disc extractor,                          BSD-3-Clause)
+  asset tool)
+
+  Upstream sources: gcc, binutils and newlib from https://gnu.org and
+  https://sourceware.org/newlib; cc65 https://github.com/cc65/cc65; SDCC
+  https://sdcc.sourceforge.net; RGBDS https://github.com/gbdev/rgbds; vasm
+  http://sun.hasenbraten.de/vasm; SGDK https://github.com/Stephane-D/SGDK;
+  asar https://github.com/RPGHacker/asar; tcc816
+  https://github.com/alekmaul/tcc; wla-dx https://github.com/vhelin/wla-dx;
+  dasm https://github.com/dasm-assembler/dasm; armips
+  https://github.com/Kingcom/armips; the decomp compilers and tools from
+  https://github.com/decompals (mips-gcc-2.7.2, mips-binutils-2.6,
+  mips-gcc-egcs-2.91.66, mips-binutils-egcs-2.9.5, old-gcc, slinky,
+  pigment64, crunch64). The exact versions and commits are in versions.json
+  in the source repository.
+
+  The PS1 decomp projects' assembly post-processor, maspsx, is ported to JS
+  inside romdevtools (see "Third-party code inside romdevtools").
+
+IDO (not shipped)
+-----------------
+  SGI's IDO 5.3 and 7.1 C compilers, which many N64 decompilation projects
+  build with, are proprietary. romdev does not ship them, and no romdev npm
+  package contains them. romdev-toolchain-ido is a private package in the
+  source repository that npm will not publish. To use IDO, build it yourself
+  from a checkout with packages/romdevtools/scripts/build-ido.sh (it
+  statically recompiles the IRIX programs with the pinned ido-static-recomp,
+  https://github.com/decompals/ido-static-recomp, MIT, and compiles the
+  result to WebAssembly), or set ROMDEV_IDO_DIR to a directory holding your
+  own build (its 5.3/ and 7.1/ folders). The IRIX programs remain the
+  property of their owners.
+
+
+Game runtime / SDK libraries  (linked into the user's game)
+-----------------------------------------------------------
+  SGDK              Genesis C engine     MIT                romdev-toolchain-m68k-gcc
+  PVSnesLib         SNES C library       MIT                romdevtools
+  libgba 0.5.4      GBA C library        LGPL with static-  romdev-platform-gba
+                                         linking exceptions
+  libtonc 1.4.5     GBA C library        no licence file    romdev-platform-gba
+                                         in this release;
+                                         see upstream
+  devkitPro crt0    GBA start-up code    MPL-2.0            romdev-platform-gba
+  maxmod            GBA music            ISC                romdev-platform-gba
+  hUGEDriver        GB/GBC music         public domain      romdevtools
+  FamiTone2         NES music            public domain      romdevtools
+  cc65 runtime      6502 targets         zlib               romdev-toolchain-cc65,
+                                                            romdevtools (cc65-src/)
+  SDCC runtime      Z80 / SM83 targets   GPL with a         romdev-toolchain-sdcc
+                                         linking exception
+  libgcc            gcc targets (incl.   GPL-3.0 with the   the gcc toolchain
+                    sync32's ARMv8-M     GCC Runtime        packages,
+                    build)               Library Exception  romdev-platform-sync32
+  newlib            gcc targets          BSD-style (mixed)  the gcc toolchain packages
+
+  Notes for games that link these:
+    - libgba's licence says static linking does not make your game a
+      derivative work, but asks that a program identify its use of libgba
+      (for example: "based in part on the work of the devkitpro project").
+    - The devkitPro crt0 is MPL-2.0: you may ship a game that contains it
+      under any licence; the MPL applies only to that file's source.
+    - Licence texts ship beside the libraries (LICENSE-HUGEDRIVER,
+      LICENSE-FAMITONE, pvsneslib/LICENSE, sgdk/LICENSE and COPYING.RUNTIME,
+      maxmod/LICENSE-MAXMOD).
+
+  Upstreams: SGDK https://github.com/Stephane-D/SGDK; PVSnesLib
+  https://github.com/alekmaul/pvsneslib; libgba
+  https://github.com/devkitPro/libgba; libtonc
+  https://github.com/devkitPro/libtonc; maxmod
+  https://github.com/devkitPro/maxmod; hUGEDriver
+  https://github.com/SuperDisk/hUGEDriver.
+
+
+Decompilation tools  (development instruments; they never touch a built ROM)
+-----------------------------------------------------------------------------
+JS ports, each in its own package with its own LICENSE and NOTICE.
+romdevtools only calls them; their output is the user's work.
+
+  Package            Port of (upstream)                        Licence
+  -----------------  ----------------------------------------  ---------------
+  romdev-splat       splat 0.37.1 (and 0.34.1 behaviour)        MIT
+                     https://github.com/ethteck/splat,
+                     with n64img 0.3.3, pypng's writer, zlib
+  romdev-spimdisasm  spimdisasm 1.42.4, 1.39.3, 1.35.0          MIT, plus
+                     https://github.com/Decompollaborate/        PSF-2.0 for
+                     spimdisasm                                 tables and
+                                                                algorithms
+                                                                derived from
+                                                                CPython
+  romdev-rabbitizer  rabbitizer 1.16.2, 1.14.3, 1.13.0 (C       MIT
+                     library built to WASM, JS binding)
+                     https://github.com/Decompollaborate/rabbitizer
+  romdev-m2c         m2c at 1d1c4454                            GPL-3.0
+                     https://github.com/matt-kempster/m2c       (kept in its own
+                                                                package)
+  romdev-permuter    decomp-permuter at 41bd0bfc                MIT
+                     https://github.com/simonlindholm/decomp-permuter
+  romdev-pycparser   pycparser 2.23 as vendored by m2c and      BSD-3-Clause
+                     decomp-permuter, with PLY 3.10
+                     https://github.com/eliben/pycparser
+
+  Graphviz (WASM)    used only by romdev-m2c for --visualize SVG output, via
+                     the @viz-js/viz npm package (MIT wrapper); Graphviz is
+                     EPL-1.0 and runs as a separate program.
+
+  Also inside romdevtools: the asm-processor, maspsx and
+  n64-decomp-workbench ports (see "Third-party code inside romdevtools").
+
+
+Audio tool ports
+----------------
+  romdev-famitone   FamiTone2's text2data (Shiru)            public domain
+                    (the port is MIT)
+  romdev-maxmod     devkitPro mmutil (Mukunda Johnson)       ISC (the port
+                                                             is MIT)
+  romdev-xgm2       SGDK's xgm2tool                          MIT
+
 
 Recompiled carts (WAT and native backends)
 ------------------------------------------
   disasm({target:'recompile', emit:'wasmcart'}) turns a ROM into a wasmcart
-  (backends: romdevtools src/analysis/recompile/wat/<platform>/), and
+  (backends: src/analysis/recompile/wat/<platform>/ in this package), and
   emit:'sync32' turns a Genesis ROM into a sync32 .s32
   (src/analysis/recompile/native/genesis/). A recompiled cart does not run on
   an emulator: so that it matches its reference core frame for frame, the
@@ -137,8 +445,8 @@ Recompiled carts (WAT and native backends)
   dispatch and layout code, the WAT assembler, the packer) are MIT, and each
   backend directory's NOTICE.txt lists which files are ported. In a built
   cart the two are combined, so the cart as a whole follows this table.
-  Commits are short here; the full ones are in romdevtools
-  scripts/versions.json and in every cart's licence entry.
+  Commits are short here; the full ones are in every cart's licence entry
+  (and in versions.json in the source repository).
 
   NES (wat/nes)
     from     fceumm: PPU, APU, CPU timing, mappers, frame loop
@@ -156,12 +464,13 @@ Recompiled carts (WAT and native backends)
 
   GBA (wat/gba)
     from     mGBA 0.11: ARM7TDMI, bus, scheduler, DMA, timers, video, audio,
-             GPIO/RTC, its HLE BIOS; musl's sin/cos (Emscripten 4.0.18)
+             GPIO/RTC, its HLE BIOS; musl's sin/cos (Emscripten 4.0.18,
+             with the FreeBSD msun notice of the files they come from)
              https://github.com/libretro/mgba @ 6dce57ee
     licence  MPL-2.0 AND MIT (musl)
     means    file-level copyleft: sharing the cart requires making the source
-             of the MPL-covered files available; the MIT notice travels in
-             the cart.
+             of the MPL-covered files available; the MIT and msun notices
+             travel in the cart.
 
   Master System / Game Gear (wat/sms)
     from     Genesis Plus GX: VDP, I/O, frame order, SN76489 PSG, blip_buf
@@ -188,15 +497,17 @@ Recompiled carts (WAT and native backends)
 
   SNES (wat/snes)
     from     snes9x: memory map and ROM loading, CPU timing, DMA/HDMA, PPU,
-             SPC700 (with its 64-byte IPL boot ROM as snes9x ships it), the
-             coprocessors (SA-1, SuperFX from fxinst.cpp, S-DD1, CX4, SPC7110,
-             DSP-1..4, ST010/011/018 HLE, OBC1, S-RTC, BS-X, MSU-1), and the
-             S-DSP from snes_spc (Shay Green)
+             SPC700, the coprocessors (SA-1, SuperFX from fxinst.cpp,
+             S-DD1, CX4, SPC7110, DSP-1..4, ST010/011/018 HLE, OBC1, S-RTC,
+             BS-X, MSU-1), and the S-DSP from snes_spc (Shay Green)
              https://github.com/libretro/snes9x @ 185488cd
              SPC7110 carts: spc7110emu/dec (byuu and neviksti, ISC-style)
              CX4 carts: musl's sin/cos/atan (MIT)
              ST011 / ST018 carts built with options.firmware: ares (ISC,
-             https://github.com/ares-emulator/ares @ 4cb8d92b, see below)
+             https://github.com/ares-emulator/ares @ 4cb8d92b, see above)
+             The SPC700 boot program is romdev's own (see "Firmware and
+             BIOS"). Coprocessor firmware, including the DSP-1 data ROM, is
+             supplied by the user and is not part of romdev.
     licence  snes9x licence (non-commercial) AND LGPL-2.1-or-later (S-DSP),
              plus ISC / MIT for those chips
     means    no commercial distribution; snes9x's licence text must go with
@@ -226,76 +537,40 @@ Recompiled carts (WAT and native backends)
   the emulator licences allow.
 
   blip_buf and snes_spc are LGPL-2.1 libraries inside non-commercial cores;
-  the carts combine them the same way the upstream cores do. This section
-  describes what each licence says; it is not legal advice. If you plan to
+  the carts combine them the same way the upstream cores do. If you plan to
   distribute recompiled carts, read the licences in LICENSES/.
 
-C64 ROMs - free replacements, not Commodore's
-----------------------------------------------
-  Upstream vice-libretro compiles Commodore's KERNAL, BASIC and CHARGEN ROMs
-  into the core (USE_EMBEDDED). Those images are "Copyright C by Commodore
-  Business Machines" per VICE's own README; the GPL covers VICE's code, not
-  them. romdev builds VICE with that define disabled and redistributes none of
-  them.
 
-  In their place romdev-core-vice bundles MEGA65 Open ROMs (GPL-3.0 /
-  LGPL-3.0), a clean-room KERNAL/BASIC/CHARGEN, so the C64 works out of the
-  box. Licences ship alongside the images in that package's roms/ directory.
-  Set ROMDEV_C64_ROM_DIR to use original ROMs you own instead.
+Bundled data  (cheat database, used by cheats({op:'lookup'|'apply'|'make'}))
+-----------------------------------------------------------------------------
+  The cheat database ships in the romdev_game_codes package (index/), a
+  pre-parsed, per-platform index built from the community-aggregated
+  RetroArch / libretro-database cheat collection (the same data RetroArch,
+  RetroDECK and Batocera ship). These codes are an aggregation assembled over
+  years from Game Genie / Pro Action Replay code books and community cheat
+  dumps; the collection has no single uniform license and individual codes
+  carry no stated provenance. romdev redistributes a pre-parsed form (game
+  name to decoded address/value entries) rather than the raw .cht files, and
+  uses it only as a read/inspect aid and for non-destructive cheat
+  application. It is not linked into any built game and does not affect the
+  license of games you make. Source:
+  https://github.com/libretro/libretro-database (cht/). The index is rebuilt
+  from a local .cht tree with packages/romdevtools/scripts/build-cheat-index.mjs
+  in the source repository.
 
-Compiler toolchains  (runtime exception - does not encumber compiled ROMs)
---------------------------------------------------------------------------
-  cc65              NES/C64/2600/7800/Lynx   zlib
-  sdcc              GB/GBC/SMS/GG            GPL-2.0 (runtime libs: GPL + linking exception)
-  arm-none-eabi-gcc GBA                     GPL-3.0 (GCC Runtime Library Exception)
-  m68k-elf-gcc      Genesis (C)             GPL-3.0 (GCC Runtime Library Exception)
-  binutils          (gcc toolchains)        GPL-3.0
-  newlib            (gcc toolchains)        BSD-style (mixed permissive)
-  asar              SNES (asm)              LGPL-3.0
-  dasm              Atari 2600 (asm)        GPL-2.0
-  vasm (m68k)       Genesis (asm)           free for any use (vasm license)
-  rgbds             GB/GBC (asm)            MIT
-  tcc816            SNES (C)                LGPL-2.1
-  wla-dx            SNES (asm)              GPL-2.0
 
-Game runtime / SDK libraries  (linked into the user's game; shipped as source)
-------------------------------------------------------------------------------
-  SGDK              Genesis C engine        MIT
-  PVSnesLib         SNES C library          MIT
-  libtonc / libgba  GBA C libraries         public domain / zlib-style
-  maxmod / mmutil   GBA music               ISC
-  hUGEDriver        GB/GBC music            MIT-style (see LICENSE-HUGEDRIVER)
-  FamiTone2         NES music               permissive (see LICENSE-FAMITONE)
-
-Bundled data  (cheat database - used by gameCheats / applyCheat / makeCheat)
-----------------------------------------------------------------------------
-  romdev bundles a cheat database under packages/romdev/src/cheats/index/ - a
-  pre-parsed, per-platform index built from the community-aggregated RetroArch /
-  libretro-database cheat collection (the same data RetroArch, RetroDECK, and
-  Batocera ship). These cheat codes are an aggregation assembled over years from
-  Game Genie / Pro Action Replay code books and community cheat dumps; the
-  collection has no single uniform license and individual codes carry no stated
-  provenance. romdev redistributes a pre-parsed form (game name → decoded
-  address/value entries) rather than the raw .cht files, and uses it only as a
-  read/inspect aid + non-destructive cheat application. It is not linked into any
-  built game and does not affect the license of games you make. Source:
-  https://github.com/libretro/libretro-database (cht/). Rebuild the index from a
-  local .cht tree with packages/romdev/scripts/build-cheat-index.mjs.
-
-Decompilation tools  (dev instruments; they never touch the built ROM)
-----------------------------------------------------------------------
-  m2c               MIPS/PPC/ARM/SH -> C    GPL-3.0, packaged separately as
-                                            romdev-m2c (a JS port; its own
-                                            LICENSE + NOTICE). Its C parser is
-                                            romdev-pycparser (BSD-3). romdevtools
-                                            only calls it; its output is the
-                                            user's draft, not covered by the GPL.
-  Graphviz (WASM)   m2c --visualize SVG     EPL-1.0, via the @viz-js/viz npm
-                                            package (MIT wrapper).
-
-Full license texts for the bundled SDK libraries live alongside their source
-under packages/romdev/src/platforms/*/lib/. Emulator-core and compiler license
-texts travel with their upstream source, which is fetched at build time from
-the pinned commits recorded in packages/romdev/scripts/versions.json. The
-licences of the emulator code the recompiler carries into carts are in
-romdevtools LICENSES/ (copied verbatim from the pinned upstream sources).
+Where the licence texts and sources are
+---------------------------------------
+  - romdev's own licence: LICENSE in this package.
+  - Licences of the emulator code the recompiler carries into carts:
+    LICENSES/ in this package (copied verbatim from the pinned upstream
+    sources; LICENSES/README.txt maps each file to its origin).
+  - SDK library licences: beside each library (see "Game runtime / SDK
+    libraries").
+  - The decompilation ports: LICENSE and NOTICE in each package.
+  - Emulator-core and compiler licence texts travel with their upstream
+    source, fetched at build time from the pinned commits. The recipes,
+    patches and pins are in the source repository,
+    https://github.com/monteslu/romdev, under packages/romdevtools/scripts/
+    (BUILD_MAP.md maps each recipe to the package it builds; versions.json
+    holds every upstream URL, commit and licence).

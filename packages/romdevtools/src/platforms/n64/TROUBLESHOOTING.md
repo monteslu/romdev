@@ -54,7 +54,7 @@ offsets must line up with the VAs' low bits (rizin ignores `-B` on a raw buffer)
 usually lands fine from codeStart=0x1000 post-IPL3; if a fixed-VA image misbehaves, see
 the PS1 troubleshooting note on the rebase trick - same principle.
 
-## "renderingContext returns N/A"
+## "background({view:'renderState'}) returns N/A"
 
 Correct - N64 is a 3D framebuffer machine with no 2D tile/sprite VDP for that op to
 decode. Not a bug. Use `frame`/screenshot + `memory` to inspect the framebuffer.

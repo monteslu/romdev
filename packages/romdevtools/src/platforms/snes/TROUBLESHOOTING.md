@@ -67,8 +67,10 @@ build({output:'rom', platform:"snes", language:"c",
   sources: {"main.c": ..., "data.asm": ...}});
 ```
 
-For real fonts, run PVSnesLib's `gfx4snes` tool natively to convert
-a PNG → `.pic` + `.pal`, then `.incbin` them in `data.asm`.
+For real fonts, convert a PNG with
+`encodeArt({stage:'tiles', platform:'snes', pngPath, outputDir})` (it writes
+`tiles.bin` + `palette.bin` in SNES 4bpp format), then `.incbin` them in
+`data.asm` and pass them via `binaryIncludePaths`.
 
 ## "Sprites don't appear" (or appear as garbage / flashing colors)
 
@@ -169,7 +171,7 @@ instant the SPC echoes the jump command, but the driver then spends
 edge-detector from $2140. A `sfx_music_play()` issued inside that
 window becomes the SEED - no edge, no dispatch, music never starts.
 
-Symptoms via the debug tools: `getAudioState({chip:'dsp'})` shows
+Symptoms via the debug tools: `audioDebug({op:'inspect', chip:'dsp'})` shows
 voice 1 with pitch 0 / env 0; ARAM $00 (prev_cmd) already equals your
 command byte while ARAM $01 (music_on) is 0.
 
@@ -221,12 +223,11 @@ consoleInitText(0, 16 * 2, &tilfont, &palfont);
 
 ## "breakpoint({on:'write'}) finds nothing, but the byte is demonstrably rewritten"
 
-Historical trap, FIXED in 0.97.0: the low 8 KB of WRAM is mirrored into banks
-$00-$3F/$80-$BF, and the watch used to arm the literal address while the core
-compared the canonical $7E form - watching `$0218` silently missed a
-`sta f:$7E0218`. Watches (write/read/range) now canonicalize at arm time and
-the result echoes `armedAddress` when that happened, so any addressing form of
-a low-WRAM byte is caught from any armed form. If you still get `found:false`,
+The low 8 KB of WRAM is mirrored into banks $00-$3F/$80-$BF. Watches
+(write/read/range) canonicalize the address at arm time and the result echoes
+`armedAddress` when that happened, so watching `$0218` also catches a
+`sta f:$7E0218`: any addressing form of a low-WRAM byte is caught from any
+armed form. If you still get `found:false`,
 the byte is likely rebuilt as a BLOCK (copied/DMA'd from a source struct) -
 find the source with `memory({op:'search'})` and watch THAT.
 
@@ -255,8 +256,8 @@ handler.
 ## "First C build is slow but later ones are instant"
 
 Expected. tcc-65816.wasm + wla-65816.wasm cold-load + compile takes
-1-2s. Subsequent builds reuse the warm worker pool (R12 crash
-isolation infrastructure). Steady-state builds are sub-second.
+1-2s. Subsequent builds reuse the warm worker pool. Steady-state
+builds are sub-second.
 
 ## "asm build fails with `ok:false` and an empty/cryptic `issues[]`" (asar idioms)
 
@@ -313,20 +314,21 @@ big.** Verify the bases with `background({view:'renderState', platform:'snes'})`
 
 ## "I want to use real graphics from a PNG"
 
-`gfx4snes` (the PVSnesLib companion tool) converts PNG → .pic + .pal.
-It's not yet bundled in romdev's WASM toolchain. Workflow:
+Use the bundled art pipeline instead of PVSnesLib's `gfx4snes`:
 
-1. Run `gfx4snes` natively on your build machine to produce
-   `mysprite.pic` + `mysprite.pal`.
-2. Ship those binary files alongside `main.c` + `data.asm` in
-   your project.
+1. `encodeArt({stage:'quantize', platform:'snes', path, outputPath})` if the
+   PNG has more colours than one 16-colour sub-palette.
+2. `encodeArt({stage:'tiles', platform:'snes', pngPath, outputDir})` writes
+   `tiles.bin` (4bpp planar-pair tiles) + `palette.bin` (BGR555). For a
+   full-screen image use `stage:'tilemap'`, which also emits the tilemap.
 3. In `data.asm`:
    ```asm
    tilsprite:
-   .incbin "mysprite.pic"
+   .incbin "tiles.bin"
    palsprite:
-   .incbin "mysprite.pal"
+   .incbin "palette.bin"
    ```
+4. Pass the blobs to `build()` with `binaryIncludePaths`.
 
-(romdev's `build({output:'rom'})` accepts binary `.pic` / `.pal` blobs
-as sibling resources.)
+To lift art from an existing ROM, `importArt({from:'rom'})` does the
+extract + crop + quantize in one call.

@@ -129,7 +129,7 @@ for (;;) {
 
 ## "BG tile visible in tiles({op:'png'}) but not on screen"
 
-The NES PPU renders 240 scanlines but most TVs (and our
+The NES PPU renders 240 scanlines but most TVs (and romdev's
 framebuffer output) crop to 224. Nametable row 0 (PPU $2000-$201F,
 top 8 px) and row 29 (PPU $23A0-$23BF, bottom 8 px) get cut. If
 your score lives at row 0 it'll be in the nametable but invisible.
@@ -157,23 +157,19 @@ and tiny structs - it's not style, it's the 512 B ceiling.)
 
 On NES, the NMI handler DMAs `shadow_oam` → real OAM at the *start* of
 each vblank, so sprites you stage on frame N first appear when frame
-N+1 renders. `build({output:'run'})` now steps one extra frame on NES before the
+N+1 renders. `build({output:'run'})` steps one extra frame on NES before the
 screenshot so it matches your staged OAM - but if you script frames
-manually (`frame({op:'step'})` then `frame({op:'screenshot'})`), add one extra `frame({op:'step'}, 1)`
+manually (`frame({op:'step'})` then `frame({op:'screenshot'})`), add one extra `frame({op:'step', frames:1})`
 after staging to see the current sprite positions.
 
-## "memory({op:'read'}, nes_chr) returns same bytes for offset 0 and offset 4096"
+## "CHR reads look wrong above 4 KB"
 
-Was a real bug in R59 of the fceumm patch - `memory({op:'read'}, nes_chr)`
-collapsed all 8 1KB pages into copies of the first page on NROM.
-Fixed in R61 (2026-05-27). If you still see this, your MCP server
-is running a stale WASM:
-```sh
-# Check the timestamp of the bundled fceumm wasm in your install:
-stat -c '%y' node_modules/romdev-core-fceumm/wasm/fceumm_libretro.wasm
-```
-Workaround if you can't restart: `tiles({op:'png'})` reads CHR
-via a different path and was unaffected throughout.
+`memory({op:'read', region:'nes_chr'})` returns the 8 KB of CHR the PPU sees
+right now, gathered from the eight live 1 KB pages, so offsets 0 and 4096 are
+the two pattern tables. If the upper half looks like a copy of the lower half,
+the cart really maps the same CHR bank into both (check the mapper's CHR bank
+registers with `background({view:'renderState'})`). To read CHR straight from
+the ROM file instead of the live PPU, use `tiles({op:'png', source:'path', path})`.
 
 ## "Globals read garbage / `_nmi_counter` never advances"
 
@@ -199,15 +195,14 @@ RAM:    file = "", start = $0300, size = $0200, define = yes;
 stack at $0500.) For larger BSS, opt into a mapper that maps
 PRG-RAM at $6000 and set iNES flags6 bit 1.
 
-The bundled `chr-ram-runtime.cfg` already does this correctly as
-of 2026-05-27.
+The bundled `chr-ram-runtime.cfg` already does this correctly.
 
 ## "OAM is full of $FF - DMA must be broken"
 
 Probably not. The crt0's init loop writes `$FF` to all 256 bytes
 of `_shadow_oam @ $0200` at boot (canonical sprite-Y off-screen
 sentinel). If your game only populates a few slots, the rest stay
-`$FF` and OAM DMA faithfully copies them. `memory({op:'read'}, nes_oam)`
+`$FF` and OAM DMA faithfully copies them. `memory({op:'read', region:'nes_oam'})`
 showing mostly `$FF` is the EXPECTED state, not a bug.
 
 Sentinel test that proves DMA works:
@@ -223,7 +218,7 @@ memory({op:'read', region:"nes_oam", offset:0, length:16})
 ## "retro_load_game failed"
 
 The build pipeline writes a valid iNES header (mapper 0, vertical
-mirroring, CHR-RAM=0) for every C build via our chr-ram crt0. If
+mirroring, CHR-RAM=0) for every C build via the bundled chr-ram crt0. If
 you're seeing this error, you're either:
 
 1. Loading a hand-built ROM that skipped the bundled crt0.
@@ -281,7 +276,7 @@ xxd -l 16 file.nes
 
 ## Debug recipes
 
-A few high-leverage tools you might not know exist:
+A few tools you might not know exist:
 
 - **`sprites({op:'inspect'})`** - pretty-prints all 64 OAM slots with
   visible/hidden status, tile, attr, position.
@@ -299,7 +294,7 @@ A few high-leverage tools you might not know exist:
 
 ## Mental model + boot order
 
-See [`MENTAL_MODEL.md`](MENTAL_MODEL.md) for the architecture
+See the mental model for the architecture
 overview (fetch via `platform({op:'doc', platform:"nes", name:"mental_model"})`).
 The canonical "boots cleanly + shows a sprite" sequence is:
 

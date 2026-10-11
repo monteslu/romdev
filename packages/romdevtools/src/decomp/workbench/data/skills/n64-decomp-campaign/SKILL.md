@@ -9,6 +9,25 @@ Use this skill to turn a stubborn N64 decompilation residual into a sequence of
 small, falsifiable experiments. Use the project's normal object or ROM build as
 the final oracle. Treat a browser percentage as a lead, never as proof.
 
+**Running these commands in romdev.** romdev does not install a
+`decomp-workbench` executable; the workbench runs inside the romdev server.
+A command written here as `decomp-workbench <group> <command> ARGS` runs as
+`decomp({op:'workbench', project, wbGroup:'<group>', wbCommand:'<command>',
+wbArgs:[ARGS]})`. Call `decomp({op:'workbench', project})` with no
+`wbCommand` to list every group and command the server carries (object,
+trace, instrument, pass, probe, sweep, permute, oracle, campaign, experiment,
+toolchain and more). A command the catalog marks destructive needs
+`allowDestructive:true`; one that reaches the network needs
+`allowNetwork:true`. Common steps also have their own decomp ops:
+`compare` (compile and score a candidate inside its translation unit),
+`diagnose` and `layout` (read a stored comparison), `variants` (measure a
+bounded list of source variants), `search` and `job` (bounded permuter
+runs), `experiment` (hypothesis, control and conclusion records), `gate`,
+`rank`, `dispatch` (parallel triage), `integrate` and `verify`.
+The `guide` command has no server op: its pages are `docs/field-guide.md` and
+`docs/compiler-laws/ido-5.3.md` / `ido-7.1.md` in the workbench data shipped
+with romdevtools (`src/decomp/workbench/data/`).
+
 ## Start from an evidence inventory
 
 Before editing source, identify and preserve:

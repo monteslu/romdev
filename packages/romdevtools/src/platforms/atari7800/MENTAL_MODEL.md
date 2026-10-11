@@ -1,7 +1,7 @@
 # Atari 7800 - mental model
 
 One page. Read once before you write your first 7800 game. The
-TROUBLESHOOTING.md alongside this file is for when something's broken;
+troubleshooting doc (`platform({op:'doc', platform:'atari7800', name:'troubleshooting'})`) is for when something's broken;
 this is the "what's going on" version.
 
 The 7800 is the **outlier** of romdev's bundled platforms - its
@@ -58,7 +58,7 @@ and DLL; you do NOT poke pixels into a framebuffer.**
   and (worse) burns enough cycles that the CPU stops getting time.
 - **Y position = which zone the object lives in.** Each zone covers
   N scanlines. To move an object up/down, you move it between
-  zones. (Or - in our example games - you stamp the same sprite at
+  zones. (Or - in the bundled example games - you stamp the same sprite at
   different row offsets within ONE zone's data block, which fakes
   Y movement.)
 - **Each DL header can pick a palette per object** (one of 8
@@ -261,7 +261,7 @@ Fire button on `INPT4` at `$0C`, also active low.
 Console switches (reset, select, pause, B/W, difficulty) on
 `SWCHB` at `$282`.
 
-### Driving input over MCP - the 2-button-mode footgun ⚠
+### Driving input over MCP - the 2-button-mode footgun
 
 `input({op:'set'})` button names map to the two ProLine fire buttons as (verified live
 against prosystem + its `Riot.c`):
@@ -294,9 +294,8 @@ $19 AUDV0   channel 0 volume (0..15)
 $1A AUDV1   channel 1 volume
 ```
 
-There's also a POKEY chip option in some 7800 cartridges (Ballblazer,
-Commando) for richer audio, but it's not standard - assume TIA-only
-for portable code.
+There's also a POKEY chip option in a few 7800 cartridges for richer
+audio, but it's not standard - assume TIA-only for portable code.
 
 ## Frame heartbeat
 
@@ -384,4 +383,4 @@ non-standard - don't assume it's present.)
 
 The Rizin/Ghidra analysis engine works here like everywhere: `disasm({target:'functions'})` to carve the program, `disasm({target:'cfg'|'xrefs'})` to trace it, `symbols({op:'analyze'})` for a one-shot structural map.
 
-**Decompiler quality on 6502: ROUGH.** Carry-flag idioms and 16-bit math on an 8-bit CPU decompile to noise that only reads cleanly once an LLM folds it - on this CPU the disassembly is often more honest than the pseudocode. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. See the cross-platform ROM-hacking playbook §5f for the full loop.
+**Decompiler quality on 6502: ROUGH.** Carry-flag idioms and 16-bit math on an 8-bit CPU decompile to noise that only reads cleanly once an LLM folds it - on this CPU the disassembly is often clearer than the pseudocode. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. The full loop is in the ROM-hacking playbook, section 5f (`platform({op:'doc', platform:'romhacking', name:'playbook'})`).

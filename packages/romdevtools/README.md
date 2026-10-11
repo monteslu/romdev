@@ -1,120 +1,66 @@
-# romdev
+# romdevtools
 
-The entry point for **romdev** - vibe-code real retro games. Build, run, inspect, and reverse-engineer actual homebrew ROMs (NES, SNES, Game Boy, Genesis, Atari, C64, GBA, PC Engine, MSX, GameTank, sync32 - and the 3D consoles N64, PlayStation, and Dreamcast), plus the **PICO-8** fantasy console (via FAKE-08), with one command - drive it yourself or let a coding assistant do it.
+romdevtools is the romdev tool server. It lets a coding agent (or you) build, run, debug, reverse-engineer and recompile retro console games: NES, SNES, Game Boy and Game Boy Color, GBA, Genesis, Master System, Game Gear, Atari 2600, 7800 and Lynx, C64, PC Engine, MSX, GameTank, sync32, and the 3D consoles N64, PlayStation and Dreamcast, plus PICO-8 and the wasmcart and jsgame runtimes. Every compiler, emulator core and analysis engine is bundled as WebAssembly.
 
 ```bash
 npx romdevtools
 ```
 
-**What you get:**
+The server listens on `http://127.0.0.1:7331` (`PORT` and `HOST` override it). Node 24 or newer.
 
-- **Build** - bundled per-platform toolchains (cc65, SDCC, RGBDS, asar, vasm, SGDK, PVSnesLib, libtonc, ...) as WASM. Write source, compile, get a real ROM.
-- **Run + see + drive** - load the ROM into an emulated console (libretro cores as WASM), step frames, screenshot, script controller input. The 2D consoles render in software; the 3D consoles (N64 via glide64, PlayStation via Beetle PSX HW, Dreamcast via Flycast) render on the **real GPU** through [`native-gles`](https://github.com/monteslu/native-gles) - headless OpenGL/EGL, no browser. PlayStation ships [OpenBIOS](https://github.com/grumpycoders/pcsx-redux) (MIT) embedded, so there's no proprietary firmware to supply. **Dreamcast is EXPERIMENTAL, but no longer just a curiosity** - the SH-4 runs on a WASM recompiler, so commercial discs boot, render, respond to input, and drive through their menus into gameplay. Across the five discs used for testing: all five boot and take controller input, and two reach live in-game scenes (3D world rendering with a working HUD); the rest land on title menus or save-file prompts. Throughput is ~70-140fps headless, against ~16fps when the SH-4 was interpreted through core 0.2.0. AICA sound is still interpreted and measures under ~12% of frame time. What hasn't been characterised is *sustained* play - a full level, long-run stability, framerate under the heaviest scenes - so treat it as young rather than finished.
-- **Inspect + romhack** - read CPU/video/save RAM, watch memory, write-breakpoints, the Cheat-Engine value-search loop, a bundled cheat database, mapper-aware disassembly, and a byte-exact rebuildable-project disassembler (`disasm({target:'project'})` splits a ROM into byte-exact region `.asm`; **`build({output:'reassemble'})` rebuilds it into a byte-identical ROM in one call on all 15 classic platforms** - edit a region and rebuild, the "cmp before commit" gate for any structural hack).
-- **Reverse-engineering analysis engine (all 18 platforms - incl. the 3D consoles' MIPS R3000/R4300 + SH-4)** - control-flow graphs, deep cross-references, auto-detected functions (ranked real-code-first), a one-shot structural map, and a Ghidra **decompiler** (C-like pseudocode, with hardware registers named and 6502 SLEIGH clutter folded to readable C; N64/PS1/Dreamcast images are analyzed at their true load address, and an N64 splat project gives segment-exact mapping with provenance): `disasm({target:'cfg'|'xrefs'|'functions'|'decompile'})` and `symbols({op:'analyze'})`. And the piece no static tool has: **live computed-jumptable recovery** - `breakpoint({on:'jumptable'})` runs the emulator to resolve the `JMP (table,X)` / RTS-trick dispatchers (state machines, script/battle VMs) that static analysis collapses to "could not recover." Understand *how* a routine works before you touch it - no $3,000 IDA license, no install.
-- **Convert assets** - PNG → platform tiles/tilemaps, quantize-to-palette, audio importers (BRR for SNES, XGM2 PCM for Genesis).
-- **Active Bezels** - an executable companion to a specific ROM (a `.ab` package) that runs once per emulated frame, reads the core's live memory, and renders the complete final scene: a map, a HUD, reconstructed world graphics, around or over the game. `loadMedia({useActiveBezel:true})` picks up the same-basename sidecar (`Game.nes` → `Game.ab`) and makes the **composite** the presented and captured picture. romdev is where these get *verified*, not just played: a package can load, tick without trapping, emit valid draw commands, and still be completely wrong about the game, so `frame({op:'screenshot', source:'both'})` returns the composite and the raw core framebuffer for the SAME frame - plus the three geometries (core framebuffer / intended display aspect / bezel scene) that are easy to conflate. Compare them against the guest's own memory reads to check the package's *interpretation*, not just that it drew something.
-- **Matching decompilation (`decomp`, N64 proven)** - the function-level generate → compile → compare → refine loop against a registered splat project's OWN compiler and build (IDO via ido-static-recomp or MIPS GCC; the per-file compile command is captured from the project's `make`). `compare` compiles a candidate inside its real translation unit and returns ONE aggregate verdict - strict instruction + relocation equality vs the extracted asm, ROM-linked words vs the base ROM, the function's own jump tables/literals, and every other function in the TU unchanged; a check that could not run is `unknown`/`error`, never `exact`, and the verifier version is part of the result cache key. Around it: `import`/`resolve` (the splat segment map is the only VA→ROM resolver; overlay VAs are ambiguous until named), `plan`/`batch` (call graph from the built objects' relocations), `generate` (m2c with the TU's preprocessed context; `types propose:true` turns asm access widths into struct proposals fed back as `extraContext`/`declarations`), `search`/`job` (bounded decomp-permuter jobs with reports), `integrate`/`verify` (patch → full build → ROM sha1, auto-revert), `progress` (code bytes per object; asm, C, library, handwritten asm and retained inline asm kept apart), and runtime ops on a live session - `trace` (a real PC break at the function: a0-a3/f12/f14/stack at entry, v0/v1/f0 at return), `coverage` (instruction-exact from the core's PC bitmap, attributed to functions and basic blocks), `overlays`/`symbolize`, `state`, `smoke`. State lives in `~/.romdev/decomp/<project>/`; nothing touches the checkout except `integrate apply:true`. Backends run in-process as JS ports of their pinned upstream commits (romdev-m2c, romdev-permuter), with no Python. Doc: `platform({op:'doc', platform:'n64', name:'decomp'})`.
-- **Native game runtimes (beyond emulation)** - the same run/see/drive loop also hosts two *native* game formats: **wasmcart** (`.wasc` - WASM games from any language; 2026) and **jsgame** (`.jsgame` - JavaScript canvas/WebGL games; 2024). `loadMedia({platform:'wasmcart'|'jsgame'})` → `frame({op:'step'|'screenshot'})` → `input`, over the same tools - plus **`wasm({op:'conformance'})`** (the 'won't load, why?' verdict - required exports / manifest-vs-instance / declared caps / debug + determinism consistency), `wasm({op:'info'|'exports'|'read'|'write'})` (live WCInfo + heap + module exports), **named debug state** (`wasm({op:'debugState'})` and read/write BY NAME - the cart's opt-in `wc_debug_state` table: `player_x` instead of a raw offset), **frame-stamped events** (`wasm({op:'events'})` drains `wc_debug_mark` annotations + captured `wc_log` - a run navigable by the moments the cart marked), **deterministic replay** (`loadMedia({deterministicSeed})` seeds `wc_set_seed` + fixes the virtual clock, so `regression({op:'capture'/'check'})` frame-hash goldens are airtight on carts that declare `WC_FLAG_DETERMINISTIC`; named-state checkpoints cover the carts that can't), **`audioDebug({op:'record'})`** (capture the cart's audio to WAV - ears to go with the eyes), **headless GL** (a cart whose wasm imports from the `gl` module renders on an offscreen WebGL2 context - screenshots, `frame({op:'verify'})`, and regression goldens see the real GPU draws, no window; `status.gl` reports rendered vs stubbed), and `pack({target:'wasc'|'jsgame'})` to zip a source dir into the distributable archive (the "build" step; romdev doesn't compile the WASM - bring your own). A capability descriptor marks the emulator-only tools (memory regions / cpuState / disasm) *not-applicable* for these kinds. Depends on the [`wasmcart`](https://www.npmjs.com/package/wasmcart) + [`rungame`](https://www.npmjs.com/package/rungame) packages (jsgame runs in a `vm` realm - the server self-re-execs with `--experimental-vm-modules`).
-- **PICO-8 (fantasy console)** - the [FAKE-08](https://github.com/jtothebell/fake-08) player (MIT, no BIOS) runs PICO-8 `.p8` (Lua source) and `.p8.png` (cart-in-a-label-PNG) carts at 128×128 with sound. `loadMedia({platform:'pico8'})` → `frame`/`input` work like any core; `build({platform:'pico8', source: lua})` PACKAGES a runnable `.p8` from Lua (+ optional gfx/sfx/map sections) - it's a cart assembler, not a CPU compiler (the Lua IS the code). PICO-8 is a Lua VM, so instead of machine-code disasm/decompile you read the cart's Lua directly with `disasm({target:'source'})`; `memory({region:'system_ram'})` exposes the full 64KB PICO-8 address space (sprite sheet, map, sfx, general RAM, screen buffer). Its capability descriptor is a `fantasy` tier - cpuState/decompile/tile-inspectors report *not-applicable* (there's no CPU or tile hardware to inspect). Ships the [`romdev-core-fake08`](https://www.npmjs.com/package/romdev-core-fake08) core package.
+## What you get
 
-Point any coding agent at it three ways:
+38 tools, each a verb with an operation axis (`memory({op:'search'})`, `disasm({target:'cfg'})`, `build({output:'run'})`):
 
-- **Plain HTTP** - `POST http://127.0.0.1:7331/tool/{name}`; browse/try every tool at `/documentation`.
-- **Agent Skill** - `GET /skills/romdev/SKILL.md` (the [Agent Skills](https://agentskills.io) standard; save it to your skills dir as `skills/romdev/SKILL.md`; ~100 tokens until invoked).
-- **MCP** - it's also a [Model Context Protocol](https://modelcontextprotocol.io/) server at `/mcp` for clients that want it. **Both protocol eras are served on that one endpoint**: legacy clients (the `initialize` handshake + `Mcp-Session-Id`) work unchanged, and clients speaking the stateless **2026-07-28** revision - no handshake, no session id, per-request `_meta` - are served natively, with `server/discover` advertising what the server supports. Since that revision has no protocol session to hold your identity, the server takes it from (in order) a `_meta["dev.romdev/sessionHandle"]` handle, the optional **`session` argument every tool accepts**, or - when a call names nothing - your keep-alive connection, in which case each result ends with a `session: <id>` line you can pass back to pin it. Over plain HTTP the same job is done by `x-romdev-session`.
+- **Build.** cc65, SDCC, RGBDS, asar, vasm, dasm, gcc for m68k, ARM, MIPS and SH, with SGDK, PVSnesLib, libtonc/libgba and other SDKs. Fork an example game with `examples({op:'fork'})`; `build({output:'run'})` builds, loads, runs and screenshots in one call. ROMs come out with the headers and checksums real hardware checks.
+- **Run, see, drive.** libretro cores as WebAssembly: step frames, screenshots, controller input, save states. The 3D consoles render on the GPU through [native-gles](https://github.com/monteslu/native-gles) (headless OpenGL ES): N64 through parallel-n64's glide64, PlayStation through Beetle PSX HW with OpenBIOS embedded, Dreamcast through Flycast with its reios HLE BIOS and an SH-4 recompiler. Dreamcast support is experimental.
+- **Inspect and romhack.** CPU, video and save RAM; value search; write, read and execution breakpoints; single-step; coverage; a bundled cheat database used as a labeled RAM map; mapper-aware disassembly; `disasm({target:'project'})` plus `build({output:'reassemble'})` for a byte-identical rebuild on the 15 classic platforms; ROM patching with re-injection of compressed assets; custom-font text tools.
+- **Analysis.** Rizin and Ghidra compiled to WebAssembly on 18 platforms (all but sync32), including the 3D consoles' MIPS and SH-4: functions, control-flow graphs, cross-references, reachable blocks, a structural map and C pseudocode (`disasm({target:'functions'|'cfg'|'xrefs'|'reachable'|'decompile'})`, `symbols({op:'analyze'})`). `breakpoint({on:'jumptable'})` resolves computed-jump dispatchers by running the game.
+- **Static recompilation.** `disasm({target:'recompile', emit:'wasmcart'})` recompiles a whole NES, SNES (with its coprocessors), Game Boy, Game Boy Color, GBA, Master System, Game Gear or Genesis ROM into a playable wasmcart. `frame({op:'verifyRecompile'})` checks it against the reference core (pixels, memory, audio, must-fail controls; `auto:true` picks the input itself), and `findDiverge` (down to `level:'instruction'`), `fuzzRecompile`, `traceInstructions` and `cycles` find and measure differences. A Genesis ROM can also be built as a native sync32 cart (`emit:'sync32'`). `emit:'ir'` exports decoded instructions for your own tools.
+- **Matching decompilation.** `decomp({op})` runs the generate, compile, compare, search and integrate loop on a splat-based N64 or PlayStation project, using the project's own compiler as WebAssembly with the flags its Makefile chooses: IDO 5.3/7.1, KMC gcc 2.7.2, EGCS 1.1.2, PS1 gcc 2.6.3 with maspsx, mips-linux-gnu gcc 14, with armips and the mips-linux-gnu binutils. `setup` runs a fresh checkout's extraction in process. m2c, decomp-permuter, splat and spimdisasm run as JavaScript ports. No Python, make or host compiler is used. Project state lives in `~/.romdev/decomp/<project>/`. IDO is SGI's proprietary compiler and is not distributed: build it from a romdev source checkout with `scripts/build-ido.sh`, or set `ROMDEV_IDO_DIR` to your build. Start with `platform({op:'doc', platform:'n64', name:'decomp'})`.
+- **Assets.** PNG to tiles, tilemaps and palettes (`encodeArt`), Aseprite/LibreSprite, Tiled, GIF and TexturePacker import (`importArt`), multi-sprite character capture (`sprites({op:'capture'})`), and audio for each platform (`encodeAudio`: SNES BRR and SPC driver data, Genesis XGM2 music and PCM, GBA maxmod soundbanks, NES FamiTone2, note tables for the other sound chips, sync32 synth and PCM).
+- **Native runtimes.** wasmcart (`.wasc`, WebAssembly games from any language, with GL and WebGPU rendering; ABI v4 required) and jsgame (JavaScript canvas and WebGL games) on the same load, step, screenshot and input loop. `wasm({op})` validates a cart (`conformance`), reads its named debug state, drains its event log and talks to it over a `command` channel. `loadMedia({deterministicSeed, deterministicStepMs})` gives replayable runs for `regression({op:'capture'|'check'})` goldens. `pack({target:'wasc'|'jsgame'})` builds the archive; you bring your own compiler.
+- **PICO-8.** The FAKE-08 player runs `.p8` and `.p8.png` carts. `build({platform:'pico8', source})` packages Lua into a `.p8`; `disasm({target:'source'})` returns a cart's Lua.
+- **Active Bezels.** `.ab` companion packages that read the game's memory every frame and draw a composite scene. `frame({op:'screenshot', source:'both'})` returns the composite and the raw core frame for the same frame so a bezel's reading of the game can be checked.
+- **A human in the loop.** `playtest()` opens an SDL window on the running game, with gamepads, while the agent keeps working. `host({op:'play', seconds})` shows a session moving on the `/livestream` page.
 
-This package contains all the JavaScript - the tool surface, the WASM emulator host, the per-platform example games, runtime/library source, and debug helpers - but **no emulator or compiler WASM itself.** Those ship in the `romdev-*` binary packages it depends on; each platform's core/toolchain WASM is resolved (`import.meta.resolve`) and instantiated only the first time you build or run that platform, so memory stays proportional to what you actually use.
+Detailed guides are served in session: `platform({op:'doc', platform, name:'mental_model'|'troubleshooting'})` per platform, `platform({op:'doc', platform:'romhacking', name:'playbook'})`, and `platform({op:'doc', platform:'guide', name})` for recompile, debugging, assets, music, wasmcart, bezels and sessions.
 
-> For the full project - what romdev is, the supported-platform matrix, how the pieces fit together, and how to develop on it - see the [repository README](https://github.com/monteslu/romdev#readme).
+## Connecting an agent
 
-## What's in this package
+- **MCP:** a streamable-HTTP MCP server at `http://127.0.0.1:7331/mcp`. For Claude Code: `claude mcp add --transport http romdev http://127.0.0.1:7331/mcp`. Other clients are listed in the [repository README](https://github.com/monteslu/romdev#connect). The session-based protocol and the stateless 2026-07-28 revision are both served; on the stateless revision pass one stable `session` argument on every call. The server sends [`AGENTS.md`](./AGENTS.md) as its connection instructions.
+- **Plain HTTP:** `POST /tool/{name}` with the arguments as a JSON body. Send an `x-romdev-session` header on every call (required; without it you get a 401). Pick one unique, descriptive id per task; it keeps your emulator between calls and labels your work on `/livestream`. When running many sessions, also send a stable `x-romdev-agent` header so eviction at the caps takes your own idle sessions, and end each with `host({op:'shutdown'})`. `GET /openapi.json` is the spec and `GET /documentation` a local Swagger UI. Errors come back as non-2xx responses with the reason.
+- **Agent Skill:** `GET /skills/romdev/SKILL.md` is an [Agent Skills](https://agentskills.io) file generated from the running server. Save it in your agent's skills directory; it costs little context until used.
 
-- **`bin`**
-  - `romdevtools` → the tool server (`src/mcp/server.js`). Serves the HTTP tool routes, `/documentation`, `/skills/romdev/SKILL.md`, and an MCP endpoint on `http://127.0.0.1:7331` by default (`PORT` / `HOST` to override). `romdev-mcp` is kept as an alias of the same command.
-  - `romdevtools-cli` → a smoke/utility CLI, incl. `romdevtools-cli play <rom>` (SDL window, hot-plug controllers, live fps in the title bar).
-- **`src/`** - the server, MCP tools, WASM host, core/toolchain resolvers, per-platform memory interpretation, and bundled library/runtime source (cc65 libs, PVSnesLib, SGDK, libtonc/libgba, hUGEDriver, ...) that forked projects link against.
-- **`examples/`** - per-platform example games (complete, working, forkable) and minimal references.
+romdev runs on the same machine as your agent. Path arguments (`path`, `outputPath`, ...) are local filesystem paths, not uploads.
+
+## What is in this package
+
+- **bin:** `romdevtools` (the server; `romdev-mcp` is an alias) and `romdevtools-cli` (`romdevtools-cli play <rom>` opens an SDL window with hot-plugged controllers and live fps).
+- **src/:** the server, tools, WebAssembly host, recompiler, decomp engine, platform docs and the library and runtime source that forked projects link against.
+- **examples/:** forkable example games and minimal references per platform.
+- **AGENTS.md**, **NOTICE**, **LICENSES/** (licence texts for the emulator code carried into recompiled carts), **CHANGELOG.md**.
+
+This package contains no emulator or compiler WebAssembly. Those ship in the `romdev-*` packages below, and each platform's binaries load the first time you use that platform.
 
 ## Dependencies
 
-`romdevtools` depends on the binary/data packages it needs (exact-pinned), so a single install gets a matched, tested set:
+Exact-pinned, so one install is a matched set:
 
-- 2D cores: `romdev-core-{fceumm,gambatte,gpgx,vice,handy,prosystem,geargrafx,bluemsx,gametank,s32core,fake08}`
-- 3D / GPU cores (rendered through `native-gles`): `romdev-core-{parallel-n64,beetle-psx-hw,flycast}`
-- Platforms (core + dedicated toolchain bundled): `romdev-platform-{snes,gba,atari2600}`
-- Toolchains: `romdev-toolchain-{cc65,sdcc,m68k-gcc,vasm,rgbds,mips-gcc,sh-gcc}` (mips-gcc = N64/PS1 C; sh-gcc = Dreamcast C)
-- GPU deps (OPTIONAL - only the 3D cores need them; the 2D cores never touch GL): `native-gles` + `webgl-node`. A headless user without a GPU stack can still run all the 2D platforms.
-- Analysis: `romdev-analysis` (Rizin → WASM: control-flow graphs, cross-references, function detection) and `romdev-analysis-decompiler` (Ghidra's C++ decompiler → WASM + SLEIGH processor specs for all 18 CPUs, incl. MIPS R3000/R4300 + SH-4). Power `disasm({target:'cfg'|'xrefs'|'functions'|'decompile'})` and `symbols({op:'analyze'})`. Lazy-loaded on first use.
-- Data: `romdev_game_codes` - the bundled game-code / cheat database (a free labeled RAM/code map for thousands of known ROMs), split out so it can grow independently. Lazy-loaded one platform at a time.
-- Native runtimes: [`wasmcart`](https://www.npmjs.com/package/wasmcart) (runs `.wasc` WASM game carts) and [`rungame`](https://www.npmjs.com/package/rungame) (runs `.jsgame` JavaScript games headlessly). Also `romdev-audio-resampler` (WASM+SIMD S16-stereo resampler, used by the live-window audio sink).
-- Active Bezels: `active-bezel` - the `.ab` package format, its reference runtime, and the compositor, shared with retroemu so the composite an agent inspects is the one a player sees. Imported lazily, only when a package is actually attached.
-
-`@kmamal/sdl` is used only by `playtest()` / `romdevtools-cli play` (the live window). It ships its native binary via its own install script, which npm skips when romdev is a transitive dep (e.g. under `npx`) - so romdev's `postinstall` fetches it, and `playtest()` also self-heals at runtime if the binary is still missing (downloading the prebuilt before the first window open). Either way, if the binary can't be fetched (offline/locked-down network), the headless server is unaffected - only the live window degrades, and the error tells you the one command to fix it.
-
-## Connect
-
-```bash
-npx romdevtools
-# then, e.g. for Claude Code (MCP):
-claude mcp add --transport http romdev http://127.0.0.1:7331/mcp
-```
-
-It's a standard **streamable-HTTP** MCP server at `http://127.0.0.1:7331/mcp`. For opencode, Codex CLI, and other clients, see **[Connect](https://github.com/monteslu/romdev#connect)** in the repository README. An optional human observer (live tool-call view) is at `/livestream`.
-
-Agents: the server delivers [`AGENTS.md`](./AGENTS.md) as connection-time instructions - the workflow guide for the full tool surface. Or just connect your agent and call `catalog({op:'categories'})` to explore the tools live, and `catalog({op:'status'})` for the running version + session snapshot.
-
-## Prefer not to use MCP? Use HTTP or a Skill
-
-Most agents support MCP, but you don't have to use it. Run the server
-(`npx romdevtools`) and **skip wiring it into your agent's MCP
-config** - no `claude mcp add`, no `mcp.json` entry, no MCP client at all. The
-same 32 tools are reachable over plain HTTP / as an Agent Skill against the
-running server:
-
-- **Plain HTTP:** `POST http://127.0.0.1:7331/tool/{name}` with the args as a JSON
-  body; the response is JSON. Browse/try every tool at **`/documentation`**
-  (Swagger UI, served locally - no CDN), or get the machine spec at
-  **`/openapi.json`**. **The agent picks its own session id** and sends it as the
-  `x-romdev-session` header on every call - it's **required** (no header → `401`;
-  the server won't silently run you in a throwaway session). Make it unique and
-  task-descriptive (e.g. `nes-platformer-build`), since it's also the label shown
-  in the `/livestream` observer. The emulator host is per-session, so the same id
-  keeps your ROM across calls, and several agents can share one server by each
-  using a different id. **Running many sessions at once?** Also send a stable
-  `x-romdev-agent` header - one value for *you*, across all your sessions. It is
-  optional and cooperative, and it buys two things: at the session/host caps
-  eviction targets the **largest holder's** oldest session, so your parallel
-  burst evicts its own idle sessions instead of another agent's, and the first
-  response of each new session you open carries `agentSessionReminder` - your
-  other live sessions, what each holds, how idle they are - which is exactly the
-  list you need to sweep up afterwards. When you finish with a session,
-  **`host({op:'shutdown'})`** releases all of it (emulator, session record,
-  livestream entry) immediately rather than waiting out the idle timer. A call
-  that fails returns a non-2xx (4xx) with the reason in the body - never a 200
-  that hides an error. romdev runs **locally** and tool path args (`path`,
-  `outputPath`, ...) are **local filesystem paths**, not uploads - pass absolute
-  paths on the same machine.
-- **Livestream playback:** `host({op:'play', seconds})` runs the session in real
-  time on the server (default 60 s, max 600) from one call, so `/livestream`
-  shows the game moving; it stops on time, on `host({op:'stop'})`, or on the
-  session's next tool call. Use it instead of a loop of `frame({op:'step'})`.
-- **Agent Skill:** **`GET /skills/romdev/SKILL.md`** is a portable [Agent
-  Skills](https://agentskills.io) `SKILL.md` (works in Claude Code, opencode,
-  OpenClaw, Hermes, ...). Drop it in your agent's skills dir; it costs ~100 tokens
-  until invoked (vs always-on MCP tool defs), then teaches the workflows + the
-  `POST /tool/{name}` calls.
-
-Both are generated from the same tool registry as the MCP surface, so they never
-drift. **You still run the server** - `npx romdevtools` (it hosts the
-emulators/toolchains in-process and serves these routes on :7331). What the
-HTTP/skill path removes is the *MCP client/protocol and its always-on context
-cost* - not the server. There's no separate install beyond romdev itself, and
-never a host `gcc` or emulator.
+- Emulator cores: `romdev-core-{fceumm,gambatte,gpgx,vice,handy,prosystem,geargrafx,bluemsx,gametank,bsnes,fake08,s32core}` and the GPU cores `romdev-core-{parallel-n64,beetle-psx-hw,flycast}`. `romdev-core-bsnes` is an alternate SNES core (`loadMedia({platform:'snes', core:'bsnes'})`), the accuracy reference for the ST010/ST011/ST018 coprocessors.
+- Core runtime: `romdev-core-host`, `romdev-core-runner`.
+- Platform bundles: `romdev-platform-{snes,gba,atari2600,sync32}`.
+- Toolchains: `romdev-toolchain-{cc65,sdcc,rgbds,vasm,m68k-gcc,mips-gcc,sh-gcc,decomp-gcc}`.
+- Analysis: `romdev-analysis` (Rizin) and `romdev-analysis-decompiler` (Ghidra decompiler and SLEIGH specs).
+- Decomp: `romdev-m2c`, `romdev-permuter` and `romdev-splat`, which bring in `romdev-spimdisasm`, `romdev-rabbitizer` and `romdev-pycparser`.
+- Audio: `romdev-famitone`, `romdev-maxmod`, `romdev-xgm2`, `romdev-audio-resampler`.
+- Data: `romdev_game_codes`, the cheat database, loaded one platform at a time.
+- GPU: `native-gles` and `webgl-node`, required (the 3D cores and GL wasmcarts render through them).
+- Runtimes: [`wasmcart`](https://www.npmjs.com/package/wasmcart) and [`rungame`](https://www.npmjs.com/package/rungame); `active-bezel` for Active Bezels (loaded only when one is attached).
+- `@kmamal/sdl` for the playtest window. npm skips its binary download when romdevtools is installed through `npx`, so romdevtools' `postinstall` fetches it and `playtest()` retries at run time. If the binary cannot be fetched, only the window is affected and the error names the command that fixes it.
 
 ## License
 
-romdev's code is **MIT**, and **the games you build are yours - including to
-sell.** Full details + third-party component inventory:
-[LICENSE](https://github.com/monteslu/romdev/blob/main/LICENSE) and
-[NOTICE](https://github.com/monteslu/romdev/blob/main/NOTICE).
+`"license": "SEE LICENSE IN NOTICE"`. romdev's own code is MIT ([LICENSE](./LICENSE)). The third-party components bundled or depended on keep their own licences, listed in [NOTICE](./NOTICE).
+
+Games you build with romdev are yours, including to sell. Carts made by the static recompiler are different: they contain code ported from the reference emulator (GPL, MPL or non-commercial terms, by platform) as well as the original game's code. Each recompiled cart carries a `licence` entry naming those components; the texts are in [LICENSES/](./LICENSES) and the terms are explained in NOTICE.

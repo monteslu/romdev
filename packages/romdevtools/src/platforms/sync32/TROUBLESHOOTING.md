@@ -58,19 +58,17 @@ relative path.
 
 ## Running
 
-**`build({output:'run'})` refuses the cart (`retro_load_game returned false`)
-but `build({output:'rom', outputPath})` + `loadMedia({path})` runs it** - that
-was a romdev bug through 0.135.1: the s32core is a NODERAWFS build (it
-`fopen()`s the cart by real path and streams `<name>/` off disk), and the run
-path did not tell the host so, so the in-memory bytes were never spilled to a
-temp file. Fixed in 0.136.0 - `output:'run'` is the documented first step of a
-fork again. If you see it on a newer server, the cart really is refused: check
-the header (`SY32`, 64 bytes) and that `mode` matches the linker script.
+**`build({output:'run'})` refuses the cart (`retro_load_game returned false`)**
+- the s32core `fopen()`s the cart by real path and streams `<name>/` off disk,
+so a refusal means the cart itself was rejected: check the header (`SY32`, 64
+bytes) and that `mode` matches the linker script. A game with resources must be
+built with `form:'folder'` to run here (the core does not unpack the `archive`
+tar).
 
 **`loadMedia` says `loaded:true` and the very next call says "No ROM
-loaded"** - your calls are landing in different sessions. On a 2026-07-28 MCP
-client (Claude Code 2.1.x) the server keys a session to your connection and
-every result ends with a `session: <id>` line; pass `session:"<id>"` on later
+loaded"** - your calls are landing in different sessions. The server keys a
+session to your MCP connection and every result ends with a `session: <id>`
+line; if your client reconnects between calls, pass `session:"<id>"` on later
 calls (or your own stable slug from the start) and the emulator stays put.
 Over plain HTTP send the same `x-romdev-session` header on every call AND
 reuse the `Mcp-Session-Id` from one `initialize` - re-initializing per call
@@ -157,10 +155,9 @@ Look at the screenshot before believing the verdict; on this platform
 
 **A ROM file suddenly became a few bytes** - something passed the ROM's path
 where a tool writes its OUTPUT. `memory({op:'readCart'})` takes the ROM to read
-as **`romPath`**; its `path`/`outputPath` is where bytes get *written*. (Before
-0.132.0 the schema declared `path` twice and the input silently became an output
-path - that is fixed, but the general shape of the mistake is easy to repeat
-with any tool that has both.)
+as **`romPath`**; its `path`/`outputPath` is where bytes get *written*. The
+same mistake is easy to repeat with any tool that has both an input and an
+output path.
 
 Recovery: a built ROM is usually a gitignored build output, so `git checkout`
 will not bring it back - rebuild it from its sources with `build(...)`. Keep

@@ -1,7 +1,7 @@
 # Super Nintendo / Super Famicom - mental model
 
 One page. Read once before you write your first SNES game. The
-TROUBLESHOOTING.md alongside this file is for when something's broken;
+troubleshooting doc (`platform({op:'doc', platform:'snes', name:'troubleshooting'})`) is for when something's broken;
 this is the "what's going on" version.
 
 ## CPU memory map (LoROM layout)
@@ -111,11 +111,11 @@ optimize:
    9-bit (attr bit 0 is the high bit / second-page select).
 4. **ROM-backed tiles beat runtime-generated tiles** for getting started.
    DMA a fixed tile sheet to the OBJ VRAM page once at init; don't generate
-   OBJ tiles on the fly until the static path renders correctly. The "SNES
-   Invaders" stable path = static ship-angle frames + explicit asteroid
+   OBJ tiles on the fly until the static path renders correctly. The stable
+   path for a small shooter = static ship-angle frames + explicit enemy
    tiles + all palettes uploaded + fixed slots + a low sprite budget.
 5. **Verify with the tools, don't guess.** After a build that should show
-   sprites, call `background({view:'renderState', platform:'snes'})` (it now decodes
+   sprites, call `background({view:'renderState', platform:'snes'})` (it decodes
    OBSEL: OBJ size, tile base, and whether the OBJ layer is enabled on the
    main screen via TM) and `sprites({op:'inspect', platform:'snes'})` (per-sprite
    `renderable` vs hidden, resolved `tileVramAddr`, `cgramPaletteRange`, and
@@ -315,8 +315,24 @@ and parallax is nearly free.
 
 Track `camX` in pixels; actor screen-X = `worldX - camX`.
 
+## Static recompilation
+
+SNES ROMs can be recompiled whole into a wasmcart with
+`disasm({target:'recompile', emit:'wasmcart', platform:'snes', path, outputPath})`. The cart's hardware is a port of snes9x, the reference core
+it is verified against with `frame({op:'verifyRecompile', cart, reference})`. Full guide: `platform({op:'doc', platform:'guide', name:'recompile'})`.
+
+snes9x cannot run the ST011 and ST018 coprocessors, so the recompiled SNES
+machine carries ares's code for those two chips. Those carts need the
+coprocessor firmware, which romdev does not ship: supply your own file
+(`options.firmware` at recompile time). To verify them, run the reference on
+the alternate **bsnes** core, the accuracy reference for these chips:
+`loadMedia({platform:'snes', core:'bsnes', firmware})` to play one, or
+`frame({op:'verifyRecompile', cart, reference, referenceCore:'bsnes'})`. bsnes
+exposes the same memory region ids as snes9x and reads the firmware
+(`st011.rom`, `st018.rom`) from its system directory.
+
 ## Reverse-engineering & decompilation
 
 The Rizin/Ghidra analysis engine works here like everywhere: `disasm({target:'functions'})` to carve the program, `disasm({target:'cfg'|'xrefs'})` to trace it, `symbols({op:'analyze'})` for a one-shot structural map.
 
-**Decompiler quality on 65816: MEDIUM.** The M/X register-width flags make instruction meaning context-dependent, but the Ghidra 65816 SLEIGH tracks them, so pseudocode is usable. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. See the cross-platform ROM-hacking playbook §5f for the full loop.
+**Decompiler quality on 65816: MEDIUM.** The M/X register-width flags make instruction meaning context-dependent, but the Ghidra 65816 SLEIGH tracks them, so pseudocode is usable. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. The full loop is in the ROM-hacking playbook, section 5f (`platform({op:'doc', platform:'romhacking', name:'playbook'})`).

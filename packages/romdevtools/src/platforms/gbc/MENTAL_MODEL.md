@@ -4,13 +4,26 @@ The Game Boy Color is the DMG (original Game Boy) with **color
 extensions** layered on. Most of the hardware (CPU, instruction set,
 VRAM layout, OAM, sound) is identical to DMG. Color adds:
 
-## Five silent-failure footguns to know before you start (R26 + R27)
+- **Two VRAM banks** (switched via VBK at $FF4F) - bank 0 holds tile
+  pattern data, bank 1 holds per-tile BG attributes (palette index,
+  H/V flip, priority, tile bank).
+- **8 BG palettes × 4 colors** (indexed via BCPS/BCPD at $FF68/$FF69).
+- **8 sprite palettes × 4 colors** (indexed via OCPS/OCPD at
+  $FF6A/$FF6B).
+- **Each color is 15-bit BGR** (5+5+5), stored as two little-endian
+  bytes per entry.
+- **Double-speed mode** via KEY1 ($FF4D) - the CPU runs at ~8 MHz instead
+  of ~4 MHz. Most homebrew ignores this; lots of cycle-counted code
+  breaks under it.
+- **HDMA** ($FF51-$FF55) for fast block transfers during HBlank -
+  used for live tile streaming.
+
+## Silent-failure footguns to know before you start
 
 These are GB-tree problems that bite identically on GBC because the
 runtime is the same SDCC sm83 port + same DMA hardware + same
-cartridge-header format. All five have shipped fixes in the bundled
-runtime + tools, but a custom build that bypasses them hits exactly
-the same wall.
+cartridge-header format. The bundled runtime + tools handle all of
+them, but a custom build that bypasses them hits exactly the same wall.
 
 1. **Cartridge header must be FULLY patched, not just logo + checksums.**
    `build({output:'rom'})` / `build({output:'run'})` do this for you at build time: every byte
@@ -28,15 +41,15 @@ the same wall.
 
 3. **Raw VRAM stores can be optimized away.** Use `memcpy_vram(dst,
    src, n)` from `gb_runtime.h` (volatile-safe by construction) or
-   cast through `volatile uint8_t *`. See `lib/c/SDCC_GOTCHAS.md`
-   § "Writes to VRAM".
+   cast through `volatile uint8_t *`. The SDCC gotchas list covers this under "Writes to VRAM":
+   https://github.com/monteslu/romdev/blob/main/packages/romdevtools/src/platforms/gb/lib/c/SDCC_GOTCHAS.md.
 
 3b. **OAM DMA goes FIRST after `wait_vblank()` - before any staging work.**
    The vblank window is ~10 scanlines (~1140 cycles) and SDCC call overhead
    is brutal: even a few dozen `oam_set()` CALLS before the flush push the
    DMA out of vblank into active display, where it tears the sprites on one
    FIXED scanline every frame (the "horizontal line a third of the way down"
-   glitch). The robust frame shape is: stage OAM/BG writes into RAM any time
+   glitch). The reliable frame shape is: stage OAM/BG writes into RAM any time
    during the frame, then `wait_vblank(); oam_dma_flush();` as the very first
    thing, then a small bounded batch of BG map writes. One frame of sprite
    latency is imperceptible. Also: statics belong at `dataLoc 0xC200` or
@@ -46,18 +59,15 @@ the same wall.
 4. **OAM DMA must run from HRAM.** During the ~160 µs OAM DMA window
    the CPU can ONLY fetch from HRAM ($FF80-$FFFE). The bundled
    `oam_dma_copy()` installs a 9-byte stub at $FF80 and CALLs it; the
-   stub spins from HRAM where DMA can't conflict. Pre-r55 the spin
-   ran from ROM and fetched $FF for every instruction → `rst $38` →
+   stub spins from HRAM where DMA can't conflict. A spin that runs from
+   ROM fetches $FF for every instruction → `rst $38` →
    stack corruption → intermittent LCDC = $FF, BG VRAM wiped, sprites
    jump. `lcd_init_default()` auto-installs the stub; if you bypass
    that helper, call `oam_dma_init_hram()` yourself before any DMA.
 
-5. **`gb_crt0.s` zeros BSS correctly.** Pre-r55's gsinit zeroed
-   `_INITIALIZED` (wrong section - gets overwritten by the copy loop)
-   instead of `_DATA` (actual BSS). Result: uninitialized statics
-   booted with WRAM garbage. The fixed crt0 zeros `_DATA` from
-   `s__DATA` for `l__DATA` bytes; bring-your-own crt0 should do the
-   same.
+5. **`gb_crt0.s` zeros BSS correctly.** Its gsinit zeros `_DATA` (the
+   actual BSS) from `s__DATA` for `l__DATA` bytes. A bring-your-own crt0
+   should do the same, or uninitialized statics boot with WRAM garbage.
 
 6. **Don't poke a hardcoded `$C0xx` WRAM pointer for game state - it
    overlaps your statics.** SDCC links the C runtime's data + BSS (every
@@ -69,22 +79,8 @@ the same wall.
    clobbered, not miscompiled). **Use a `static` array and let the linker
    place it** (`static uint8_t board[78]; board[i]=p;`), or hardcode at
    `$C200`+ and confirm with the linker map (`build({includeSymbols:true})`
-   → check `s__DATA`/`s__BSS`). Full write-up + repro in
-   `lib/c/SDCC_GOTCHAS.md` § "sm83 codegen traps in plain game logic".
-
-- **Two VRAM banks** (switched via VBK at $FF4F) - bank 0 holds tile
-  pattern data, bank 1 holds per-tile BG attributes (palette index,
-  H/V flip, priority, tile bank).
-- **8 BG palettes × 4 colors** (indexed via BCPS/BCPD at $FF68/$FF69).
-- **8 sprite palettes × 4 colors** (indexed via OCPS/OCPD at
-  $FF6A/$FF6B).
-- **Each color is 15-bit BGR** (5+5+5), stored as two little-endian
-  bytes per entry.
-- **Double-speed mode** via KEY1 ($FF4D) - Z80 runs at ~8 MHz instead
-  of ~4 MHz. Most homebrew ignores this; lots of cycle-counted code
-  breaks under it.
-- **HDMA** ($FF51-$FF55) for fast block transfers during HBlank -
-  used for live tile streaming.
+   → check `s__DATA`/`s__BSS`). Full write-up + repro in the SDCC gotchas
+   list (link above), section "sm83 codegen traps in plain game logic".
 
 ## MCP debug & inspection tooling
 
@@ -163,7 +159,7 @@ bit 7     BG-over-OBJ priority
 
 Identical to DMG - same 4-channel APU. `sound_init` / `sound_play_tone`
 / `sound_play_noise` / `sound_off` from `gb_runtime.h` work unchanged
-on GBC. See the GB MENTAL_MODEL.md for the channel layout.
+on GBC. See the GB mental model (`platform({op:'doc', platform:'gb', name:'mental_model'})`) for the channel layout.
 `audioDebug({op:'inspect', chip:"gb"})` decodes the live APU on GBC too.
 
 ## Frame heartbeat
@@ -202,8 +198,7 @@ the genesis_plus_gx platforms (Genesis/SMS/GG), there's no surprise here.
 All GB example games (`shmup`, `platformer`, `puzzle`, `sports`, `racing`,
 `hello_sprite`, `tile_engine`) compile identically as GBC ROMs - the
 bundled GB runtime is already CGB-aware (writes OCPD/OCPS for color).
-The genre examples inherit from GB via `TEMPLATES.gbc = TEMPLATES.gb`;
-the only differences at build time are:
+The GBC genre examples are the GB ones; the only differences at build time are:
 
 - ROM extension: `.gbc` (vs `.gb`)
 - the build sets `$0143 = $80` to flip CGB mode on (automatic when you
@@ -221,10 +216,16 @@ the wrapping 32×32 BG map, and stream the next BG-map column (its tile IDs +,
 on CGB, its BG attribute byte in VRAM bank 1) each time the camera crosses an
 8-px boundary. Use the Window (LCDC bit 5) for a fixed HUD. CGB adds nothing
 that changes the scroll mechanism - just remember the per-tile attribute in
-bank 1 when you stream columns. See the GB MENTAL_MODEL for the full pattern.
+bank 1 when you stream columns. See the GB mental model for the full pattern.
+
+## Static recompilation
+
+Game Boy Color ROMs can be recompiled whole into a wasmcart with
+`disasm({target:'recompile', emit:'wasmcart', platform:'gbc', path, outputPath})`. The cart's hardware is a port of gambatte, the reference core
+it is verified against with `frame({op:'verifyRecompile', cart, reference})`. Full guide: `platform({op:'doc', platform:'guide', name:'recompile'})`.
 
 ## Reverse-engineering & decompilation
 
 The Rizin/Ghidra analysis engine works here like everywhere: `disasm({target:'functions'})` to carve the program, `disasm({target:'cfg'|'xrefs'})` to trace it, `symbols({op:'analyze'})` for a one-shot structural map.
 
-**Decompiler quality on SM83: GOOD.** A dedicated SLEIGH plugin gives clean block-level pseudocode. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. See the cross-platform ROM-hacking playbook §5f for the full loop.
+**Decompiler quality on SM83: GOOD.** A dedicated SLEIGH plugin gives clean block-level pseudocode. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. The full loop is in the ROM-hacking playbook, section 5f (`platform({op:'doc', platform:'romhacking', name:'playbook'})`).

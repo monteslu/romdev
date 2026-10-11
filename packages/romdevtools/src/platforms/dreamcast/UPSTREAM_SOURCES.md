@@ -1,6 +1,6 @@
 # Sega Dreamcast - source you can read
 
-Trust hierarchy (try in order before filing a feedback round):
+Trust hierarchy (try in order before filing an issue):
 
 1. **Bundled examples** (`examples/dreamcast/{hello,shmup,platformer,puzzle,racing,sports}/main.c`)
    - verified building + rendering on the GPU (full 480-line frame). Start here.
@@ -15,7 +15,7 @@ Trust hierarchy (try in order before filing a feedback round):
    | Flycast (libretro core, PowerVR2 + reios HLE BIOS) | https://github.com/flyinghead/flycast |
    | SH-4 / PowerVR2 / AICA / Maple internals | (in the flycast tree: `core/hw/sh4/`, `core/hw/pvr/`, `core/hw/aica/`, `core/hw/maple/`) |
 
-   The cpuState/audioDebug exports we patch in (`romdev_sh4_regs_get`, `romdev_aica_get`)
+   The cpu({op:'read'}) and audioDebug exports romdev patches in (`romdev_sh4_regs_get`, `romdev_aica_get`)
    live in `scripts/patches/romdev-snippets/flycast-debug.c`.
 
 4. **The toolchain** - a from-scratch `sh-elf-gcc` cross-compiler (little-endian SH-4,
@@ -52,6 +52,6 @@ Trust hierarchy (try in order before filing a feedback round):
   flycast `core/hw/pvr/pvr_regs.h` (SPG_CONTROL interlace bit).
 - "dc_pad doesn't reflect button presses" → `dc.h` `dc_pad()` (Maple Get-Condition DMA) +
   flycast `core/hw/maple/maple_devs.cpp` (the controller response framing). Reads the
-  resting state; press mapping is a known follow-up.
+  resting state only; button presses are not delivered to the game yet.
 - "Which AICA register holds channel key-on/volume?" → `dc-aica-state.js` decode +
   flycast `core/hw/aica/`.

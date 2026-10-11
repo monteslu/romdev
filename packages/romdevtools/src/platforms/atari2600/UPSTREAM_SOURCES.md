@@ -6,9 +6,9 @@ Trust hierarchy:
 2. **Bundled runtime** - `src/platforms/atari2600/lib/*.asm`
    (kernel_skeleton, player_kernel, playfield_kernel,
    read_joystick, vectors).
-3. **Bundled cc65 atari2600 libsrc** (R58) at `src/platforms/
+3. **Bundled cc65 atari2600 libsrc** at `src/platforms/
    atari2600/lib/cc65-src/`. (Note: cc65 doesn't generate practical
-   2600 code; we use **dasm** for 2600. The cc65 libsrc here is the
+   2600 code; romdev uses **dasm** for 2600. The cc65 libsrc here is the
    small bit cc65 ships for 2600 - mostly reference, since real
    2600 dev is asm.)
 4. **Upstream**:

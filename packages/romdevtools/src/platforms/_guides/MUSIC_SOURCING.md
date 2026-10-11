@@ -34,6 +34,11 @@ This is the clean case. romdev compiles it in-process, no external tools:
 | FamiTracker `.txt` export | NES | `encodeAudio({target:'famitone'})` → FamiTone2 driver |
 | WAV/PCM (a sound) | SNES | `encodeAudio({target:'brr'})` (BRR sample) |
 | WAV/PCM (a sound) | Genesis | `encodeAudio({target:'xgm2pcm'})` (PCM SFX) |
+| WAV/PCM (a sound) | sync32 | `encodeAudio({target:'sync32pcm'})` (s16 SFX for the game's own mixer) |
+| a note/duration song | SNES | `encodeAudio({target:'spc'})` (row table for the bundled SPC driver) |
+| a note/duration song | SMS, GG, C64, Lynx, Atari 7800 | `encodeAudio({target:'sms'})`, or target `'gg'`, `'c64'`, `'lynx'`, `'atari7800'` (the bundled driver's note table) |
+| a note/duration song (1-4 channels) | GB, GBC | `encodeAudio({target:'gb'})` or `target:'gbc'` (hUGEDriver channels) |
+| a note/duration song | sync32 | `encodeAudio({target:'sync32'})` (event tables for a software synth) |
 
 (These are faithful ports of the standard tools - SGDK's xgm2tool, devkitPro's
 mmutil, FamiTone2's text2data - so no Java, no native binary, no devkitPro needed.)
@@ -42,12 +47,15 @@ mmutil, FamiTone2's text2data - so no Java, no native binary, no devkitPro neede
 
 ## Path B - arbitrary audio (WAV/MP3) → SAMPLE music (Genesis / SNES / GBA)
 
-Works directly. Install **ffmpeg** (the only external tool needed) to conform any
-file to the chip's spec, then feed romdev's sample encoders:
+Works directly. `encodeAudio({target:'xgm2pcm'})` (Genesis) and
+`encodeAudio({target:'sync32pcm'})` take a WAV and do the resampling themselves.
+For an MP3 or another compressed format, or to resample for SNES BRR or GBA,
+**ffmpeg** is the one optional external tool: conform the file to the chip's spec,
+then feed romdev's sample encoders:
 
 ```
-ffmpeg -i song.mp3 -ac 1 -ar 13300 -f s8 song.raw     # Genesis: mono, ~13.3kHz, 8-bit signed
-  → encodeAudio({target:'xgm2pcm', format:'pcm16'|..., ...})
+ffmpeg -i song.mp3 -ac 1 -ar 13300 -f s16le song.raw  # Genesis: mono, ~13.3kHz, s16 PCM
+  → encodeAudio({target:'xgm2pcm', format:'pcm16', pcmRate:13300, ...})
 # SNES (BRR): resample to your playback rate, then encodeAudio({target:'brr'})
 # GBA (Direct Sound): resample to your mixing rate, play as a sample
 ```
@@ -66,7 +74,7 @@ also take raw PCM directly if you resample some other way.
 The chip can't play your recording, so you transcribe it to notes, then compile
 those. This is **lossy and approximate** - great on a clean monophonic melody/solo,
 rough on a dense full mix. The chain uses optional open-source helpers (none
-bundled; suggest by name + install + license):
+bundled; each is listed with where to get it and its licence):
 
 **Step 1 - audio → MIDI (the hard MIR step):**
 - **Spotify Basic Pitch** - https://github.com/spotify/basic-pitch-ts - Apache-2.0,
@@ -83,12 +91,15 @@ bundled; suggest by name + install + license):
   MIDI front-end when you're coming from transcription.)
 - **GBA / module systems:** **OpenMPT** - https://openmpt.org - BSD. Imports MIDI,
   exports `.it`/`.xm`/`.mod` → feeds `encodeAudio({target:'maxmod'})`.
-- **Genesis / SMS (PSG):** a MIDI→VGM tool (e.g. **mid2vgm**-style utilities) →
+- **Genesis:** a MIDI→VGM tool (e.g. **mid2vgm**-style utilities) →
   feeds `encodeAudio({target:'xgm2'})`.
-- **C64 SID:** **GoatTracker** / SID-Wizard - GPL. MIDI import is limited; mostly
-  hand-authoring. The roughest target.
+- **SMS / GG / C64 / Lynx / Atari 7800 / GB / GBC / SNES / sync32:** reduce the
+  MIDI to note/duration rows (one voice, or 1-4 channels on GB/GBC) and feed the
+  platform's `encodeAudio` song target from the Path A table.
+- **C64 SID** beyond simple note rows: **GoatTracker** / SID-Wizard - GPL. MIDI
+  import is limited; mostly hand-authoring. The roughest target.
 
-**Honest expectation:** the output sounds like the song's *notes* played on the
+**Expectation:** the output sounds like the song's *notes* played on the
 chip's voices - not the original recording. Clean up the transcribed MIDI in a
 tracker before compiling for anything beyond a simple melody.
 

@@ -201,7 +201,7 @@ ImageMagick installs.
   zstd isn't supported.
 - **`.ase` tilemap-mode cels** (Aseprite 1.3+): convert to regular
   layers first (`Layer → Convert → To Layer`).
-- **GIF disposal**: omggif (our parser) doesn't apply disposal. Export
+- **GIF disposal**: omggif (the bundled parser) doesn't apply disposal. Export
   GIFs with `Disposal: Replace` for full-frame sprite animations.
 - **Indexed PNG colors must match the platform palette** (±8/channel
   tolerance). If `encodeArt({stage:'tiles'})` warns about colors outside the

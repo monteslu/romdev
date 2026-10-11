@@ -13,7 +13,7 @@ need to grep around the actual implementation. Trust hierarchy:
    lynx-160-102-16.s`), joystick driver, conio, header builder, sound
    engine (`lynx-snd.s`), etc. Read this when "tgi_bar does X - why?".
 4. **Compiler + emulator GitHub** (links below) - for anything below
-   our thin wrappers and beyond cc65's source. We don't bundle these
+   the romdev wrappers and beyond cc65's source. These are not bundled
    because they're big and the agent can't rebuild them anyway, but
    you can fetch them on demand when chasing a deep bug.
 5. **Found a real bug in romdev?** Open an issue at
@@ -40,7 +40,7 @@ your "why doesn't tgi_X work?" question gets answered.
 |---|---|---|
 | cc65 compiler + libsrc | https://github.com/cc65/cc65 | We bundle the WASM compiler + lynx libsrc separately; full tree is ~50 MB |
 | handy libretro core | https://github.com/libretro/libretro-handy | C++ emulator source, ~5 MB. Read when MCP behavior diverges from real hardware. |
-| handy mikie/susie (deeper) | Same repo, `src/lynx/mikie.cpp` + `susie.cpp` | Contains the exact emulation of MIKEY timers + Suzy blitter. Where round-29's audio-vs-TGI bug was diagnosed. |
+| handy mikie/susie (deeper) | Same repo, `src/lynx/mikie.cpp` + `susie.cpp` | Contains the exact emulation of MIKEY timers + Suzy blitter. Where the MIKEY timer-event sweep that can corrupt an in-flight Suzy blit lives (see "Audio + TGI interaction" in the Lynx mental model). |
 
 ## Lynx hardware docs
 
@@ -62,5 +62,5 @@ attempting anything beyond `tgi_bar`.
   `PaintSprites()` + check `mSUZYBUSEN` + `mSPRGO`
 - "What's the actual audio register layout?" → `cc65-src/lynx-snd.s`
   + Programmer's Manual section 5.6
-- "Does the bundled lynx_sfx wrap MIKEY correctly?" → our
+- "Does the bundled lynx_sfx wrap MIKEY correctly?" → the bundled
   `lynx_sfx.c` source (it's tiny - 100 lines, fully readable)

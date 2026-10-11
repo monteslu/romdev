@@ -1,9 +1,10 @@
 # romdev-toolchain-m68k-gcc
 
-m68k-elf-gcc toolchain (cc1/as/ld/objcopy/objdump) for Sega Genesis C - and the
-native m68k disassembler/reassembler behind `disassembleProject` - as
-WebAssembly. Plus SGDK's Z80 tools (sjasm/bintos), the Genesis C library tree
-(`share/genesis/lib/`: full SGDK + minimal runtime), and the full C build
+The m68k-elf gcc toolchain (`cc1`, `as`, `ld`, `objcopy`, `objdump`) for Sega
+Genesis C, as WebAssembly. The objdump also serves 68000 disassembly for
+`disasm({target:'rom'})` and byte-exact `disasm({target:'project'})`. The
+package also carries SGDK's Z80 tools (`sjasm`, `bintos`), the Genesis C
+library tree (`share/genesis/lib/`: SGDK and a minimal runtime) and the C build
 pipeline:
 
 ```js
@@ -11,30 +12,42 @@ import { buildGenesisC, finalizeGenesisRom, parseBuildLog }
   from "romdev-toolchain-m68k-gcc";
 
 const r = await buildGenesisC({ source: '#include <genesis.h>\nint main(){ ... }' });
-const rom = finalizeGenesisRom(r.binary); // pad + $18E checksum (SGDK post-link)
+const rom = finalizeGenesisRom(r.binary); // pad and write the $18E checksum (SGDK's post-link step)
 ```
 
-One dep compiles everything for the target - an SDK or tool building Genesis
-ROMs needs only this package (romdev's own server builds through the same
-entry, so there is exactly one pipeline). `buildGenesisC` also accepts an
-injected `env` (runTool / share manifest / hash / sdkCache / loadGlue) so the
-identical pipeline runs in a browser Web Worker - see
+An SDK or tool that builds Genesis ROMs needs only this package; romdevtools'
+`build({platform:'genesis'})` goes through the same entry point.
+`buildGenesisC` also accepts an injected `env` (runTool, share manifest, hash,
+sdkCache, loadGlue) so the same pipeline runs in a browser Web Worker; see
 `build/genesis-c/genesis-c.js` for the contract.
 
-A binary package for [romdev](https://github.com/monteslu/romdev): it ships the
-prebuilt WebAssembly + JS glue and is resolved by the main `romdev` package on
-demand. Install `romdev` for the full dev suite, or this package alone for the
-build pipeline.
+A binary package for [romdev](https://github.com/monteslu/romdev). The main
+`romdevtools` package loads it on demand. Install `romdevtools`
+(`npx romdevtools`) for the full tool set, or this package alone for the build
+pipeline.
 
-## Upstream & license
+## Upstream and license
 
-Bundles: **m68k-elf-gcc, binutils**.
+Bundles: **gcc 14.2.0, binutils 2.42 and newlib 4.4.0** for m68k-elf, and
+**SGDK** (https://github.com/Stephane-D/SGDK) with its `sjasm` and `bintos`
+tools.
 
-**License:** GPL-3.0-or-later with GCC Runtime Library Exception (does not encumber compiled ROMs).
+**License:**
 
-This package redistributes the upstream binary built to WebAssembly; the source
-is fetched from a pinned upstream commit at build time (see the romdev repo's
-`scripts/versions.json` and `BUILDING.md`). See the romdev repo `NOTICE` for the
-full third-party inventory.
+- gcc and binutils: GPL-3.0-or-later (the package's `license` field). libgcc
+  carries the GCC Runtime Library Exception, and newlib uses BSD-style
+  licences, so linking them does not place conditions on a compiled ROM.
+- SGDK: MIT (`share/genesis/lib/sgdk/LICENSE`, with `COPYING.RUNTIME`).
+- `sjasm` and `bintos` are built from SGDK's `tools/` tree at the pinned SGDK
+  commit; `sjasm` keeps its original author's licence notice there.
 
-**Built by:** `romdevtools/scripts/build-m68k-wasm-tools.sh + build-sjasm.sh` (no patch - built clean). See `scripts/BUILD_MAP.md` in the romdev repo for the full recipe→package map.
+This package redistributes the upstream source built to WebAssembly. The
+upstream versions are pinned in `packages/romdevtools/scripts/versions.json` in
+the romdev repo, and the repo's `NOTICE` has the full third-party inventory.
+
+**Built by:** `packages/romdevtools/scripts/build-m68k-wasm-tools.sh` (the
+native stage is `build-m68k-toolchain.sh`, with newlib patches
+`newlib-4.4.0-m68k-ldbl-eq-dbl.patch` and
+`newlib-4.4.0-m68k-bare-metal-system.patch`) and `build-sjasm.sh`. See
+[BUILD_MAP.md](https://github.com/monteslu/romdev/blob/main/packages/romdevtools/scripts/BUILD_MAP.md)
+for the recipe-to-package map.
