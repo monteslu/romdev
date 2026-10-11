@@ -377,7 +377,7 @@ export async function stepInstructionsCore(sessionKey, { count = 16, withRegiste
       if (m) {
         entry.mapper = m;
         // Only claim a bank when the registers hold real bank numbers. On an
-        // unbanked cart the honest answer is "no banking in effect", not a
+        // unbanked cart the correct answer is "no banking in effect", not a
         // number derived from uninitialised RAM.
         const bank = m.uninitialised ? null : bankForPc(pc, m);
         if (bank != null) { entry.bank = bank; entry.blockId = `${bank}:${entry.pc}`; }
@@ -1870,7 +1870,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     "so a live cpu read afterward returns END-OF-FRAME registers, not the break instant. `registersAtHit` sidesteps that. The break PC is reported as `pc`/`pcRaw`; " +
     "the RAM side effects are also reliable via memory({op:'read'}). frame({op:'stepInstruction'}) to single-step from the break. (on:'read'/'write' finish the frame.)\n" +
     "• on:'jumptable' - **RESOLVE a computed-jump dispatcher the static decompiler can't follow.** Game-state machines, script/event VMs, and battle engines dispatch through `JMP (table,X)` / RTS-trick tables; `decompile`/`cfg` collapse them to `(*_IRQ)()` + 'Could not recover jumptable'. Break at the dispatcher `address`, single-step THROUGH the indirect transfer, and record the PC it lands on - repeated across frames/inputs to accumulate the DISTINCT target set (the real switch arms), ranked by hit count. Drive more game states (pressDuring / fromState) to surface rarer arms. Returns `{targets:[{target,hits,fromPC}], distinctTargets}`. **No static-only tool (IDA/Ghidra/Binary Ninja) can do this - it needs a live emulator in the loop, which is romdev's edge.** Feed the targets to decompile({address:target}) to read each arm.\n" +
-    "All supported on every CPU core. **Every hit carries `registersAtHit` - the FULL register file frozen by the core AT the hit instant, on ALL 14 platforms and all three `on` kinds.** Use it instead of a follow-up cpu({op:'read'}): the live registers keep moving after a hit (per-scanline CPU scheduling / frame completion), so a post-hit read drifts - chasing pointer registers read that way burned a real session for hours. The hit `pc` is the EXECUTING instruction's first byte (mid-instruction hooks no longer report the operand-advanced PC). Out-of-date core packages return notSupported.\n" +
+    "All supported on every CPU core. **Every hit carries `registersAtHit` - the FULL register file frozen by the core AT the hit instant, on ALL 14 platforms and all three `on` kinds.** Use it instead of a follow-up cpu({op:'read'}): the live registers keep moving after a hit (per-scanline CPU scheduling / frame completion), so a post-hit read drifts and pointer registers read that way are wrong. The hit `pc` is the EXECUTING instruction's first byte (mid-instruction hooks no longer report the operand-advanced PC). Out-of-date core packages return notSupported.\n" +
     "MENU-SCREEN INPUT TRICK: if a pressDuring schedule never registers (some menu screens poll input in a way scheduled taps miss), HOLD the button instead: input({op:'set', buttons:{...}}) BEFORE this call and OMIT pressDuring - the run inherits the held state, the menu sees the edge, and the breakpoint catches the event.",
     {
       on: z.enum(["write", "read", "pc", "jumptable"])
@@ -1997,9 +1997,9 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       // handlers via RAM vectors, music drivers) ran CONCURRENTLY and may have
       // written over the routine's output buffer. Loud, up front, with the fix.
       const frameLogicCaveat = (!pure && r.framesRun > 0 && (host.pureCallSupported ? host.pureCallSupported() : false))
-        ? ` ⚠ framesRun:${r.framesRun} - the game's own frame logic (VBlank handler, music driver) ran DURING this call and may have modified RAM the routine wrote; treat the output buffer as suspect. Re-run with pure:true to step ONLY the CPU (no frame machinery).`
+        ? ` WARNING: framesRun:${r.framesRun} - the game's own frame logic (VBlank handler, music driver) ran DURING this call and may have modified RAM the routine wrote; treat the output buffer as suspect. Re-run with pure:true to step ONLY the CPU (no frame machinery).`
         : (!pure && r.framesRun > 0)
-          ? ` ⚠ framesRun:${r.framesRun} - the game's own frame logic ran DURING this call and may have modified RAM the routine wrote; treat the output buffer as suspect (verify visually or against a known-good slice).`
+          ? ` WARNING: framesRun:${r.framesRun} - the game's own frame logic ran DURING this call and may have modified RAM the routine wrote; treat the output buffer as suspect (verify visually or against a known-good slice).`
           : "";
       const note = (r.returned
         ? "Routine RETURNED. readMemory the buffer it wrote (e.g. the decompressor's A1 dest) now - sandbox:false leaves it live. (regs by reg-id: m68k 8=A0,9=A1,0=D0.)"

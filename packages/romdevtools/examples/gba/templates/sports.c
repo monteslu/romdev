@@ -26,7 +26,7 @@
  *     (sfx_music_tick once per frame - forget it and the game is silent).
  *   libtonc (the build links it) - VBlankIntrWait/key_poll/TTE/tonccpy.
  *
- * HANDHELD, SO SINGLE-PLAYER ONLY (honest note): 2P versus on the GBA means a
+ * HANDHELD, SO SINGLE-PLAYER ONLY (note): 2P versus on the GBA means a
  * link cable between two units - a second emulator instance this environment
  * can't provide. So RALLY ROVER is 1P vs a beatable CPU, not split-screen
  * versus. (Contrast the NES/Genesis sports templates, which ARE 2P versus -

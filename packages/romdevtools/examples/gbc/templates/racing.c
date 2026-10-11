@@ -18,10 +18,10 @@
  *     reshape your gameplay around it (see TROUBLESHOOTING before changing).
  *   GAME LOGIC (clay) - traffic patterns, speeds, tuning, art: reshape freely.
  *
- * SINGLE-PLAYER, honestly: the Game Boy's "player 2" is a LINK CABLE, which
+ * SINGLE-PLAYER: the Game Boy's "player 2" is a LINK CABLE, which
  * one emulator instance cannot provide - so handheld examples ship a
  * press-start title and no 2P mode instead of faking one. (The console racing
- * examples have real split-lane 2P; the handheld is an honest 1P endless run.)
+ * examples have real split-lane 2P; the handheld is a 1P endless run.)
  *
  * What depends on what:
  *   gb_hardware.h - register names (LCDC/WX/WY/SCY/VBK/BCPS/NRxx/...) + masks.

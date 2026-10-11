@@ -40,7 +40,7 @@
  *   the title screen trigger A (or SPACE) starts 1P vs CPU; trigger B starts
  *   2P versus. On the result screen any fire returns to the title.
  *
- * Record honesty: the bundled bluemsx core build exposes NO battery save path
+ * Record: the bundled bluemsx core build exposes NO battery save path
  *   (retro_get_memory(SAVE_RAM) is unimplemented for MSX carts), so BEST (the
  *   longest 1P-vs-CPU win streak) lives in plain RAM: it survives title↔match
  *   cycles but NOT a power cycle / hardReset. Never fake persistence - if you
@@ -255,10 +255,10 @@ static uint8_t serve_timer;      /* freeze frames between points              */
 static uint8_t two_player;       /* title pick: 0 = vs CPU, 1 = 2P versus     */
 static uint8_t streak;           /* current 1P-vs-CPU win streak (RAM)        */
 static uint16_t best_streak;     /* SESSION-ONLY record - see end_match + the
-                                  * record-honesty note at the top of file.
+                                  * record note at the top of file.
                                   * No SAVE_RAM on this core, so it lives in
                                   * plain RAM: survives title↔match cycles,
-                                  * NOT a power cycle (honest, not faked).    */
+                                  * NOT a power cycle (real, not faked).    */
 static uint8_t new_record;       /* result screen shows NEW RECORD            */
 
 #define ST_TITLE 0

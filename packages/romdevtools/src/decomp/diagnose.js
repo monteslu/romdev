@@ -293,7 +293,7 @@ export function groupResiduals(target, candidate, strict, { gap = 3 } = {}) {
  *
  * Every verdict carries a confidence and the reason, because "scheduling" and
  * "register allocation" call for completely different experiments and a
- * confident wrong label costs more than an honest "unclassified".
+ * confident wrong label costs more than a plain "unclassified".
  */
 export function classifyGroup(group, target, candidate) {
   const idx = group.indices;

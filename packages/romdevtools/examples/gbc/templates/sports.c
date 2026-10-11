@@ -26,7 +26,7 @@
  *   GAME LOGIC (clay) - court art, ball physics, CPU skill, scoring rules:
  *     reshape freely.
  *
- * SINGLE-PLAYER, honestly: the Game Boy's "player 2" is a LINK CABLE, which
+ * SINGLE-PLAYER: the Game Boy's "player 2" is a LINK CABLE, which
  * one emulator instance cannot provide - a single instance cannot emulate
  * the second Game Boy on the other end of that cable. So handheld examples
  * ship a press-start title and a 1P-vs-CPU match instead of faking a 2P mode
@@ -55,7 +55,7 @@
  * ($C100) - else oam_clear() would zero our state. The project recipe sets
  * that automatically.
  *
- * RENDERING - the hard-won architecture (details at each routine below):
+ * RENDERING - the architecture (details at each routine below):
  *  - The two paddles and the ball are OBJ sprites (OAM), not BG tiles; moving
  *    them is just an OAM rewrite - and each paddle's TEAM colour is its OBJ
  *    palette (OCPS), so one tile reads cyan or red purely by its OAM attr.
@@ -684,7 +684,7 @@ static void draw_court(void) {
 }
 
 /* ── GAME LOGIC (clay - reshape freely) ── title screen: court backdrop +
- * name + prompt + the honest no-2P note. */
+ * name + prompt + the no-2P note. */
 static void draw_title(void) {
     draw_court();
     draw_text((uint8_t)((20 - (sizeof(GAME_TITLE) - 1)) / 2), 4, GAME_TITLE);

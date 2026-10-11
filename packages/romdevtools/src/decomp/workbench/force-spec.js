@@ -1,4 +1,4 @@
-// force-spec.js - honest handoff from register permutations to allocator
+// force-spec.js - handoff from register permutations to allocator
 // oracle tooling: the observed permutation, never invented allocator web ids.
 //
 // Plain JS ESM + JSDoc.

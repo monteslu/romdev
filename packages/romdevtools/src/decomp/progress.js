@@ -1,4 +1,4 @@
-// progress.js - honest progress from the SELECTED BUILD's actual objects, not
+// progress.js - progress from the SELECTED BUILD's actual objects, not
 // from pragma counts or a README badge. States are reported separately and
 // never collapsed into one percentage:
 //   asm            GLOBAL_ASM functions (the .NON_MATCHING symbol exists)

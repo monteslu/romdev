@@ -35,7 +35,7 @@ const CATEGORIES = ["gtt", "vram", "cpu"];
  *
  * A driver reports the SAME allocation on every DRM fd the process holds (we
  * routinely hold 3), so summing across fds would triple-count. The maximum
- * across fds is the honest figure.
+ * across fds is the real figure.
  *
  * @returns {{gttMb?: number, vramMb?: number, driver?: string} | null}
  */

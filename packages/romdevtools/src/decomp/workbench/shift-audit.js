@@ -502,7 +502,7 @@ export function shiftAuditLines(found, { limit }) {
     lines.push("  pins_missing_sources is off: pass --elf <linked ELF> to check "
       + "whether --pins/--symbol-addrs named every absolute symbol the "
       + "link actually carries. An incomplete inventory exits "
-      + "clean and reports every other number honestly about the pins "
+      + "clean and reports every other number with the pins stated "
       + "it *was* given -- this is the only check that catches a pin "
       + "file nobody handed it.");
   }

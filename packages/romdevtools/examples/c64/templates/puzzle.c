@@ -169,7 +169,7 @@ void raster_irq(void) {
   asm("sta $d016");
   asm("lda #251");           /* = BOTTOM_LINE (cc65's asm %b only takes     */
   asm("sta $d012");          /* signed bytes, so these are literals - the   */
-  asm("jmp $ea81");          /* #if below keeps them honest)                */
+  asm("jmp $ea81");          /* #if below keeps them in sync)                */
 at_bottom:
   asm("lda #$C0");           /* = D016_BAR                                  */
   asm("sta $d016");          /* bar scroll for the top of the NEXT frame    */
@@ -233,7 +233,7 @@ static uint8_t read_stick_port1(void) {     /* player 2 */
 #define JOY_FIRE  0x10
 
 /* ── HARDWARE IDIOM (load-bearing) - hi-score persistence: DISK SAVE ─────────
- * The C64 has no battery SRAM - the honest save medium is the FLOPPY. A game
+ * The C64 has no battery SRAM - the real save medium is the FLOPPY. A game
  * persists by writing a file to drive 8; VICE commits it into the live 1541
  * disk image (true-drive GCR write-back), so a save survives a power cycle
  * exactly as it did on real hardware. (To capture it headlessly the host does
@@ -241,7 +241,7 @@ static uint8_t read_stick_port1(void) {     /* player 2 */
  *
  * REQUIRES THE GAME RUN FROM A DISK: build/package it as a .d64 and load THAT
  * (loadMedia autostarts it). A bare .prg injected straight into RAM has no
- * mounted disk to save to, so the save is a silent no-op - still honest (the
+ * mounted disk to save to, so the save is a silent no-op - still correct (the
  * value just stays in-session), it simply has nowhere to persist.
  *
  * We keep a 2-byte record in a SEQ file "HI" on drive 8. These are the STABLE

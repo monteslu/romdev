@@ -3,8 +3,8 @@
  * SCARP SPRINT - a COMPLETE, working game: title screen, 1P mode and 2P
  * ALTERNATING-TURNS mode (arcade-classic: players swap on death; each player
  * has their own score and own 3 lives; player 2 plays on PORT B - see the
- * honesty note at gg_joypad_read_p2), coins + distance scoring, persistent
- * hi-score (Sega-mapper cart RAM - see the honesty note at hiscore_save),
+ * note at gg_joypad_read_p2), coins + distance scoring, persistent
+ * hi-score (Sega-mapper cart RAM - see the note at hiscore_save),
  * PSG music + SFX, and the GG/SMS signature LINE-INTERRUPT split: a fixed HUD
  * strip over a horizontally scrolling level, timed by the VDP's programmable
  * line counter.
@@ -414,7 +414,7 @@ static void wait_split(void) {
  * snoops the bus. That's why the crt0 parks SP at $DFF0: the bytes above it
  * ($DFFC-$FFFF) belong to the mapper registers' shadow.
  *
- * HONESTY (verified 2026-06-10 against the bundled gpgx core, same finding as
+ * NOTE (verified 2026-06-10 against the bundled gpgx core, same finding as
  * the SMS example): gpgx only instantiates the Sega mapper for ROMs LARGER
  * than 48KB, and this build pipeline emits 32KB ROMs - so in-emulator the
  * $8000 window stays open-bus (reads $FF), the magic check fails, and the game
@@ -811,7 +811,7 @@ void main(void) {
     music_update();
     wait_split();                    /* the line-interrupt split - every frame */
 
-    if (turn_pause) {                /* freeze gameplay, keep the frame honest */
+    if (turn_pause) {                /* freeze gameplay, keep the frame consistent */
       --turn_pause;
       stage_sprites();               /* blink runs; SAT stays fresh */
       continue;

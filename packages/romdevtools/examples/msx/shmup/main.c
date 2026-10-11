@@ -25,7 +25,7 @@
  *   trigger A fires. PORT 2 flies ship 2 in co-op. On the title screen
  *   trigger A starts 1P; trigger B (or player 2's trigger) starts 2P co-op.
  *
- * Hi-score honesty: the bundled bluemsx core build does NOT expose a battery
+ * Hi-score: the bundled bluemsx core build does NOT expose a battery
  *   save path (retro_get_memory(SAVE_RAM) is unimplemented for MSX carts), so
  *   the hi-score lives in plain RAM: it survives title↔game cycles but NOT a
  *   power cycle. Never fake persistence - if you need real saves, that's a
@@ -273,7 +273,7 @@ static uint16_t hiscore;         /* SESSION-ONLY: plain RAM. The bundled
                                   * bluemsx build exposes no SAVE_RAM region,
                                   * so there is nothing battery-backed to
                                   * write - survives title↔game cycles, not a
-                                  * power cycle (honest, not faked). */
+                                  * power cycle (real, not faked). */
 static uint8_t  spawn_timer;
 static uint16_t rng;
 

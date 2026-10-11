@@ -1930,7 +1930,7 @@ export class LibretroHost {
    *
    *  The other mirror platforms (NES/GB/GBC/SMS/GG/Genesis) get the SAME
    *  arm-side canonicalization so arming a mirror-form address matches the
-   *  canonical-form writer (the common agent mistake). ⚠ Their core hooks
+   *  canonical-form writer (the common agent mistake). Their core hooks
    *  compare RAW bus addresses (only snes9x canonicalizes live accesses), so
    *  a WRITER that itself uses a mirror form still evades on those platforms
    *  - fixing that direction needs per-core hook patches (deferred; noted in
@@ -3355,7 +3355,7 @@ export class LibretroHost {
 
   _emptyRegionError(region) {
     const plat = this.status && this.status.platform;
-    // SRAM gets an honest, specific answer: empty save_ram almost always means
+    // SRAM gets a specific answer: empty save_ram almost always means
     // "this cart/system has no battery save," NOT "the core is broken."
     if (region === "save_ram") {
       if (["atari2600", "atari7800", "lynx"].includes(plat)) {

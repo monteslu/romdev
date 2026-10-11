@@ -76,7 +76,7 @@ const EMITTERS = {
     // and it means any OTHER source ISA passes through as text the assembler
     // has never heard of (`dec b`, `ld a,(hl)`, `ret label`), producing a file
     // that looks plausible and cannot build. Declaring the accepted sources is
-    // what turns that from a silent miscompile into an honest error.
+    // what turns that from a silent miscompile into an explicit error.
     sourceIsas: ["6502"],
     emitBody: emit65816Body,
     emitWrapper: (a) => emit65816Wrapper(a),

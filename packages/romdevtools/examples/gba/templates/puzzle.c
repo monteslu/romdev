@@ -25,7 +25,7 @@
  *     (sfx_music_tick once per frame - forget it and the game is silent).
  *   libtonc (the build links it) - VBlankIntrWait/key_poll/TTE/tonccpy.
  *
- * HANDHELD, SO SINGLE-PLAYER ONLY (honest note): 2P versus on the GBA means a
+ * HANDHELD, SO SINGLE-PLAYER ONLY (note): 2P versus on the GBA means a
  * link cable between two units - a second emulator instance this environment
  * can't provide. So FACET FALL is a 1P MARATHON: clear, chain, level up, and
  * push your hi-score. (Contrast the NES/Genesis puzzle templates, which ARE

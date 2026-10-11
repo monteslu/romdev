@@ -12,7 +12,7 @@ export const COMMAND_METAVAR = "COMMAND";
 export const COMMAND_MAP = Object.freeze({
   "object": [
     ["next", "name the next diagnostic step, with the command and why"],
-    ["score", "one honest headline number for how far this candidate is"],
+    ["score", "one headline number for how far this candidate is"],
     ["diagnose", "one-screen exactness, mechanism, and next lever"],
     ["compare", "exact object truth and ranked metrics"],
     ["align", "the edit script between two objects, tolerant of shifts"],
@@ -179,7 +179,7 @@ export const COMMAND_MAP = Object.freeze({
     ["check", "report whether a ranking still describes the current tree"],
   ],
   "oracle": [
-    ["plan", "build an honest two-phase allocator force grid"],
+    ["plan", "build a two-phase allocator force grid"],
     ["diff", "compare compiler decisions by semantic web provenance"],
     ["force", "run a calibrated causal force set plus its baseline"],
     ["sweep", "run the full measured force grid as a cached campaign"],
@@ -308,7 +308,7 @@ export const NETWORK_POLICY = Object.freeze([
   "Offline-first: every analysis command reads local files only.",
   "A network command never runs implicitly; a user names it explicitly.",
   "A network command is never a step inside another command.",
-  "Requests identify the workbench and its version honestly, and are serialized, timed out, retried at most once, and cached on disk.",
+  "Requests identify the workbench and its version, and are serialized, timed out, retried at most once, and cached on disk.",
 ]);
 
 /** Flat names kept parseable but left out of help and completion. */

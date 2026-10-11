@@ -113,7 +113,7 @@ static void hiscore_save(const sync32_api_t *api, uint32_t score, uint32_t *hi) 
 /* ── GAME LOGIC (clay) ─────────────────────────────────────────────────────
  * Two-paddle versus. sync32 exposes `api->pad(player, ...)` for a real second
  * controller - SO THIS SHIPS 2P, and falls back to an AI opponent when port 1
- * reports `connected == 0`. That check is the honest way to do it: never
+ * reports `connected == 0`. That check is the straightforward way to do it: never
  * assume a second pad, never refuse to run without one. */
 #define PAD_W 6
 #define PAD_H 44
@@ -196,7 +196,7 @@ void game_main(const sync32_api_t *api) {
         s32_pad_t p1, p2;
         api->pad(0, &p1);
         api->pad(1, &p2);
-        /* HARDWARE IDIOM: `connected` is the honest 1P/2P switch. */
+        /* HARDWARE IDIOM: `connected` is the 1P/2P switch. */
         g.ai = !p2.connected;
         uint16_t pressed = (uint16_t)(p1.buttons & ~prev);
 

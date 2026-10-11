@@ -133,7 +133,7 @@ export const COMMAND_SPECS = [
       { flags: ["--force"], action: "store_true", help: "file under an identifier somebody else reserved" },
       JSON_FLAG] },
   { path: ["note-reserve"], handler: noteReserveCommand,
-    description: "Claim the next unused identifiers before writing anything under them. Three findings collided on one number in a single night of one campaign, each filed by an agent that had honestly read the log first -- because reading is not claiming. The claim here is the file: each identifier gets its own file created with O_EXCL, so two agents reserving in the same instant cannot both take WB-122. The loser takes WB-123 and neither has to be told.",
+    description: "Claim the next unused identifiers before writing anything under them. Three findings collided on one number in a single night of one campaign, each filed by an agent that had read the log first -- because reading is not claiming. The claim here is the file: each identifier gets its own file created with O_EXCL, so two agents reserving in the same instant cannot both take WB-122. The loser takes WB-123 and neither has to be told.",
     epilog: "example: decomp-workbench note reserve --log FINDINGS.md --prefix WB --count 3 --author W4",
     arguments: [LOG,
       { flags: ["--prefix"], default: "WB", metavar: "WB", help: "the part before the number (default: WB)" },

@@ -490,7 +490,7 @@ export function campaignResultSortKey(result, { by_raw = false, rank_by = "auto"
   return [c === null || c === undefined, ...signalKey, ...regionKey, metric, result.source];
 }
 
-/** The ordering key this result set can honestly be sorted on. */
+/** The ordering key this result set can validly be sorted on. */
 export function sortCampaignResultsKey(results, { rank_by = "auto", requiredSignalsPass = defaultRequired } = {}) {
   const comparisons = results.filter((r) => r.comparison).map((r) => r.comparison);
   const byRaw = comparisons.some((c) => !c.alignment_comparable);

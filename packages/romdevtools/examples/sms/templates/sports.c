@@ -306,7 +306,7 @@ static void wait_split(void) {
  * snoops the bus. That's why the crt0 parks SP at $DFF0: the bytes above it
  * ($DFFC-$FFFF) belong to the mapper registers' shadow.
  *
- * HONESTY (verified against the bundled gpgx core): gpgx only instantiates
+ * NOTE (verified against the bundled gpgx core): gpgx only instantiates
  * the Sega mapper for ROMs LARGER than 48KB, and this build pipeline emits
  * 32KB ROMs - so in-emulator the $8000 window stays open-bus (reads $FF), the
  * magic check fails, and the game falls back to the WRAM record (in-session

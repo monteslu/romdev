@@ -102,7 +102,7 @@ static void load_art(void) {
 #define GRAVITY  1
 #define JUMP_V   12
 
-/* world platforms: x (world), y, w. ⚠ PLAT_X / COIN_X MUST be unsigned int - world
+/* world platforms: x (world), y, w. PLAT_X / COIN_X MUST be unsigned int - world
  * coords run past 255 and an unsigned char would WRAP (270 → 14), putting a platform
  * somewhere it isn't drawn, so the hero lands on / falls through empty air. */
 /* Platform tops (PLAT_Y) must sit a clear gap ABOVE the ground so the hero (14 tall,
@@ -174,7 +174,7 @@ static unsigned char overlap(unsigned int ax, unsigned char ay, unsigned char aw
  * grass-topped platforms / hero feet. (No multi-band haze - it just adds seams.) */
 static void draw_world_bg(void) {
   gt_clear(C_SKY1);                                       /* sky: deep blue */
-  /* ⚠ width MUST be <= 127 - the GameTank blitter drops a box whose width is 128
+  /* width MUST be <= 127 - the GameTank blitter drops a box whose width is 128
    * (a full-screen-wide box wraps/rejects). Always 127, never 128. */
   queue_draw_box(0, GROUND_Y, 127, 128 - GROUND_Y, C_GROUND);  /* ground slab */
   queue_draw_box(0, GROUND_Y, 127, 2, C_GRASS);          /* grass cap (one shared seam) */

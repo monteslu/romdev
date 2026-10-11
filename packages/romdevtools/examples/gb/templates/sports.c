@@ -16,7 +16,7 @@
  *
  * MONOCHROME, on purpose: the DMG has FOUR shades of grey, no colour. The
  * two paddles are told apart by SHADE - your paddle is solid black (OBP0),
- * the CPU's is a lighter block (OBP1) - the honest handheld take on the
+ * the CPU's is a lighter block (OBP1) - the handheld take on the
  * GBA version's blue-team / red-team palettes. The court reads as a court
  * (rails, a dashed net, a dithered surface) so it's never sprites on flat
  * black.
@@ -28,7 +28,7 @@
  *   GAME LOGIC (clay) - court art, ball physics, CPU skill, scoring rules:
  *     reshape freely.
  *
- * SINGLE-PLAYER, honestly: the Game Boy's "player 2" is a LINK CABLE, which
+ * SINGLE-PLAYER: the Game Boy's "player 2" is a LINK CABLE, which
  * one emulator instance cannot provide - a single instance cannot emulate
  * the second Game Boy on the other end of that cable. So handheld examples
  * ship a press-start title and a 1P-vs-CPU match instead of faking a 2P mode
@@ -54,7 +54,7 @@
  *   (No font.h - the 1bpp glyphs are embedded below, so this template builds
  *    with exactly the same includes as the platformer/puzzle/shmup.)
  *
- * RENDERING - the hard-won architecture (details at each routine below):
+ * RENDERING - the architecture (details at each routine below):
  *  - The two paddles and the ball are OBJ sprites (OAM), not BG tiles, so
  *    moving them is just an OAM rewrite - no per-frame BG writes.
  *  - The court is BG tiles, painted once with the LCD off at match start.
@@ -602,7 +602,7 @@ static void draw_court(void) {
 }
 
 /* ── GAME LOGIC (clay - reshape freely) ── title screen: court backdrop +
- * name + prompt + the honest no-2P note. */
+ * name + prompt + the no-2P note. */
 static void draw_title(void) {
     draw_court();
     draw_text((uint8_t)((20 - (sizeof(GAME_TITLE) - 1)) / 2), 4, GAME_TITLE);

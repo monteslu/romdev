@@ -25,7 +25,7 @@
  *   cc65's pce crt0 + pce.lib are auto-linked; the 'rom32k' linker preset
  *     (applied automatically to example projects) gives a 32KB HuCard.
  *
- * 2P, honestly: the stock PC Engine has ONE controller port; 2P needs a
+ * 2P: the stock PC Engine has ONE controller port; 2P needs a
  * TurboTap. The geargrafx core implements the TurboTap and the romdev host
  * now force-ENABLES it (PLATFORM_CORE_OPTIONS pce: geargrafx_turbotap), so a
  * second pad's input reaches the game on pad slot 2 - verified by driving
@@ -309,7 +309,7 @@ static void draw_hud(void) {
 /* ── HARDWARE TRUTH: a bare HuCard CANNOT save the win streak (in-session) ──
  * This was researched and corrected: earlier versions wrote the longest 1P win
  * streak to BRAM ("backup RAM", bank $F7) and claimed it persisted across power
- * cycles. That is NOT honest for a HuCard game. On REAL hardware a plain HuCard
+ * cycles. That is NOT accurate for a HuCard game. On REAL hardware a plain HuCard
  * plugged into a base PC Engine / TurboGrafx-16 has NO backup RAM at all - BRAM
  * exists ONLY when a peripheral is attached: the CD-ROM² System (2KB kept by a
  * supercapacitor), the Tennokoe Bank HuCard, or the Memory Base 128. No
@@ -320,7 +320,7 @@ static void draw_hud(void) {
  *
  * The record we track is still the longest 1P win streak vs the CPU (a raw
  * hi-score is meaningless when every match ends 5-x; 2P matches never touch
- * it) - but IN-SESSION only, resetting to 0 on a cold boot like the honest
+ * it) - but IN-SESSION only, resetting to 0 on a cold boot like the
  * 2600/Lynx examples. To ACTUALLY persist on real hardware you would target a
  * peripheral (BRAM behind a detect, or a CD-ROM² build) - a real-hardware
  * feature, not a property of the cartridge.                              */

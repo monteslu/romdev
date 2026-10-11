@@ -53,7 +53,7 @@ test("relocation-controlled words explain raw above words", () => {
   const c = compareInstructions(parseDisassembly(fs.readFileSync(path.join(FIX, "target.objdump.txt"), "utf8")),
     parseDisassembly(fs.readFileSync(path.join(FIX, "relocated-match.objdump.txt"), "utf8")), { target_name: "target.o", candidate_name: "candidate.o", symbol: null });
   const text = buildHeadline(c).disagreements.join(" ");
-  if (c.raw_word_mismatches > c.word_mismatches) { assert.ok(text.includes("relocation-controlled")); assert.ok(text.includes("words=0 is the honest gate")); }
+  if (c.raw_word_mismatches > c.word_mismatches) { assert.ok(text.includes("relocation-controlled")); assert.ok(text.includes("words=0 is the real gate")); }
 });
 
 test("score TARGET CANDIDATE prints the headline first; JSON names the headline metric; mixing forms and missing truth are refused", async () => {

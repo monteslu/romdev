@@ -7,7 +7,7 @@
 // what lets NES→Genesis (and any other pair whose ISAs have a lifter+emitter)
 // reuse the SAME pipeline instead of a second bespoke recompiler.
 //
-// DESIGN PRINCIPLE: the IR is DELIBERATELY SMALL and HONEST. It models only the
+// DESIGN PRINCIPLE: the IR is DELIBERATELY SMALL and EXACT. It models only the
 // instruction classes a mechanical port actually needs, and REFUSES (rather than
 // guesses) anything whose semantics don't carry across ISAs. A refused node is
 // surfaced as residue, never silently mistranslated - the same contract the

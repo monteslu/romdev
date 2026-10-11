@@ -1,7 +1,7 @@
 // jobs.js - bounded candidate search as a cancellable, resumable background
 // job around the permuter. romdev-permuter (a JS port of decomp-permuter at
 // the pinned upstream commit) owns the mutation + scoring loop; romdev owns the
-// budget, the persistence, the lifetime and the honest status.
+// budget, the persistence, the lifetime and the true status.
 //
 // The search runs IN this process: romdev-permuter evaluates candidates in
 // node worker threads, compiles each one through romdev's WASM toolchain

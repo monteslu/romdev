@@ -1,7 +1,7 @@
 // ledger.js - what "100% decompiled" actually means, measured per dimension.
 //
-// `progress` reports CPU code honestly and says outright that data and assets
-// are not tracked. That is the right kind of honesty and it leaves the real
+// `progress` reports CPU code and says outright that data and assets
+// are not tracked. That is deliberate, and it leaves the real
 // question unanswerable: this ROM has 7,238,640 bytes inside `bin` ranges -
 // 86.3% of the image - and none of it is code.
 //

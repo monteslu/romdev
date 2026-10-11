@@ -7,7 +7,7 @@
  *   - a spinning GEAR HAZARD: a 32x32 OBJ that continuously rotates (and
  *     scale-pulses) via an OAM affine matrix (8.8 fixed point, affine slot 0,
  *     double-size flag). Touch it and you lose a life. The classic
- *     spinning-saw/gear obstacle, done the hardware-honest way.
+ *     spinning-saw/gear obstacle, done the hardware-native way.
  *
  * The level is a regular (text/tiled) Mode-0 BG: a 64x32 map = a 512-px run
  * of pits, platforms, ground and coins, scrolled by REG_BG0HOFS as the camera
@@ -28,7 +28,7 @@
  *     (sfx_music_tick once per frame - forget it and the game is silent).
  *   libtonc (the build links it) - VBlankIntrWait/key_poll/OAM/TTE.
  *
- * HANDHELD, SO SINGLE-PLAYER ONLY (honest note): 2P on GBA means a link
+ * HANDHELD, SO SINGLE-PLAYER ONLY (note): 2P on GBA means a link
  * cable between two units - a second emulator instance this environment
  * can't provide. Title is press-start, no mode select.
  *
@@ -547,7 +547,7 @@ static void update_play(void) {
     }
 
     /* Gear hazard: spin + pulse, world-anchored (drifts with the scroll). The
-     * collision is the UNROTATED box around the gear center - honest
+     * collision is the UNROTATED box around the gear center - a deliberate
      * simplification; a rotating hitbox buys little for a round gear. Once it
      * slides off the left, recycle it ahead at a fresh height. */
     gear_theta = (u16)(gear_theta + 0x0300);   /* ~4.2°/frame */

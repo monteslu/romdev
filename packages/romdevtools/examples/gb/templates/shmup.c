@@ -11,7 +11,7 @@
  *     your gameplay around it (see TROUBLESHOOTING before changing).
  *   GAME LOGIC (clay) - enemy patterns, scoring, tuning, art: reshape freely.
  *
- * SINGLE-PLAYER BY DESIGN (the honest handheld story): the Game Boy has ONE
+ * SINGLE-PLAYER BY DESIGN (a handheld): the Game Boy has ONE
  * controller. Multiplayer on real hardware means the link cable, and a
  * single emulator instance cannot emulate a second Game Boy on the other
  * end of that cable - so this game ships 1P only instead of faking a 2P

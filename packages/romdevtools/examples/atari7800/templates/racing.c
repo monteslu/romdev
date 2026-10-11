@@ -41,10 +41,10 @@
  *      a thick stream of independent traffic objects.
  * The asphalt itself (the solid road band + roadside grass) is STATIC - it is
  * a single colour either way, so redrawing it would buy nothing. Documented
- * honestly so a fork doesn't go hunting for a scroll register that isn't there.
+ * plainly so a fork doesn't go hunting for a scroll register that isn't there.
  * ════════════════════════════════════════════════════════════════════════
  *
- * PERSISTENCE - honest note: the canonical 7800 save path is the High Score
+ * PERSISTENCE - note: the canonical 7800 save path is the High Score
  * Cart (HSC): a pass-through cartridge with 2KB battery RAM at $1000-$17FF
  * plus a directory ROM. The bundled prosystem core does NOT implement HSC
  * (probed 2026-06: retro_get_memory(SAVE_RAM) size = 0, and the core binary
@@ -774,7 +774,7 @@ static void game_over(void) {
     /* HSC NOTE (see file header): on real hardware with a High Score Cart you
      * would write the record into HSC RAM ($1000-$17FF) here. The bundled
      * prosystem core has no HSC support and exposes no SAVE_RAM, so the record
-     * honestly lives only as long as the session. */
+     * lives only as long as the session. */
   }
   paint_gameover();
 }

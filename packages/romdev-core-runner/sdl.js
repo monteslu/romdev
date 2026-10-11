@@ -11,7 +11,7 @@
 //     verified (and repaired) BEFORE the first import.
 //   - With no presentable display SDL silently picks the "offscreen"/"dummy"
 //     video driver - createWindow SUCCEEDS but nothing appears on any screen.
-//     We ask SDL which driver it actually selected and fail honestly.
+//     We ask SDL which driver it actually selected and fail with a clear error.
 //
 // On failure throws an Error tagged `.code = "SDL_UNAVAILABLE"` plus
 // `.sdlKind` ("missing-binary" | "install-failed" | "sdl-error" |
@@ -52,7 +52,7 @@ export function sdlPackageRoot(resolve = require.resolve) {
 let _sdlModule = null;
 
 /**
- * Load @kmamal/sdl with the self-repair + honest-failure behavior described in
+ * Load @kmamal/sdl with the self-repair + clear-failure behavior described in
  * the header. Memoized per process (SDL can only init once anyway).
  *
  * @param {Object} [opts]

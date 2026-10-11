@@ -27,14 +27,14 @@
  *     ($2800 →). This game claims the BOTTOM of RAM3 ($2200-$25FD) for its
  *     display-list pool - see the RAM MAP below before moving anything.
  *
- * NO HARDWARE SCROLL - honest note: MARIA has no scroll register; a scrolling
+ * NO HARDWARE SCROLL - note: MARIA has no scroll register; a scrolling
  * platformer rebuilds/repoints the display lists every frame (expensive on a
  * 1.79MHz 6502). This example is a FIXED single-screen arena (the form most
  * 7800 platformers actually shipped in). To scroll, you would re-emit the
  * ledge bands at shifted Y/X each frame under the same pool - see the
  * "scrolling a 7800 field" note in TROUBLESHOOTING.
  *
- * PERSISTENCE - honest note: the canonical 7800 save path is the High Score
+ * PERSISTENCE - note: the canonical 7800 save path is the High Score
  * Cart (HSC): a pass-through cartridge with 2KB battery RAM at $1000-$17FF
  * plus a directory ROM. The bundled prosystem core does NOT implement HSC
  * (probed 2026-06: retro_get_memory(SAVE_RAM) size = 0, and the core binary
@@ -776,7 +776,7 @@ static void game_over(void) {
     /* HSC NOTE (see file header): on real hardware with a High Score Cart
      * you would write the record into HSC RAM ($1000-$17FF) here. The
      * bundled prosystem core has no HSC support and exposes no SAVE_RAM,
-     * so the record honestly lives only as long as the session. */
+     * so the record lives only as long as the session. */
   }
   paint_gameover();
 }

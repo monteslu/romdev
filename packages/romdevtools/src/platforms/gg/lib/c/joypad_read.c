@@ -24,7 +24,7 @@ uint8_t gg_joypad_read(void) {
 /*
  * Player 2 read - for ALTERNATING-TURNS or 2-controller play.
  *
- * HONEST NOTE: a real Game Gear has only ONE controller port on the unit; its
+ * NOTE: a real Game Gear has only ONE controller port on the unit; its
  * 2P story is the Gear-to-Gear LINK CABLE (a second console). But the GG VDP
  * and I/O chip are the SMS's, and gpgx wires the SMS's full split-across-
  * $DC/$DD second-controller layout for GG too - so a SECOND PAD does drive

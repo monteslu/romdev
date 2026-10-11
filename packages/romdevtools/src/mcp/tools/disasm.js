@@ -1307,7 +1307,7 @@ async function runProjectDisassembly({ path: romPath, outputDir }, resolved, pro
           : await reassembleForPlatform({ platform: resolved, bytes: reg.bytes, startAddress: reg.startAddress, codeSpans: regionSpans });
         // A uniform-FILL region ($FF/$00 padding) disassembles into junk that
         // reports a high readablePercent - a trap (the emptiest bank looks the
-        // "most readable"). Detect it and report readability HONESTLY as null +
+        // "most readable"). Detect it and report readability as null +
         // a `fill` flag, so `readablePercent` never lies about padding.
         const fillByte = uniformFillByte(reg.bytes);
         const isFill = fillByte != null && reg.kind !== "data";
@@ -1497,7 +1497,7 @@ function renderBuildMd({ platform, romPath, outputDir, regions, blobs, build, ve
   lines.push(`Disassembled from \`${nodePath.basename(romPath)}\` by \`disasm({target:'project'})\`.`, "");
   lines.push("## Files", "");
   for (const r of regions) {
-    lines.push(`- \`${r.file}\` - ${r.region}${r.kind === "data" ? " (data)" : ""}, byte-exact${r.roundTripOk === false ? " ⚠ round-trip FAILED" : ""}.`);
+    lines.push(`- \`${r.file}\` - ${r.region}${r.kind === "data" ? " (data)" : ""}, byte-exact${r.roundTripOk === false ? " WARNING: round-trip FAILED" : ""}.`);
   }
   for (const b of blobs) lines.push(`- \`${b.file}\` - ${b.bytes} bytes of binary data (extracted from the ROM; do not hand-edit).`);
   lines.push("- `original.rom` - a verbatim copy of the source ROM (the rebuild template; do not edit). **Copyrighted ROM data - never commit it. A `.gitignore` excluding it (and ROM extensions) is written for you.**");
@@ -1529,7 +1529,7 @@ function renderBuildMd({ platform, romPath, outputDir, regions, blobs, build, ve
     lines.push("The same JSON is in `rebuild.json`.", "");
   }
   if (notes) lines.push("## Notes", "", notes, "");
-  if (!allOk) lines.push("> ⚠ Some regions did not round-trip byte-exact as INSTRUCTIONS (they floored to `.byte` data, which is still byte-exact). The one-call rebuild above is unaffected.", "");
+  if (!allOk) lines.push("> WARNING: Some regions did not round-trip byte-exact as INSTRUCTIONS (they floored to `.byte` data, which is still byte-exact). The one-call rebuild above is unaffected.", "");
   return lines.join("\n") + "\n";
 }
 
@@ -1557,7 +1557,7 @@ function renderBuildMd({ platform, romPath, outputDir, regions, blobs, build, ve
 /**
  * target='source' - return a cart's high-level SOURCE instead of a disassembly, for
  * platforms where the "cart" IS source (not machine code). Today: PICO-8 (.p8 = Lua +
- * data sections; .p8.png = the same cart embedded in a label PNG). This is the honest
+ * data sections; .p8.png = the same cart embedded in a label PNG). This is the accurate
  * "understand this cart" path for a Lua VM - there's no machine code to disassemble, so
  * we hand back the actual Lua the game runs, plus a map of the other sections.
  */
@@ -2654,7 +2654,7 @@ function planRegions(platform, data) {
     //   0x000-0x0BF (192 B) = the cartridge HEADER (entry branch, Nintendo logo,
     //     title, checksums) - pure DATA. Disassembling it as code = garbage, so
     //     it's its own data-only region.
-    //   0x0C0+ = code. Disassembled in ARM mode. HONEST CAVEAT: most GBA C code
+    //   0x0C0+ = code. Disassembled in ARM mode. CAVEAT: most GBA C code
     //     is compiled as THUMB (16-bit), which an ARM-mode disassembly decodes
     //     as garbage → it falls back to byte-exact `.byte` (low readability).
     //     Per-region ARM/Thumb mode-tracking isn't built yet (it's a real

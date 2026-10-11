@@ -24,7 +24,7 @@
  *   GAME LOGIC (clay) - level layout, physics tuning, scoring, art: reshape
  *     freely.
  *
- * SINGLE-PLAYER, honestly: the Game Boy's "player 2" is a LINK CABLE, which
+ * SINGLE-PLAYER: the Game Boy's "player 2" is a LINK CABLE, which
  * one emulator instance cannot provide - so handheld examples ship a
  * press-start title and no 2P mode instead of faking one.
  *
@@ -931,7 +931,7 @@ void main(void) {
       if ((pad & (PAD_START | PAD_A)) && !(prev_pad & (PAD_START | PAD_A))) start_game();
       prev_pad = pad;
     } else if (state == ST_PLAY) {
-      if (respawn_pause) {       /* ready-blink: freeze gameplay, stay honest */
+      if (respawn_pause) {       /* ready-blink: freeze gameplay, stay consistent */
         --respawn_pause;
         prev_pad = pad;
       } else {

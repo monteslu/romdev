@@ -27,7 +27,7 @@
  * SCROLLING ON THE LYNX (read this - it is the platform's biggest "where's
  *   the hardware feature?" surprise): the Lynx has NO hardware tilemap and NO
  *   background scroll register. Suzy is a SPRITE BLITTER, not a tile engine.
- *   So we scroll the level the honest way: keep a software camera (cam_x) and
+ *   So we scroll the level the straightforward way: keep a software camera (cam_x) and
  *   REDRAW the visible slice of the world every frame, painting each ground/
  *   platform column at its on-screen position (world_x - cam_x). The full-
  *   redraw TGI loop (below) makes that cheap enough - the whole 160-px window
@@ -36,7 +36,7 @@
  *
  * PLAYERS: 1. This is a handheld - multiplayer on real hardware is ComLynx,
  *   a cable between TWO Lynx units. A single emulator instance has nobody on
- *   the other end of the cable, so this example is honestly single-player
+ *   the other end of the cable, so this example is single-player
  *   (no fake "P2" that could never work).
  *
  * SCREEN: 160x102. The system font is 8x8, so a full row of text is 20
@@ -357,7 +357,7 @@ static void start_game(void) {
 static void game_over(void) {
   over_new_hi = 0;
   if (score > hiscore) {
-    /* ── In-session hi-score ONLY - and here's the honest why. Real Lynx
+    /* ── In-session hi-score ONLY - and here is why. Real Lynx
      * carts persist via a 93Cxx serial EEPROM on the cart PCB (cc65 even
      * ships lynx_eeprom_read/write for it; see vendor/cc65/libsrc/lynx/
      * eeprom.s). PROBED: the bundled handy core emulates CEEPROM internally
@@ -433,7 +433,7 @@ static void frame_title(uint8_t joy) {
   tgi_setcolor(COLOR_LIGHTGREY);
   tgi_outtextxy(32, 44, "HI ");
   tgi_outtextxy(56, 44, fmt5(hiscore));
-  tgi_outtextxy(24, 56, "1 PLAYER GAME");            /* handheld honesty     */
+  tgi_outtextxy(24, 56, "1 PLAYER GAME");            /* handheld: 1P only     */
 
   if (JOY_BTN_1(joy) && !JOY_BTN_1(prev_joy)) start_game();
 }

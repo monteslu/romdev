@@ -315,7 +315,7 @@ export async function planWork(project, { limit = 40, offset = 0, objective = "b
 /**
  * The dependency hash each remaining function's TU hashes to RIGHT NOW.
  *
- * compile.js keys every stored result on this hash, so it is the only honest
+ * compile.js keys every stored result on this hash, so it is the only valid
  * way to ask "was this evidence measured against the tree I have?". Computed
  * per TU (there are far fewer TUs than functions) and best-effort: a TU whose
  * hash cannot be computed has UNKNOWN freshness. Historical results never

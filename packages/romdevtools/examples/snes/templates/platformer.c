@@ -402,7 +402,7 @@ static void play_update(void) {
   u16 pad;
   u8 i, delta, y8, feet, c0, c1, top, killed;
 
-  if (turn_pause) {              /* freeze gameplay, keep the frame honest */
+  if (turn_pause) {              /* freeze gameplay, keep the frame consistent */
     --turn_pause;
     if (turn_pause == 0) clear_row(4);     /* drop the "Pn GO" banner     */
     stage_actors();

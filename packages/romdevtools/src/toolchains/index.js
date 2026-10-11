@@ -47,7 +47,7 @@ const CC65_ROM_SIZE = {
  * Adding a new language for a platform = add a row here + ship the
  * toolchain wasm. The `available: false` entries declare future
  * intent but don't yet ship a toolchain - listPlatforms surfaces them
- * so the discoverability story is honest.
+ * so the discoverability story is accurate.
  *
  * @type {Record<string, Record<string, { toolchain: string, available: boolean, note?: string }>>}
  */

@@ -214,7 +214,7 @@ test("agreement is stated; gaps, count differences and relocation words are expl
   const report = buildHeadline(comparison);
   if (comparison.raw_word_mismatches > comparison.word_mismatches) {
     assert.ok(report.disagreements.join(" ").includes("relocation-controlled"));
-    assert.ok(report.disagreements.join(" ").includes("words=0 is the honest gate"));
+    assert.ok(report.disagreements.join(" ").includes("words=0 is the real gate"));
   }
 });
 

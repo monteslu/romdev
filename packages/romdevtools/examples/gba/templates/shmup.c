@@ -19,7 +19,7 @@
  *     (sfx_music_tick once per frame - forget it and the game is silent).
  *   libtonc (the build links it) - VBlankIntrWait/key_poll/OAM/TTE.
  *
- * HANDHELD, SO SINGLE-PLAYER ONLY (honest note): 2P on GBA means a link
+ * HANDHELD, SO SINGLE-PLAYER ONLY (note): 2P on GBA means a link
  * cable between two units - a second emulator instance this environment
  * can't provide. Title is press-start, no mode select.
  *
@@ -505,7 +505,7 @@ static void update_play(void) {
         if (++spawn_timer >= 90) { spawn_timer = 0; spawn_enemy(); }
 
         /* Bullets vs boss: 28x28 box around the boss CENTER. Collision is
-         * the UNROTATED box on purpose - honest simplification; rotating
+         * the UNROTATED box on purpose - a deliberate simplification; rotating
          * hitboxes buys little for a round boss. */
         for (i = 0; i < MAX_BULLETS; i++) {
             if (!bullets[i].alive) continue;

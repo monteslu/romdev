@@ -352,6 +352,6 @@ export function scanRanges(rom, ranges) {
     scanned: out.length, identified, identifiedBytes, opaqueBytes,
     ranges: out.sort((a, b) => b.bytes - a.bytes).slice(0, 60),
     note: "identification is by MAGIC and STRUCTURE only - never by the name in the splat yaml, which is a label someone typed. "
-      + "`identifiedBytes` may still be far short of the opaque total; that is the honest state, not a failure of the scan.",
+      + "`identifiedBytes` may still be far short of the opaque total; that is the true state, not a failure of the scan.",
   };
 }

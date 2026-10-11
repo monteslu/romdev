@@ -19,7 +19,7 @@ import { fileSha256 } from "./evidence.js";
 export const CACHE_HEADER_PREFIX = "#decomp-workbench-disassembly-cache-v1";
 const HEADER_RE = new RegExp("^" + reEscape(CACHE_HEADER_PREFIX) + String.raw`\s+(?<fields>.*)$`);
 
-/** A disassembly could not be trusted, and no fallback would be honest. */
+/** A disassembly could not be trusted, and no fallback would be valid. */
 export class DisassemblyCacheError extends ValueError { constructor(message) { super(message); this.kind = "DisassemblyCacheError"; } }
 
 /** What happened to one cache entry, and why. */

@@ -41,11 +41,11 @@
 ;   First to 7 points wins. Your BEST RALLY (consecutive paddle hits in one
 ;   volley) is the hi-score shown on the title screen.
 ;
-; HI-SCORE HONESTY: real 2600 cartridges had NO battery, NO SRAM, NO
+; HI-SCORE: real 2600 cartridges had NO battery, NO SRAM, NO
 ; persistence of any kind. The hi-score here lives in RIOT RAM ($8B) and
 ; survives game → title cycles only WITHIN one power-on session - exactly
 ; like the arcade machines of the era. Power off and it is gone. Do not
-; fake an EEPROM; state it honestly in your fork too.
+; fake an EEPROM; state it in your fork too.
 ;
 ; NTSC frame: 3 VSYNC + 37 VBLANK + 192 visible + 30 overscan = 262 lines.
 
@@ -114,7 +114,7 @@ SCORE1    = $89         ; right player points (0..7)
 RALLY     = $8A         ; current volley's paddle hits - BCD, so the digit
                         ;   nibbles fall out for free in the score kernel
 HISCORE   = $8B         ; best rally this SESSION (BCD). RAM only - real
-                        ;   2600 carts have no battery; honest by design.
+                        ;   2600 carts have no battery; by design.
 FRAME     = $8C
 SFX_LEFT  = $8D         ; frames remaining on the voice-0 sound effect
 TUNE_SEL  = $8E         ; 0 = title jingle, 1 = game-over tune (voice 1)
@@ -675,7 +675,7 @@ rally_hit:              ; one more paddle hit this volley (BCD, capped at 99)
 
 rally_end:              ; volley over: keep the best rally as the session
   LDA RALLY             ; hi-score. RAM ONLY - no battery exists on a real
-  CMP HISCORE           ; 2600 cart, so this honestly resets at power-off.
+  CMP HISCORE           ; 2600 cart, so this resets at power-off.
   BCC .rkeep
   STA HISCORE
 .rkeep:
@@ -1142,7 +1142,7 @@ title_kernel:
   ; with no reflect the byte draws TWICE - left copy in COLUP0's blue,
   ; right copy in COLUP1's red. That doubled "NN NN" is the classic 2600
   ; dual-score aesthetic (think launch-era tank/plane games): embraced
-  ; here, not fixed. In-session best rally; honest comment: there is no
+  ; here, not fixed. In-session best rally; note: there is no
   ; battery - this number is gone at power-off, like the arcades.
   LDX #0
 .hsb:

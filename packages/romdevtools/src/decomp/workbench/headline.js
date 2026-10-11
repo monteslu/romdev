@@ -1,4 +1,4 @@
-// headline.js - one honest number for "how far is this candidate from the
+// headline.js - one number for "how far is this candidate from the
 // target": the headline is always `words` (positional word differences after
 // masking linker-controlled relocation fields); aligned_total and raw appear
 // beneath it labelled with what they are for, and every disagreement between
@@ -44,7 +44,7 @@ export function disagreementNotes(item) {
   if (item.raw_word_mismatches > item.word_mismatches) {
     const cause = controlled ? `${controlled} relocation-controlled word(s)` : "words whose only differing bits are linker-filled";
     notes.push(`raw=${item.raw_word_mismatches} exceeds words=${item.word_mismatches} by ${item.raw_word_mismatches - item.word_mismatches}: ${cause}. `
-      + "The linker owns those bits, so raw cannot reach zero on this pair and words=0 is the honest gate.");
+      + "The linker owns those bits, so raw cannot reach zero on this pair and words=0 is the real gate.");
   }
   if (item.aligned_gaps) {
     notes.push(`aligned_total=${item.aligned_total} counts rows the aligner paired, and it inserted ${item.aligned_gaps} gap(s) `

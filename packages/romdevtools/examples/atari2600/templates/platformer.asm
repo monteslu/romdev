@@ -13,7 +13,7 @@
 ;      tilemap and NO hardware scroll, so the level IS the playfield. PF0/
 ;      PF1/PF2 are reloaded per scanline band from a per-row table; a lit PF
 ;      pixel is solid ground, a gap is a pit. This is exactly how the era's
-;      single-screen platformers drew their arenas: the honest 2600
+;      single-screen platformers drew their arenas: the period-correct 2600
 ;      platformer is a FIXED screen (those games flip whole new screens at
 ;      the edges - they never scroll), so this one is too.
 ;   2. CODE COLLISION, NOT TIA LATCHES (land-on-ledge) - a shooter reads the
@@ -49,7 +49,7 @@
 ;   Grab the bouncing coin to score; touch the patrolling spike and it's
 ;   game over. Your best SCORE this session is shown on the title screen.
 ;
-; PLAYERS - 1P, honest. The 2600 has two joystick ports, but this single-
+; PLAYERS - 1P. The 2600 has two joystick ports, but this single-
 ; screen kernel is already spending its scanline budget on the PLAYFIELD
 ; level (per-row PF reload), the hero (P0), the coin (BL) and the spike
 ; (M0). A second human hero would need its own positioned object competing
@@ -57,11 +57,11 @@
 ; alternating TURNS instead - cheap, no extra kernel objects - keep a second
 ; score/lives pair and swap on death; left as an exercise.
 ;
-; HI-SCORE HONESTY: real 2600 cartridges had NO battery, NO SRAM, NO
+; HI-SCORE: real 2600 cartridges had NO battery, NO SRAM, NO
 ; persistence of any kind. The hi-score here lives in RIOT RAM ($A0) and
 ; survives game → title cycles only WITHIN one power-on session - exactly
 ; like the arcade machines of the era. Power off and it is gone. Do not
-; fake an EEPROM; state it honestly in your fork too.
+; fake an EEPROM; state it in your fork too.
 ;
 ; NTSC frame: 3 VSYNC + 37 VBLANK + 192 visible + 30 overscan = 262 lines.
 
@@ -146,7 +146,7 @@ COIN_ROW  = $9A         ; coin's level row (for the kernel)
 SPK_ROW   = $9B         ; spike's level row (for the kernel)
 GFXIDX    = $9C         ; hero sprite frame base (0 = idle, 6 = walk)
 SCORE_HSV = $A0         ; SESSION hi-score (BCD low byte). RAM only - real
-SCORE_HSH = $A1         ;   2600 carts have no battery; honest by design.
+SCORE_HSH = $A1         ;   2600 carts have no battery; by design.
 S0BUF     = $A2         ; 6 rows: packed score digits for the play kernel
 HSBUF     = $A8         ; 6 rows: hi-score, packed (for the title kernel)
 SCRATCH   = $AE         ; 6 bytes general kernel/packer scratch
@@ -1194,7 +1194,7 @@ title_kernel:
 
   ; band 6: hi-score, 24 lines (6 rows × 4). Packed digits stream into PF1;
   ; SCORE mode draws them twice in the two player colors. In-session best;
-  ; honest: there is no battery - gone at power-off, like the arcades.
+  ; note: there is no battery - gone at power-off, like the arcades.
   LDA #COL_HUD
   STA COLUPF
   LDX #0

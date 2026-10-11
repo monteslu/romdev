@@ -14,7 +14,7 @@
 // rel paths always use "/" and are relative to the share LIB root (e.g.
 // "libtonc/gba_crt0.s", "sgdk/md.ld").
 //
-// ⚠ ORDER MATTERS: list() order feeds SDK compile order → ar member order →
+// ORDER MATTERS: list() order feeds SDK compile order → ar member order →
 // ROM bytes, and the sdk-cache hash keys. dirShare preserves the readdir
 // walk order the drivers always used; buildShareManifest() materializes a
 // manifest with the SAME walk, so a browser host that stages its manifest

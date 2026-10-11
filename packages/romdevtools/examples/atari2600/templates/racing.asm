@@ -15,7 +15,7 @@
 ;      animating a dashed CENTRE LINE that crawls DOWN the screen every
 ;      frame (a per-frame phase offset, SCROLL), plus traffic cars that
 ;      descend toward you. This is exactly how the era's forward-view road
-;      games faked motion - honest, period-correct, no scroll hardware.
+;      games faked motion - period-correct, no scroll hardware.
 ;   2. RESP/HMOVE BEAM POSITIONING (the SBC-#15 idiom) - there is no sprite
 ;      X register; you strobe RESPx/RESM0 WHERE THE BEAM IS, then nudge ±7px
 ;      with HMOVE. Three objects (your car P0, a rival car P1, a hazard M0)
@@ -48,7 +48,7 @@
 ;   A crash flashes the screen and ends the run. Your DISTANCE this run is
 ;   your score; your best DISTANCE this session is shown on the title screen.
 ;
-; PLAYERS - 1P, honest. The 2600 has two joystick ports, but this genre's
+; PLAYERS - 1P. The 2600 has two joystick ports, but this genre's
 ; kernel is already spending its scanline budget on the road playfield, your
 ; car (P0), a rival car (P1) and a hazard (M0). A second human car would
 ; need its OWN positioned object competing for the SAME 76-cycle two-line
@@ -58,11 +58,11 @@
 ; mode - cheap, no extra kernel objects - keep a second hi-score and swap on
 ; crash; left as an exercise.)
 ;
-; HI-SCORE HONESTY: real 2600 cartridges had NO battery, NO SRAM, NO
+; HI-SCORE: real 2600 cartridges had NO battery, NO SRAM, NO
 ; persistence of any kind. The hi-score here lives in RIOT RAM ($A4) and
 ; survives game → title cycles only WITHIN one power-on session - exactly
 ; like the arcade machines of the era. Power off and it is gone. Do not
-; fake an EEPROM; state it honestly in your fork too.
+; fake an EEPROM; state it in your fork too.
 ;
 ; NTSC frame: 3 VSYNC + 37 VBLANK + 192 visible + 30 overscan = 262 lines.
 
@@ -142,7 +142,7 @@ TICK      = $96         ; distance accumulator: +1 score every N frames
 S0BUF     = $97         ; 6 rows: packed score digits for the kernel
 SCRATCH   = $9D         ; 6 bytes general kernel/packer scratch
 DIST_HSV  = $A4         ; SESSION hi-score (BCD low byte). RAM only - real
-DIST_HSH  = $A5         ;   2600 carts have no battery; honest by design.
+DIST_HSH  = $A5         ;   2600 carts have no battery; by design.
 HSBUF     = $A6         ; 6 rows: hi-score, packed
 
 COL_CAR   = $1E         ; yellow player car
@@ -990,7 +990,7 @@ title_kernel:
 
   ; band 6: hi-score, 24 lines (6 rows × 4). Packed digits stream into PF1;
   ; SCORE mode draws them twice in the two player colors. In-session best
-  ; DISTANCE; honest: there is no battery - gone at power-off, like the
+  ; DISTANCE; note: there is no battery - gone at power-off, like the
   ; arcades.
   LDX #0
 .hsb:

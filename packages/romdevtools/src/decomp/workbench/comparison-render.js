@@ -128,7 +128,7 @@ export function rawVersusWordsLines(item) {
   return [
     `raw-vs-words: raw=${item.raw_word_mismatches} exceeds words=${item.word_mismatches} by ${controlled} relocation-controlled word(s):`,
     "              linker-filled bits no source change moves. A raw objdump text diff counts",
-    "              them permanently, so words=0 is the honest gate, not a byte-identical dump.",
+    "              them permanently, so words=0 is the real gate, not a byte-identical dump.",
   ];
 }
 

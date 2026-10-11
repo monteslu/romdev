@@ -46,7 +46,7 @@
 ;   Clear the whole formation to advance; let it reach your row and it's
 ;   game over. Your best SCORE this session is shown on the title screen.
 ;
-; PLAYERS - 1P, honest. The 2600 has two joystick ports, but this genre's
+; PLAYERS - 1P. The 2600 has two joystick ports, but this genre's
 ; kernel is already spending its scanline budget on P0 (your ship), P1 with
 ; NUSIZ replication (the formation), and M0 (the shot). A second human ship
 ; would need its own positioned object competing for the SAME 76-cycle
@@ -55,11 +55,11 @@
 ; TURNS instead - cheap, no extra kernel objects - keep a second score/lives
 ; pair and swap on death; left as an exercise.)
 ;
-; HI-SCORE HONESTY: real 2600 cartridges had NO battery, NO SRAM, NO
+; HI-SCORE: real 2600 cartridges had NO battery, NO SRAM, NO
 ; persistence of any kind. The hi-score here lives in RIOT RAM ($A0) and
 ; survives game → title cycles only WITHIN one power-on session - exactly
 ; like the arcade machines of the era. Power off and it is gone. Do not
-; fake an EEPROM; state it honestly in your fork too.
+; fake an EEPROM; state it in your fork too.
 ;
 ; NTSC frame: 3 VSYNC + 37 VBLANK + 192 visible + 30 overscan = 262 lines.
 
@@ -140,7 +140,7 @@ MARCH_PERIOD = $97      ; frames per march step (set per wave; speeds up)
 S0BUF     = $98         ; 6 rows: packed score digits for the kernel
 SCRATCH   = $9E         ; 6 bytes general kernel/packer scratch
 SCORE_HSV = $A4         ; SESSION hi-score (BCD low byte). RAM only - real
-SCORE_HSH = $A5         ;   2600 carts have no battery; honest by design.
+SCORE_HSH = $A5         ;   2600 carts have no battery; by design.
 HSBUF     = $A6         ; 6 rows: hi-score, packed
 
 SHIPGFX  = %00111100    ; cannon top bar (full sprite in SHIP table below)
@@ -1065,7 +1065,7 @@ title_kernel:
 
   ; band 6: hi-score, 24 lines (6 rows × 4). Packed digits stream into PF1;
   ; SCORE mode draws them twice in the two player colors. In-session best;
-  ; honest: there is no battery - gone at power-off, like the arcades.
+  ; note: there is no battery - gone at power-off, like the arcades.
   LDX #0
 .hsb:
   STA WSYNC

@@ -1,7 +1,7 @@
 /* ── shmup.c - Game Gear vertical shooter (complete example game) ────────────
  *
  * A COMPLETE, working game - title screen (press START), lives, score +
- * hi-score (cart-RAM save code included - see the honesty note at
+ * hi-score (cart-RAM save code included - see the note at
  * hiscore_save), PSG music + SFX, and the GG/SMS signature LINE INTERRUPT
  * split: a fixed HUD strip over a drifting starfield, with the scroll change
  * timed by the VDP's programmable line counter.
@@ -12,10 +12,10 @@
  *     your gameplay around it (see TROUBLESHOOTING before changing).
  *   GAME LOGIC (clay) - enemy patterns, scoring, tuning, art: reshape freely.
  *
- * SINGLE-PLAYER BY DESIGN (honest note): the Game Gear has ONE controller -
+ * SINGLE-PLAYER BY DESIGN (note): the Game Gear has ONE controller -
  * its 2P story is the Gear-to-Gear link cable on the EXT port, which needs a
  * second console and can't be emulated in a single emulator instance. So
- * this game is honestly 1P; the console examples (SMS/NES/Genesis/...) carry
+ * this game is 1P; the console examples (SMS/NES/Genesis/...) carry
  * the 2P modes.
  *
  * THE #1 GG FOOTGUN - THE VISIBLE WINDOW: the GG VDP is the SMS VDP. It
@@ -354,7 +354,7 @@ static void wait_split(void) {
  * just snoops the bus. That's why the crt0 parks SP at $DFF0: the bytes
  * above it ($DFFC-$FFFF) belong to the mapper registers' shadow.
  *
- * HONESTY (verified 2026-06-10 against the bundled gpgx core, same finding
+ * NOTE (verified 2026-06-10 against the bundled gpgx core, same finding
  * as the SMS example): gpgx only instantiates the Sega mapper for ROMs
  * LARGER than 48KB, and this build pipeline emits 32KB ROMs - so
  * in-emulator the $8000 window stays open-bus (reads $FF), the magic check

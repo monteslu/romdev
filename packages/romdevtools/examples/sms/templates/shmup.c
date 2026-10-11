@@ -1,7 +1,7 @@
 /* ── shmup.c - SMS vertical shooter (complete example game) ──────────────────
  *
  * A COMPLETE, working game - title screen, 1P and 2P co-op modes, lives,
- * score + hi-score (cart-RAM save code included - see the honesty note at
+ * score + hi-score (cart-RAM save code included - see the note at
  * hiscore_save), music + SFX, and the SMS's signature LINE INTERRUPT split:
  * a fixed HUD strip over a drifting starfield, with the scroll change timed
  * by the VDP's programmable line counter.
@@ -272,7 +272,7 @@ static void wait_split(void) {
  * just snoops the bus. That's why the crt0 parks SP at $DFF0: the bytes
  * above it ($DFFC-$FFFF) belong to the mapper registers' shadow.
  *
- * HONESTY (verified 2026-06-10 against the bundled gpgx core): gpgx only
+ * NOTE (verified 2026-06-10 against the bundled gpgx core): gpgx only
  * instantiates the Sega mapper for ROMs LARGER than 48KB, and this build
  * pipeline emits 32KB ROMs - so in-emulator the $8000 window stays open-bus
  * (reads $FF), the magic check fails, and the game falls back to the WRAM

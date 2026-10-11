@@ -45,7 +45,7 @@
  *   hard-drops. In 2P versus, JOYSTICK PORT 2 plays well 1 the same way. On
  *   the title screen trigger A starts 1P marathon; trigger B starts 2P versus.
  *
- * Hi-score honesty: the bundled bluemsx core build exposes NO battery save
+ * Hi-score: the bundled bluemsx core build exposes NO battery save
  *   path (retro_get_memory(SAVE_RAM) is unimplemented for MSX carts), so the
  *   hi-score lives in plain RAM: it survives title↔game cycles but NOT a
  *   power cycle / hardReset. Never fake persistence - if you need real saves,
@@ -269,7 +269,7 @@ static uint16_t hiscore;         /* SESSION-ONLY: plain RAM. The bundled
                                   * bluemsx build exposes no SAVE_RAM region,
                                   * so there is nothing battery-backed to
                                   * write - survives title↔game cycles, not a
-                                  * power cycle (honest, not faked). */
+                                  * power cycle (real, not faked). */
 static uint8_t  level;           /* 1P: 1..9, speeds up the fall              */
 static uint16_t cleared_total;   /* 1P: gems cleared, drives the level        */
 static uint8_t  well_lx[2];      /* left interior name-table col per well     */

@@ -36,7 +36,7 @@
  *   on JOYSTICK PORT 2 when it is their turn. On the title screen trigger A
  *   starts 1P; trigger B (port-1 button 2) starts 2P turns.
  *
- * Hi-score honesty: the bundled bluemsx core build exposes NO battery save
+ * Hi-score: the bundled bluemsx core build exposes NO battery save
  *   path (retro_get_memory(SAVE_RAM) is unimplemented for MSX carts), so the
  *   hi-score lives in plain RAM: it survives title↔game cycles but NOT a
  *   power cycle / hardReset. Never fake persistence - if you need real saves,
@@ -335,7 +335,7 @@ static uint16_t hiscore;         /* SESSION-ONLY: plain RAM. The bundled
                                   * bluemsx build exposes no SAVE_RAM region,
                                   * so there is nothing battery-backed to
                                   * write - survives title↔game cycles, not a
-                                  * power cycle (honest, not faked). */
+                                  * power cycle (real, not faked). */
 static uint8_t  turn_pause;      /* freeze frames after a turn change        */
 static uint8_t  dist_sub;        /* sub-counter: traversal pays a point      */
 static uint16_t rng;

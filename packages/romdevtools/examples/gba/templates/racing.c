@@ -22,7 +22,7 @@
  *   libtonc (the build links it) - VBlankIntrWait/key_poll/TTE/lu_sin/lu_cos/
  *     tonccpy and the affine-BG matrix registers (REG_BG2PA..PD, BG2X/Y).
  *
- * HANDHELD, SO SINGLE-PLAYER ONLY (honest note): 2P versus on the GBA means a
+ * HANDHELD, SO SINGLE-PLAYER ONLY (note): 2P versus on the GBA means a
  * link cable between two units - a second emulator instance this environment
  * can't provide. So VERGE PILOT is a 1P ENDLESS racer chasing your own best
  * distance, not split-screen versus. (Contrast the NES/Genesis racing
@@ -32,7 +32,7 @@
  * floor (a true Mode-7 "ground plane" where each screen row samples the road
  * at a different scale) needs an HBlank-IRQ table that rewrites the matrix 160
  * times a frame - powerful but heavy, and a distraction in a starter. VERGE
- * PILOT takes the HONEST, lighter showcase: ONE affine matrix per frame that
+ * PILOT takes the lighter showcase: ONE affine matrix per frame that
  * (1) scrolls the road texture downward (it recedes toward the horizon as you
  * drive), (2) scales it with your speed, and (3) rotates/banks it as you
  * steer. The matrix is provably non-identity and the scale+bank are visible on

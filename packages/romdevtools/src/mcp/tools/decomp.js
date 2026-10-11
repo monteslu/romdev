@@ -757,7 +757,7 @@ export function registerDecompTools(server, z, sessionKey) {
           if (!asmRel) throw Object.assign(new Error(`'${fn.symbol}' has no extracted asm to fingerprint.`), { code: "NO_TARGET_ASM" });
           const asmText = await readFile(project.abs(asmRel), "utf8");
           // A fingerprint over ZERO instructions matches nothing and reports
-          // `siblingHits: []` - indistinguishable from an honest "no match
+          // `siblingHits: []` - indistinguishable from a real "no match
           // found". Refuse instead: an empty search that LOOKS like a completed
           // search is the worst of the three outcomes.
           if (!/^\s*\/\*\s*[0-9A-Fa-f]+\s+[0-9A-Fa-f]{8}\s+[0-9A-Fa-f]{8}\s*\*\//m.test(asmText)) {

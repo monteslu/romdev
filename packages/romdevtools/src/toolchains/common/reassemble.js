@@ -505,7 +505,7 @@ async function reassembleCc65Spans(original, startAddress, spans, family) {
     // data (rizin over-claimed a data blob as a function); grinding it one pin
     // per re-assembly is the slow path (a 500-line junk span = 500 assemblies).
     // So bail to a clean `.byte` dump once too many lines are pinned - cheaper
-    // AND more honest (a 40%-pinned "function" isn't readable code anyway). The
+    // AND more accurate (a 40%-pinned "function" isn't readable code anyway). The
     // pass cap is a hard ceiling; the pin-ratio bail is the usual early exit.
     const cap = Math.min(total + 8, 60);
     const bailPins = Math.max(12, Math.ceil(total * 0.35));
@@ -628,7 +628,7 @@ async function reassembleCc65Spans(original, startAddress, spans, family) {
     // Readability is measured over the rizin CODE spans only (the code we set out
     // to disassemble). A speculatively-decoded gap that recovered real code adds
     // to `readable` as a bonus; a gap that floored to `.byte` does NOT inflate
-    // `total` (it was never claimed as code) - so the percentage stays honest:
+    // `total` (it was never claimed as code) - so the percentage stays accurate:
     // it reflects how much identified code is readable, not diluted by data
     // gaps we optimistically probed.
     if (!segments[i].gap) { readable += healed[i].readable; total += healed[i].total; }

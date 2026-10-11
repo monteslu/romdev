@@ -60,7 +60,7 @@
  * and kick it off. Takes ~60 ms (~20 KB transferred one byte at a time
  * over the APUIO ports - the SPC's max rate).
  *
- * ⚠ CALL THIS *AFTER* setScreenOn(), AND CHECK THE RETURN. Every wait
+ * CALL THIS *AFTER* setScreenOn(), AND CHECK THE RETURN. Every wait
  * inside is bounded - a wedged SPC can no longer hang the main CPU - but
  * if it returns nonzero, sound init failed and you should just keep
  * running (the game renders fine without sound). Calling it BEFORE the

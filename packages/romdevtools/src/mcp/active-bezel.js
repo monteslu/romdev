@@ -578,7 +578,7 @@ export function activeBezelGeometry(sessionKey, host) {
  * Called from the step path so the "once per emulated frame" contract holds
  * even when nobody captures anything. The composite is recomputed at capture
  * time from the then-current frame, so throwing this one away costs a compose
- * but keeps the guest's own timeline honest -- and a guest that only ticked on
+ * but keeps the guest's own timeline consistent -- and a guest that only ticked on
  * screenshots would see time jump, which is precisely the kind of subtle wrong
  * this whole feature exists to expose.
  */

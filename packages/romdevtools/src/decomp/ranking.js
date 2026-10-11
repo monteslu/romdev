@@ -118,7 +118,7 @@ export function rankCandidates(candidates, opts = {}) {
     }
     return 0;
   };
-  // Across gap states, only the alignment-independent fallback is honest.
+  // Across gap states, only the alignment-independent fallback is valid.
   const byFallback = (a, b) => {
     if (a.exact !== b.exact) return a.exact ? -1 : 1;
     const da = a.distance ?? Infinity, db = b.distance ?? Infinity;
@@ -153,6 +153,6 @@ export function rankCandidates(candidates, opts = {}) {
     perGapState: Object.fromEntries([...partitions].map(([k, v]) => [k, v.length])),
     policy: "NEVER compare aligned_total across candidates with different gap state. Within one gap state, aligned metrics rank and "
       + "ties break by mechanism depth (opcode > immediate > relocation > register > scheduling > pool). Across gap states, only the "
-      + "alignment-independent distance is honest, and the response says so rather than producing a confident wrong order.",
+      + "alignment-independent distance is valid, and the response says so rather than producing a confident wrong order.",
   };
 }

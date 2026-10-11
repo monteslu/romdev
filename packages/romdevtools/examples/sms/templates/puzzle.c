@@ -5,7 +5,7 @@
  * 6x12 wells side by side, P1 on PORT A, P2 on PORT B, both falling at once,
  * where every cascade chain you score lays SIEGE to the other well: garbage
  * rows rise from the bottom of your rival's board. Score + persistent
- * hi-score (Sega-mapper cart RAM - see the honesty note at hiscore_save),
+ * hi-score (Sega-mapper cart RAM - see the note at hiscore_save),
  * PSG music + SFX, and the SMS's signature LINE-INTERRUPT split: a fixed HUD
  * strip over the wells, timed by the VDP's programmable line counter.
  *
@@ -320,7 +320,7 @@ static void wait_split(void) {
  * snoops the bus. That's why the crt0 parks SP at $DFF0: the bytes above it
  * ($DFFC-$FFFF) belong to the mapper registers' shadow.
  *
- * HONESTY (verified against the bundled gpgx core): gpgx only instantiates
+ * NOTE (verified against the bundled gpgx core): gpgx only instantiates
  * the Sega mapper for ROMs LARGER than 48KB, and this build pipeline emits
  * 32KB ROMs - so in-emulator the $8000 window stays open-bus (reads $FF), the
  * magic check fails, and the game falls back to the WRAM hi-score (in-session

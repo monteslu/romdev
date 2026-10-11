@@ -10,7 +10,7 @@
 // (N64/PS1/Dreamcast/PSP/DS) breaks that - 3D rendering, MIPS/SH-4 CPUs, GPU-FBO
 // screenshots, ops that are meaningless on a polygon renderer. A declared
 // contract + a uniform "unsupported" signal lets agents discover what a system
-// can do BEFORE calling, and keeps the matrix honest as platforms diverge.
+// can do BEFORE calling, and keeps the matrix accurate as platforms diverge.
 //
 // Fields (keep MINIMAL - only what the contract / discovery / conformance use):
 //   cpuFamily       primary CPU family (forward-looking; "6502","z80","sm83",
@@ -223,7 +223,7 @@ export const CAPABILITIES = {
     // memory works - the romdev patch exposes the full 64KB PICO-8 address space as
     // system_ram (sprite sheet, map, flags, music, sfx, general RAM, screen buffer).
     // disasm here is target:'source' - the cart IS Lua source, so we return the Lua
-    // itself (the honest "understand this cart" path), not a machine-code listing.
+    // itself (the real "understand this cart" path), not a machine-code listing.
     // It renders to a 128×128 framebuffer (poke to screen memory), so the inspect-*
     // tile/sprite-table tools are N/A like gametank/the disc platforms.
     // tier:"fantasy" - a fantasy console (Lua VM), not a CPU emulator. Held to its OWN

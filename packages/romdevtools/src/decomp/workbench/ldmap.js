@@ -8,7 +8,7 @@
 //   - Several output sections can share a VMA (a nested lookup table, or an
 //     N64 overlay group). The single-answer lookups resolve through the
 //     smallest candidate; sectionsContaining / sectionsLoadedAt return every
-//     candidate for a caller that needs the honest answer.
+//     candidate for a caller that needs the exact answer.
 //   - A symbol name is not unique across a map; a by-name lookup answers
 //     with the LAST placement the map printed.
 //   - `. = ALIGN(...)` location-counter updates are not symbols.

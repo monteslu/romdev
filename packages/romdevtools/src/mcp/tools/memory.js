@@ -373,7 +373,7 @@ async function memProvenance(sessionKey, { region = "system_ram", offset = 0, le
   // A fixed-length query is the wrong shape on its own: the caller cannot know
   // the copied run's length in advance. Measured on a real cart, one routine
   // was verbatim ROM for 9 bytes and then diverged - so a 20-byte query
-  // returned NOTHING while an 8-byte query resolved uniquely, and the honest
+  // returned NOTHING while an 8-byte query resolved uniquely, and the accurate
   // reading of the empty result is "not copied verbatim at this length", which
   // is easy to misread as "not from ROM at all". For each candidate, extend the
   // comparison past the queried range and report where it stops.

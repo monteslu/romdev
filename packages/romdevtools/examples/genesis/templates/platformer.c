@@ -686,7 +686,7 @@ int main(bool hard) {
         apply_camera();
 
         if (turn_pause) {              /* freeze gameplay, keep frames     */
-            --turn_pause;              /* honest (sprites/scroll staged)   */
+            --turn_pause;              /* sprites/scroll staged          */
             sfx_update();
             SYS_doVBlankProcess();
             continue;

@@ -73,7 +73,7 @@ export const COMMAND_SPECS = [
   {
     path: ["fetch-scratch"], handler: fetchScratchCommand, defaults: { report_command: "fetch-scratch" },
     help: "download one decomp.me scratch export into the standard layout",
-    description: `Download a scratch export over HTTPS and unpack it to OUTDIR/SLUG (${EXPORT_MEMBERS.join(", ")}), keeping the ZIP alongside it. The request identifies this workbench and its version honestly; a scratch already on disk is reported rather than downloaded again. This is one of the two commands that open a network connection, and it never runs implicitly.`,
+    description: `Download a scratch export over HTTPS and unpack it to OUTDIR/SLUG (${EXPORT_MEMBERS.join(", ")}), keeping the ZIP alongside it. The request identifies this workbench and its version; a scratch already on disk is reported rather than downloaded again. This is one of the two commands that open a network connection, and it never runs implicitly.`,
     arguments: [
       { dest: "slug", help: "decomp.me scratch slug or scratch URL" },
       { flags: ["--outdir"], default: ".", help: "directory to create SLUG/ inside (default: the current directory)" },

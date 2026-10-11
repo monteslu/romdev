@@ -454,7 +454,7 @@ export async function playtest(args) {
 
   // Decide initial window size. In "tv" / "core" modes, scale by height
   // and let the chosen aspect dictate width - keeps vertical resolution
-  // honest (you can still count scanlines) while applying horizontal
+  // accurate (you can still count scanlines) while applying horizontal
   // stretch. Shared + unit-tested in core-runner (the inline copy of this
   // math is what opened a 0-width window when a host reported aspect 0).
   // A bezel's scene is already the finished picture at its intended shape, so
@@ -1647,7 +1647,7 @@ export async function playtest(args) {
             // Nearest keeps emulator pixels crisp, which is right for a bare
             // core frame. A bezel composite is mostly anti-aliased panel art and
             // text, so nearest re-aliases exactly the edges the guest smoothed -
-            // linear is the honest presentation of what it drew.
+            // linear is the faithful presentation of what it drew.
             scaling: composed ? "linear" : "nearest",
             dstRect: { x: dstX, y: dstY, width: dstW, height: dstH },
           });
@@ -1793,7 +1793,7 @@ export async function playtest(args) {
     // Truth-probe for the underlying SDL window. `running` is our own flag
     // and can lag reality if the window dies without firing a 'close' event
     // (compositor kill, X/Wayland session loss, invalid handle). Callers
-    // that need an honest answer (playtestStatus) check this and reconcile.
+    // that need a reliable answer (playtestStatus) check this and reconcile.
     // Any throw from the SDL binding (handle freed under us) → treat as dead.
     windowAlive() {
       if (!running) return false;
@@ -1827,7 +1827,7 @@ export async function playtest(args) {
         // that the cadence fired -- it is stamped before writeCheckpoint runs
         // and stays set even when the write bails -- so it cannot answer this.
         // A caller needs "is the human's progress actually being saved", and
-        // that question had no honest answer here.
+        // that question had no reliable answer here.
         written: checkpointWritten,
         kind: checkpointKind,
       };

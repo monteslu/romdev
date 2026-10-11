@@ -13,7 +13,7 @@
 ;
 ; The aliens march left/right as a block (move P1's X), drop a step at
 ; the edges, and you shoot upward with the joystick button. This is the
-; deliberately-small but visually-honest version of the genre on the
+; deliberately-small but visually-accurate version of the genre on the
 ; 2600 - extend it by reusing P1 again lower down for shields, or
 ; adding M1 as an alien bomb.
 ;

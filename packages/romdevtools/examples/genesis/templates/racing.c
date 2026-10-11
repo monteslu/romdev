@@ -720,7 +720,7 @@ int main(bool hard) {
         update_haze();
 
         if (start_pause) {             /* green light: freeze gameplay,    */
-            --start_pause;             /* keep frames honest (sprites +    */
+            --start_pause;             /* keep frames consistent (sprites +    */
             sfx_update();              /* haze staged)                     */
             SYS_doVBlankProcess();
             continue;

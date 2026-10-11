@@ -5,7 +5,7 @@
  * once - player 2 on PORT B), a vertically-scrolling road done the GG/SMS way
  * (whole-plane R9 vertical scroll, latched once per frame), streamed roadside
  * scenery rows, crash/lives rules, persistent best DISTANCE (Sega-mapper cart
- * RAM - see the honesty note at best_save), PSG music + SFX, and the GG/SMS
+ * RAM - see the note at best_save), PSG music + SFX, and the GG/SMS
  * signature LINE-INTERRUPT split holding a fixed HUD strip over the road.
  *
  * THIS FILE IS THE GG TWIN of the SMS racing (FENDER FURY). The GG VDP IS the
@@ -501,7 +501,7 @@ static void wait_split(void) {
  * $E000-$FFFF), so this write also lands in WRAM at $DFFC - the mapper just
  * snoops the bus. That's why the crt0 parks SP at $DFF0.
  *
- * HONESTY (verified 2026-06-10 against the bundled gpgx core, same finding as
+ * NOTE (verified 2026-06-10 against the bundled gpgx core, same finding as
  * the SMS example): gpgx only instantiates the Sega mapper for ROMs LARGER
  * than 48KB; this build pipeline emits 32KB ROMs, so in-emulator the $8000
  * window stays open-bus (reads $FF), the magic check fails, and the game falls
@@ -679,7 +679,7 @@ static void paint_field(void) {
 /* The result card reuses the live road as its backdrop (a bare single-colour
  * card reads as a render failure - the verify tool flags >92% one-colour
  * frames) and draws its text via deferred over_step pieces in the ST_OVER
- * loop, one per vblank, so each vblank→split budget stays honest. The road
+ * loop, one per vblank, so each vblank→split budget stays accurate. The road
  * keeps scrolling under it. */
 
 /* ── GAME LOGIC (clay) - traffic pool (fixed slots, no allocation) ── */
@@ -913,7 +913,7 @@ void main(void) {
     gg_sat_upload();                 /* shadow SAT staged at end of last frame */
 
     if (start_pause) {               /* green light: freeze gameplay, keep
-                                      * frames honest (scroll idles, sprites
+                                      * frames consistent (scroll idles, sprites
                                       * staged) */
       --start_pause;
       scroll_road_down(0);           /* re-commit R9 (no motion) */

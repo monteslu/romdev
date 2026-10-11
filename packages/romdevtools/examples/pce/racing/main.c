@@ -50,7 +50,7 @@
  *     3 crashes end the run. Persistent stat: best DISTANCE (u16, one unit =
  *     16 scrolled pixels ≈ one car length); in-session only (see the note below).
  *
- * 2P, honestly: the stock PC Engine has ONE controller port; 2P needs a
+ * 2P: the stock PC Engine has ONE controller port; 2P needs a
  * TurboTap. The geargrafx core implements the TurboTap and the romdev host
  * force-ENABLES it (PLATFORM_CORE_OPTIONS pce: geargrafx_turbotap), so a second
  * pad's input reaches the game on pad slot 2 - verified by driving port-1 input
@@ -279,7 +279,7 @@ static void upload_font(void) {
  * SPRITE HUD digits. The PCE has NO hardware window plane and this minimal lib
  * does no raster split, so a BAT-tile HUD would scroll WITH the road under BYR
  * (and the road-row STREAMER below restamps every BAT row in turn, wiping any
- * tile HUD outright). The honest fix - the same one the NES racing template
+ * tile HUD outright). The fix - the same one the NES racing template
  * uses - is a SPRITE HUD: sprites are positioned in SCREEN space and never move
  * with a BG scroll. We build 10 digit cells here and stage them at HUD_Y every
  * frame. Traffic spawns BELOW HUD_Y so the HuC6270's 16-sprites-per-scanline
@@ -430,7 +430,7 @@ static void advance_road(u8 px) {
 /* ── HARDWARE TRUTH: a bare HuCard CANNOT save the best distance (in-session) ──
  * This was researched and corrected: earlier versions wrote the best distance
  * to BRAM ("backup RAM", bank $F7) and claimed it persisted across power
- * cycles. That is NOT honest for a HuCard game. On REAL hardware a plain HuCard
+ * cycles. That is NOT accurate for a HuCard game. On REAL hardware a plain HuCard
  * plugged into a base PC Engine / TurboGrafx-16 has NO backup RAM at all - BRAM
  * exists ONLY when a peripheral is attached: the CD-ROM² System (2KB kept by a
  * supercapacitor), the Tennokoe Bank HuCard, or the Memory Base 128. No
@@ -439,7 +439,7 @@ static void advance_road(u8 px) {
  * emulator like geargrafx exposes BRAM unconditionally, so the old code
  * "worked" in emulation in a way the real machine never would.
  *
- * So this game keeps an IN-SESSION best only (like the honest 2600/Lynx
+ * So this game keeps an IN-SESSION best only (like the 2600/Lynx
  * examples) - it survives across runs within a power-on, resets to 0 on a cold
  * boot. To ACTUALLY persist on real hardware you would target a peripheral
  * (BRAM behind a detect, or a CD-ROM² build) - a real-hardware feature, not a

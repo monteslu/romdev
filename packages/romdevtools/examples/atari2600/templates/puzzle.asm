@@ -11,7 +11,7 @@
 ; WHY THIS IS A PUZZLE, NOT AN ACTION GAME: nothing moves on its own. The
 ; board is static; the player THINKS, moves a cursor, and chooses which two
 ; tiles to flip. The challenge is memory + deduction, not reflexes. That is
-; the honest "puzzle" idiom - and it suits the 2600 well, because a static,
+; the natural "puzzle" idiom - and it suits the 2600 well, because a static,
 ; turn-based board needs no per-frame motion and so the kernel is simple.
 ;
 ; THE BOARD: 8 tiles = 4 PAIRS, drawn as a vertical stack of 8 bands. Each
@@ -25,7 +25,7 @@
 ; TIA object roles:
 ;   PF       = the 8 tile bands (full-width blocks; the only 2600 object wide
 ;               enough to read as a "tile"). COLUPF changes per band = per-
-;               tile color, the easy honest way to show 4 distinct values.
+;               tile color, the easy way to show 4 distinct values.
 ;   COLUBK   = the cursor highlight (the selected band's background brightens).
 ;
 ; CONTROLS: joystick UP/DOWN moves the cursor; FIRE flips the tile under it.

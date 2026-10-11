@@ -562,7 +562,7 @@ void main(void) {
     split_after_hud();          /* the sprite-0 split - every frame */
     sound_music_tick();
 
-    if (turn_pause) {           /* freeze gameplay, keep the frame honest */
+    if (turn_pause) {           /* freeze gameplay, keep the frame consistent */
       --turn_pause;
       continue;
     }

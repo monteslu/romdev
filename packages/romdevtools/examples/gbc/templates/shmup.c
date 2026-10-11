@@ -23,7 +23,7 @@
  *     reshape your gameplay around it (see TROUBLESHOOTING before changing).
  *   GAME LOGIC (clay) - enemy patterns, scoring, tuning, art: reshape freely.
  *
- * SINGLE-PLAYER, honestly: the Game Boy's "player 2" is a LINK CABLE, which
+ * SINGLE-PLAYER: the Game Boy's "player 2" is a LINK CABLE, which
  * one emulator instance cannot provide - so handheld examples ship a
  * press-start title and no 2P mode instead of faking one. (Consoles' shmup
  * examples have real co-op 2P.)

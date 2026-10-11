@@ -26,7 +26,7 @@ export function decodeGameTankAcp(a) {
   const clkMult = a[9] & 0xFF;
 
   // "playing" = the audio CPU is running, not muted/resetting, and the DAC isn't
-  // parked at the midpoint silence ($80) - a coarse but honest activity signal.
+  // parked at the midpoint silence ($80) - a coarse but real activity signal.
   const playing = running && !muted && !resetting && dacReg !== 0x80;
 
   return {

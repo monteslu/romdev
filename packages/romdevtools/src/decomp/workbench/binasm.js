@@ -267,7 +267,7 @@ function peepReport(text, { limit }) {
     events: events.slice(0, limit).map((e) => e.asDict()),
     unparsed_debug_line_count: unparsed.length,
     unparsed_debug_lines: unparsed.slice(0, limit),
-    correlation_scope: "INST is pass-local in this trace. Without block/address records it cannot be mapped honestly to a Binasm byte offset; use it to name the owning peephole and the observed register pair.",
+    correlation_scope: "INST is pass-local in this trace. Without block/address records it cannot be mapped reliably to a Binasm byte offset; use it to name the owning peephole and the observed register pair.",
   };
 }
 

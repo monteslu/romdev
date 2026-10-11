@@ -413,7 +413,7 @@ export async function analyzeFunctions(romPath, platformOverride, opts = {}) {
     callers: f.indegree ?? (f.codexrefs?.length ?? 0),
     callees: f.outdegree ?? 0,
     // A3: rizin's flat sweep folds DATA regions into pseudo-functions with absurd
-    // `size` (megabyte "functions", phantoms exceeding the ROM). The honest
+    // `size` (megabyte "functions", phantoms exceeding the ROM). The accurate
     // signal is the BYTES-PER-BLOCK ratio, not raw size: real code averages tens
     // of bytes per basic block; a "function" of thousands of bytes per block (or
     // a single huge block with no control flow) is a data table / graphics blob
@@ -456,7 +456,7 @@ export async function analyzeFunctions(romPath, platformOverride, opts = {}) {
   // The old default of 25 got worse the bigger the ROM -- 25 of 116 on a NES
   // cart, 25 of 406 on Genesis -- and `truncated:true` next to a field still
   // called `functions` reads as a complete list to anyone skimming. Returning
-  // everything is the honest default; callers that want a preview pass topN.
+  // everything is the default; callers that want a preview pass topN.
   const cap = Number.isFinite(opts.topN) ? Math.max(1, opts.topN) : Infinity;
   const shown = Number.isFinite(cap) ? filtered.slice(0, cap) : filtered;
   const truncated = shown.length < filtered.length;

@@ -20,7 +20,7 @@
  *   cc65's pce crt0 + pce.lib are auto-linked; the 'rom32k' linker preset
  *     (applied automatically to example projects) gives a 32KB HuCard.
  *
- * SINGLE PLAYER, honestly: the stock PC Engine has ONE controller port;
+ * SINGLE PLAYER: the stock PC Engine has ONE controller port;
  * 2P needs a TurboTap. The geargrafx core implements the TurboTap but ships
  * with it disabled (a core option, no headless override today), so a second
  * pad's input never reaches the game - verified by scanning all 5 multitap
@@ -363,7 +363,7 @@ static void draw_hud_numbers(void) {
 /* ── HARDWARE TRUTH: a bare HuCard CANNOT save a hi-score (in-session only) ──
  * This was researched and corrected: earlier versions wrote the hi-score to
  * BRAM ("backup RAM", bank $F7) and claimed it persisted across power cycles.
- * That is NOT honest for a HuCard game. On REAL hardware a plain HuCard plugged
+ * That is NOT accurate for a HuCard game. On REAL hardware a plain HuCard plugged
  * into a base PC Engine / TurboGrafx-16 has NO backup RAM at all - BRAM exists
  * ONLY when a peripheral is attached: the CD-ROM² System (2KB kept by a
  * supercapacitor), the Tennokoe Bank HuCard, or the Memory Base 128. No
@@ -372,7 +372,7 @@ static void draw_hud_numbers(void) {
  * emulator like geargrafx exposes BRAM unconditionally, so the old code
  * "worked" in emulation in a way the real machine never would.
  *
- * So this game keeps an IN-SESSION hi-score only (like the honest 2600/Lynx
+ * So this game keeps an IN-SESSION hi-score only (like the 2600/Lynx
  * examples) - it survives game-overs within a power-on, resets to 0 on a cold
  * boot. To make it ACTUALLY persist on real hardware you would target a
  * peripheral: write to BRAM only after detecting one (and go through the System

@@ -14,12 +14,12 @@
  *     your gameplay around it (see TROUBLESHOOTING before changing).
  *   GAME LOGIC (clay) - traffic patterns, speeds, tuning, art: reshape freely.
  *
- * SINGLE-PLAYER BY DESIGN (the honest handheld story): the Game Boy has ONE
+ * SINGLE-PLAYER BY DESIGN (a handheld): the Game Boy has ONE
  * controller. Multiplayer on real hardware means the LINK CABLE, and a
  * single emulator instance cannot emulate the second Game Boy on the other
  * end of that cable - so this game ships 1P only instead of faking a 2P mode
  * the platform can't deliver. (The console racing examples have real
- * split-lane 2P; the handheld is an honest 1P endless run.)
+ * split-lane 2P; the handheld is a 1P endless run.)
  *
  * What depends on what:
  *   gb_hardware.h - register names (LCDC/WX/WY/SCY/NRxx/...) + LCDC bit masks.

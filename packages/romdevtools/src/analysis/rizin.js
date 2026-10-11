@@ -6,7 +6,7 @@
 // through Module.print). JSON commands (aflj / axtj / agf json / pdj / iIj)
 // give machine-readable results - prefer them from tool code.
 //
-// ⚠ Do NOT issue plugin-LISTING commands (`La`, `e asm.arch=??`) - they trap
+// Do NOT issue plugin-LISTING commands (`La`, `e asm.arch=??`) - they trap
 // on a fn-pointer signature mismatch in the wasm build (see
 // scripts/patches/README.md, Family 3). Everything on the analysis path works.
 import { fileURLToPath } from "node:url";

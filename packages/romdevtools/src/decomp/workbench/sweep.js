@@ -1,4 +1,4 @@
-// sweep.js - a sweep is a named family of sources, a manifest, and an honest
+// sweep.js - a sweep is a named family of sources, a manifest, and an explicit
 // ingest. The workbench emits sources and a manifest; the project's own
 // compile-one wrapper turns them into objects; the objects come back to be
 // gated, scored and reported.

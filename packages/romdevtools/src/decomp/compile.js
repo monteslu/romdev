@@ -127,7 +127,7 @@ export function applyRelocations(stream, symbolVa, baseVa) {
           }
           case "R_MIPS_LO16": { const lo = ((word << 16) >> 16); const full = (sv + lo + (ins.reloc.addend | 0)) >>> 0; word = ((word & 0xffff0000) | (full & 0xffff)) >>> 0; break; }
           case "R_MIPS_GPREL16": case "R_MIPS_LITERAL": default:
-            // Relocation TYPE not handled: same honesty rule as an unknown symbol.
+            // Relocation TYPE not handled: same rule as an unknown symbol.
             unresolved.add(`${ins.reloc.type}:${ins.reloc.symbol}`);
             out.push({ ...ins, linkedWord: word, unresolvedReloc: `${ins.reloc.type}:${ins.reloc.symbol}` });
             continue;

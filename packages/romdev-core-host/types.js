@@ -473,7 +473,7 @@ export const MemoryRegionToRetro = {
  * to cartridge; C64 depends on the file kind - a `.d64`/`.g64`/`.d71`/`.d81` is a
  * disk, a `.tap` is a tape, a `.crt` is a cartridge, and a bare `.prg`/`.p00` is
  * a program injected directly. The extension is passed when known (loadMedia has
- * it) so disk/tape images report honestly in status() and the agent knows a
+ * it) so disk/tape images report accurately in status() and the agent knows a
  * writable disk exists for saves.
  * @param {string} platform
  * @param {string} [ext] lower- or mixed-case file extension incl. dot, e.g. ".d64"

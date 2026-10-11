@@ -5,7 +5,7 @@
  * once - player 2 on PORT B), a vertically-scrolling road done the SMS way
  * (whole-plane R9 vertical scroll, latched once per frame), streamed roadside
  * scenery rows, crash/lives rules, persistent best DISTANCE (Sega-mapper cart
- * RAM - see the honesty note at best_save), PSG music + SFX, and the SMS's
+ * RAM - see the note at best_save), PSG music + SFX, and the SMS's
  * signature LINE-INTERRUPT split holding a fixed HUD strip over the road.
  *
  * THIS FILE IS MEANT TO BE FORKED AND MODIFIED into your own game - even a
@@ -429,7 +429,7 @@ static void wait_split(void) {
  * $E000-$FFFF), so this write also lands in WRAM at $DFFC - the mapper just
  * snoops the bus. That's why the crt0 parks SP at $DFF0.
  *
- * HONESTY (verified against the bundled gpgx core): gpgx only instantiates the
+ * NOTE (verified against the bundled gpgx core): gpgx only instantiates the
  * Sega mapper for ROMs LARGER than 48KB; this build pipeline emits 32KB ROMs,
  * so in-emulator the $8000 window stays open-bus (reads $FF), the magic check
  * fails, and the game falls back to the WRAM best (in-session only). The code
@@ -577,7 +577,7 @@ static void paint_field(void) {
 /* The result card reuses the live road as its backdrop (a bare single-colour
  * card reads as a render failure - the verify tool flags >92% one-colour
  * frames) and draws its text via deferred over_step pieces in the ST_OVER
- * loop, one per vblank, so each vblank→split budget stays honest. The road
+ * loop, one per vblank, so each vblank→split budget stays accurate. The road
  * keeps scrolling under it. */
 
 /* ── GAME LOGIC (clay) - traffic pool (fixed slots, no allocation) ── */
@@ -808,7 +808,7 @@ void main(void) {
     sms_sat_upload();                /* shadow SAT staged at end of last frame */
 
     if (start_pause) {               /* green light: freeze gameplay, keep
-                                      * frames honest (scroll idles, sprites
+                                      * frames consistent (scroll idles, sprites
                                       * staged) */
       --start_pause;
       scroll_road_down(0);           /* re-commit R9 (no motion) */

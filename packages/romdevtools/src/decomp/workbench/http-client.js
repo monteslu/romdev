@@ -1,6 +1,6 @@
 // http-client.js - a small, polite, explicitly invoked HTTP client for the
 // public decomp.me API. Offline-first: only fetch-scratch and
-// public-match-check use it. Requests are serialized, identified honestly
+// public-match-check use it. Requests are serialized, identified by name
 // (the User-Agent names this package and version), timed out, retried at most
 // once, and a refusal is reported as a refusal with the offline route out.
 // The transport is injected (`opener`), so tests never touch a network.
@@ -207,7 +207,7 @@ export class PoliteClient {
     if (status === 401 || status === 403) {
       const interstitial = response.looksLikeAWebPage() ? " and answered with a web page rather than the API document" : "";
       return new RequestRefused(`${url} refused this request (HTTP ${status})${interstitial}.\n`
-        + `The workbench sends an honest User-Agent naming itself and its version (${this._user_agent}) plus the ordinary browser `
+        + `The workbench sends a User-Agent naming itself and its version (${this._user_agent}) plus the ordinary browser `
         + "headers, and it will not imitate a specific browser build to get past a block \u2014 that is an arms race, and the site is "
         + "run by volunteers.\n"
         + "Do this instead: open the page in a browser, download what you need, and point the workbench at the local file; or "

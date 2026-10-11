@@ -21,7 +21,7 @@
  *   - REG_KEYS, KEY_A/B/SELECT/START etc.
  *   - VBlankIntrWait()              frame heartbeat
  *
- * ⚠️  One omission: libtonc's `tte_iohook` (auto-routing of printf /
+ * NOTE: One omission: libtonc's `tte_iohook` (auto-routing of printf /
  *    iprintf through TTE via libsysbase) is NOT bundled - same
  *    reason as libgba's console.c. Use `tte_write` / `tte_printf`
  *    directly (which is what every Tonc tutorial actually does

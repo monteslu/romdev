@@ -69,7 +69,7 @@ function pairSlot(name) {
  * through `labelToken()` and emitted `lda r` - an ALU op against a LABEL NAMED
  * r that does not exist, rejected by asar as Elabel_not_found. Emitting a
  * marker keeps the line visible in the output AND counted in residue, which is
- * the honest outcome: refusing to translate is not the same as pretending the
+ * the correct outcome: refusing to translate is not the same as pretending the
  * instruction was not there. (`ld a,r` is used as a cheap pseudo-random source
  * in real games, so this appears in commercial code and not in short samples.)
  */
@@ -538,7 +538,7 @@ function emitReg(node, out) {
     default:
       // Everything else (block ops, daa, rotates through (HL), im, halt)
       // has no faithful single-instruction 65816 form. Marking it is the
-      // honest outcome: the line is visible in the asm AND counted as residue.
+      // correct outcome: the line is visible in the asm AND counted as residue.
       out.push(untranslated(node, `no 65816 translation for Z80 '${m}'`));
   }
 }

@@ -72,7 +72,7 @@ function envNum(name, fallback) {
 const RING_IMAGE_KEEP = envNum("ROMDEV_OBSERVER_RING_IMAGES", 1);
 const RING_MAX_BYTES = envNum("ROMDEV_OBSERVER_RING_BYTES", 8 * 1024 * 1024);
 
-/** Rough byte cost of a retained event (base64 dominates; JSON.stringify is honest enough). */
+/** Rough byte cost of a retained event (base64 dominates; JSON.stringify is close enough). */
 function eventBytes(event) {
   try {
     return JSON.stringify(event).length;

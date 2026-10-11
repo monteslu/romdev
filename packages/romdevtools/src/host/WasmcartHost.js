@@ -728,7 +728,7 @@ export class WasmcartHost {
       const fromFbo = this.cart?.withRenderedFrame?.((fw, fh) => { w = fw; h = fh; });
       if (!fromFbo || !(w > 0 && h > 0)) {
         // No redirect FBO: the cart really does draw into the default
-        // framebuffer, so the context size is the honest answer there.
+        // framebuffer, so the context size is the correct answer there.
         w = Math.min(this.status.fbWidth || gl.drawingBufferWidth, gl.drawingBufferWidth);
         h = Math.min(this.status.fbHeight || gl.drawingBufferHeight, gl.drawingBufferHeight);
       }
@@ -1426,10 +1426,8 @@ export class WasmcartHost {
       // SHARED offscreen context then made GL calls against a null current
       // context and died with "Cannot read properties of null (reading
       // '_id')" - so ONE presentWindow load poisoned every later plain load
-      // in the process. (Found by the MCP client agent screenshotting five
-      // shipped carts: 4 of 5 came back black or failed, and the discriminator
-      // turned out to be a presentWindow load earlier in the run, not
-      // anything about the carts.) Hand currency back to the shared context
+      // in the process (screenshots of later carts came back black or failed).
+      // Hand currency back to the shared context
       // if this process has one.
       //
       // ONLY IF WE HELD IT. Doing this unconditionally stole currency from

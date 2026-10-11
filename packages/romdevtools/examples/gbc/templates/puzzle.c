@@ -20,7 +20,7 @@
  *     reshape your gameplay around it (see TROUBLESHOOTING before changing).
  *   GAME LOGIC (clay) - board rules, scoring, tuning, art: reshape freely.
  *
- * SINGLE-PLAYER, honestly: the Game Boy's "player 2" is a LINK CABLE, which
+ * SINGLE-PLAYER: the Game Boy's "player 2" is a LINK CABLE, which
  * one emulator instance cannot provide - so handheld examples ship a
  * press-start title and no 2P mode instead of faking one.
  *
@@ -31,7 +31,7 @@
  *     the SRAM hi-score persist (the GB equivalent of the NES BATTERY bit).
  *   font.h - 0-9 A-Z glyphs for all text.
  *
- * RENDERING - the hard-won architecture (details at each routine below):
+ * RENDERING - the architecture (details at each routine below):
  *  - The FALLING column and the NEXT preview are OBJ sprites (OAM), not BG
  *    tiles, so moving them is just an OAM rewrite - no per-frame BG writes.
  *  - The LOCKED well is BG tiles, updated through a COLLECT/FLUSH queue:

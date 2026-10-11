@@ -433,7 +433,7 @@ export function decodeProActionReplay(code, platform) {
  *  Returns one of: "game-genie", "pro-action-replay", "gameshark",
  *  "action-replay", "raw", or "unknown". Per-platform, because the SAME shape
  *  means different devices on different systems (8 hex = SNES PAR, but on GB =
- *  GameShark). This is what lets us be HONEST about device type. */
+ *  GameShark). This is what lets the device type be reported accurately. */
 export function detectDevice(code, platform) {
   const c = code.trim();
   if (c.includes(":")) return "raw";
@@ -593,7 +593,7 @@ export function encodeRaw({ address, value, compare }) {
 }
 
 // Which physical cheat DEVICE each platform's "native" code is for. This is the
-// honesty layer: we don't call everything "Game Genie" - SNES native is Pro
+// Accuracy layer: do not call everything "Game Genie" - SNES native is Pro
 // Action Replay, SMS/GG is Action Replay, GB has both GG (ROM) and GameShark
 // (RAM). `nativeDevicesFor` lists them best-first.
 export function nativeDevicesFor(platform) {

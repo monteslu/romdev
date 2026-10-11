@@ -14,7 +14,7 @@
  *   GAME LOGIC (clay) - level layout, physics tuning, scoring, art: reshape
  *     freely.
  *
- * SINGLE-PLAYER BY DESIGN (the honest handheld story): the Game Boy has ONE
+ * SINGLE-PLAYER BY DESIGN (a handheld): the Game Boy has ONE
  * controller. Multiplayer on real hardware means the link cable, and a
  * single emulator instance cannot emulate a second Game Boy on the other
  * end of that cable - so this game ships 1P only instead of faking a 2P
@@ -825,7 +825,7 @@ void main(void) {
       else if ((pad & PAD_A) && !(prev_pad & PAD_A))    start_game();
       prev_pad = pad;
     } else if (state == ST_PLAY) {
-      if (respawn_pause) {       /* ready-blink: freeze gameplay, stay honest */
+      if (respawn_pause) {       /* ready-blink: freeze gameplay, stay consistent */
         --respawn_pause;
         prev_pad = pad;
       } else {

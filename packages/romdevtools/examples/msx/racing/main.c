@@ -36,7 +36,7 @@
  * all (see the idiom below), so TURBO TANGLE fakes the motion by REDRAWING the
  * road's dashes + shoulder texture one phase further down the name table each
  * frame: a moving-stripe pattern, recomputed from a single scrolling offset.
- * Same genre, the opposite hardware reality - and the honest way to teach it.
+ * Same genre, the opposite hardware reality - and the straightforward way to teach it.
  *
  * Controls: JOYSTICK PORT 1 (or keyboard cursors) LEFT/RIGHT steers; UP/trigger
  *   A accelerates, DOWN/trigger B brakes (1P only). In 2P versus, JOYSTICK
@@ -44,7 +44,7 @@
  *   1P race; trigger B starts 2P versus. On the result screen any fire returns
  *   to the title.
  *
- * Record honesty: the bundled bluemsx core build exposes NO battery save path
+ * Record: the bundled bluemsx core build exposes NO battery save path
  *   (retro_get_memory(SAVE_RAM) is unimplemented for MSX carts), so BEST (the
  *   best 1P distance) lives in plain RAM: it survives title↔race cycles but NOT
  *   a power cycle / hardReset. Never fake persistence - if you need real saves,
@@ -309,7 +309,7 @@ static uint8_t  dist_frac;
 static uint16_t best;            /* SESSION-ONLY best 1P distance - see header.
                                   * No SAVE_RAM on this core, so it lives in
                                   * plain RAM: survives title↔race cycles, NOT
-                                  * a power cycle (honest, not faked).         */
+                                  * a power cycle (real, not faked).         */
 static uint8_t  spawn_timer;
 static uint8_t  road_phase;      /* 0..7 - the faked-scroll offset (idiom)     */
 

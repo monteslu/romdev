@@ -6,7 +6,7 @@
  * ONCE at setup, and every frame we just nudge two scroll registers and
  * re-stage one sprite. This is the single most important thing to copy:
  *
- *     ★ Do NOT rewrite tilemaps in the frame loop. ★
+ *     Do NOT rewrite tilemaps in the frame loop.
  *
  * Rewriting a plane each frame is a big VDP/DMA burst that overruns
  * vblank and makes movement feel choppy/juddery. Hardware scroll is free.
@@ -148,7 +148,7 @@ int main(bool hard) {
          * the screen edge instead of staying pinned to the centre. */
         player_screen_x = g_player_x - cam;
 
-        /* ★ THE ENTIRE PER-FRAME RENDER COST: two scroll-register writes.
+        /* THE ENTIRE PER-FRAME RENDER COST: two scroll-register writes.
          * Positive cam scrolls the plane LEFT, so we write the negative.
          * Plane A: 1:1 with the world. Plane B: 1/4 speed = parallax. */
         VDP_setHorizontalScroll(BG_A, -cam);

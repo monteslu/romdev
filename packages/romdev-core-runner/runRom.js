@@ -72,7 +72,7 @@ export async function runRom(rom, opts = {}) {
   const buttonMap = opts.buttonMap ?? SDL_BUTTON_TO_LIBRETRO_BIT;
   const keyMap = opts.keyMap ?? KEY_TO_LIBRETRO_BIT;
 
-  // SDL first - fail fast (and honestly: SDL_UNAVAILABLE) before touching the core.
+  // SDL first - fail fast (with SDL_UNAVAILABLE) before touching the core.
   const sdl = await initSdl({ log, ...(opts._initSdlOpts ?? {}) });
 
   // Load core + ROM.

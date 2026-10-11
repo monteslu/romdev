@@ -23,12 +23,12 @@
  *   - irqInit, irqEnable                  interrupt table setup
  *   - VBlankIntrWait()                    frame heartbeat (REQUIRES irq)
  *
- * ⚠️  IRQ INIT IS REQUIRED. VBlankIntrWait() is a BIOS function that
+ * NOTE: IRQ INIT IS REQUIRED. VBlankIntrWait() is a BIOS function that
  *    halts the CPU until a vblank IRQ fires. Without irqInit() +
  *    irqEnable(IRQ_VBLANK) the BIOS halts forever - ROM appears to
  *    load but freezes on frame 1. Single most common GBA gotcha.
  *
- * ⚠️  iprintf-style stdio (console.c) is NOT bundled - see
+ * NOTE: iprintf-style stdio (console.c) is NOT bundled - see
  *    TROUBLESHOOTING.md for workarounds. The libtonc default runtime
  *    provides TTE which sidesteps the issue entirely.
  */

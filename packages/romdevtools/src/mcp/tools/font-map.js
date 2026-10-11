@@ -271,7 +271,7 @@ async function learnFontMapFromScreen({ platform, fromScreen, which = 0, alphabe
   if (looksLikeGraphic) {
     result.likelyPreRenderedGraphic = true;
     result.warning =
-      "⚠ These tiles look like a PRE-RENDERED GRAPHIC, not font-rendered text - " +
+      "WARNING: These tiles look like a PRE-RENDERED GRAPHIC, not font-rendered text - " +
       (repeatedCharReuse === false
         ? "a repeated character used a DIFFERENT tile each time (a real font reuses one tile per letter). "
         : "every tile is unique and the ids form a contiguous run (tiles X,X+1,X+2,... = one ripped bitmap). ") +
@@ -505,7 +505,7 @@ export function registerFontMapTools(server, z, sessionKey) {
     "from the live nametable at a tile (row,col). Solves the chicken-and-egg where you'd need the ROM offset to " +
     "learn the map. Live mode works on NES/SNES/Genesis/GB/GBC/SMS/GG/C64; NOT atari2600/7800 (race-the-beam) or " +
     "lynx/gba (bitmap fb) - use ROM mode there. `which` selects the nametable/plane/BG layer.\n" +
-    "⚠ GRAPHIC vs FONT (live mode): if on-screen 'text' is actually a PRE-RENDERED GRAPHIC (a name/logo drawn as a " +
+    "GRAPHIC vs FONT (live mode): if on-screen 'text' is actually a PRE-RENDERED GRAPHIC (a name/logo drawn as a " +
     "bitmap, not font-rendered - common for player names, title logos), 'learn' DETECTS it (repeated letters use " +
     "different tiles, or the tiles are a unique contiguous run) and returns `likelyPreRenderedGraphic:true` + a " +
     "`warning`. Then the text is NOT editable as a string - change the tile bitmaps, not ASCII. Heed it before " +

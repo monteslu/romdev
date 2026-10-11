@@ -128,7 +128,7 @@ export function registerLifecycleTools(server, z, sessionKey) {
       ...(bytes ? { bytes, virtualName } : { path }),
       // Only force a mediaKind when the caller picked one; otherwise let the host
       // derive it from the file extension (a C64 .d64 → "disk", .tap → "tape",
-      // .prg → "program") so status reports the kind honestly.
+      // .prg → "program") so status reports the kind correctly.
       ...(mediaKind ? { mediaKind } : {}),
       ...(coreOptions ? { coreOptions } : {}),
     });

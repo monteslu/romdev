@@ -7,7 +7,7 @@
 // in VDP regs $15-$17 (a word address; byte addr = source<<1), which for a
 // normal cart is the ROM offset the tiles were copied from.
 //
-// HONESTY: this is FRAME-SAMPLED. It steps frames (optionally driving input) and
+// NOTE: this is FRAME-SAMPLED. It steps frames (optionally driving input) and
 // reads the DMA source registers once per frame, logging each DISTINCT
 // mem→VRAM source it sees. It will MISS a second DMA that happens in the same
 // frame as another (only the last frame's register state is visible per step).

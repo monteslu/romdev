@@ -97,7 +97,7 @@ export function viewOutputArguments() {
   return [
     ...terminalArguments(),
     { flags: ["--html"], metavar: "PATH", help: "write a self-contained aligned evidence report" },
-    { flags: ["--emit-force-spec"], metavar: "PATH", help: "write an honest register-permutation oracle handoff" },
+    { flags: ["--emit-force-spec"], metavar: "PATH", help: "write a register-permutation oracle handoff" },
   ];
 }
 

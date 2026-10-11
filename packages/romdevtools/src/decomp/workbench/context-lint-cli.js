@@ -39,7 +39,7 @@ export function contextDuplicatesCommand(args, io, ctx) {
   }
   if (args.json) {
     io.print(dumps({ schema: "decomp-workbench-context-duplicates-v1", files: args.files, findings,
-      limitations: "single-line file-scope definitions only; this is an honest approximation, not a C parser" }));
+      limitations: "single-line file-scope definitions only; this is an approximation, not a C parser" }));
   } else {
     io.print(`context duplicates: ${findings.length} repeated definition(s) across ${args.files.length} file(s)`);
     for (const f of findings) io.print(`  ${f.symbol}: ${f.occurrences.map((o) => `${o.source}:${o.line}`).join(", ")}`);

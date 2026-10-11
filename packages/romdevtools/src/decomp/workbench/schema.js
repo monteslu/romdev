@@ -39,7 +39,7 @@ export const METRICS = Object.freeze([
   new Metric("geometry_edit_distance", "geometry_edit_distance", "normalized edit-script distance used in structural Pareto ranking"),
   new Metric("geometry_front", "geometry_front", "cohort-relative structural Pareto layer; zero is nondominated, None means this population did not use geometry ranking"),
   new Metric("geometry", "geometry", "structural evidence vector: absolute true extent delta, normalized edit distance, and opcode edit distance"),
-  new Metric("opcodes", "opcode_mismatches", "positional mnemonic differences; the honest signal that two objects have different instruction shapes and their aligned rows count different things", {summary: true,width: 4,kind: "integer"}),
+  new Metric("opcodes", "opcode_mismatches", "positional mnemonic differences; the real signal that two objects have different instruction shapes and their aligned rows count different things", {summary: true,width: 4,kind: "integer"}),
   new Metric("gaps", "aligned_gaps", "aligned rows the aligner filled on one side only; any gap makes aligned_total incomparable with another candidate's", {summary: true,width: 4,kind: "integer"}),
   new Metric("reloc_syms", "relocation_symbol_mismatches", "positional relocation differences where the two sides name a different symbol rather than the same symbol at a different addend; a semantic difference the link cannot resolve, and one that word masking hides from words=", {summary: true,width: 4,kind: "integer"}),
   new Metric("norm", "normalized_distance", "edit distance after masking addresses, immediates, and stack offsets; search guidance only", {summary: true,width: 4,kind: "integer"}),

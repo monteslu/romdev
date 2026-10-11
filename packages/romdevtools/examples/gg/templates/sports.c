@@ -31,7 +31,7 @@
  * below. The DEUCE DASH (SMS) court was 32 cols wide on fixed paddle X 16/232;
  * here the court is the 20-col window and the paddles sit at the window edges.
  *
- * 2P IS LEGIT HERE (vs the GG shmup's honest 1P note): a real Game Gear has
+ * 2P IS LEGIT HERE (vs the GG shmup's 1P note): a real Game Gear has
  * one controller port on the unit, but its I/O chip is the SMS's and gpgx
  * wires the SMS's full split-across-$DC/$DD second-controller layout for GG
  * too - so a SECOND PAD drives PORT B in the emulator (and on an SMS-pad
@@ -369,7 +369,7 @@ static void wait_split(void) {
  * snoops the bus. That's why the crt0 parks SP at $DFF0: the bytes above it
  * ($DFFC-$FFFF) belong to the mapper registers' shadow.
  *
- * HONESTY (verified 2026-06-10 against the bundled gpgx core, same finding as
+ * NOTE (verified 2026-06-10 against the bundled gpgx core, same finding as
  * the GG shmup/platformer): gpgx only instantiates the Sega mapper for ROMs
  * LARGER than 48KB, and this build pipeline emits 32KB ROMs - so in-emulator
  * the $8000 window stays open-bus (reads $FF), the magic check fails, and the

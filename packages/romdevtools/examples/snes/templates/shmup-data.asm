@@ -392,7 +392,7 @@ palsprite:
 ; ── Starfield tiles (four 8×8 4bpp tiles) ───────────────────────────────────
 ; shmup.c checkers tiles 0/1 across BG1 (two near-black space tones - no
 ; single colour ever dominates the frame, which keeps render-health checks
-; honest) and scatters tiles 2/3 (stars) with its LFSR. The whole field then
+; accurate) and scatters tiles 2/3 (stars) with its LFSR. The whole field then
 ; scrolls in hardware (BG1VOFS) while the BG0 text HUD stays put.
 ; 4bpp plane order: bytes 0-15 = rows 0-7 plane0/plane1 pairs, bytes 16-31 =
 ; rows 0-7 plane2/plane3 pairs. Colour bits: p0=1, p1=2, p2=4, p3=8.

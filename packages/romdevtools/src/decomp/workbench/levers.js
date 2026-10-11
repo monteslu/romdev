@@ -9,7 +9,7 @@
 //   pool-rotation / pool-population   the two pool lanes' sequences
 //   unreachable     the catalogued proofs, or an as1 -R readiness measurement
 //
-// The honesty rule is the whole design: a class is named from evidence or not
+// The evidence rule is the whole design: a class is named from evidence or not
 // at all. Where the deciding input is a trace nobody captured, the report
 // says which trace and leaves `edit_family` null.
 //

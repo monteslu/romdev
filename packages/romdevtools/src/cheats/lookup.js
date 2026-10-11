@@ -265,7 +265,7 @@ export async function lookupCheats({ platform, romName, fileName, bytes }) {
     ...(crc ? { crc32: crc } : {}),
     ...(fuzzyAlternatives.length > 1 ? { alternatives: fuzzyAlternatives } : {}),
     entries: idx.games[hit],
-    // CRITICAL honesty: a name/filename/fuzzy match is NOT a positive identification.
+    // CRITICAL: a name/filename/fuzzy match is NOT a positive identification.
     note:
       "PROBABLE MATCH by " + howMatched +
       " - NOT a verified (CRC) identification. The cheat labels are very likely " +

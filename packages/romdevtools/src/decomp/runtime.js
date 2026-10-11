@@ -266,7 +266,7 @@ export async function coverage(project, { sessionKey, frames = 600, inputs = [],
     basicBlocks: covBitmap || probe.singleStep.supported ? { available: true, total: blocksTotal, observed: blocksObserved, perFunction: blocks.sort((a, b) => b.blocks - a.blocks).slice(0, 40) } : { available: false, reason: "no instruction-level PC source on this core" },
     observed: observed.slice(0, 60), unobservedTop: unobserved.slice(0, 40), unreferencedTop: unreferenced.slice(0, 40),
     distinction: "unobserved = has a static caller (R_MIPS_26) and was never executed in this scenario; unreferenced = no static caller anywhere (jump-table/function-pointer target or dead code) - neither is proof of unreachability",
-    honesty: samples > 0 && exceptionSamples === samples ? "every sample was the exception vector: this scenario observed NO game function" : undefined,
+    warning: samples > 0 && exceptionSamples === samples ? "every sample was the exception vector: this scenario observed NO game function" : undefined,
     provenance: prov, ms: Date.now() - t0, file };
   await writeFile(file, JSON.stringify(report, null, 2));
   return report;

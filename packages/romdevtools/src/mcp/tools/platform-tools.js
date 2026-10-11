@@ -504,7 +504,7 @@ export function registerPlatformTools(server, z, sessionKey) {
       const p = resolvePlatform(host, platform);
       // Generic slot filter, applied by each platform branch before returning.
       // `slots` (explicit index list) wins over `maxSlots` (first N); the
-      // returned sprites keep their original .slot field so indices stay honest.
+      // returned sprites keep their original .slot field so indices stay stable.
       const slotSet = slots != null ? new Set(slots) : null;
       const clampSlots = (sprites) => {
         const slotsTotal = sprites.length;

@@ -33,14 +33,14 @@
  *
  * NO HARDWARE TILEMAP (read this - it is the platform's biggest "where's the
  *   court renderer?" surprise): the Lynx has NO background tilemap. Suzy is a
- *   SPRITE BLITTER, not a tile engine. So the court is drawn the honest way:
+ *   SPRITE BLITTER, not a tile engine. So the court is drawn the straightforward way:
  *   the full-redraw TGI loop repaints the whole arena every frame as a stack
  *   of tgi_bar fills + tgi_line markings - cheap on a 160x102 screen. The
  *   paddles are flat bars; the ball is a Suzy SCALABLE sprite on top.
  *
  * PLAYERS: 1. This is a handheld - head-to-head on real hardware is ComLynx,
  *   a cable between TWO physical Lynx units. A single emulator instance has
- *   nobody on the other end of the cable, so this example is honestly 1P vs a
+ *   nobody on the other end of the cable, so this example is 1P vs a
  *   CPU opponent (no fake "P2 VERSUS" that could never work here - contrast
  *   the NES sports donor, which has a real simultaneous-2P mode).
  *
@@ -305,7 +305,7 @@ static void end_match(void) {
   if (p1_won) {
     ++streak;
     if (streak > best_streak) {
-      /* ── In-session record ONLY - and here's the honest why. Real Lynx
+      /* ── In-session record ONLY - and here is why. Real Lynx
        * carts persist via a 93Cxx serial EEPROM on the cart PCB (cc65 even
        * ships lynx_eeprom_read/write for it; see vendor/cc65/libsrc/lynx/
        * eeprom.s). PROBED: the bundled handy core emulates CEEPROM internally
@@ -388,7 +388,7 @@ static void frame_title(uint8_t joy) {
   tgi_outtextxy(36, 66, "BEST ");
   numbuf[0] = (char)('0' + (best_streak > 9 ? 9 : best_streak)); numbuf[1] = 0;
   tgi_outtextxy(76, 66, numbuf);
-  tgi_outtextxy(20, 80, "1P VS CPU");        /* handheld honesty             */
+  tgi_outtextxy(20, 80, "1P VS CPU");        /* handheld: 1P only             */
 
   if (JOY_BTN_1(joy) && !JOY_BTN_1(prev_joy)) start_match();
 }

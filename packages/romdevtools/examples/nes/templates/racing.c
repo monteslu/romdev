@@ -27,7 +27,7 @@
  *     vertically, a fixed BG HUD would need a mid-frame Y-scroll change:
  *     unlike the X-only sprite-0 split in shmup.c, mid-frame Y needs the
  *     4-write $2006/$2005 sequence (the advanced variant - see
- *     TROUBLESHOOTING). Sprite HUD is the simple honest option, so that's
+ *     TROUBLESHOOTING). Sprite HUD is the simple option, so that's
  *     what this game uses. Budget rule: max 8 sprites per scanline.
  *   2P VERSUS - ONE PPU means ONE road scroll, so both players share one
  *     road at a fixed speed and only steer: solid center divider, P1 (blue,

@@ -352,7 +352,7 @@ async function main() {
   // _initialized) passes - i.e. we adopt the client's session instead of
   // forcing a reinitialize.
   //
-  // ⚠ SDK-COUPLING: the streamable-HTTP transport only binds its sessionId by
+  // SDK-COUPLING: the streamable-HTTP transport only binds its sessionId by
   // running a real `initialize` HTTP request through Hono - which needs
   // genuine Node req/res stream objects, not fabricable here. So we set the
   // two state fields on the inner web-standard transport directly. These are

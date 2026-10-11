@@ -30,7 +30,7 @@
  *
  * NO HARDWARE TILEMAP (read this - it is the platform's biggest "where's the
  *   board renderer?" surprise): the Lynx has NO background tilemap. Suzy is a
- *   SPRITE BLITTER, not a tile engine. So the well is drawn the honest way:
+ *   SPRITE BLITTER, not a tile engine. So the well is drawn the straightforward way:
  *   the full-redraw TGI loop repaints the 6x12 grid every frame as a stack of
  *   tgi_bar fills (one filled rect per occupied cell) - cheap because the well
  *   is only 48x96 px. The falling trio + the clear-pop gems are Suzy SCALABLE
@@ -38,7 +38,7 @@
  *
  * PLAYERS: 1. This is a handheld - head-to-head on real hardware is ComLynx,
  *   a cable between TWO physical Lynx units. A single emulator instance has
- *   nobody on the other end of the cable, so this example is honestly a
+ *   nobody on the other end of the cable, so this example is a
  *   single-player MARATHON (no fake "P2 VERSUS" that could never work here -
  *   contrast the NES puzzle donor, which has a real split-board 2P mode).
  *
@@ -279,7 +279,7 @@ static void apply_gravity(void) {
 static void game_over(void) {
   over_new_hi = 0;
   if (score > hiscore) {
-    /* ── In-session hi-score ONLY - and here's the honest why. Real Lynx
+    /* ── In-session hi-score ONLY - and here is why. Real Lynx
      * carts persist via a 93Cxx serial EEPROM on the cart PCB (cc65 even
      * ships lynx_eeprom_read/write for it; see vendor/cc65/libsrc/lynx/
      * eeprom.s). PROBED: the bundled handy core emulates CEEPROM internally
@@ -437,7 +437,7 @@ static void frame_title(uint8_t joy) {
   tgi_setcolor(COLOR_LIGHTGREY);
   tgi_outtextxy(8, 60, "HI ");
   tgi_outtextxy(32, 60, fmt5(hiscore));
-  tgi_outtextxy(4, 76, "1 PLAYER MARATHON");   /* handheld honesty            */
+  tgi_outtextxy(4, 76, "1 PLAYER MARATHON");   /* handheld: 1P only            */
 
   if (JOY_BTN_1(joy) && !JOY_BTN_1(prev_joy)) start_game();
 }
