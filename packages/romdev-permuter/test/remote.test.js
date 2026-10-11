@@ -1,8 +1,8 @@
-// permuter@home over loopback: the controller (pah-controller.mjs), a worker
-// server (pah.mjs run-server, with its evaluator process) and a -J client
+// permuter@home over loopback: the controller (romdev-permuter-remote-controller, bin/remote-controller.mjs), a worker
+// server (romdev-permuter-remote run-server, with its evaluator process) and a -J client
 // (permuter.mjs -J -j 0, so every candidate is evaluated remotely), all on
-// 127.0.0.1. Access is granted the upstream way: `pah.mjs setup` on the
-// worker's side, `pah.mjs vouch` by the root user, the sealed token pasted back.
+// 127.0.0.1. Access is granted the upstream way: `romdev-permuter-remote setup` on the
+// worker's side, `romdev-permuter-remote vouch` by the root user, the sealed token pasted back.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -74,21 +74,21 @@ test("permuter@home loopback: setup, vouch, run-server and a -J client that find
 
       // ping as root.
       // (spawned, not execFileSync: the controller runs on this event loop)
-      const ping = (await spawnNode([path.join(BIN, "pah.mjs"), "ping"], { cwd: rootDir }).done).stdout;
+      const ping = (await spawnNode([path.join(BIN, "remote.mjs"), "ping"], { cwd: rootDir }).done).stdout;
       assert.match(ping, /Connected successfully! Round-trip time: [\d.]+ ms\n0 servers online \(0 cores, 0 clients\)/);
 
       // The worker's owner asks for access; root vouches; the token goes back.
       let vouchCmd = null;
-      const setup = spawnNode([path.join(BIN, "pah.mjs"), "setup"], {
+      const setup = spawnNode([path.join(BIN, "remote.mjs"), "setup"], {
         cwd: workerDir,
         onOut: (text, child) => {
           if (/Nickname \[default: [^\]]*\]: $/.test(text) && !child.sentNick) { child.sentNick = true; child.stdin.write("worker\n"); }
-          const m = /pah\.mjs vouch (\S+)\n/.exec(text);
+          const m = /romdev-permuter-remote vouch (\S+)\n/.exec(text);
           if (m && !vouchCmd) vouchCmd = m[1];
         },
       });
       while (!vouchCmd) await new Promise((r) => setTimeout(r, 50));
-      const vouch = spawnNode([path.join(BIN, "pah.mjs"), "vouch", vouchCmd], {
+      const vouch = spawnNode([path.join(BIN, "remote.mjs"), "vouch", vouchCmd], {
         cwd: rootDir,
         onOut: (text, child) => { if (/Grant permuter server access to worker \(Y\/n\)\? $/.test(text) && !child.sent) { child.sent = true; child.stdin.write("y\n"); } },
       });
@@ -107,7 +107,7 @@ test("permuter@home loopback: setup, vouch, run-server and a -J client that find
 
       // The worker server (its evaluator runs the WASM IDO toolchain).
       let serverUp = false;
-      worker = spawnNode([path.join(BIN, "pah.mjs"), "run-server", "--cores", "2", "--memory", "2"], {
+      worker = spawnNode([path.join(BIN, "remote.mjs"), "run-server", "--cores", "2", "--memory", "2"], {
         cwd: workerDir, onOut: (text) => { if (/Started\./.test(text)) serverUp = true; },
       });
       for (let k = 0; k < 600 && !(serverUp && logs.some((l) => /\[worker\] start server \(0\.1, 2\)/.test(l))); k++) await new Promise((r) => setTimeout(r, 50));
@@ -153,7 +153,7 @@ test("permuter@home loopback: setup, vouch, run-server and a -J client that find
       mkdirSync(strangerDir);
       writeFileSync(path.join(strangerDir, "pah.conf"),
         `secret_key = "${"ab".repeat(32)}"\nserver_public_key = "${hex("server_public_key")}"\nserver_address = "127.0.0.1:${controller.port}"\n`);
-      const denied = await spawnNode([path.join(BIN, "pah.mjs"), "ping"], { cwd: strangerDir }).done;
+      const denied = await spawnNode([path.join(BIN, "remote.mjs"), "ping"], { cwd: strangerDir }).done;
       assert.equal(denied.code, 1);
       assert.equal(denied.stdout, "Error: Access denied!\n");
 

@@ -405,7 +405,7 @@ function connectTcp(host, port) {
 async function _do_connect(config) {
   await nacl();
   if (!config.server_verify_key || !config.signing_key || !config.server_address) {
-    throw new EOFError("Using permuter@home requires someone to give you access to a central -J server.\nRun `pah.mjs setup` to set this up.");
+    throw new EOFError("Using permuter@home requires someone to give you access to a central -J server.\nRun `romdev-permuter-remote setup` to set this up.");
   }
   const [host, port_str] = config.server_address.split(":");
   const sock = await connectTcp(host, Number(port_str));

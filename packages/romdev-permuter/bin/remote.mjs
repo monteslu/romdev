@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // permuter@home CLI, a port of decomp-permuter's pah.py (src/net/cmd/):
-//   pah.mjs [--debug] ping | setup | vouch MAGIC | run-server --cores N --memory GB [--systray] [--min-priority P]
+//   romdev-permuter-remote [--debug] ping | setup | vouch MAGIC | run-server --cores N --memory GB [--systray] [--min-priority P]
 // To use p@h as a client, pass -J to romdev-permuter; this is only needed for
 // configuration or to run a worker server.
 import { createInterface } from "node:readline/promises";
@@ -10,7 +10,7 @@ import { Server, SystrayState, AsyncQueue, server_main_loop } from "../src/net/s
 import { ServerError } from "../src/error.js";
 import { plural } from "../src/helpers.js";
 
-const usage = `usage: pah.mjs [-h] [--debug] <command> ...
+const usage = `usage: romdev-permuter-remote [-h] [--debug] <command> ...
 
 permuter@home - run the permuter across the Internet!
 
@@ -83,7 +83,7 @@ async function run_setup() {
   const signed_nickname = sign_with_magic("NAME", signing_key, Buffer.from(nickname, "utf8"));
   const vouch_text = Buffer.concat([Buffer.from(signing_key.verify_key.encode()), signed_nickname]).toString("base64");
   out("Ask someone to run the following command:");
-  out(`pah.mjs vouch ${vouch_text}`);
+  out(`romdev-permuter-remote vouch ${vouch_text}`);
   out();
   out("They should give you a token back in return. Paste that here:");
   const inp = (await input("")).trim();
@@ -153,7 +153,7 @@ async function run_server(args) {
   const opts = { num_cores: null, max_memory_gb: null, systray: false, min_priority: 0.1 };
   const num = (v, flag) => {
     const x = Number(v);
-    if (v == null || !Number.isFinite(x)) { process.stderr.write(`pah.mjs run-server: error: argument ${flag}: invalid float value: '${v}'\n`); process.exit(2); }
+    if (v == null || !Number.isFinite(x)) { process.stderr.write(`romdev-permuter-remote run-server: error: argument ${flag}: invalid float value: '${v}'\n`); process.exit(2); }
     return x;
   };
   for (let i = 0; i < args.length; i++) {
@@ -162,10 +162,10 @@ async function run_server(args) {
     else if (a === "--memory") opts.max_memory_gb = num(args[++i], "--memory");
     else if (a === "--systray") opts.systray = true;
     else if (a === "--min-priority") opts.min_priority = num(args[++i], "--min-priority");
-    else { process.stderr.write(`pah.mjs run-server: error: unrecognized arguments: ${a}\n`); process.exit(2); }
+    else { process.stderr.write(`romdev-permuter-remote run-server: error: unrecognized arguments: ${a}\n`); process.exit(2); }
   }
   const missing = [["--cores", opts.num_cores], ["--memory", opts.max_memory_gb]].filter(([, v]) => v == null).map(([k]) => k);
-  if (missing.length) { process.stderr.write(`pah.mjs run-server: error: the following arguments are required: ${missing.join(", ")}\n`); process.exit(2); }
+  if (missing.length) { process.stderr.write(`romdev-permuter-remote run-server: error: the following arguments are required: ${missing.join(", ")}\n`); process.exit(2); }
 
   const io_queue = new AsyncQueue();
   const config = await read_config();
@@ -207,11 +207,11 @@ async function main() {
     if (cmd === "ping") await run_ping();
     else if (cmd === "setup") await run_setup();
     else if (cmd === "vouch") {
-      if (rest.length !== 1) { process.stderr.write("pah.mjs vouch: error: the following arguments are required: magic\n"); process.exit(2); }
+      if (rest.length !== 1) { process.stderr.write("romdev-permuter-remote vouch: error: the following arguments are required: magic\n"); process.exit(2); }
       await run_vouch(rest[0]);
     } else if (cmd === "run-server") await run_server(rest);
     else if (cmd === undefined || cmd === "-h" || cmd === "--help") out(usage);
-    else { process.stderr.write(`${usage}\npah.mjs: error: argument <command>: invalid choice: '${cmd}'\n`); process.exit(2); }
+    else { process.stderr.write(`${usage}\nromdev-permuter-remote: error: argument <command>: invalid choice: '${cmd}'\n`); process.exit(2); }
   } catch (e) {
     if (e instanceof EOFError) { out(`Network error: ${e.message}`); process.exit(1); }
     if (e instanceof ServerError) { out(`Error: ${e.message}`); process.exit(1); }

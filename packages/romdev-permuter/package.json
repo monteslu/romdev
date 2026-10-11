@@ -11,8 +11,8 @@
   "bin": {
     "romdev-permuter": "bin/permuter.mjs",
     "romdev-permuter-import": "bin/import.mjs",
-    "romdev-pah": "bin/pah.mjs",
-    "romdev-pah-controller": "bin/pah-controller.mjs"
+    "romdev-permuter-remote": "bin/remote.mjs",
+    "romdev-permuter-remote-controller": "bin/remote-controller.mjs"
   },
   "files": [
     "src",

@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // The permuter@home control server (upstream's Rust `pahserver`):
-//   pah-controller.mjs run --listen-on IP:PORT --config config.toml --db db.json [--debug]
-//   pah-controller.mjs setup --db db.json
+//   romdev-permuter-remote-controller run --listen-on IP:PORT --config config.toml --db db.json [--debug]
+//   romdev-permuter-remote-controller setup --db db.json
 import { run_controller, run_setup } from "../src/net/controller.js";
 import { enable_debug_mode } from "../src/net/core.js";
 
-const usage = `Usage: pah-controller.mjs <command> [<args>]
+const usage = `Usage: romdev-permuter-remote-controller <command> [<args>]
 
 The permuter@home control server.
 

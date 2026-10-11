@@ -1,4 +1,4 @@
-// systray.js - `pah.mjs run-server --systray`, a port of RealSystrayState from
+// systray.js - `romdev-permuter-remote run-server --systray`, a port of RealSystrayState from
 // decomp-permuter's src/net/cmd/run_server.py. The tray itself is upstream's
 // external helper (src/net/cmd/systray/tray.go, built with Go), driven over
 // newline-delimited JSON on its stdin/stdout. romdev does not ship that binary:
