@@ -54,10 +54,6 @@ the `romdev-mcp` bin is kept as an alias.)
   named. On bsnes the Super Game Boy needs `sgb_boot.bin` / `sgb2_boot.bin`,
   and a Cx4 cart uses bsnes's high-level emulation unless `cx4.data.rom` is
   there.
-- **SNES boot timing.** The SPC700 boot ROM is romdev's own (see Licensing).
-  Its upload loop takes about 33 SPC700 cycles a byte, so a game's boot-time
-  sound upload finishes slightly later than before and the frames after it
-  shift. Recorded frame numbers for SNES games may need updating.
 - **GL carts get a private GL context.** Every GL wasmcart session has its own
   context, which fixes server crashes with parallel GL sessions. Set
   `ROMDEV_SHARED_GL=1` to restore the shared context.
@@ -279,7 +275,10 @@ the `romdev-mcp` bin is kept as an alias.)
 
 - The SNES SPC700 boot ROM is replaced by romdev's own clean-room
   reimplementation (MIT, `scripts/spc700-ipl/`), in snes9x, bsnes and
-  recompiled carts. The chip data ROMs and boot ROMs upstream snes9x and bsnes
+  recompiled carts. It samples and answers the ports on the same SPC700 cycles
+  as the console's (matched by measuring the ports from outside), so games
+  upload their sound on the same schedule and recorded frames are unchanged.
+  The chip data ROMs and boot ROMs upstream snes9x and bsnes
   embed (DSP-1, DSP-3, ST010, Cx4, Super Game Boy) are removed at build time
   and become user-supplied, like the ST011 and ST018 program ROMs.
 - `romdev-platform-gba` ships the libgba and libtonc licence files.

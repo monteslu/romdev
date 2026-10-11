@@ -562,8 +562,10 @@ SNES boot ROM and chip data - romdev's own, or the user's
   Nintendo's. romdev uses its own instead: a clean-room reimplementation
   written from the public description of the protocol and of the state it
   hands over (romdevtools scripts/spc700-ipl/ipl.asm, MIT), assembled with
-  asar. The snes9x core, the bsnes core and every recompiled SNES cart run
-  it; the builds replace the upstream array (scripts/spc700-ipl/install-ipl.mjs).
+  asar. Its port timing was matched by measuring the ports from outside
+  only, so a program uploads on the same SPC700 cycles as on the console.
+  The snes9x core, the bsnes core and every recompiled SNES cart run it; the
+  builds replace the upstream array (scripts/spc700-ipl/install-ipl.mjs).
 
   romdev ships no chip firmware, chip data ROM or boot ROM. snes9x embeds the
   DSP-1 data ROM (and a sine table taken from it), the DSP-3 data ROM and the
