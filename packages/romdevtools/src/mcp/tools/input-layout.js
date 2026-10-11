@@ -132,7 +132,7 @@ const HARDWARE_LAYOUTS = {
     strobe: "None - read the memory-mapped Mikey registers directly.",
     readSequence: "JOYSTICK ($FCB0): bit7 Up, bit6 Down, bit5 Left, bit4 Right, bit3 Opt1, bit2 Opt2, bit1 B (inner), bit0 A (outer). ACTIVE-HIGH (1 = pressed) - unlike most retro pads. SWITCHES ($FCB1) bit0 = Pause.",
     bitOrder: ["A", "B", "Opt2", "Opt1", "Right", "Left", "Down", "Up"],
-    note: "Two gotchas: (1) buttons are ACTIVE-HIGH on the Lynx (1=pressed), opposite the active-low convention almost everywhere else. (2) The D-pad's physical Up/Down/Left/Right is RELATIVE TO SCREEN ROTATION - Mikey flips the direction bits when the screen is set to the flipped/left-handed orientation, so 'Up' in code may be physical-down on a rotated game. cc65's lynx target + the bundled lynx lib expose these via joy_read-style helpers. libretro maps A→'a', B→'b', Opt1/Opt2→'start'/'select', Pause→'select' (verify with holdInputs + readMemory $FCB0).",
+    note: "Two gotchas: (1) buttons are ACTIVE-HIGH on the Lynx (1=pressed), opposite the active-low convention almost everywhere else. (2) The D-pad's physical Up/Down/Left/Right is RELATIVE TO SCREEN ROTATION - Mikey flips the direction bits when the screen is set to the flipped/left-handed orientation, so 'Up' in code may be physical-down on a rotated game. cc65's lynx target + the bundled lynx lib expose these via joy_read-style helpers. libretro maps A→'a', B→'b', Opt1/Opt2→'start'/'select', Pause→'select' (verify with holdInputs + memory({op:'read'}) at $FCB0).",
     faceButtons: FACE_BUTTON_MAP.lynx,
   },
   pce: {

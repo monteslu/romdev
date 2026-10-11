@@ -244,7 +244,7 @@ export function registerPlatformTools(server, z, sessionKey) {
           platform: p,
           colors,
           subPalettes,
-          note: "Genesis CRAM = 4 sub-palettes × 16 colors. Flat index → sub-palette: 0-15=PAL0, 16-31=PAL1, 32-47=PAL2, 48-63=PAL3. Pass the sub-palette NUMBER (0-3) as inspectPatternTiles({paletteIndex}).",
+          note: "Genesis CRAM = 4 sub-palettes × 16 colors. Flat index → sub-palette: 0-15=PAL0, 16-31=PAL1, 32-47=PAL2, 48-63=PAL3. Pass the sub-palette NUMBER (0-3) as tiles({op:'png', paletteIndex}).",
         }, png);
       }
 

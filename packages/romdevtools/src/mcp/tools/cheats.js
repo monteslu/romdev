@@ -242,7 +242,7 @@ export async function cheatsApplyCore({ code, desc, path: romPath, index, enable
           (reencodedFrom
           ? `Raw code ${reencodedFrom} names a ROM address - re-encoded to the native ROM-patch device (${codeToApply}) so the core installs a read-intercept (a raw ADDR:VAL on a ROM address is treated as a RAM poke and would silently no-op). `
           : unencodable
-          ? `WARNING: this raw code names a ROM address but couldn't be re-encoded to a ROM-patch code (a ROM patch needs a COMPARE byte - pass ADDR:VAL:COMPARE). As applied it's a RAM poke and will likely NO-OP on this read-only ROM address. Read the current byte and supply it as the compare, or use makeCheat. `
+          ? `WARNING: this raw code names a ROM address but couldn't be re-encoded to a ROM-patch code (a ROM patch needs a COMPARE byte - pass ADDR:VAL:COMPARE). As applied it's a RAM poke and will likely NO-OP on this read-only ROM address. Read the current byte and supply it as the compare, or use cheats({op:'make'}). `
           : "") +
           "Applied in volatile core state - the ROM file is untouched; reset / state({op:'load'}) / cheats({op:'clear'}) removes it. " +
           "Screenshot to see the effect (and to verify the cheat's address label is correct). " +

@@ -272,7 +272,7 @@ export async function buildAdapter(host, platform) {
     case "gb": case "gbc": return gbAdapter(host, platform);
     case "sms": case "gg": return smsAdapter(host, platform);
     case "c64":
-      throw new Error("sprites({op:'capture'}) [c64]: the C64 has 8 hardware MOBs (24×21px bitmaps, not 8x8 tiles) - they don't fit the tile-based meta-sprite model. Use inspectSprites + the sprite data pointers, and author MOB bitmaps directly.");
+      throw new Error("sprites({op:'capture'}) [c64]: the C64 has 8 hardware MOBs (24×21px bitmaps, not 8x8 tiles) - they don't fit the tile-based meta-sprite model. Use sprites({op:'inspect'}) + the sprite data pointers, and author MOB bitmaps directly.");
     default:
       throw new Error(`sprites({op:'capture'}): no meta-sprite adapter for platform '${platform}'. Supported: genesis, snes, nes, gb, gbc, sms, gg.`);
   }
