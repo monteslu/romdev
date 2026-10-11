@@ -827,7 +827,7 @@ test("an interrupt's entry cycles are one AddCycles: a line end they cross happe
 /** snes9x frames the SPC700 count is compared over, and what it read. */
 const WORD_ACCESS_FRAMES = 600;
 const WORD_ACCESS_ROM_SHA1 = "5e890018ffe831cefbd4f128577f6c85087e5572";
-const WORD_ACCESS_ARAM_SHA1 = "bee731bed4f3429daf0331901387b94340d96088";
+const WORD_ACCESS_ARAM_SHA1 = "977e7b29158dddfe8f57fb2b9715bed0ab62d91f";
 
 /**
  * A cart whose SPC700 counts in ARAM $10/$11 (incw $10, 6 SPC clocks each)
@@ -1068,8 +1068,8 @@ test("a per-title APU speedup (snes9x Timings.APUSpeedup) runs the SPC slower an
   assert.equal(createHash("sha1").update(new Uint8Array(Int16Array.from(samples).buffer)).digest("hex"), SPEEDUP_SHA1);
 });
 // snes9x, reference frames 1-20 (counts) and 1-60 (sample sha1)
-const SPEEDUP_COUNTS = [532, 534, 533, 533, 533, 533, 534, 532, 534, 533, 533, 533, 534, 532, 534, 533, 532, 534, 533, 533];
-const SPEEDUP_SHA1 = "1597b843fd24fc03c4f6a014fcf303cbb58c4fcc";
+const SPEEDUP_COUNTS = [532, 534, 533, 533, 533, 533, 534, 532, 534, 533, 533, 533, 534, 532, 533, 534, 532, 534, 533, 533];
+const SPEEDUP_SHA1 = "41761a6aff9b1c5ca63f14584406973393d3e33a";
 
 /** A synthetic cart under a given header name (and SRAM size byte). */
 function titled(rom, name, sram) {
@@ -1416,5 +1416,5 @@ test("PAL carts (region byte): 312 lines, the PAL APU clock ratio, as snes9x run
     if (f >= 5) counts.push((w - last + 4096) % 4096);
     last = w;
   }
-  assert.deepEqual(counts, [640, 641, 641, 640, 641, 641, 641, 640, 641, 641, 640, 641, 641, 641, 640, 641, 641, 640, 641, 641]);
+  assert.deepEqual(counts, [640, 641, 641, 640, 641, 641, 641, 640, 641, 641, 640, 641, 641, 640, 641, 641, 641, 640, 641, 641]);
 });

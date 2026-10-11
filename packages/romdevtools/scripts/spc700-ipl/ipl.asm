@@ -61,13 +61,12 @@ block:                 ; port 0 holds a kick value; ports 1-3 are stable
 wait:
   cmp x, $F4
   beq wait             ; port 0 unchanged since the last echo
+  mov x, $F4           ; the new value is the last echo from here on
   cmp y, $F4
   bne block            ; changed, but not the next index: a new block
   mov a, $F5           ; the byte
+  mov $F4, y           ; echo the index
   mov ($00)+y, a
-  mov a, y
-  mov x, a
-  mov $F4, a           ; echo the index
   inc y
   bne wait
   inc $01              ; Y wrapped: next 256 bytes
