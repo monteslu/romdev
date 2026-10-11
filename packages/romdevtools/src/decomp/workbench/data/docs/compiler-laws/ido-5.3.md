@@ -23,7 +23,7 @@ instructions and 922 basic blocks, and one of 2057 instructions with 222 calls -
 so "always" below means "in every case observed in those procedures", never
 "provably, in all programs".
 
-Laws L49–L60 come from the GE007 `mp_watch_menu_display` campaign (2026-08,
+Laws L49–L60 come from an IDO 5.3 `mp_watch_menu_display` campaign (2026-08,
 ~2900 builds across ~37 delegated stages, scratch score 6859 → instruction-exact
 at 2057/2057 words). Like the L26–L40 block below, each carries a
 **Provenance** line naming the stage, because those stages ran in parallel and
@@ -65,7 +65,7 @@ registers a group landed on, and the object hash that closed it. Nothing on
 this page is a copy of any part of a binary -- no instruction text, no
 disassembly, no extracted data -- and the objects behind these receipts are
 not redistributable and are not in this repository. That is the exemption
-[CONTRIBUTING](../../CONTRIBUTING.md) records for symbol-level citations, and
+[CONTRIBUTING](https://github.com/akratch/n64-decomp-workbench/blob/main/CONTRIBUTING.md) records for symbol-level citations, and
 it is why these laws need no separate redistribution basis. Reproducing one
 means rebuilding it from the project that owns the binary.
 
@@ -211,7 +211,7 @@ construct rather than the pool re-anchoring. Both had survived ~120 respelling
 attempts across four stages, which is what a value-numbered pool looks like from
 the outside.
 
-**Provenance:** ge007 `mp_watch_menu_display` (2026-08), stages `symdump`
+**Provenance:** `mp_watch_menu_display` (2026-08), stages `symdump`
 (`L-sd-1`/`L-sd-2`), `cfetemps`, `birthorder` (`L-bo-1`).
 
 ### L50. A call-valued argument temps only in a non-final position
@@ -231,7 +231,7 @@ retires the retype route: giving the callee an `int` return type still does not
 pool a call-result temp with the general expression temp -- the two never share a
 symbol, whatever the type.
 
-**Provenance:** ge007 `mp_watch_menu_display` (2026-08), stages `cfetemps`
+**Provenance:** `mp_watch_menu_display` (2026-08), stages `cfetemps`
 (`L-pk-3` falsified), `finalframe` (`L-cf-4` re-tested).
 
 ### L51. cfe's own `&&`-as-a-value expansion is a spelling you can write
@@ -254,7 +254,7 @@ temp pool could not be emptied. The predicate was never the expensive thing; the
 **Scope.** The value form. This says nothing about `&&` in a controlling
 expression, where no value is materialised in the first place.
 
-**Provenance:** ge007 `mp_watch_menu_display` (2026-08), stage `birthorder`
+**Provenance:** `mp_watch_menu_display` (2026-08), stage `birthorder`
 (`L-bo-2`).
 
 ### L52. `uadd` operand order follows node complexity, and a cast is a node
@@ -273,7 +273,7 @@ target's operand order and closed the function to zero words.
 commutative-operand residue ([L2](#l2-claim-order-is-source-condition-order-test-order-is-canonicalized)
 and the guide's lever 2 are the rest of that family), not as a swept law.
 
-**Provenance:** ge007 `mp_watch_menu_display` (2026-08), stage `birthorder`
+**Provenance:** `mp_watch_menu_display` (2026-08), stage `birthorder`
 (`L-bo-4`).
 
 ### L53. The frame is a byte map, and every declared local has a home in it
@@ -303,7 +303,7 @@ single-word spill area. Both are allocator outputs, and neither is addressable
 from source. "There are spare bytes in the frame" and "there are spendable bytes
 in the frame" are different claims.
 
-**Provenance:** ge007 `mp_watch_menu_display` (2026-08), stages `symdump`,
+**Provenance:** `mp_watch_menu_display` (2026-08), stages `symdump`,
 `finalframe` (`L-ff-1`/`L-ff-2`), `birthorder`.
 
 ### L54. An array's unaddressed interior is spendable frame
@@ -328,7 +328,7 @@ ceiling at this frame size", then "30" -- and the general form both rested on,
 that a local supply is what the declaration list already says it is. The supply
 was inside a declared array the whole time.
 
-**Provenance:** ge007 `mp_watch_menu_display` (2026-08), stages `finalframe`
+**Provenance:** `mp_watch_menu_display` (2026-08), stages `finalframe`
 (`L-ff-3`, `L-ff-4`), `birthorder` (`L-bo-3`, which spent the last 4 bytes a
 dead temp pool released -- those go to the **locals** block, never to temps).
 
@@ -828,7 +828,7 @@ the certificate "the measured cost model forbids the target's allocation" was
 measuring the wrong stage entirely: crossings price a candidate, charges decide
 whether there is a candidate.
 
-**Provenance:** ge007 `mp_watch_menu_display` (2026-08), stage `colourterm`
+**Provenance:** `mp_watch_menu_display` (2026-08), stage `colourterm`
 (`L-ct-1`…`L-ct-5`); generalises the ovl8 `chargeB` law
 ([L36](#l36-chargeb-exactly-a-store-placement-term)) by giving it its gate.
 
@@ -925,7 +925,7 @@ two values share a colour in the target; it does not say the candidate has kept
 them apart, and here uopt had already merged them.
 
 **Scope.** The tie itself is directly decidable with a forced-colour probe
-([the p1 decision arithmetic](../p1-decision-arithmetic.md)), and this law is
+([the p1 decision arithmetic](https://github.com/akratch/n64-decomp-workbench/blob/main/docs/p1-decision-arithmetic.md)), and this law is
 what is left when that instrument is unavailable: the CDX profile was absent
 from the campaign's instrumented uopt for the whole of this cohort, which is
 why the class is T3 and not T1.
@@ -1041,7 +1041,7 @@ lane, `overlay4UpdateObjectMotion`.
 
 ## p1 (the global-colour allocator)
 
-Laws L26–L40 come from the GE007 `object_interaction` campaign (2026-08-08/09,
+Laws L26–L40 come from an IDO 5.3 `object_interaction` campaign (2026-08-08/09,
 15 stages, 54 → 0 differing words), which spent most of its second half inside
 `f_compute_save` and `f_split` -- the same pass L6–L9 already described, read
 here at the level of individual `uopt.c` line numbers rather than build
@@ -1415,8 +1415,8 @@ least 2 rows (one for the definition, one for the use) -- there is no route
 to a zero-cost plant at such a site, because the register a plant would need
 to reuse is never actually a colour. A zero-cost route at such a site is
 therefore always evidence of a **missing temp in the decompiled C**, not a
-free lever -- see the campaign postmortem's
-["split machine temp" and "missing local" error classes](https://github.com/akratch/n64-decomp-workbench/blob/main/docs/postmortem-2026-08-09-ge007.md).
+free lever. It belongs to the "split machine temp" and "missing local" error
+classes.
 
 **Receipt -- T1**, consistent with L13's and L27's independent measurements
 of the same ring.
@@ -1495,7 +1495,7 @@ never re-offered the original decision. It also retires the reading of "60" as a
 constant, which is what made the toll look like an unmovable law of the
 allocator rather than a property of procedure size.
 
-**Provenance:** ge007 `mp_watch_menu_display` (2026-08), stage `tolllaw`
+**Provenance:** `mp_watch_menu_display` (2026-08), stage `tolllaw`
 (`L-tl-1`…`L-tl-3`).
 
 ### L57. The copy-relation channel: `available0` is an argmin, not a complement
@@ -1521,7 +1521,7 @@ argument register gets `available0` narrowed to that register, bypassing the
 forbids" -- which was an inference from one record pair and sent a stage hunting
 for a bypass that does not exist. The narrowing is real; the bypass is not.
 
-**Provenance:** ge007 `mp_watch_menu_display` (2026-08), stages `moveabsorb`
+**Provenance:** `mp_watch_menu_display` (2026-08), stages `moveabsorb`
 (`L-ma`, the falsified form) and `channel3` (the decoded form).
 
 ### L58. `forbidden0` is seeded from hard-register conflicts -- argument pins steer colours
@@ -1554,7 +1554,7 @@ both -- which is how one lever's fix created a second, register-swapped family
 until the roles were split onto two symbols
 ([L54](#l54-an-arrays-unaddressed-interior-is-spendable-frame)).
 
-**Provenance:** ge007 `mp_watch_menu_display` (2026-08), stages `unrollcrack`
+**Provenance:** `mp_watch_menu_display` (2026-08), stages `unrollcrack`
 (`L-uc-3`, the seeding), `wordsaudit` (`L-wa-1`, the lever).
 
 ### L66. A web feeding a call argument inherits that argument's register at cost 0
@@ -1617,7 +1617,7 @@ sixth.
 > colour-reachable, because the target's load definition sits in a different
 > web *partition*, which no visit order produces. Whether a given residual's
 > colours are legal at all is answered by a force experiment
-> ([the reachability field](../json-contracts.md#the-lever-block)), not by
+> ([the reachability field](https://github.com/akratch/n64-decomp-workbench/blob/main/docs/json-contracts.md#the-lever-block)), not by
 > this law.
 
 **Receipt -- T1**, live records from the instrumented uopt CDX colouring
@@ -1726,7 +1726,7 @@ statements into two to move an instruction earlier detonated the allocator
 line layout has **no** purchase -- a 13-word residue elsewhere in the same
 function did not move under any of a dozen line layouts.
 
-**Provenance:** ge007 `mp_watch_menu_display` (2026-08), stage `schedtie`
+**Provenance:** `mp_watch_menu_display` (2026-08), stage `schedtie`
 (`L-st-1`…`L-st-3`), re-confirmed inert on two later bases by stages
 `wordsaudit` (`L-wa-2`) and `finalframe`.
 
@@ -2142,10 +2142,10 @@ operation costs 3; a three-deep expression chain costs 5.
 **Receipt -- T2**, verified by construction against built objects; the same
 closed form was reverse-engineered independently by two operators in
 different campaigns, because ugen's temp allocator emits no trace
-([roadmap](../roadmap.md) carries the instrument that would make this
+([roadmap](https://github.com/akratch/n64-decomp-workbench/blob/main/docs/roadmap.md) carries the instrument that would make this
 directly observable, and future revisions T1).
 
-**Provenance:** proxy stage `SGQkv`, GE007 frontier campaign, 2026-08-13.
+**Provenance:** proxy stage `SGQkv`, an IDO 5.3 campaign, 2026-08-13.
 
 ### L64. The integer temp ring is seeded `t6 t7 t8 t9 t0 .. t5`
 
@@ -2324,7 +2324,7 @@ split separates the two mechanisms in one build.
 
 ## Measurement laws
 
-### L18. Positional words are the honest metric
+### L18. Positional words are the true metric
 
 Rank candidates on **positional word differences after masking
 linker-controlled fields**. Row-based census metrics inflate in repetitive
@@ -2405,7 +2405,7 @@ information, not which untried site will turn out to be one.
 A band-vector score expressed relative to the ring's own rotation group (a
 "free" count reported after quotienting out a global ring-coset shift) can
 look like a large improvement while the actual positional-word score -- the
-one that matters, per [L18](#l18-positional-words-are-the-honest-metric) --
+one that matters, per [L18](#l18-positional-words-are-the-true-metric) --
 is far worse, because the whole object carries a hidden global coset shift
 the ring-relative number cancels out. One recorded case reported as "worth
 10" (an apparent close approach) was, measured positionally, **1045** words
@@ -2509,10 +2509,10 @@ oracle on the same base returned 65.
 **Falsifies.** The habit that produces impossibility certificates at all:
 reasoning to a floor from a model, in a campaign whose whole activity is
 discovering that the model is incomplete. Every stage that wrote one had
-measured honestly; what none of them could measure was the term they did not
+measured correctly; what none of them could measure was the term they did not
 know about.
 
-**Provenance:** ge007 `mp_watch_menu_display` (2026-08), whole campaign --
+**Provenance:** `mp_watch_menu_display` (2026-08), whole campaign --
 ~2900 builds, ~37 delegated stages, nine falsified certificates, seven decoded
 allocator/scheduler channels, from a scratch score of 6859 to
 instruction-exact.
