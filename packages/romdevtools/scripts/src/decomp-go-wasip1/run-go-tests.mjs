@@ -3,7 +3,8 @@
 // `romdev` exec imports), each in its package directory like `go test`.
 // usage: node run-go-tests.mjs <tests dir> <module root> <tmp dir>
 // Some tests read the project's extracted disc (disks/us): point <module root>
-// at tools/sotn-assets inside a checkout of the pinned commit that has one.
+// at the asset tool's module (tools/<name>-assets) inside a checkout of the
+// pinned commit that has one.
 // A test binary named a_b.test.wasm is package ./a/b (main.test.wasm = .).
 import fs from "node:fs";
 import path from "node:path";

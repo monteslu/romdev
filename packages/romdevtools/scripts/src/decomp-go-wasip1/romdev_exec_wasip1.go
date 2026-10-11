@@ -1,12 +1,11 @@
 //go:build wasip1
 
-// Added to sotn-assets' package sotn by build-decomp-go-tools.sh (go build
-// -overlay). WASI has no processes: the one child the asset commands start,
+// Added to the asset tool's game package (psxgame) by gen-source.mjs. WASI has no processes: the one child the asset commands start,
 // the C preprocessor that reads an enum out of a header, is handed to the
 // host instead. romdev's wasi-run.js implements the `romdev` imports by
 // running the argv through its own recipe dispatch (cpp -> WASM cc1 -E) and
 // returning the exit status and stdout.
-package sotn
+package psxgame
 
 import (
 	"encoding/binary"

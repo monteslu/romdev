@@ -9,7 +9,7 @@
 #               compressors that call Python's zlib; Node's zlib is Chromium's
 #               fork and writes different streams
 #   psx-str     a PS1 decomp project's string encoder (the project's
-#               tools/sotn_str crate, pinned by commit: toolchains.psx_decomp_tools);
+#               tools/<name>_str crate, pinned by commit: toolchains.psx_decomp_tools);
 #               its own unit tests are built to WASM too and must pass
 #
 # Arguments name a subset to build (e.g. `build-decomp-rust-tools.sh psx-str`);
@@ -100,29 +100,32 @@ want slinky-cli && build_crate slinky_cli   slinky-cli createSlinky
 want pigment64 && build_crate pigment64    pigment64  createPigment64
 want crunch64 && build_crate crunch64_cli crunch64   createCrunch64 cli
 
-# psx-str: a crate inside the project tree (no workspace at the root; the
-# crate and binary keep the project's name, sotn_str), built with its own
-# Cargo.lock. Its #[test]s run as WASM under node before shipping.
+# psx-str: a crate inside the project tree (no workspace at the root), built
+# with its own Cargo.lock from a copy that src/psx-str/gen-source.mjs renames
+# to psx_str and rewrites so the project's name is not in the binary. Its
+# #[test]s run as WASM under node before shipping.
 build_psx_str() {
-  local dir="$ROOT/psx_decomp_tools" crate args=() a t
+  local dir="$ROOT/psx_decomp_tools" crate="$ROOT/psx_str" args=() a t
   fetch_pinned "toolchains.psx_decomp_tools" "$dir"
-  crate="$dir/tools/sotn_str"
+  node "$SCRIPT_DIR/src/psx-str/gen-source.mjs" "$dir" "$crate"
   for a in $LINK "-sEXPORT_NAME=createPsxStr"; do args+=(-C "link-arg=$a"); done
   ( cd "$crate" && CARGO_TARGET_DIR="$ROOT/target" cargo rustc --release --locked \
-      --target wasm32-unknown-emscripten --bin sotn_str -- "${args[@]}" )
+      --target wasm32-unknown-emscripten --bin psx_str -- "${args[@]}" )
   local out="$ROOT/target/wasm32-unknown-emscripten/release"
-  cp "$out/sotn_str.js" "$PKG_OUT/psx-str.mjs"
-  cp "$out/sotn_str.wasm" "$PKG_OUT/psx-str.wasm"
+  cp "$out/psx_str.js" "$PKG_OUT/psx-str.mjs"
+  cp "$out/psx_str.wasm" "$PKG_OUT/psx-str.wasm"
   # emscripten's glue loads <binary>.wasm next to itself; point it at the shipped name.
-  sed -i 's/sotn_str\.wasm/psx-str.wasm/g' "$PKG_OUT/psx-str.mjs"
+  sed -i 's/psx_str\.wasm/psx-str.wasm/g' "$PKG_OUT/psx-str.mjs"
   sync_glue "$PKG_OUT/psx-str.mjs"
+  local name; name="$(cat "$crate/.project-name")"
+  if grep -qai -- "$name" "$PKG_OUT/psx-str.wasm" "$PKG_OUT/psx-str.mjs"; then echo "FATAL: psx-str contains the project's name" >&2; exit 1; fi
   ( cd "$crate" && CARGO_TARGET_DIR="$ROOT/target-test" cargo test --release --locked --no-run \
-      --target wasm32-unknown-emscripten --bin sotn_str )
-  t="$(ls -t "$ROOT"/target-test/wasm32-unknown-emscripten/release/deps/sotn_str-*.js | head -1)"
+      --target wasm32-unknown-emscripten --bin psx_str )
+  t="$(ls -t "$ROOT"/target-test/wasm32-unknown-emscripten/release/deps/psx_str-*.js | head -1)"
   # CommonJS glue under romdevtools' "type": "module"; run it as .cjs.
   cp "$t" "${t%.js}.cjs"
   node "${t%.js}.cjs" || { echo "FATAL: psx-str unit tests failed as WASM" >&2; exit 1; }
-  rm -rf "$ROOT/target-test"
+  rm -rf "$ROOT/target-test" "$crate"
 }
 want psx-str && build_psx_str
 rm -rf "$ROOT/target"

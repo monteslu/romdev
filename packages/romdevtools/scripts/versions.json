@@ -468,7 +468,7 @@
       "commit": "ea06850554ed29156cbabb1c7975c809b4cfef89",
       "license": "AGPL-3.0",
       "platforms": ["psx"],
-      "note": "A PS1 decomp project's own setup tools, built from the project tree at this commit and shipped under neutral names: psx-str from tools/sotn_str (Rust string encoder, cpp | sotn_str process | iconv) by build-decomp-rust-tools.sh, psx-disk from tools/sotn-disk (CD image extractor) and psx-assets from tools/sotn-assets (asset extract/build) (Go, go.work at the root) by build-decomp-go-tools.sh. Ship in romdev-toolchain-decomp-gcc (wasm/tools/)."
+      "note": "A PS1 decomp project's own setup tools, built from the project tree at this commit and shipped under neutral names: psx-str from tools/<name>_str (Rust string encoder, cpp | <name>_str process | iconv) by build-decomp-rust-tools.sh, psx-disk from tools/<name>-disk (CD image extractor) and psx-assets from tools/<name>-assets (asset extract/build) (Go) by build-decomp-go-tools.sh, each from a rewritten copy that carries none of the game's names (src/decomp-go-wasip1/gen-source.mjs, src/psx-str/gen-source.mjs). Ship in romdev-toolchain-decomp-gcc (wasm/tools/)."
     },
     "go_toolchain": {
       "kind": "tarball",

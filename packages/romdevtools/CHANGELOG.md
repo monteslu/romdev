@@ -265,6 +265,17 @@ the `romdev-mcp` bin is kept as an alias.)
 - `romdev-toolchain-decomp-gcc`'s PS1 asset and string tools get neutral
   names (`psx-str`, `psx-disk`, `psx-assets`), and `romdev-permuter`'s commands are renamed under the
   `romdev-permuter-` prefix (`romdev-permuter-remote`, `romdev-permuter-remote-controller`).
+- `psx-assets`, `psx-disk` and `psx-str` no longer carry any of the game's
+  names. The upstream tools compiled in the game's stage, boss and character
+  names, its short title (module, package and crate names, file paths, env
+  vars, messages) and the disc's volume identifiers. romdev builds them from a
+  rewritten copy of the pinned source: objdiff progress labels are the overlay
+  codes, the console-port file lists come from the project's config, the
+  short title in paths and env vars is read from the project the tool runs
+  in, and `psx-disk make` copies the volume identifiers from the original
+  disc image. `extract-assets`, `build-assets`, `psx-disk make` and
+  `psx-str process` output is unchanged, and `objdiff-gen` writes the same
+  units and categories with code labels.
 - The `romdevtools` package licence field becomes `SEE LICENSE IN NOTICE`:
   the package is MIT, and the recompiler backends it ships carry their
   reference emulators' licences, as NOTICE and `LICENSES/` describe.

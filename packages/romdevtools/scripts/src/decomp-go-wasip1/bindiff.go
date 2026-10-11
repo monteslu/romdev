@@ -1,4 +1,4 @@
-// wasip1 build overlay for tools/sotn-assets/bindiff.go (build-decomp-go-tools.sh).
+// Replaces the asset tool's bindiff.go in romdev's wasip1 build (gen-source.mjs).
 // The interactive terminal diff viewer (gobindiff over tcell) has no WASI
 // terminal backend; the command reports that instead of linking it.
 package main

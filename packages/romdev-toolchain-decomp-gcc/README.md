@@ -44,7 +44,12 @@ tool.
   setup tools (a string encoder in Rust, a disc image extractor and an asset
   tool in Go), built from that project's repository at the commit pinned in
   `versions.json` (AGPL-3.0). The Go tools are wasip1 modules run under
-  `node:wasi`.
+  `node:wasi`. romdev builds all three from a rewritten copy of the source
+  that carries none of the game's text: names the tools need (project file
+  paths, env vars, the console-port file lists, the disc's volume
+  identifiers) are read at run time from the project and its original disc
+  image, and objdiff progress labels are the overlay codes. Extracted and
+  built assets and rebuilt disc images are unchanged.
 
 Objects these compilers emit are compared byte for byte against the natively
 built compilers over full project builds. romdev drives the modules from its
@@ -58,7 +63,9 @@ LGPL-2.1-or-later (`stdc-predef.h`), AGPL-3.0-only (the PS1 project's setup
 tools), MIT (slinky, pigment64, crunch64) and Zlib (`raw-deflate`). The
 upstream commits and tarballs are pinned in
 `packages/romdevtools/scripts/versions.json` in the romdev repo; the patches
-are in `packages/romdevtools/scripts/patches/`.
+are in `packages/romdevtools/scripts/patches/`, and the source rewrites
+in `packages/romdevtools/scripts/src/decomp-go-wasip1/` (Go tools) and
+`packages/romdevtools/scripts/src/psx-str/` (string encoder).
 
 **Built by** (all in `packages/romdevtools/scripts/`):
 
