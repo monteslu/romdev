@@ -38,9 +38,10 @@ Bundles: **mGBA** (https://github.com/libretro/mgba) and **arm-none-eabi gcc
   conditions on a compiled ROM.
 - Libraries in `share/gba/lib/` keep their own licences: libgba (LGPL with a
   static-linking exception; it asks that a program credit the devkitPro
-  project), maxmod (ISC, `maxmod/LICENSE-MAXMOD`), the devkitPro crt0 (MPL-2.0)
-  and libtonc (no licence file in the shipped release; see
-  https://github.com/devkitPro/libtonc).
+  project; `libgba/LICENSE`), maxmod (ISC, `maxmod/LICENSE-MAXMOD`), the
+  devkitPro crt0 (MPL-2.0) and libtonc (MIT, `libtonc/LICENSE`; the upstream
+  release has no licence file, and the author confirmed MIT to the gbadev-org
+  fork, which added this one).
 
 This package redistributes the upstream source built to WebAssembly. The
 upstream versions are pinned in `packages/romdevtools/scripts/versions.json` in

@@ -350,9 +350,7 @@ Game runtime / SDK libraries  (linked into the user's game)
   PVSnesLib         SNES C library       MIT                romdevtools
   libgba 0.5.4      GBA C library        LGPL with static-  romdev-platform-gba
                                          linking exceptions
-  libtonc 1.4.5     GBA C library        no licence file    romdev-platform-gba
-                                         in this release;
-                                         see upstream
+  libtonc 1.4.5     GBA C library        MIT                romdev-platform-gba
   devkitPro crt0    GBA start-up code    MPL-2.0            romdev-platform-gba
   maxmod            GBA music            ISC                romdev-platform-gba
   hUGEDriver        GB/GBC music         public domain      romdevtools
@@ -372,9 +370,11 @@ Game runtime / SDK libraries  (linked into the user's game)
       (for example: "based in part on the work of the devkitpro project").
     - The devkitPro crt0 is MPL-2.0: you may ship a game that contains it
       under any licence; the MPL applies only to that file's source.
+    - libtonc is MIT: a game that links it should carry its copyright and
+      permission notice (libtonc/LICENSE) in its credits or documentation.
     - Licence texts ship beside the libraries (LICENSE-HUGEDRIVER,
       LICENSE-FAMITONE, pvsneslib/LICENSE, sgdk/LICENSE and COPYING.RUNTIME,
-      maxmod/LICENSE-MAXMOD).
+      maxmod/LICENSE-MAXMOD, libgba/LICENSE, libtonc/LICENSE).
 
   Upstreams: SGDK https://github.com/Stephane-D/SGDK; PVSnesLib
   https://github.com/alekmaul/pvsneslib; libgba
