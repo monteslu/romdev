@@ -3367,7 +3367,7 @@ regression goldens all see the actual draws.
 
 - `status.gl`: `"rendered"` | `"stubbed"` for GL carts, `null` for 2D carts;
   `getCapabilities().hasGlRendering` alongside.
-- Degrades honestly: wasmcart < 0.6.0 or missing webgl-node → the old
+- Degrades cleanly: wasmcart < 0.6.0 or missing webgl-node → the old
   stubbed-GL behavior (2D framebuffer only), reported as `"stubbed"`, never
   a load failure. Version-gated by reading wasmcart's package version (its
   exports map hides package.json - resolved next to the entry).
@@ -4080,7 +4080,7 @@ A batch of RE-workflow fixes from two SNES annotation sessions (carving routines
   byte-exact, since the reassemble rebuild splices each chunk into `original.rom` by offset. Measured
   on a real 512 KB cart: **~5 min → ~33 s**, and the one-call `build({output:'reassemble'})` rebuild
   is **byte-identical** (verified). `planRebuild`'s Genesis header/pad math spans all chunks.
-- For the fully-robust path on any multi-MB ROM, `background:true` + poll (0.89.0) now genuinely
+- For the most reliable path on any multi-MB ROM, `background:true` + poll (0.89.0) now genuinely
   helps here - 15 chunks parallelize where one region couldn't.
 
 ## 0.91.2 - 2026-07-15
@@ -4214,7 +4214,7 @@ Two fixes from a real-world `disasm({target:'project'})` + `build({output:'reass
 - **`readablePercent` no longer lies about padding.** A uniform-fill bank (all `$FF` or `$00`)
   disassembles into junk instructions (`sbc $FFFFFF,x` ...) and used to report a bogus ~100% readable -
   so the *emptiest* bank looked the "most readable," inverting the "low % = data bank" heuristic. Fill
-  regions are now detected (≥99.5% one byte, ≥256 bytes) and reported honestly: `readablePercent: null`
+  regions are now detected (≥99.5% one byte, ≥256 bytes) and reported as such: `readablePercent: null`
   + `fill: true` + `fillByte`, excluded from the code-only `readablePercentAvg`, and labeled in the
   region `.asm` header. The payload reports `fillRegions` count.
 
@@ -4964,7 +4964,7 @@ buildable through the normal createProject/build tool flow.
 
 **PS1** (4 × 3D + 1 × 2D, on a software 3D engine + the GPU): shmup STARFALL,
 racing POLE BENDER (a real receding 3D road), platformer BLOCK HOP, sports
-SLAM COURT (3D pong/air-hockey), puzzle DROP GRID (2D - the right idiom for a grid).
+SLAM COURT (3D paddle/air-hockey), puzzle DROP GRID (2D - the right idiom for a grid).
 
 **N64** (all 5 × 3D - the N64 was a 3D-first machine, so even the puzzle is a 3D
 well of cubes): STARFALL 64 / POLE BENDER 64 / BLOCK HOP 64 / SLAM COURT 64 /
@@ -6665,7 +6665,7 @@ discoverable rename table).
 
 ### Fixed
 - Genesis music docs named the wrong tool/API. Corrected to `XGM2_play` (there is
-  no `XGM2_startPlay` in R58), the compiled-blob requirement, and that the legacy
+  no `XGM2_startPlay`), the compiled-blob requirement, and that the legacy
   `xgmtool`/`.xgc`/`XGM_*` is a DIFFERENT format.
 - **`romPatch({op:'findPointer'})` no longer doubles its hit list with shadows.**
   On the multi-width systems (Genesis: 32+24-bit BE; SNES: 16+24-bit LE) a wider
