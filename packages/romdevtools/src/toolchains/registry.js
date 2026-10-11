@@ -57,4 +57,11 @@ export const TOOLCHAINS = {
     tier: 1,
     source: "bundled:romdev-toolchain-m68k-gcc",
   },
+  "arm-none-eabi-gcc": {
+    id: "arm-none-eabi-gcc",
+    displayName: "arm-none-eabi gcc (GBA C compiler)",
+    platforms: ["gba"],
+    tier: 1,
+    source: "bundled:romdev-platform-gba",
+  },
 };
