@@ -3,14 +3,27 @@
 // (rungame) sandboxes games in a vm.SourceTextModule realm, which requires that flag.
 // It's harmless for everything else, so we enable it once up front rather than making
 // users remember it. Guard against a re-exec loop via a sentinel env var.
-if (
-  !process.execArgv.some((a) => a.includes("experimental-vm-modules")) &&
-  !process.env.ROMDEV_REEXEChild
-) {
+//
+// --no-wasm-code-gc on V8 13.6 (every Node 24): its process-wide wasm import
+// wrapper cache can free a wrapper twice when wasm code GC runs while
+// instances come and go, and the process dies with "Check failed:
+// jit_page.has_value()" (or "end > addr") in ThreadIsolation, under
+// Runtime_TierUpWasmToJSWrapper -> WasmImportWrapperCache::Free. A server
+// loading and unloading many carts hits it (twice on 2026-10-10 while
+// cartwheel gates ran WebGPU carts; reproduced after 65-76 cart loads). V8
+// fixed it in 9b8ca54d5a ("Fix lookup of wrappers marked is_dying"); no Node
+// 24 release has it yet (nodejs/node#66366). Without code GC, dead import
+// wrappers and code a module tiered past are not freed early; a module's code
+// still goes with the module. Measured: RSS stayed flat (1.4-2.1 GB) over 200
+// WebGPU/GL cart loads, where code GC crashed the server by load 76.
+const reexecFlags = ["--experimental-vm-modules"];
+if (process.versions.v8.startsWith("13.6.")) reexecFlags.push("--no-wasm-code-gc");
+const missingFlags = reexecFlags.filter((f) => !process.execArgv.some((a) => a.includes(f.slice(2))));
+if (missingFlags.length && !process.env.ROMDEV_REEXEChild) {
   const { spawnSync } = await import("node:child_process");
   const r = spawnSync(
     process.execPath,
-    ["--experimental-vm-modules", ...process.execArgv, process.argv[1], ...process.argv.slice(2)],
+    [...missingFlags, ...process.execArgv, process.argv[1], ...process.argv.slice(2)],
     { stdio: "inherit", env: { ...process.env, ROMDEV_REEXEChild: "1" } },
   );
   // A child killed by a SIGNAL reports status === null, so `r.status ?? 0`
