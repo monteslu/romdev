@@ -51,8 +51,8 @@ export function captureFromAdapter(adapter, opts = {}) {
   }
   if (selected.length === 0) {
     throw new Error(
-      `captureMetaSprite[${adapter.platform}]: no sprite entries matched. ` +
-      `Pass slots:[...] (from inspectSprites/groupVisibleSprites) or a rect that overlaps a sprite, ` +
+      `sprites({op:'capture'}) [${adapter.platform}]: no sprite entries matched. ` +
+      `Pass slots:[...] (from sprites({op:'inspect'})/sprites({op:'group'})) or a rect that overlaps a sprite, ` +
       `and step to a frame where the character is on screen.`
     );
   }

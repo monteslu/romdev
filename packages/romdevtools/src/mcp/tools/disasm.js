@@ -782,10 +782,10 @@ async function disassembleRomCore(args) {
       let length;
       if (args.endAddress != null) {
         if (args.length != null) {
-          throw new Error("disassembleRom: pass either `length` OR `endAddress`, not both.");
+          throw new Error("disasm({target:'rom'}): pass either `length` OR `endAddress`, not both.");
         }
         length = args.endAddress - startAddress + 1;
-        if (length <= 0) throw new Error(`disassembleRom: endAddress ($${args.endAddress.toString(16)}) must be >= startAddress ($${startAddress.toString(16)}).`);
+        if (length <= 0) throw new Error(`disasm({target:'rom'}): endAddress ($${args.endAddress.toString(16)}) must be >= startAddress ($${startAddress.toString(16)}).`);
       } else {
         length = args.length ?? 256;
       }
@@ -2011,7 +2011,7 @@ export function registerDisasmTools(server, z) {
     "so the kept `original.rom` (copyrighted ROM data) can't be committed. **LARGE ROM (≥512KB, e.g. a 1MB SNES cart)? Pass " +
     "`background:true`** - the reassemble can take minutes and would time out the call; you get a `{jobId}` immediately, then poll " +
     "`disasm({target:'project', job, outputDir})` (reports `regionsDone/regionsTotal`, then the full result when `status:'done'`). " +
-    "REBUILD (one call, ALL 15 classic platforms): `build({output:'reassemble', platform, path})` turns the project " +
+    "REBUILD (one call, every classic platform): `build({output:'reassemble', platform, path})` turns the project " +
     "dir back into a BYTE-IDENTICAL ROM - it assembles each region + splices them into the kept `original.rom` " +
     "(header/gaps/pad verbatim). Edit a region `.asm` first for a change: a same-length edit rebuilds a modified " +
     "ROM (`byteExact:false`), a length-changing edit is refused. NES/C64/7800/Lynx/PCE ALSO ship a cc65-native " +
@@ -2202,7 +2202,7 @@ export function registerDisasmTools(server, z) {
             redirect: "breakpoint({on:'jumptable'})",
             address: args.address != null ? "$" + (args.address >>> 0).toString(16).toUpperCase() : null,
             note: "Computed-jumptable recovery is LIVE, not static: it breaks at the dispatcher in a RUNNING emulator, single-steps through the indirect JMP (table,X)/RTS-trick, and records the targets it actually lands on. Load the ROM (playtest/loadMedia), drive it to the state that runs the dispatcher, then call breakpoint({on:'jumptable', address" +
-              (args.address != null ? `: ${args.address}` : "") + "}). That returns the distinct computed targets; decompile({address: target}) each to read the switch arms. No static-only tool can do this - it needs the live emulator.",
+              (args.address != null ? `: ${args.address}` : "") + "}). That returns the distinct computed targets; disasm({target:'decompile', address: target}) each to read the switch arms. No static-only tool can do this - it needs the live emulator.",
           });
         default: throw new Error(`disasm: unknown target '${args.target}'`);
       }
@@ -2670,7 +2670,7 @@ function planRegions(platform, data) {
     regions.push({
       name: "code", file: "code.asm", bytes: trimTrailingPad(data.slice(0xC0)),
       startAddress: 0x080000C0, fileOffset: 0xC0,
-      label: "GBA code @ 0x080000C0 (ARM7TDMI, ARM mode) - Thumb spans fall back to byte-exact data; use disassembleRom({thumb:true}) to read them",
+      label: "GBA code @ 0x080000C0 (ARM7TDMI, ARM mode) - Thumb spans fall back to byte-exact data; use disasm({target:'rom', thumb:true}) to read them",
     });
     return regions;
   }

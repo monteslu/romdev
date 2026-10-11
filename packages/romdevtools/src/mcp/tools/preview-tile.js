@@ -31,7 +31,7 @@ function liveTileRegion(platform) {
     case "genesis":
     case "megadrive":
     case "md": return "video_ram";
-    default: throw new Error(`previewTileArt: fromEmulator not wired for platform '${platform}'`);
+    default: throw new Error(`tiles({op:'preview'}): fromEmulator not wired for platform '${platform}'`);
   }
 }
 
@@ -44,7 +44,7 @@ async function resolveTileBytes({ tileBytes, tilePath, fromEmulator, tileStart, 
   if (fromEmulator) {
     const host = getHostOrNull(sessionKey);
     if (!host || !host.status?.platform) {
-      throw new Error("previewTileArt: fromEmulator:true requires a loaded ROM - call loadMedia first.");
+      throw new Error("tiles({op:'preview'}): fromEmulator:true requires a loaded ROM - call loadMedia first.");
     }
     const region = liveTileRegion(platform);
     const startByte = (tileStart ?? 0) * bytesPerTile;
@@ -66,7 +66,7 @@ async function resolveTileBytes({ tileBytes, tilePath, fromEmulator, tileStart, 
     return { bytes: Buffer.from(tileBytes, "base64"), source: "inline" };
   }
   if (!tilePath) {
-    throw new Error("previewTileArt: must pass tileBytes (base64), tilePath, or fromEmulator:true.");
+    throw new Error("tiles({op:'preview'}): must pass tileBytes (base64), tilePath, or fromEmulator:true.");
   }
   const file = await readFile(tilePath);
   // iNES auto-locate (NES only).
@@ -74,7 +74,7 @@ async function resolveTileBytes({ tileBytes, tilePath, fromEmulator, tileStart, 
     const prgSize = file[4] * 16384;
     const chrSize = file[5] * 8192;
     if (chrSize === 0) {
-      throw new Error(`previewTileArt: '${tilePath}' is a CHR-RAM cart - no graphics in the file. Load it and pass paletteFromEmulator:true with tileBytes from a live readMemory.`);
+      throw new Error(`tiles({op:'preview'}): '${tilePath}' is a CHR-RAM cart - no graphics in the file. Load it and pass paletteFromEmulator:true with tileBytes from a live memory({op:'read'}).`);
     }
     const chr = file.slice(16 + prgSize, 16 + prgSize + chrSize);
     const startByte = (tileStart ?? 0) * bytesPerTile;
@@ -119,7 +119,7 @@ async function resolvePalette({ platform, palette, palettePath, paletteIndex, pa
   if (palette) {
     if (platform === "nes") {
       if (palette.length !== 4) {
-        throw new Error(`previewTileArt: NES palette must be 4 master-palette indices (0-63), got ${palette.length}`);
+        throw new Error(`tiles({op:'preview'}): NES palette must be 4 master-palette indices (0-63), got ${palette.length}`);
       }
       return palette.map((idx) => nesPaletteIndexToRgb(idx & 0x3F));
     }
@@ -135,7 +135,7 @@ async function resolvePalette({ platform, palette, palettePath, paletteIndex, pa
     if (spec.master) {
       return palette.map((idx) => spec.master[idx & 0xFF]);
     }
-    throw new Error(`previewTileArt[${platform}]: palette must be either RGB triples or master-palette indices`);
+    throw new Error(`tiles({op:'preview'})[${platform}]: palette must be either RGB triples or master-palette indices`);
   }
 
   if (paletteFromEmulator) {
@@ -151,7 +151,7 @@ async function resolvePalette({ platform, palette, palettePath, paletteIndex, pa
       const { DEFAULT_PALETTES } = await import("../../platforms/common/default-palette.js");
       if (DEFAULT_PALETTES[platform]) return DEFAULT_PALETTES[platform];
     }
-    throw new Error("previewTileArt: paletteFromEmulator:true requires a loaded ROM. Call loadMedia first.");
+    throw new Error("tiles({op:'preview'}): paletteFromEmulator:true requires a loaded ROM. Call loadMedia first.");
   }
 
   if (palettePath) {
@@ -183,7 +183,7 @@ export function decodeLivePalette(host, platform, subIdx, spec) {
     }
     case "gb":
     case "gbc": {
-      throw new Error("previewTileArt[gb]: live palette read not yet wired (DMG palette is in $FF47/$FF48/$FF49; CGB has BCPS/BCPD bg palette RAM). Pass explicit `palette` for now.");
+      throw new Error("tiles({op:'preview'})[gb]: live palette read not yet wired (DMG palette is in $FF47/$FF48/$FF49; CGB has BCPS/BCPD bg palette RAM). Pass explicit `palette` for now.");
     }
     case "pce": {
       // VCE 512-entry 9-bit GRB; subIdx picks one of the 16-color sub-palettes
@@ -210,7 +210,7 @@ export function decodeLivePalette(host, platform, subIdx, spec) {
       return entries.map((e) => [e.r, e.g, e.b]);
     }
     default:
-      throw new Error(`previewTileArt[${platform}]: live palette read not implemented`);
+      throw new Error(`tiles({op:'preview'})[${platform}]: live palette read not implemented`);
   }
 }
 
@@ -274,7 +274,7 @@ function decodePaletteBytes(data, platform, subIdx, spec) {
     case "megadrive":
     case "md":   return decodeGenesisSubpalette(data, subIdx);
     default:
-      throw new Error(`previewTileArt[${platform}]: palette file decode not implemented`);
+      throw new Error(`tiles({op:'preview'})[${platform}]: palette file decode not implemented`);
   }
 }
 
@@ -336,7 +336,7 @@ export async function previewTileArtCore(args) {
 
   const spec = TILE_SPECS[platform];
   if (!spec) {
-    throw new Error(`previewTileArt: unknown platform '${platform}'. Supported: ${Object.keys(TILE_SPECS).join(", ")}, msx`);
+    throw new Error(`tiles({op:'preview'}): unknown platform '${platform}'. Supported: ${Object.keys(TILE_SPECS).join(", ")}, msx`);
   }
   const bytesPerTile = (8 * 8 * spec.bpp) / 8;
   // byteOffset: preview tiles starting at a raw BYTE offset (e.g. a watchDma /
@@ -354,7 +354,7 @@ export async function previewTileArtCore(args) {
         `byteOffset 0x${args.byteOffset.toString(16).toUpperCase()} is NOT a multiple of the ${bytesPerTile}-byte ${platform} tile size ` +
         `(${spec.bpp}bpp) - tiles will be mis-decoded. Nearest tile-aligned offsets: ` +
         `0x${lower.toString(16).toUpperCase()} or 0x${upper.toString(16).toUpperCase()}. ` +
-        `(A DMA/findReferences source is byte-exact but rarely tile-aligned - a graphic usually starts a few bytes after a header.)`;
+        `(A DMA/references source is byte-exact but rarely tile-aligned - a graphic usually starts a few bytes after a header.)`;
     }
     args = { ...args, tileStart: Math.floor(args.byteOffset / bytesPerTile) };
   }
@@ -426,7 +426,7 @@ async function previewMsxScreen2(args, d) {
   const { tilesPerRow = 16, scale = 1, outputPath, sessionKey, tileCount = 256, tileStart = 0 } = args;
   const host = getHostOrNull(sessionKey);
   if (!host) {
-    throw new Error("previewTileArt[msx]: needs a loaded ROM (screen-2 tiles live in the running VDP's VRAM). Call loadMedia first.");
+    throw new Error("tiles({op:'preview'})[msx]: needs a loaded ROM (screen-2 tiles live in the running VDP's VRAM). Call loadMedia first.");
   }
   const vram = host.readMemory("msx_vram", 0, host.regionSize("msx_vram"));
   const regs = host.readMemory("msx_vdp_regs", 0, 64);

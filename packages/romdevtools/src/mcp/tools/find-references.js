@@ -433,7 +433,7 @@ export async function findReferencesCore({ path, platform, address, mapper: _map
     null
   );
   if (!resolved) {
-    throw new Error(`findReferences: could not detect platform for '${path}'. Pass platform explicitly.`);
+    throw new Error(`disasm({target:'references'}): could not detect platform for '${path}'. Pass platform explicitly.`);
   }
   if (accessScan) {
     const family = accessFamilyFor(resolved);
@@ -690,14 +690,14 @@ export async function findReferencesCore({ path, platform, address, mapper: _map
     // binutils ARM objdump ships in romdev-platform-gba.
     const { runObjdump, objdumpAvailable } = await import("../../toolchains/objdump.js");
     if (!objdumpAvailable("arm")) {
-      throw new Error("findReferences: GBA needs the ARM objdump WASM (romdev-platform-gba).");
+      throw new Error("disasm({target:'references'}): GBA needs the ARM objdump WASM (romdev-platform-gba).");
     }
     const CAP = 512 * 1024;
     const bytes = data.slice(0, Math.min(data.length, CAP));
     const r = await runObjdump({ bytes, arch: "arm", startAddress: 0x08000000 });
     asm = r.asm;
   } else {
-    throw new Error(`findReferences: platform '${resolved}' not supported yet.`);
+    throw new Error(`disasm({target:'references'}): platform '${resolved}' not supported yet.`);
   }
 
   if (accessScan) {

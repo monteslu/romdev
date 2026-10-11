@@ -163,7 +163,7 @@ export async function cheatsLookupCore({ path: romPath, platform, filter, kind =
           totalInGame: res.entries.length,
           entries: pretty,
           ...(APPLY_ONLY_INDEX.has(plat) ? {
-            mapNote: `${plat.toUpperCase()} source cheats are encrypted (Code Breaker / GameShark), so the addresses are NOT descrambled - these entries are APPLY-ONLY: the labeled \`code\` works with applyCheat (the core decodes it live), but \`parts\` carry no usable address, so this is not a labeled-address RE map the way NES/GB/etc. indexes are.`,
+            mapNote: `${plat.toUpperCase()} source cheats are encrypted (Code Breaker / GameShark), so the addresses are NOT descrambled - these entries are APPLY-ONLY: the labeled \`code\` works with cheats({op:'apply'}) (the core decodes it live), but \`parts\` carry no usable address, so this is not a labeled-address RE map the way NES/GB/etc. indexes are.`,
           } : {}),
         };
       }
@@ -184,7 +184,7 @@ export async function cheatsApplyCore({ code, desc, path: romPath, index, enable
       let rawCode = code;
       let resolvedDesc;
       if (!rawCode && desc) {
-        if (!romPath) throw new Error("applyCheat: `desc` requires `path` to look the cheat up.");
+        if (!romPath) throw new Error("cheats({op:'apply'}): `desc` requires `path` to look the cheat up.");
         const mod = await import("../../rom-id/identifier.js");
         const id = await mod.identifyFile(romPath).catch(() => null);
         const bytes = await readFile(romPath).catch(() => null);
@@ -192,14 +192,14 @@ export async function cheatsApplyCore({ code, desc, path: romPath, index, enable
           platform: id?.platform, romName: id?.title || undefined,
           fileName: path.basename(romPath), bytes: bytes ? new Uint8Array(bytes) : undefined,
         });
-        if (!res.matched) throw new Error(`applyCheat: no DB match for that ROM, so cannot resolve desc='${desc}'. Pass a raw \`code\` instead.`);
+        if (!res.matched) throw new Error(`cheats({op:'apply'}): no DB match for that ROM, so cannot resolve desc='${desc}'. Pass a raw \`code\` instead.`);
         const f = desc.toLowerCase();
         const entry = res.entries.find((e) => (e.desc || "").toLowerCase().includes(f));
-        if (!entry) throw new Error(`applyCheat: no cheat matching desc='${desc}' in '${res.game}'.`);
+        if (!entry) throw new Error(`cheats({op:'apply'}): no cheat matching desc='${desc}' in '${res.game}'.`);
         rawCode = entry.code;
         resolvedDesc = entry.desc;
       }
-      if (!rawCode) throw new Error("applyCheat: provide `code` (raw) or `desc` (+`path`).");
+      if (!rawCode) throw new Error("cheats({op:'apply'}): provide `code` (raw) or `desc` (+`path`).");
 
       // Resolve the raw-ROM-cheat footgun (raw ADDR:VAL on a ROM address is a
       // RAM poke that silently no-ops - re-encode it to a ROM-patch device). See
@@ -244,7 +244,7 @@ export async function cheatsApplyCore({ code, desc, path: romPath, index, enable
           : unencodable
           ? `WARNING: this raw code names a ROM address but couldn't be re-encoded to a ROM-patch code (a ROM patch needs a COMPARE byte - pass ADDR:VAL:COMPARE). As applied it's a RAM poke and will likely NO-OP on this read-only ROM address. Read the current byte and supply it as the compare, or use makeCheat. `
           : "") +
-          "Applied in volatile core state - the ROM file is untouched; reset / loadState / clearCheats removes it. " +
+          "Applied in volatile core state - the ROM file is untouched; reset / state({op:'load'}) / cheats({op:'clear'}) removes it. " +
           "Screenshot to see the effect (and to verify the cheat's address label is correct). " +
           "`appliedAs` tells you how it went in: 'ram' poke, 'rom' read-intercept, 'raw' core-decoded code, or 'rom-unencodable' (a ROM address that couldn't be made into a working ROM patch).",
       };
@@ -387,7 +387,7 @@ export async function cheatsMakeCore({ platform, address, value, values, compare
       }
 
       // Single-value form (back-compat).
-      if (value == null) throw new Error("makeCheat: provide `value` (single) or `values` (batch).");
+      if (value == null) throw new Error("cheats({op:'make'}): provide `value` (single) or `values` (batch).");
       const built = buildFor(value);
       const primary = built.codes[0]?.code || built.raw;
       return {
@@ -416,7 +416,7 @@ export function registerCheatTools(server, z, sessionKey) {
     "TRUST: lookup matches by NAME/fuzzy similarity, NOT a verified CRC - a PROBABLE match. Labels are usually " +
     "right, but a different region/revision can use different addresses - VERIFY before patching: apply + observe, " +
     "or check the address in live memory with memory/watch. " +
-    "apply is NON-DESTRUCTIVE (volatile core state; reset / loadState / clear removes it, the ROM file is never " +
+    "apply is NON-DESTRUCTIVE (volatile core state; reset / state({op:'load'}) / op:'clear' removes it, the ROM file is never " +
     "touched), so it doubles as the verifier - apply a label, screenshot, confirm. " +
     "make emits the platform's NATIVE device code (not always 'Game Genie': NES/Genesis=Game Genie; SNES=Pro " +
     "Action Replay+GG; GB/GBC=Game Genie(ROM)+GameShark(RAM); SMS/GG=Action Replay) plus the raw ADDR:VAL, all " +

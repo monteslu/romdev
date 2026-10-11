@@ -74,7 +74,7 @@ export function classifyBytes(bytes, _opts = {}) {
   } else if (zr >= 0.5 && ent <= 3.5) {
     looksLike = "sparse-or-tiledata"; // lots of zeros, low entropy
     confidence = "low";
-    note = "Sparse / low-entropy (many zeros) - could be tile/bitmap data, a sparse table, or padding. Inspect as tiles (getTile/inspectPatternTiles) if it's graphics.";
+    note = "Sparse / low-entropy (many zeros) - could be tile/bitmap data, a sparse table, or padding. Inspect as tiles (tiles({op:'png'})) if it's graphics.";
   } else if (ent <= 4.5 && pr < 0.5) {
     looksLike = "structured-data"; // tables, code, binary records
     confidence = "low";

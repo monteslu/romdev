@@ -252,8 +252,8 @@ export function registerPlaytestTools(server, z, sessionKey) {
         // sent people down the wrong path.
         const kind = e?.sdlKind;
         const headlessNote =
-          " Every headless tool (screenshot / runSource / readMemory / " +
-          "stepFrames / pressButton) still works against the live ROM - only " +
+          " Every headless tool (frame / build / memory / " +
+          "input / state) still works against the live ROM - only " +
           "the interactive window is affected.";
 
         // A failed window-open is a REAL FAILURE - THROW it, don't return a soft
@@ -434,7 +434,7 @@ export function registerPlaytestTools(server, z, sessionKey) {
           activeFrameCount: h?.status?.frameCount ?? null,
           note: h
             ? "No playtest window, but a host/ROM is still loaded - re-open playtest without re-running loadMedia."
-            : "No playtest window and no host loaded - loadMedia (or runSource) first.",
+            : "No playtest window and no host loaded - loadMedia (or build({output:'run'})) first.",
         });
       }
       const session = sessions.get(sessionKey);
@@ -513,7 +513,7 @@ export function registerPlaytestTools(server, z, sessionKey) {
         return jsonContent({
           ok: false,
           error: "no playtest window open",
-          hint: "Open one with playtest(), or use screenshot() to capture the session's active host.",
+          hint: "Open one with playtest({op:'open'}), or use frame({op:'screenshot'}) to capture the session's active host.",
         });
       }
       if (!inline && !outPath) {

@@ -66,14 +66,14 @@ async function resolveChrBase(path, platform, explicitOffset) {
     throw new Error(
       `spliceCHR: SMS/GG tiles are uploaded to VRAM at runtime from arbitrary ROM ` +
       `offsets - no auto-detect. Pass chrFileOffset explicitly. Typical approach: ` +
-      `disassembleRom near the VDP $BE writes to find where the game loads tiles ` +
+      `disasm({target:'rom'}) near the VDP $BE writes to find where the game loads tiles ` +
       `from in ROM, then point chrFileOffset there.`
     );
   }
   if (platform === "snes" || platform === "genesis" || platform === "megadrive" || platform === "md") {
     throw new Error(
       `spliceCHR[${platform}]: tile data lives at arbitrary ROM offsets (game-specific). ` +
-      `Pass chrFileOffset explicitly. For SNES use disassembleRom + grep for DMA writes ` +
+      `Pass chrFileOffset explicitly. For SNES use disasm({target:'rom'}) + grep for DMA writes ` +
       `to VRAM; for Genesis grep for VDP_DATA ($C00000) writes.`
     );
   }
@@ -90,7 +90,7 @@ async function resolveChrBase(path, platform, explicitOffset) {
       `spliceCHR[2600]: the 2600 has no tile ROM region - graphics are 1-bit ` +
       `sprite bytes written by code to GRP0/GRP1/PF0/PF1/PF2/ENABL each scanline. ` +
       `There's nothing to splice generically. Use patchFile on specific ROM ` +
-      `bytes (find them via disassembleRom + lda/sta GRP/PF refs).`
+      `bytes (find them via disasm({target:'rom'}) + lda/sta GRP/PF refs).`
     );
   }
   if (platform === "atari7800" || platform === "a7800") {
@@ -98,7 +98,7 @@ async function resolveChrBase(path, platform, explicitOffset) {
       `spliceCHR[7800]: the 7800 reads tile/sprite graphics from MARIA display ` +
       `lists at runtime - they live at arbitrary ROM offsets per game. Pass ` +
       `chrFileOffset explicitly after finding the chargen base via ` +
-      `disassembleRom (look for the CHARBASE register write at $87).`
+      `disasm({target:'rom'}) (look for the CHARBASE register write at $87).`
     );
   }
   throw new Error(`spliceCHR: platform '${platform}' not yet supported. Pass chrFileOffset explicitly to splice raw tile bytes.`);
@@ -162,7 +162,7 @@ function bankToChrOffset(platform, bytes, bank) {
   }
   const prgSize = bytes[4] * 16384;
   const chrSize = bytes[5] * 8192;
-  if (chrSize === 0) throw new Error("CHR-RAM cart - no CHR in the file. Use writeMemory on the running emulator instead.");
+  if (chrSize === 0) throw new Error("CHR-RAM cart - no CHR in the file. Use memory({op:'write'}) on the running emulator instead.");
   const chrBase = 16 + prgSize;
   const offset = chrBase + bank * 4096;
   if (offset >= chrBase + chrSize) {

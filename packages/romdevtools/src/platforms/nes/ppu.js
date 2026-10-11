@@ -401,7 +401,7 @@ export async function snapshotPatternTables(host) {
 
   // Last resort: nothing we can show.
   throw new Error(
-    "inspectPatternTiles: could not read CHR. " +
+    "tiles({op:'png'}): could not read CHR. " +
     (status.mediaPath
       ? "ROM at " + status.mediaPath + " has no valid iNES header and the core didn't expose nes_chr."
       : "No ROM loaded - call loadMedia or loadMediaBytes first.")

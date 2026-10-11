@@ -527,7 +527,7 @@ export function registerStateTools(server, z, sessionKey) {
     "Save-state lifecycle for the emulator. `op`: 'save' | 'load' | 'list' | 'export' | 'dump' | 'diff'.\n" +
     "'save': `name` = fast in-memory slot (LOST on server restart / new session), `path` = disk blob that SURVIVES " +
     "across sessions - reload via op:'load'. Multi-session RE: save once at the state you care about, reload it " +
-    "every session instead of re-running loadMedia + hundreds of stepFrames.\n" +
+    "every session instead of re-running loadMedia + hundreds of frame steps.\n" +
     "'load': restore from a `name` slot OR a `path` blob. A state captures RAM/CPU/PPU/APU - NOT the ROM - so it's " +
     "ROM-CONTENT-INDEPENDENT: a state saved on the stock ROM reloads into a rebuilt/patched ROM of the same core → " +
     "clean A/B patch test. KNOW: (1) `render:true` (default) steps one frame so the next screenshot isn't stale/" +

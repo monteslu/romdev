@@ -230,8 +230,8 @@ export async function extractSpriteSheetCore({ platform, path: romPath, offset, 
         throw new Error(
           "atari2600 has no tile region - sprites are encoded as 1-byte-per-row " +
           "bitmap strips inlined in code (typically LDA imm / STA GRP0/GRP1 sequences). " +
-          "Use `disassembleRom` + `findReferences({symbol:'GRP0'})` to locate the strips, " +
-          "then read the byte sequences directly with `readMemory` or by inspecting the ROM bytes."
+          "Use `disasm({target:'rom'})` + `disasm({target:'references', address:0x1B})` (GRP0) to locate the strips, " +
+          "then read the byte sequences directly with `memory({op:'read'})` or by inspecting the ROM bytes."
         );
       }
       const bytes = new Uint8Array(await readFile(romPath));
@@ -243,7 +243,7 @@ export async function extractSpriteSheetCore({ platform, path: romPath, offset, 
         const { extractChrFromINes } = await import("../../rom-id/patch.js");
         const chr = extractChrFromINes(bytes);
         if (!chr) {
-          throw new Error("CHR-RAM cart - no graphics in the ROM file. Load it and use inspectPatternTiles on the running emulator.");
+          throw new Error("CHR-RAM cart - no graphics in the ROM file. Load it and use tiles({op:'png'}) on the running emulator.");
         }
         tileBytes = chr;
         note = `NES CHR (${chr.length} bytes from iNES file).`;
@@ -343,7 +343,7 @@ export function bankToFileOffset(platform, bytes, bank) {
     const prgSize = bytes[4] * 16384;
     const chrSize = bytes[5] * 8192;
     if (chrSize === 0) {
-      throw new Error("CHR-RAM cart - no CHR in the ROM file. Load it and use inspectPatternTiles instead.");
+      throw new Error("CHR-RAM cart - no CHR in the ROM file. Load it and use tiles({op:'png'}) instead.");
     }
     const chrBase = 16 + prgSize;
     const offset = chrBase + bank * 4096;
@@ -353,5 +353,5 @@ export function bankToFileOffset(platform, bytes, bank) {
     }
     return offset;
   }
-  throw new Error(`bank arg not yet supported for platform '${platform}' - pass an explicit \`offset\` for now (or use inspectPatternTiles on a running emulator).`);
+  throw new Error(`bank arg not yet supported for platform '${platform}' - pass an explicit \`offset\` for now (or use tiles({op:'png'}) on a running emulator).`);
 }

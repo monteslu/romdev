@@ -483,7 +483,7 @@ export function renderSnesTilesheet(vram, cgramColors, opts = {}) {
     bpp,
     note: `${tileCount} ${bpp}bpp tiles from VRAM byte offset 0x${tileBase.toString(16)} ` +
       `(palette base CGRAM index ${paletteBase}). If bpp/tileBase/paletteBase weren't supplied they ` +
-      `default to Mode-1 values - get the live ones from getRenderingContext({platform:'snes'}).`,
+      `default to Mode-1 values - get the live ones from background({view:'renderState'}).`,
   };
 }
 
@@ -574,7 +574,7 @@ export function renderSnesTilemap(vram, cgramColors, opts = {}) {
     bpp,
     note: `${mapW}×${mapH}-tile BG map from VRAM byte offset 0x${tilemapBase.toString(16)} ` +
       `(${bpp}bpp tiles at 0x${tileBase.toString(16)}). If tilemapBase/tileBase/bpp/mapSize weren't ` +
-      `supplied they default to Mode-1 BG1 - get the live ones from getRenderingContext({platform:'snes'}).layers. ` +
+      `supplied they default to Mode-1 BG1 - get the live ones from background({view:'renderState'}).layers. ` +
       `Scroll is NOT applied; the visible window is a 256×224 sub-region.`,
   };
 }

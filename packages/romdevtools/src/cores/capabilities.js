@@ -29,7 +29,7 @@
  * file plumbing, encodeAudio, catalog, files, ...) are NOT here - they don't
  * vary by platform. */
 export const OP_KEYS = /** @type {const} */ ([
-  "build",              // buildSource for this platform
+  "build",              // build({output}) for this platform
   "run",                // loadMedia + a real core
   "screenshot",         // frame({op:'screenshot'})
   "inspectSprites",     // sprites({op:'inspect'})
@@ -40,7 +40,7 @@ export const OP_KEYS = /** @type {const} */ ([
   "audioDebug",         // audioDebug({op:'inspect'})
   "cart",               // cart({op:'extract'/'wrap'})
   "disasm",             // disasm({target:'rom'/'project'/'references'})
-  "decompile",          // disasm({target:'decompile'}) - RE engine, all 14
+  "decompile",          // disasm({target:'decompile'}) - RE engine
   "decomp",             // decomp({op}) - matching decompilation on a splat project's own compiler
 ]);
 

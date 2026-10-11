@@ -78,7 +78,7 @@ export function registerWasmInspectTools(server, z, sessionKey) {
     "you own the source, so prefer `name`).\n" +
     "• 'events' - DRAIN the frame-stamped debug event trace: wc_log lines ({frame, text}) and wc_debug_mark(id) " +
     "annotations ({frame, id}) the cart emitted since the last drain. The navigable timeline of a run ('level " +
-    "loaded at frame 312') - pull-model, clears on read. wasmcart 0.5.0+.\n" +
+    "loaded at frame 312') - pull-model, clears on read.\n" +
     "• 'save' - the cart's declared save-data bytes (savePtr/saveSize), to assert a game persisted what it should.\n" +
     "• 'command' {text} - the DEBUG CHANNEL: ask a running cart a question it answers itself (scene tree, get/set a " +
     "property by path, spawn/free nodes, stats...). Convention, no ABI change: the cart exposes bytes fields `dbg.cmd` " +

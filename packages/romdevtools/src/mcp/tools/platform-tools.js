@@ -98,13 +98,13 @@ export function registerPlatformTools(server, z, sessionKey) {
       // File-source path: read iNES directly from disk.
       if (romPath) {
         const p = platform ?? (/\.nes$/i.test(romPath) ? "nes" : null);
-        if (!p) throw new Error("inspectPatternTiles: pass platform explicitly when reading from a non-.nes file.");
-        if (p !== "nes") throw new Error(`inspectPatternTiles[file mode]: platform '${p}' not yet supported`);
+        if (!p) throw new Error("tiles({op:'png'}): pass platform explicitly when reading from a non-.nes file.");
+        if (p !== "nes") throw new Error(`tiles({op:'png'}) [file mode]: platform '${p}' not yet supported`);
         const { readFile } = await import("node:fs/promises");
         const bytes = new Uint8Array(await readFile(romPath));
         const { chrFromINes } = await import("../../platforms/nes/ppu.js");
         const { width, height, png, hasChr } = chrFromINes(bytes);
-        if (!hasChr) throw new Error(`'${romPath}' is a CHR-RAM cart - no graphics in the ROM file. Load it and call inspectPatternTiles without path.`);
+        if (!hasChr) throw new Error(`'${romPath}' is a CHR-RAM cart - no graphics in the ROM file. Load it and call tiles({op:'png'}) without path.`);
         return emit(png, { platform: p, source: "file", sourcePath: romPath, width, height });
       }
       const host = getHost(callerSessionKey ?? sessionKey);
@@ -136,7 +136,7 @@ export function registerPlatformTools(server, z, sessionKey) {
           platform: p, source: "emulator", width, height, tileCount,
           note: `${tileCount} tiles from 16 KB VRAM (covers tiles + name table + SAT - late ` +
             `tiles will be noise from those regions). For the active BG pattern range, check ` +
-            `getRenderingContext().sms.bgTileDataBase.`,
+            `background({view:'renderState'}).sms.bgTileDataBase.`,
         });
       }
       if (p === "gb" || p === "gbc") {
@@ -146,7 +146,7 @@ export function registerPlatformTools(server, z, sessionKey) {
           platform: p, source: "emulator", width, height, tileCount,
           note: `${tileCount} tiles from VRAM $8000-$97FF (the entire tile region). ` +
             `Active BG/Window/sprite tile data area is selected by LCDC bit 4 - check ` +
-            `getRenderingContext().gb.bgTileDataBase.`,
+            `background({view:'renderState'}).gb.bgTileDataBase.`,
         });
       }
       if (p === "snes") {
@@ -170,7 +170,7 @@ export function registerPlatformTools(server, z, sessionKey) {
           tileCount: r.tileCount, paletteIndex: r.paletteIndex, note: r.note,
         });
       }
-      throw new Error(`inspectPatternTiles not yet implemented for platform '${p}'`);
+      throw new Error(`tiles({op:'png'}) not yet implemented for platform '${p}'`);
   };
 
   // inspectPaletteCore: palette({source:'live'}). Module-scope so the `palette`
@@ -401,7 +401,7 @@ export function registerPlatformTools(server, z, sessionKey) {
     if (chip === "dsp") {
       const p = resolvePlatform(host, "snes");
       const dsp = getDspState(host, p);
-      if (!dsp) throw new Error("getAudioState chip:'dsp' is SNES only.");
+      if (!dsp) throw new Error("audioDebug chip:'dsp' is SNES only.");
       const { regs, ...rest } = dsp;
       return { platform: p, chip, ...rest, regsHex: Array.from(regs, (b) => b.toString(16).padStart(2, "0")).join("") };
     }
@@ -420,13 +420,13 @@ export function registerPlatformTools(server, z, sessionKey) {
     if (chip === "nes") {
       const p = resolvePlatform(host, "nes");
       const apu = getNesApuState(host, p);
-      if (!apu) throw new Error("getAudioState chip:'nes' is NES only.");
+      if (!apu) throw new Error("audioDebug chip:'nes' is NES only.");
       return { platform: p, chip, ...apu };
     }
     if (chip === "gb") {
       // GB/GBC DMG APU - read the APU register file from gb_io ($FF00-$FF7F).
       const p = resolvePlatform(host);
-      if (p !== "gb" && p !== "gbc") throw new Error("getAudioState chip:'gb' is for Game Boy / Game Boy Color only.");
+      if (p !== "gb" && p !== "gbc") throw new Error("audioDebug chip:'gb' is for Game Boy / Game Boy Color only.");
       const io = host.readMemory("gb_io", 0, 0x80);
       return { platform: p, chip, ...decodeGbApu(io) };
     }
@@ -448,43 +448,43 @@ export function registerPlatformTools(server, z, sessionKey) {
     if (chip === "pce") {
       // PC Engine HuC6280 PSG - 6 wavetable channels (ch 4/5 can do noise).
       const psg = getPcePsgState(host);
-      if (!psg) throw new Error("getAudioState chip:'pce' - no PSG region (load a PCE ROM into the patched geargrafx core).");
+      if (!psg) throw new Error("audioDebug chip:'pce' - no PSG region (load a PCE ROM into the patched geargrafx core).");
       return { platform: "pce", ...psg };
     }
     if (chip === "ay8910") {
       // MSX AY-3-8910 - 3 square + noise + envelope.
       const ay = getMsxAyState(host);
-      if (!ay) throw new Error("getAudioState chip:'ay8910' - no PSG region (load an MSX ROM into the patched blueMSX core).");
+      if (!ay) throw new Error("audioDebug chip:'ay8910' - no PSG region (load an MSX ROM into the patched blueMSX core).");
       return { platform: "msx", ...ay };
     }
     if (chip === "spu") {
       // PS1 SPU - 24 ADPCM voices (volume/pitch/ADSR + key-on/off).
       const regs = host.getSpuRegs?.();
-      if (!regs) throw new Error("getAudioState chip:'spu' - no SPU region (load a PS1 program into the rebuilt pcsx_rearmed core).");
+      if (!regs) throw new Error("audioDebug chip:'spu' - no SPU region (load a PS1 program into the rebuilt pcsx_rearmed core).");
       return { platform: "ps1", ...decodePs1Spu(regs) };
     }
     if (chip === "ai") {
       // N64 AI - the audio OUTPUT state (sample rate + playing + DMA source). N64
       // audio is RSP-mixed, so there are no per-voice registers to decode.
       const regs = host.getAiRegs?.();
-      if (!regs) throw new Error("getAudioState chip:'ai' - no AI region (load an N64 ROM into the rebuilt parallel_n64 core).");
+      if (!regs) throw new Error("audioDebug chip:'ai' - no AI region (load an N64 ROM into the rebuilt parallel_n64 core).");
       return { platform: "n64", ...decodeN64Ai(regs) };
     }
     if (chip === "aica") {
       // Dreamcast AICA - 64 PCM/ADPCM channels (key-on/volume/pitch/loop) + master
       // volume, from the rebuilt flycast core's romdev_aica_get register window.
       const regs = host.getAicaRegs?.();
-      if (!regs) throw new Error("getAudioState chip:'aica' - no AICA region (load a Dreamcast program into the rebuilt flycast core).");
+      if (!regs) throw new Error("audioDebug chip:'aica' - no AICA region (load a Dreamcast program into the rebuilt flycast core).");
       return { platform: "dreamcast", ...decodeAica(regs) };
     }
     if (chip === "acp") {
       // GameTank ACP - a second 65C02 driving a DAC from 4 KB audio RAM (no fixed
       // synth registers), from the patched core's romdev_acp_get state block.
       const regs = host.getAcpState?.();
-      if (!regs) throw new Error("getAudioState chip:'acp' - no ACP state (load a GameTank ROM into the patched gametank core).");
+      if (!regs) throw new Error("audioDebug chip:'acp' - no ACP state (load a GameTank ROM into the patched gametank core).");
       return { platform: "gametank", ...decodeGameTankAcp(regs) };
     }
-    throw new Error(`getAudioState: unknown chip '${chip}'. Use 'nes' (NES 2A03), 'gb' (Game Boy/GBC), 'gba' (GBA), 'dsp' (SNES), 'psg' (Genesis/SMS/GG SN76489), 'ym2612' (Genesis FM), 'sid' (C64), 'mikey' (Lynx), 'pce', 'ay8910' (MSX), 'spu' (PS1), 'aica' (Dreamcast), or 'acp' (GameTank).`);
+    throw new Error(`audioDebug: unknown chip '${chip}'. Use 'nes' (NES 2A03), 'gb' (Game Boy/GBC), 'gba' (GBA), 'dsp' (SNES), 'psg' (Genesis/SMS/GG SN76489), 'ym2612' (Genesis FM), 'sid' (C64), 'mikey' (Lynx), 'pce', 'ay8910' (MSX), 'spu' (PS1), 'aica' (Dreamcast), or 'acp' (GameTank).`);
   }
 
   getAudioStateCore = async ({ chip }, callerSessionKey) => jsonContent(readAudioChip(chip, callerSessionKey));
@@ -773,7 +773,7 @@ export function registerPlatformTools(server, z, sessionKey) {
       const host = getHost(callerSessionKey ?? sessionKey);
       const p = resolvePlatform(host, platform);
       if (attributesOnly && tilesOnly) {
-        throw new Error("inspectBackgroundMap: attributesOnly and tilesOnly are mutually exclusive - omit both to get tiles + subPaletteGrid together.");
+        throw new Error("background({view:'map'}): attributesOnly and tilesOnly are mutually exclusive - omit both to get tiles + subPaletteGrid together.");
       }
       // Gate the PNG; the textual note travels alongside it. Used by every
       // image-producing path. NES render:false stays JSON-only (no image).
@@ -881,10 +881,10 @@ export function registerPlatformTools(server, z, sessionKey) {
   // convertImageToTiles → encodeArt({stage:'tiles'}) (router in sprite-pipeline.js).
   convertImageToTilesCore = async ({ platform, pngBase64, pngPath, maxTiles = 512, tileOrder = "row", outputDir, inline }) => {
       if (!inline && !outputDir) {
-        throw new Error("convertImageToTiles: pass outputDir (write tiles.bin/palette.bin to disk, returns paths) or inline:true (return base64 in the response).");
+        throw new Error("encodeArt({stage:'tiles'}): pass outputDir (write tiles.bin/palette.bin to disk, returns paths) or inline:true (return base64 in the response).");
       }
       if (!pngBase64 && !pngPath) {
-        throw new Error("convertImageToTiles: pass pngPath (a PNG on disk - preferred) or pngBase64.");
+        throw new Error("encodeArt({stage:'tiles'}): pass pngPath (a PNG on disk - preferred) or pngBase64.");
       }
       // Resolve the PNG bytes once: from disk (preferred) or from base64.
       const pngBuf = pngPath ? await readFile(pngPath) : Buffer.from(pngBase64, "base64");
@@ -897,7 +897,7 @@ export function registerPlatformTools(server, z, sessionKey) {
         const png = pngBuf;
         const img = PNG.sync.read(png);
         if (img.width % 8 || img.height % 8) {
-          throw new Error(`convertImageToTiles(msx): image ${img.width}x${img.height} must be a multiple of 8 in both dimensions.`);
+          throw new Error(`encodeArt({stage:'tiles'}) (msx): image ${img.width}x${img.height} must be a multiple of 8 in both dimensions.`);
         }
         // Map RGBA → nearest of the 16 fixed TMS9918 colors (MSX1 screen-2).
         const { TMS9918_PALETTE } = await import("../../platforms/msx/vdp.js");
@@ -1090,7 +1090,7 @@ export function registerPlatformTools(server, z, sessionKey) {
               `palette.bin = 4 lines × 16 colors (128 B BE CRAM words; ${r._genesis?.paletteLines} line(s) used). ` +
               `Set plane width to 64 cells and write the nametable to your Plane A base.` +
               (r._genesis?.warnings?.length ? " WARNINGS: " + r._genesis.warnings.slice(0, 3).join(" ") : "")
-            : "Paths written. Pass them as binaryIncludePaths into buildSource.",
+            : "Paths written. Pass them as binaryIncludePaths into build.",
         });
       }
 

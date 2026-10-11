@@ -25,7 +25,7 @@ export async function traceVramSourceCore({ frames = 120, pressDuring, romPrevie
       const host = getHost(sessionKey);
       const platform = host.status.platform;
       if (platform !== "genesis" && platform !== "megadrive" && platform !== "md") {
-        throw new Error(`traceVramSource is Genesis-only (loaded platform: '${platform}'). VRAM-DMA source tracing uses the Genesis VDP DMA registers.`);
+        throw new Error(`watch({on:'dma'}) is Genesis-only (loaded platform: '${platform}'). VRAM-DMA source tracing uses the Genesis VDP DMA registers.`);
       }
       // ROM image for the preview (un-banked on Genesis: file offset == DMA source byte addr).
       let rom = null;

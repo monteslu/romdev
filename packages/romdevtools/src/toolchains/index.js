@@ -393,7 +393,7 @@ export async function buildForPlatform(args) {
       throw new Error(
         `language '${args.language}' not supported for platform '${args.platform}'. ` +
         `Supported: ${available.join(", ") || "(none)"}. ` +
-        `Call listPlatforms() to see the full matrix.`
+        `Call platform({op:'list'}) to see the full matrix.`
       );
     }
     if (!entry.available) {

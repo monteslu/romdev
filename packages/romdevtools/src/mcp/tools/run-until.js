@@ -18,7 +18,7 @@ export function registerRunUntilTools(server, z, sessionKey) {
   // valid non-NES regions (genesis_*, c64_*, *_apu_regs) that host.readMemory
   // accepts. The readMemory(region,...) call in the handler validates and throws a
   // clear message on an unknown region (full canonical set, same as `memory`).
-  const regionStr = z.string().describe("memory region (full readMemory set, e.g. system_ram, nes_oam, genesis_vram, c64_color_ram; validated at runtime)");
+  const regionStr = z.string().describe("memory region (full memory({op:'read'}) set, e.g. system_ram, nes_oam, genesis_vram, c64_color_ram; validated at runtime)");
   const memoryCondition = z.object({
     type: z.literal("memory"),
     region: regionStr,
@@ -49,7 +49,7 @@ export function registerRunUntilTools(server, z, sessionKey) {
 
   server.tool(
     "runUntil",
-    "Step the emulator forward until a condition holds, or until maxFrames is reached. Use this instead of polling stepFrames + readMemory yourself for 'play until X happens' workflows. " +
+    "Step the emulator forward until a condition holds, or until maxFrames is reached. Use this instead of polling frame({op:'step'}) + memory({op:'read'}) yourself for 'play until X happens' workflows. " +
       "condition.type is one of: 'memory' (byte at region/offset equals/notEquals a value, or mask hits when byte & mask is nonzero); 'memoryChanged' (any byte in offset..offset+length differs from start-of-call); 'framebufferChanged' (any pixel differs from start-of-call); 'framebufferPixel' (pixel x,y equals/notEquals an [r,g,b]). " +
       "checkEvery throttles condition checks (and is the step batch size), so the actual stop frame can overshoot by up to checkEvery-1. " +
       "Returns {conditionMet, framesStepped, finalValue} (finalValue is null when the condition was not met).",

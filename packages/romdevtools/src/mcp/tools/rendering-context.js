@@ -126,7 +126,7 @@ function nesContext(host, area) {
       summary.push(
         `iNES mapper ${mapperNum} - for banked-CHR mappers (MMC1/MMC3/etc.), the file-offset answer above ` +
         `assumes the active CHR bank covers PPU $0000-$1FFF. If your mapper does 1KB/2KB bank switching, ` +
-        `treat the live readMemory('nes_chr', 0, 8192) bytes as authoritative.`
+        `treat the live memory({op:'read', region:'nes_chr', offset:0, length:8192}) bytes as authoritative.`
       );
     }
   }
@@ -231,7 +231,7 @@ async function snesContext(host, area) {
         `SNES BG mode ${ppu.bgMode}. Active layers: ${active}. ` +
         `Brightness ${ppu.brightness}/15${ppu.forcedBlank ? " (FORCED BLANK - screen off!)" : ""}. ` +
         `Feed a layer's tilemapBaseByte/tileBaseByte/bpp/mapWidth/mapHeight straight into ` +
-        `inspectBackgroundMap({platform:'snes', ...}).`
+        `background({view:'map', ...}).`
       );
     } else {
       summary.push(
@@ -251,12 +251,12 @@ async function snesContext(host, area) {
         `OBJ sizes ${JSON.stringify(ppu.objSize.small)}/${JSON.stringify(ppu.objSize.large)}, ` +
         `OBJ tile base 0x${ppu.objNameBaseByte.toString(16)}, OBJ layer ` +
         `${ppu.mainScreen.obj ? "ON" : "OFF"} (TM=$${ppu.tm.toString(16)}). ` +
-        `inspectSprites({platform:'snes'}) resolves per-sprite tileVramAddr + palette range + uninitialized-palette warnings.`
+        `sprites({op:'inspect'}) resolves per-sprite tileVramAddr + palette range + uninitialized-palette warnings.`
       );
     } else {
       summary.push(
         `OAM: ${onscreenSprites} of 128 slots on-screen (Y<0xE0). OBSEL not populated yet - step more frames. ` +
-        `inspectSprites({platform:'snes'}) gives the full decoded list.`
+        `sprites({op:'inspect'}) gives the full decoded list.`
       );
     }
   }
@@ -264,7 +264,7 @@ async function snesContext(host, area) {
     summary.push(
       "Readable SNES regions: snes_cgram (512B palette), snes_oam (544B), video_ram (64KB VRAM), " +
       "snes_aram (64KB SPC700), snes_fillram (32KB PPU/DMA register shadow - $2100-$213f decoded above). " +
-      "For CPU/audio state use getCPUState / getAudioState."
+      "For CPU/audio state use cpu({op:'read'}) / audioDebug({op:'inspect'})."
     );
   }
 
@@ -327,13 +327,13 @@ async function genesisContext(host, area) {
     summary.push(
       `Tiles are a flat 11-bit index into VRAM (tile N = VRAM offset 0x${(0).toString(16)} + N×32, 4bpp). ` +
       `There is no CHR bank - a name-table entry's low 11 bits ARE the VRAM tile address. ` +
-      `Use inspectBackgroundMap({plane:'A'|'B'}) to render either plane's composite.`
+      `Use background({view:'map', plane:'A'|'B'}) to render either plane's composite.`
     );
   }
   if (area === "all" || area === "sprites") {
     summary.push(
       `Sprite attribute table (SAT): ${hx(vdp.spriteTable)} (VRAM, 80 entries × 8 bytes). ` +
-      `Use inspectSprites() to decode it.`
+      `Use sprites({op:'inspect'}) to decode it.`
     );
   }
   if (area === "all") {
@@ -348,7 +348,7 @@ async function genesisContext(host, area) {
     );
     summary.push(
       "NOTE: gpgx snapshots the VDP register file at save-state time. Step the " +
-      "ROM past startup (stepFrames(120)+) before calling - power-on register " +
+      "ROM past startup (frame({op:'step', frames:120})+) before calling - power-on register " +
       "state won't match what the title screen renders."
     );
   }
@@ -560,7 +560,7 @@ async function lynxContext(host, area) {
   const summary = [];
   if (!ctx.displayDmaEnable) summary.push("Display DMA is OFF (DISPCTL bit0) - Mikey isn't refreshing the LCD from the display buffer; nothing will show.");
   else summary.push(`Display DMA on. Buffer at ${ctx.displayAddress}. ${ctx.fourColour ? "4-color" : "4bpp/16-color"} mode${ctx.flip ? ", flipped" : ""}.`);
-  summary.push("Lynx has no tilemap/nametable - the framebuffer is a linear bitmap in RAM at displayAddress; sprites are SCB-drawn into it by Suzy (see inspectSprites).");
+  summary.push("Lynx has no tilemap/nametable - the framebuffer is a linear bitmap in RAM at displayAddress; sprites are SCB-drawn into it by Suzy (see sprites({op:'inspect'})).");
   return { platform: "lynx", area, ...ctx, summary };
 }
 
@@ -579,7 +579,7 @@ async function pceContext(host, area) {
   const summary = [];
   if (!bgEnable && !spEnable) summary.push("BG and SPR are BOTH disabled (VDC R5 bits 7/6 clear) - the screen shows only the backdrop color; enable them to see output.");
   else summary.push(`BG ${bgEnable ? "on" : "off"}, SPR ${spEnable ? "on" : "off"} (VDC R5=$${cr.toString(16)}). BG scroll (${bgScrollX},${bgScrollY}). SATB DMA src $${satbSrc.toString(16)}.`);
-  summary.push("PCE has no nametable region - the BG map lives in VRAM (pce_vdc_vram); MWR (R9) selects the virtual screen size. Sprites are in the SATB (inspectSprites).");
+  summary.push("PCE has no nametable region - the BG map lives in VRAM (pce_vdc_vram); MWR (R9) selects the virtual screen size. Sprites are in the SATB (sprites({op:'inspect'})).");
   return {
     platform: "pce", area,
     screenEnabled: bgEnable || spEnable,
@@ -790,9 +790,9 @@ export function registerRenderingContextTools(server, z, sessionKey) {
     "• view:'renderState' - decode the current PPU/VDP rendering state into structured fields + a plain-English " +
     "`summary[]`, including WHICH CHR/tile bank BG and sprites are fetching from right now plus the file offset " +
     "ready for patchFile (so you don't patch the wrong half of CHR). NES decodes PPUCTRL/MASK/STATUS bit-by-bit + " +
-    "derived `chrFileOffsetForActiveBgBank` (for banked mappers, live `readMemory('nes_chr',...)` is authoritative). " +
+    "derived `chrFileOffsetForActiveBgBank` (for banked mappers, live `memory({op:'read', region:'nes_chr'})` is authoritative). " +
     "SNES decodes BG mode/layer tilemap+char bases/OBSEL from the snes_fillram register shadow. `area` limits the " +
-    "summary (bg/sprites/window/all). GOTCHA: step past startup (stepFrames(120)+) first - power-on PPU/VDP state " +
+    "summary (bg/sprites/window/all). GOTCHA: step past startup (frame({op:'step', frames:120})+) first - power-on PPU/VDP state " +
     "won't match the title screen.\n" +
     "• view:'rendered' - map tile IDs → game assets: walk the current frame's BG nametable + OAM and return the set " +
     "of tile IDs actually being drawn ({background, sprite, combined}, each with ids/idsHex/ranges). ROM-hack trick: " +

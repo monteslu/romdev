@@ -41,7 +41,7 @@ export async function buildSourceWithDebugCore({ platform, source, sources, incl
       const SDCC_TARGETS = ["gb", "gbc", "sms", "gg"];
       const M68K_TARGETS = ["genesis"];
       if (!inline && !outputPath) {
-        throw new Error("buildSourceWithDebug: pass outputPath (where to save the ROM; .dbg/.map/log land alongside it) or inline:true to get everything in the response.");
+        throw new Error("build({output:'romWithDebug'}): pass outputPath (where to save the ROM; .dbg/.map/log land alongside it) or inline:true to get everything in the response.");
       }
       const sib = outputPath ? siblings(outputPath) : null;
       // resolveSymbols:[...] - resolve just these names off the freshly-produced
@@ -159,7 +159,7 @@ export async function buildSourceWithDebugCore({ platform, source, sources, incl
             "like `0xe0ff0048                well`. SGDK links 68k work-RAM through its mirror at " +
             "0xE0FF0000 (hardware mirrors $FF0000 across the high bus). The work-RAM region is " +
             "exposed as `system_ram` (64KB); the OFFSET into it is the low 16 bits of the symbol " +
-            "address - e.g. 0xE0FF0048 → writeMemory({region:'system_ram', offset:0x0048, ...}). " +
+            "address - e.g. 0xE0FF0048 → memory({op:'write', region:'system_ram', offset:0x0048, ...}). " +
             "C symbols have NO leading underscore in the m68k ELF (unlike SDCC's .map).",
         };
         if (r.binary) {

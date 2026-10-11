@@ -34,7 +34,7 @@ export function registerRecordTools(server, z, sessionKey) {
     "recordSession",
     "Run the loaded ROM for N frames, sampling screenshots and/or memory every sampleEvery frames. Returns a timeline the agent can analyze. Inputs are either held for the whole session (holdInputs) or scripted as {atFrame, ports} entries each held until the next (inputScript). " +
     "Screenshots (includeScreenshots, default true): every sampled frame ALWAYS streams to the human's /livestream (over REST or MCP, no flag needed). For the AGENT's response: pass outputDir to also write frame-<n>.png per sample (timeline gets screenshotPath), or inline:true to embed screenshotBase64 per entry (opt-in - NOT default, so image bytes don't flood your context). With neither, frames still go to /livestream and the response stays compact (just the timeline). Set includeScreenshots:false to skip capture entirely (memory-only runs). " +
-    "Memory (memorySamples): accepts the full readMemory region set incl. hardware registers (nes_apu_regs, etc.); hex appears per-sample in the timeline. For dense sampling (sampleEvery:1 over a long loop, e.g. APU regs across a music loop) add memoryOutputPath to stream rows to NDJSON on disk and keep the hex OUT of context - the response returns a compact summary {path, rows, regions, valueRanges} instead.",
+    "Memory (memorySamples): accepts the full memory({op:'read'}) region set incl. hardware registers (nes_apu_regs, etc.); hex appears per-sample in the timeline. For dense sampling (sampleEvery:1 over a long loop, e.g. APU regs across a music loop) add memoryOutputPath to stream rows to NDJSON on disk and keep the hex OUT of context - the response returns a compact summary {path, rows, regions, valueRanges} instead.",
     {
       frames: z.number().int().min(1).max(36000).default(300).describe("Total frames to run."),
       sampleEvery: z.number().int().min(1).max(600).default(30).describe("Capture a sample (screenshot and/or memory) every N frames."),
@@ -53,13 +53,13 @@ export function registerRecordTools(server, z, sessionKey) {
         .array(
           z.object({
             label: z.string(),
-            region: z.string().describe("memory region (full readMemory set incl. hardware registers; validated at runtime)"),
+            region: z.string().describe("memory region (full memory({op:'read'}) set incl. hardware registers; validated at runtime)"),
             offset: z.number().int().min(0),
             length: z.number().int().min(1).max(256),
           }),
         )
         .optional()
-        .describe("Memory regions to sample at each capture point. Accepts the full readMemory region set (incl. nes_apu_regs and other hardware registers). Tip: sampleEvery:1 + memoryOutputPath gives a per-frame telemetry stream (e.g. APU registers over a music loop) without flooding context with hex."),
+        .describe("Memory regions to sample at each capture point. Accepts the full memory({op:'read'}) region set (incl. nes_apu_regs and other hardware registers). Tip: sampleEvery:1 + memoryOutputPath gives a per-frame telemetry stream (e.g. APU registers over a music loop) without flooding context with hex."),
       includeScreenshots: z.boolean().default(true).describe("If false, skip PNG capture (just memory samples)."),
       outputDir: z.string().optional().describe("OPTIONAL. If set, also write per-sample PNGs (frame-<n>.png) to this dir; the timeline gets each one's `screenshotPath`. Captured frames stream to /livestream regardless; outputDir just additionally persists them to disk for the agent."),
       inline: z.boolean().default(false).describe("OPT-IN base64. If true, embed screenshotBase64 in each timeline entry. Default false - frames go to /livestream + (if outputDir) disk, but image BYTES are NOT put in your response context unless you ask. Only set this if you genuinely need the base64 inline."),

@@ -476,10 +476,10 @@ export function registerToolchainTools(server, z, sessionKey) {
         ? d.consumeHint(
             "show-after-first-build",
             "Build succeeded - your user can watch the game live by calling " +
-            "loadCategory({category:'show'}) then playtest({}). It returns immediately " +
+            "playtest({}). It returns immediately " +
             "and the window follows your rebuilds, so the emulator stays available to " +
-            "all other tools (screenshot, readMemory, saveState, pause, stepFrames, ...) " +
-            "while the human plays - screenshot() shows the same frame the human sees. " +
+            "all other tools (frame, memory, state, host, ...) " +
+            "while the human plays - frame({op:'screenshot'}) shows the same frame the human sees. " +
             "Recommended early in any session where a user is watching."
           )
         : null;
@@ -539,7 +539,7 @@ export function registerToolchainTools(server, z, sessionKey) {
         if (includeSymbols) {
           payload.symbols = result.symbols;
         } else {
-          payload.symbolsHint = "Pass `includeSymbols: true` to get the full .map/.sym text inline. Or call `addressToSymbol({pc})` to look up a single address without loading it.";
+          payload.symbolsHint = "Pass `includeSymbols: true` to get the full .map/.sym text inline. Or call `symbols({op:'addr', pc})` to look up a single address without loading it.";
         }
       }
       return jsonContent(payload);
@@ -844,7 +844,7 @@ export function registerToolchainTools(server, z, sessionKey) {
       maxmod: z.boolean().optional().describe("GBA - link maxmod for music (libmm.a). You still call mmInit/mmStart + hook mmVBlank."),
       rebuildSdk: z.boolean().optional().describe("GBA + Genesis - rebuild the bundled SDK (libtonc/libgba/maxmod/SGDK) from vendored source instead of the prebuilt seed (~20-40s). Only if you edited SDK source (else an `sdkEditIgnored` warning fires)."),
       lint: z.enum(["advisory", "strict"]).default("advisory").describe("output:'rom' SDCC - 'advisory' (default, warnings in issues[]) or 'strict' (any lint warning fails the build with stage:'lint' before the compiler runs - the SDCC crash-pattern guard)."),
-      includeSymbols: z.boolean().default(false).describe("output:'rom' - return the toolchain's symbol/map text inline (sdld .map / cc65 .sym). False = only symbolsBytes (call symbols/addressToSymbol to look up a PC). Maps can be 30+ KB."),
+      includeSymbols: z.boolean().default(false).describe("output:'rom' - return the toolchain's symbol/map text inline (sdld .map / cc65 .sym). False = only symbolsBytes (call symbols({op:'addr'}) to look up a PC). Maps can be 30+ KB."),
       resolveSymbols: z.array(z.string()).optional().describe("output:'romWithDebug' - resolve just these symbol NAMES (e.g. ['grid','score']) off the freshly-produced .dbg/.map and fold {resolvedSymbols:{grid:{address,hex,region?,ramOffset?}}} into the result. The CHEAP path to a WRAM variable's address: you get the addresses you asked for WITHOUT the 30-60KB map entering your context. Genesis work-RAM symbols come back with `ramOffset` for memory({region:'system_ram', offset}). Names that don't resolve are listed in `unresolvedSymbols`."),
       // run-only
       frames: z.number().int().min(1).max(100000).default(60).describe("output:'run' - frames to run before the screenshot (default 60)."),

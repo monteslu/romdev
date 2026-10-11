@@ -176,7 +176,7 @@ export function createDisclosure(server, z, categories, sessionKey) {
     if (!cat) {
       throw new Error(
         `unknown category '${name}'. Available: ${[...byName.keys()].join(", ")}, or 'all'. ` +
-        `Call listCategories() for descriptions.`
+        `Call catalog({op:'categories'}) for descriptions.`
       );
     }
     if (loaded.has(name)) {

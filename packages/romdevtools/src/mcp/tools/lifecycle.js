@@ -218,10 +218,10 @@ export function registerLifecycleTools(server, z, sessionKey) {
       core: resolved.coreName,
       mediaKind: host.status.mediaKind,
       ...(bytes ? { bytes: bytes.length } : { path: host.status.mediaPath }),
-      ...(settleFrames > 0 ? { settleFrames, settleNote: `The core ran ${settleFrames} warm-up frames during load to resolve real framebuffer geometry. They are NOT counted in frameCount (which stays 0 so your first stepFrames(N) advances it by exactly N), but they ARE real execution: the game's boot code has run and written RAM. Memory read now is post-boot state, not hardware power-on state.` } : {}),
+      ...(settleFrames > 0 ? { settleFrames, settleNote: `The core ran ${settleFrames} warm-up frames during load to resolve real framebuffer geometry. They are NOT counted in frameCount (which stays 0 so your first frame({op:'step', frames:N}) advances it by exactly N), but they ARE real execution: the game's boot code has run and written RAM. Memory read now is post-boot state, not hardware power-on state.` } : {}),
       ...(framebufferKnown
         ? { framebuffer: { width: host.status.fbWidth, height: host.status.fbHeight } }
-        : { framebufferNote: "Framebuffer dimensions are unknown until the core runs - call stepFrames first, then getStatus (the pre-boot default does not match the real output resolution)." }),
+        : { framebufferNote: "Framebuffer dimensions are unknown until the core runs - call frame({op:'step'}) first, then catalog({op:'status'}) (the pre-boot default does not match the real output resolution)." }),
       ...(appliedCheats ? { cheats: appliedCheats } : {}),
       ...(activeBezel ? { activeBezel } : {}),
     });
@@ -235,16 +235,16 @@ export function registerLifecycleTools(server, z, sessionKey) {
   server.tool(
     "loadMedia",
     "Load a ROM/disk/tape/program into a fresh host - resolves the libretro core automatically. " +
-    "Pass `path` (file on disk) OR `base64` (ROM bytes - e.g. straight from buildSource, no disk write, " +
+    "Pass `path` (file on disk) OR `base64` (ROM bytes - e.g. straight from build, no disk write, " +
     "for a fast iteration loop). `cheats` apply BEFORE the first frame (one call instead of loadMedia + " +
-    "applyCheat), so a boot-time code that changes a value the reset code reads is in effect from frame 0. " +
+    "cheats({op:'apply'})), so a boot-time code that changes a value the reset code reads is in effect from frame 0. " +
     "`slot:'b'` loads into the SECONDARY comparison host (a different platform is fine) so two cores can run " +
     "at once for frame({op:'sideBySide'}) - the original-vs-port compare loop; slot B does not affect slot A " +
     "or the livestream. " +
-    "NOTE: framebuffer dimensions are omitted until you stepFrames - the pre-boot default does not match the " +
+    "NOTE: framebuffer dimensions are omitted until you step frames (frame({op:'step'})) - the pre-boot default does not match the " +
     "real output resolution.",
     {
-      platform: z.string().describe("Platform id (e.g. 'nes', 'gb', 'c64'). Use listPlatforms() to discover."),
+      platform: z.string().describe("Platform id (e.g. 'nes', 'gb', 'c64'). Use platform({op:'list'}) to discover."),
       path: z.string().optional().describe("Absolute path to the media file. Provide this OR `base64`."),
       base64: z.string().optional().describe("Base64-encoded media bytes. Provide this OR `path`."),
       mediaKind: z.enum(MEDIA_KINDS).optional().describe("Default 'cartridge' for consoles, 'program' for C64."),
@@ -279,7 +279,7 @@ export function registerLifecycleTools(server, z, sessionKey) {
     "boot-seeded variables PERSIST). Pass `hard:true` for a TRUE power-cycle that reloads the ROM from scratch and " +
     "clears RAM + re-seeds boot state - use it when re-testing boot-time behavior (a soft reset boots the PREVIOUS " +
     "state).\n" +
-    "'pause': halt emulation (stepFrames returns 0 until resume). 'resume': continue.\n" +
+    "'pause': halt emulation (frame steps advance nothing until resume). 'resume': continue.\n" +
     "'play': run this session in REAL TIME on the server for `seconds` (default 60, max " + PLAY_MAX_SECONDS + ") from ONE call, " +
     "so the /livestream shows the game moving. Returns at once. Use it instead of looping frame({op:'step'}) to keep " +
     "the stream alive - never poll. The run ends when its seconds elapse, on host({op:'stop'}), on ANY other tool " +

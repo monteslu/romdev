@@ -399,7 +399,7 @@ export function registerInputTools(server, z, sessionKey) {
     "y/b/a, so set({a:true}) presses Genesis C and Genesis A is {y:true}. Prefer SPATIAL names (north/east/south/" +
     "west) or press/navigate's native aliases (Genesis c→a internally, SMS/GG 1/2→b/a). layout.faceButtons has the " +
     "exact map. NOTE on 'set': `requested` is what you SET, NOT proof the pad saw it - the game only reads input " +
-    "when ITS code polls; re-apply immediately before the consuming stepFrames and verify via the held-buttons RAM " +
+    "when ITS code polls; re-apply immediately before the consuming frame step and verify via the held-buttons RAM " +
     "byte, not this echo.",
     {
       op: z.enum(["set", "press", "sequence", "timeline", "navigate", "layout", "pressKey", "typeText", "joyport", "pointer", "wheel"]).describe("set/hold buttons; press one button; run a sequence; navigate a menu; get the input layout. WASMCART: pointer (absolute mouse/touch - position the cursor at an exact {x,y} and click; for carts that declare FLAG_POINTER), wheel (scroll delta for the frame). C64-ONLY: pressKey/typeText/joyport."),

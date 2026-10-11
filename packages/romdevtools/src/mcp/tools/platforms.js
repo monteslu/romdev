@@ -18,8 +18,8 @@ const PLATFORM_QUIRKS = {
       "LoROM header at $00FFC0 must be written BEFORE any large incbin that would extend past it. See lorom_multibank.asm starter snippet.",
       "Bank $00 has only ~32 KB before the header at $FFC0. Put CHR/audio/level data in bank $01+ (org $018000).",
       "SPC700 audio chip is separate from main 65816 CPU - upload driver via IPL handshake, communicate via $2140-$2143 mailbox ports. See audio_pipeline.asm.",
-      "DSP register $5C is KOFF, $6C is FLG. Many references swap them. Power-on FLG=$E0 (mute+reset). Confirmed by 4hr debugging.",
-      "Debugging tools available: getCPUState({cpu:'main'|'spc700'}), getAudioState({chip:'dsp'}), inspectSprites, inspectPalette, readMemory regions snes_oam/snes_cgram/snes_aram/snes_fillram.",
+      "DSP register $5C is KOFF, $6C is FLG. Many references swap them. Power-on FLG=$E0 (mute+reset). Confirmed on the bundled core.",
+      "Debugging tools available: cpu({op:'read', cpu:'main'|'spc700'}), audioDebug({op:'inspect', chip:'dsp'}), sprites({op:'inspect'}), palette({source:'live'}), memory({op:'read'}) regions snes_oam/snes_cgram/snes_aram/snes_fillram.",
     ],
     starterSnippets: ["lorom_header.asm", "lorom_multibank.asm", "reset_init.asm", "nmi_safe.asm", "oam_upload.asm", "cgram_upload.asm", "vram_dma_upload.asm", "pad_read.asm", "sprite_table_populate.asm", "audio_pipeline.asm"],
   },
@@ -35,7 +35,7 @@ const PLATFORM_QUIRKS = {
       "VDP at $C00000 (data) + $C00004 (control). 24 registers control video - vdp_init.s shows the standard 320×224 H40 setup.",
       "VDP DMA during ACTIVE display causes 'snow' artifacts. Only DMA during VBlank or HBlank windows. See sprite_table.s for the DMA sprite-table upload pattern.",
       "Genesis sprites use a LINKED LIST: each sprite has a link byte pointing to the next. Link 0 = end of list. Must initialize sprite 0's link even if you have just one sprite.",
-      "Debugging tools available: getCPUState({cpu:'main'}) for 68K, inspectSprites, inspectPalette, getAudioState({chip:'ym2612'|'psg'}), readMemory regions genesis_cram/genesis_vsram/genesis_vdp_regs/genesis_z80_ram/genesis_m68k.",
+      "Debugging tools available: cpu({op:'read', cpu:'main'}) for 68K, sprites({op:'inspect'}), palette({source:'live'}), audioDebug({op:'inspect', chip:'ym2612'|'psg'}), memory({op:'read'}) regions genesis_cram/genesis_vsram/genesis_vdp_regs/genesis_z80_ram/genesis_m68k.",
     ],
     starterSnippets: ["header.s", "vdp_init.s", "sprite_table.s", "nmi_safe.s", "z80_bootstrap.s"],
   },
@@ -46,9 +46,9 @@ const PLATFORM_QUIRKS = {
     notes: [
       "Toolchain is cc65 (HuC6280 = 65C02 superset), language C by default. The conio text library is the fastest path to a visible screen - it inits the HuC6270 VDC + HuC6260 VCE and uploads a font for you.",
       "EMPTY-BSS TRAP: cc65's pce/crt0.s clears .bss with `tii ...,__BSS_SIZE__-1`. With NO globals, __BSS_SIZE__=0 → ld65 'Range error in pce/crt0.s' AND a BLACK screen. ALWAYS keep at least one (ideally 2+ byte) global/static. See the hello_pce.c starter's `_keep_bss`.",
-      "Color is the HuC6260 VCE: 512 entries (256 BG + 256 SPR), 9-bit GRB (0bGGG_RRR_BBB). inspectPalette decodes it; area:'bg'|'sprite' narrows. Slot 0 of each 16-color sub-palette = transparent.",
-      "Sprites are the HuC6270 SATB: 64 sprites, 16/32 wide × 16/32/64 tall, pattern codes index 16×16 cells in VRAM. inspectSprites reads it.",
-      "Debugging: getCPUState (huc6280), inspectPalette, inspectSprites, getRenderingContext (VDC R5 screen-enable + scroll), getAudioState({chip:'pce'}) (6-channel PSG), getMemoryMap, readMemory regions pce_vdc_vram/pce_vdc_satb/pce_vdc_regs/pce_vce_palette/pce_cpu_regs/pce_psg_regs.",
+      "Color is the HuC6260 VCE: 512 entries (256 BG + 256 SPR), 9-bit GRB (0bGGG_RRR_BBB). palette({source:'live'}) decodes it; area:'bg'|'sprite' narrows. Slot 0 of each 16-color sub-palette = transparent.",
+      "Sprites are the HuC6270 SATB: 64 sprites, 16/32 wide × 16/32/64 tall, pattern codes index 16×16 cells in VRAM. sprites({op:'inspect'}) reads it.",
+      "Debugging: cpu({op:'read'}) (huc6280), palette({source:'live'}), sprites({op:'inspect'}), background({view:'renderState'}) (VDC R5 screen-enable + scroll), audioDebug({op:'inspect', chip:'pce'}) (6-channel PSG), symbols({op:'map'}), memory({op:'read'}) regions pce_vdc_vram/pce_vdc_satb/pce_vdc_regs/pce_vce_palette/pce_cpu_regs/pce_psg_regs.",
     ],
     starterSnippets: ["hello_pce.c"],
   },
@@ -61,8 +61,8 @@ const PLATFORM_QUIRKS = {
       "INIT MUST NOT RETURN: C-BIOS CALLs the cart INIT to hand over the machine. If it `ret`s, the BIOS prints 'No cartridge found' (after running your code). End main() in an infinite loop - see hello_msx.c.",
       "TIMING: C-BIOS shows its logo for ~2-3s (≈150 frames) BEFORE calling the cart INIT. Step >= 240 frames before expecting output on screen.",
       "Fastest visible output is BIOS calls: INITXT ($006C) sets the 40-col text screen + enables display, CHPUT ($00A2) prints the char in A. Put asm data labels INSIDE a function's asm block (file-scope __asm is a SDCC syntax error).",
-      "Video is the V9938 VDP: VRAM up to 128KB, 16-entry programmable palette (9-bit GRB) on MSX2 bitmap modes, fixed TMS9918 palette on MSX1 modes. inspectPalette picks the right source automatically.",
-      "Debugging: getCPUState (z80), inspectPalette, inspectSprites (VRAM sprite-attr table), getRenderingContext (VDP R1 screen-enable + mode + VRAM table bases), getAudioState({chip:'ay8910'}) (3 square + noise + envelope), getMemoryMap (pass the sdld .map), readMemory regions msx_vram/msx_vdp_regs/msx_vdp_status/msx_palette/msx_cpu_regs/msx_psg_regs.",
+      "Video is the V9938 VDP: VRAM up to 128KB, 16-entry programmable palette (9-bit GRB) on MSX2 bitmap modes, fixed TMS9918 palette on MSX1 modes. palette({source:'live'}) picks the right source automatically.",
+      "Debugging: cpu({op:'read'}) (z80), palette({source:'live'}), sprites({op:'inspect'}) (VRAM sprite-attr table), background({view:'renderState'}) (VDP R1 screen-enable + mode + VRAM table bases), audioDebug({op:'inspect', chip:'ay8910'}) (3 square + noise + envelope), symbols({op:'map'}) (pass the sdld .map), memory({op:'read'}) regions msx_vram/msx_vdp_regs/msx_vdp_status/msx_palette/msx_cpu_regs/msx_psg_regs.",
     ],
     starterSnippets: ["hello_msx.c", "msx_crt0.s"],
   },
@@ -72,7 +72,7 @@ const PLATFORM_QUIRKS = {
     headerLocation: "PS-EXE: 'PS-X EXE' magic at 0, entry (pc0) at +0x10, load addr (t_addr) at +0x18; 2048-byte header then code",
     notes: [
       "32-bit MIPS R3000 (little-endian), framebuffer GPU. Runs via PCSX-ReARMed with its BUILT-IN HLE BIOS - no firmware file needed, software-rendered. Load a .exe (PS-EXE), or a disc image if you have one.",
-      "WORKS NOW: build (buildSource language:'c' → mips-elf-gcc → a PS-EXE the HLE BIOS runs; write GPU/SPU registers directly, no SDK yet), run, frame({op:'screenshot'}), cpu({op:'read'}) (live R3000 registers), cheats, readMemory/writeMemory (system_ram = 2MB main RAM), disasm + decompile (Ghidra MIPS C), the live-debug tools breakpoint({on:'pc'/'write'/'read'}) + watch({on:'range'}), AND getAudioState({chip:'spu'}) (24-voice SPU). MIPS is little-endian here.",
+      "WORKS NOW: build (build({output:'rom'}) language:'c' → mips-elf-gcc → a PS-EXE the HLE BIOS runs; write GPU/SPU registers directly, no SDK yet), run, frame({op:'screenshot'}), cpu({op:'read'}) (live R3000 registers), cheats, memory({op:'read'|'write'}) (system_ram = 2MB main RAM), disasm + decompile (Ghidra MIPS C), the live-debug tools breakpoint({on:'pc'/'write'/'read'}) + watch({on:'range'}), AND audioDebug({op:'inspect', chip:'spu'}) (24-voice SPU). MIPS is little-endian here.",
       "The bare build path: a minimal crt0 sets the stack + clears .bss + calls main(); code loads at 0x80010000. No PSn00bSDK runtime yet - drive the GPU at ports 0x1F801810/0x1F801814. The framebuffer renderer has no tile/sprite inspectors - use screenshot + memory.",
       "For higher fidelity (GL hardware renderer) a real PS1 BIOS + the beetle_psx_hw core is the alternative, but the HLE pcsx_rearmed path ships clean with zero firmware.",
     ],
@@ -84,7 +84,7 @@ const PLATFORM_QUIRKS = {
     headerLocation: ".z64 (big-endian) magic 80 37 12 40 at 0; entry point (big-endian word) at +0x08; 0x1000-byte IPL3 bootcode then game code. .v64/.n64 byte orders are auto-normalized.",
     notes: [
       "32-bit MIPS R4300 (big-endian), 3D RDP/RSP. Runs via ParaLLEl-N64 with the glide64 GL renderer - HW-rendered on a real GPU through the native GL stack (native-gles + webgl-node), which ships as a required dependency, so nothing extra to install.",
-      "WORKS NOW: build (buildSource language:'c' → mips-elf-gcc → a big-endian MIPS image; bare crt0, no libdragon yet so it's logic-only for now), run, frame({op:'screenshot'}) (real 3D frames, headless via FBO readback), cpu({op:'read'}) (live R4300 registers), cheats, readMemory/writeMemory (system_ram = 8MB RDRAM, 0x80xxxxxx maps to offset 0), disasm + decompile (Ghidra MIPS C), breakpoint + watch (live-debug instrumentation), AND getAudioState({chip:'ai'}) (audio output: sample rate + playing). MIPS is big-endian here.",
+      "WORKS NOW: build (build({output:'rom'}) language:'c' → mips-elf-gcc → a big-endian MIPS image; bare crt0, no libdragon yet so it's logic-only for now), run, frame({op:'screenshot'}) (real 3D frames, headless via FBO readback), cpu({op:'read'}) (live R4300 registers), cheats, memory({op:'read'|'write'}) (system_ram = 8MB RDRAM, 0x80xxxxxx maps to offset 0), disasm + decompile (Ghidra MIPS C), breakpoint + watch (live-debug instrumentation), AND audioDebug({op:'inspect', chip:'ai'}) (audio output: sample rate + playing). MIPS is big-endian here.",
       "build caveat: a fully BOOTABLE N64 ROM needs the IPL3 bootcode + a libdragon-style header (libdragon SDK forthcoming). The bare build compiles+links your C to a flat image - great for logic/RE, not yet a self-booting cart. 3D renderer has no tile/sprite inspectors - use screenshot + memory.",
       "If frame() errors pointing at GL, the native GL module failed to build/download during install - reinstall romdevtools and check that step's output.",
     ],
@@ -164,15 +164,15 @@ export function registerPlatformTools(server, z) {
     "'list': every platform with its emulator core, toolchain(s), available languages (+ documented default), and " +
     "platform-specific quirks. Call this FIRST to discover what's possible + check a non-default language is " +
     "available before asking build for it.\n" +
-    "'capabilities': the CAPABILITY CONTRACT - which platform-sensitive ops a platform supports (inspectSprites/" +
-    "Palette/Background, cpuState, audioDebug, renderingContext, cart, disasm, decompile), plus its cpuFamily, " +
+    "'capabilities': the CAPABILITY CONTRACT - which platform-sensitive ops a platform supports (op keys: inspectSprites = " +
+    "sprites, inspectPalette = palette, inspectBackground/renderingContext = background, cpuState = cpu, audioDebug, cart, disasm, decompile), plus its cpuFamily, " +
     "renderingKind (tile/framebuffer/3d), introspection depth, CPUs, audio chips, and memory regions. Pass `platform` " +
     "for one, omit it for the whole matrix. Check this BEFORE calling a platform-sensitive tool to avoid an " +
     "'unsupported' error - every tool that can't do an op on a platform returns {unsupported:true, platform, op, " +
     "reason, alternative}.\n" +
     "'resolve': resolved core paths for a platform (debugging aid).\n" +
     "'toolchains': the bundled homebrew toolchains (all Tier-1 = bundled WASM, no install). Pass `id` to confirm a " +
-    "specific toolchain's install status (a no-op in v1 - everything's bundled).\n" +
+    "specific toolchain's install status (everything is bundled, so it is always installed).\n" +
     "'docs': the doc names available for a platform. 'doc': the full markdown of one (`name`: mental_model / " +
     "troubleshooting / upstream_sources; `platform:'romhacking'` + `name:'playbook'` for the RE decision tree). " +
     "Read MENTAL_MODEL before writing code, and the romhacking playbook before a hack.",

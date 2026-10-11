@@ -137,9 +137,9 @@ const REGION_INFO = {
   genesis_vsram:     { endianness: "big",    wordSize: 2, note: "128B vertical scroll table (per-cell or per-line depending on VDP reg $0B)" },
   genesis_vdp_regs:  { endianness: "big",    wordSize: 1, note: "32 VDP registers $00-$1F (write-only on hardware; this is gpgx's mirror)" },
   genesis_z80_ram:   { endianness: "little", wordSize: 1, note: "8KB Z80 sound CPU RAM (Z80 is little-endian even though main CPU is big)" },
-  genesis_m68k:      { endianness: "little", wordSize: 4, note: "Live m68ki_cpu_core struct from gpgx. Host-side fields are wasm32 native LE. Use getCPUState({platform:'genesis'}) instead of decoding by hand." },
+  genesis_m68k:      { endianness: "little", wordSize: 4, note: "Live m68ki_cpu_core struct from gpgx. Host-side fields are wasm32 native LE. Use cpu({op:'read'}) instead of decoding by hand." },
   genesis_ym2612:    { endianness: "little", wordSize: 1, note: "YM2612 internal context snapshot (gpgx-private layout - diff-only)" },
-  genesis_psg:       { endianness: "little", wordSize: 1, note: "PSG (SN76489) internal context snapshot - parse via getAudioState({chip:'psg'})" },
+  genesis_psg:       { endianness: "little", wordSize: 1, note: "PSG (SN76489) internal context snapshot - parse via audioDebug({op:'inspect', chip:'psg'})" },
   genesis_svp_dram:  { endianness: "little", wordSize: 2, note: "SVP carts only: the SSP1601 DSP's 128KB DRAM ($300000-$31FFFF on the 68000 side) as gpgx stores it, host-order (little-endian) 16-bit words" },
   genesis_svp_iram:  { endianness: "little", wordSize: 2, note: "SVP carts only: the SSP1601's 2KB instruction RAM (little-endian 16-bit words)" },
   genesis_svp_ssp:   { endianness: "little", wordSize: 4, note: "SVP carts only: gpgx's ssp1601_t (internal RAM banks, registers, pointer regs, stack, PMAC modes, emu_status)" },
@@ -242,7 +242,7 @@ async function memRead(sessionKey, { region, offset = 0, length, offsets, output
       if (region === "video_ram" && host.status.platform === "genesis") {
         note = (note ? note + " " : "") +
           "GENESIS: these are RAW host-LE bytes - each 16-bit VRAM word's two bytes are SWAPPED " +
-          "vs the VDP-logical order, so this is not a direct tile/pixel map. getTile({logicalPixels:true}) " +
+          "vs the VDP-logical order, so this is not a direct tile/pixel map. tiles({op:'pixels', logicalPixels:true}) " +
           "decodes tiles in render order for you.";
       }
       const meta = {
@@ -259,7 +259,7 @@ async function memRead(sessionKey, { region, offset = 0, length, offsets, output
       // Large reads: path-or-inline. Write the RAW bytes to disk (not hex) so
       // the artifact is directly usable; inline returns the hex string.
       if (bytes.length > INLINE_HEX_LIMIT && !inline) {
-        const { path, bytes: written } = writeOutput(bytes, { outputPath, what: `readMemory(${region})` });
+        const { path, bytes: written } = writeOutput(bytes, { outputPath, what: `memory read (${region})` });
         return jsonContent({ ...meta, path, bytes: written });
       }
       // Small read WITH an explicit outputPath: honor it - write the raw bytes
@@ -269,7 +269,7 @@ async function memRead(sessionKey, { region, offset = 0, length, offsets, output
       // when the whole point of outputPath was keeping it out of context.
       const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
       if (outputPath) {
-        const { path, bytes: written } = writeOutput(bytes, { outputPath, what: `readMemory(${region})` });
+        const { path, bytes: written } = writeOutput(bytes, { outputPath, what: `memory read (${region})` });
         if (echo === false) return jsonContent({ ...meta, path, bytes: written });
         return jsonContent({ ...meta, path, bytes: written, hex });
       }
@@ -283,8 +283,8 @@ async function memWrite(sessionKey, { region, offset = 0, hex, base64, data, byt
           ? `Array payloads aren't accepted. Convert to a hex string: hex: bytes.map(b => b.toString(16).padStart(2,'0')).join('')`
           : "Pass the payload as `hex` (string) or `base64` (string).";
         throw new Error(
-          `writeMemory: '${wrongName}' is not a valid arg. ${hint} ` +
-          `Example: writeMemory({region:"${region}", offset:${offset}, hex:"42"})`
+          `memory({op:'write'}): '${wrongName}' is not a valid arg. ${hint} ` +
+          `Example: memory({op:"write", region:"${region}", offset:${offset}, hex:"42"})`
         );
       }
       let buf;
@@ -292,12 +292,12 @@ async function memWrite(sessionKey, { region, offset = 0, hex, base64, data, byt
         // Strip whitespace/underscore/$ separators FIRST: "AB CD" failed the odd-length check and the error blamed length, so
         // the caller re-counted nibbles instead of spotting the space. Same
         // cleaning findHex has always done.
-        buf = parseHexBytes(hex, "writeMemory: hex");
+        buf = parseHexBytes(hex, "memory({op:'write'}): hex");
       } else if (base64) {
         buf = new Uint8Array(Buffer.from(base64, "base64"));
       } else {
         throw new Error(
-          "writeMemory: missing payload. Pass `hex` (e.g. hex:'42') or `base64`. " +
+          "memory({op:'write'}): missing payload. Pass `hex` (e.g. hex:'42') or `base64`. " +
           "If you intended to pass an array, convert it to hex: " +
           "bytes.map(b => b.toString(16).padStart(2,'0')).join('')"
         );

@@ -2692,7 +2692,7 @@ export async function createProjectImpl({ platform, name, path: projPath, title,
   const hasTemplates = !!TEMPLATES[platform];
   const isSimple = !!SIMPLE_STARTERS[platform];
   if (!hasTemplates && !isSimple) {
-    throw new Error(`createProject doesn't yet support platform '${platform}'. Supported: ${[...Object.keys(TEMPLATES), ...Object.keys(SIMPLE_STARTERS)].sort().join(", ")}`);
+    throw new Error(`examples({op:'fork'}) doesn't yet support platform '${platform}'. Supported: ${[...Object.keys(TEMPLATES), ...Object.keys(SIMPLE_STARTERS)].sort().join(", ")}`);
   }
 
   /** @type {any} */
@@ -3232,16 +3232,16 @@ async function _createGameCore({ platform, genre, name, path: projPath, title, o
         const projTemplates = platformTemplates ? Object.keys(platformTemplates) : [];
         const hint = projTemplates.length ? projTemplates.join(", ") : null;
         throw new Error(
-          `createGame: no genre scaffolds for platform '${platform}' yet. ` +
+          `examples({op:'fork'}): no genre scaffolds for platform '${platform}' yet. ` +
           `Supported platforms: ${genrePlatforms.join(", ") || "(none)"}. ` +
           (hint
-            ? `For ${platform}, use createProject({platform:"${platform}", template:"..."}) with one of: ${hint}.`
-            : `For other platforms, use createProject({platform, template:"default"}) and build up from there.`)
+            ? `For ${platform}, use examples({op:'fork', platform:"${platform}", template:"...", name, path}) with one of: ${hint}.`
+            : `For other platforms, use examples({op:'fork', platform, template:"default", name, path}) and build up from there.`)
         );
       }
       if (!availableGenres.includes(genre)) {
         throw new Error(
-          `createGame: genre '${genre}' not supported for platform '${platform}'. ` +
+          `examples({op:'fork'}): genre '${genre}' not supported for platform '${platform}'. ` +
           `Available genres: ${availableGenres.join(", ")}.`
         );
       }

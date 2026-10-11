@@ -187,7 +187,7 @@ export async function computeVerify(host, frames, sessionKey) {
     platform,
     ...(ok
       ? { note: `Frame ${frameCount}: rendering looks alive (${distinctColors} colors, ${Math.round((100 - pixels.dominantPct) * 10) / 10}% of the screen is non-backdrop).` }
-      : { issues, note: "Rendering looks broken - see issues[]. For per-platform thresholds + the full checklist, getPlatformDoc({platform, doc:'mental_model'})." }),
+      : { issues, note: "Rendering looks broken - see issues[]. For per-platform thresholds + the full checklist, platform({op:'doc', platform, name:'mental_model'})." }),
     pixels, render,
   };
 }
@@ -975,7 +975,7 @@ export function registerFrameTools(server, z, sessionKey) {
     "Returns {verified:true|false|null, issues[], pixels, render}. verified:null + unsettled when no frame has been " +
     "stepped yet (it won't cry wolf on boot - step first). issues[] flags blankScreen/nearlyBlank/renderDisabled. " +
     "renderDisabled is only raised when the registers SAY so (never on an undecodable platform). Pass/fail with no " +
-    "image tokens; for WHAT to fix, getPlatformDoc({platform, doc:'mental_model'}).\n" +
+    "image tokens; for WHAT to fix, platform({op:'doc', platform, name:'mental_model'}).\n" +
     "'verifyRecompile': ONE call that verifies a recompiled wasmcart against its reference core. Loads `cart` (.wasc or bare " +
     ".wasm) in slot A and the source ROM `reference` in slot B (platform from the cart's romdev.recompile section or " +
     "`platform`), drives BOTH with one `input` schedule ('frame:buttons:hold,...' in REFERENCE frames; the wasmcart host maps " +

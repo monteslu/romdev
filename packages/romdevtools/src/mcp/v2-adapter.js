@@ -1,6 +1,6 @@
 // A `.tool()` face over the v2 (2026-07-28) McpServer.
 //
-// romdev registers 35 tools through the v1 shape:
+// romdev registers 38 tools through the v1 shape:
 //
 //     server.tool(name, description, zodRawShape, handler)
 //
