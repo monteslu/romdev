@@ -102,6 +102,9 @@ cp "$RDBG_SRC/romdev_debug.h" "$RDBG_SRC/romdev_debug.c" "$SNES9X_DIR/"
 # reference and a recompiled cart write identical bytes.
 cp "$PROJECT_DIR/scripts/recompile-gen/snes9x-chips/glue/romdev_chipstate.h" "$SNES9X_DIR/libretro/"
 ROMDEV_INC="-I$SNES9X_DIR"
+# Keep build-machine paths out of the shipped module (assert/__FILE__ strings
+# from snes9x and ares).
+PREFIX_MAP="-ffile-prefix-map=$BUILD_DIR=/build -ffile-prefix-map=$PROJECT_DIR=/romdev"
 
 # Build the libretro static archive (.a) using snes9x's own emscripten
 # Makefile platform.
@@ -109,7 +112,7 @@ cd "$SNES9X_DIR/libretro"
 emmake make platform=emscripten clean >/dev/null 2>&1 || true
 # Drop a stale renamed .a so find -quit can't pick it over the fresh build.
 find . -maxdepth 1 -name "*_libretro*.a" -delete 2>/dev/null || true
-emmake make platform=emscripten -j"${JOBS:-$(nproc)}" INCFLAGS_PLATFORM="$ROMDEV_INC"
+emmake make platform=emscripten -j"${JOBS:-$(nproc)}" INCFLAGS_PLATFORM="$ROMDEV_INC $PREFIX_MAP"
 
 # Locate the produced archive. snes9x may emit `.a` or `.bc` depending
 # on the upstream Makefile version; both are LLVM IR archives that emcc
@@ -126,7 +129,7 @@ fi
 
 # Compile the shared romdev_debug.c + add it to the archive so its exports link in.
 RDBG_OBJ="$SNES9X_DIR/romdev_debug.o"
-emcc -c -O2 "$SNES9X_DIR/romdev_debug.c" -o "$RDBG_OBJ"
+emcc -c -O2 $PREFIX_MAP "$SNES9X_DIR/romdev_debug.c" -o "$RDBG_OBJ"
 emar rcs "$CORE_LIB" "$RDBG_OBJ"
 
 # The ares chips (see above): ares's sources with ares's language level
@@ -136,13 +139,13 @@ emar rcs "$CORE_LIB" "$RDBG_OBJ"
 FWCHIP_OBJ_DIR="$SNES9X_DIR/romdev-fwchip-obj"
 rm -rf "$FWCHIP_OBJ_DIR"; mkdir -p "$FWCHIP_OBJ_DIR/include/ares"
 cp "$FWCHIP_GLUE/romdev_ares.hpp" "$FWCHIP_OBJ_DIR/include/ares/ares.hpp"
-FWCHIP_FLAGS=(-O2 -std=c++20 -Wno-everything -I"$FWCHIP_OBJ_DIR/include" -I"$FWCHIP_GLUE" -I"$ARES_DIR/nall" -I"$ARES_DIR" -I"$ARES_DIR/ares" -I"$ARES_DIR/libco")
+FWCHIP_FLAGS=(-O2 $PREFIX_MAP -std=c++20 -Wno-everything -I"$FWCHIP_OBJ_DIR/include" -I"$FWCHIP_GLUE" -I"$ARES_DIR/nall" -I"$ARES_DIR" -I"$ARES_DIR/ares" -I"$ARES_DIR/libco")
 em++ -c "${FWCHIP_FLAGS[@]}" "$ARES_DIR/ares/component/processor/upd96050/upd96050.cpp" -o "$FWCHIP_OBJ_DIR/upd96050.o"
 em++ -c "${FWCHIP_FLAGS[@]}" "$ARES_DIR/ares/component/processor/arm7tdmi/arm7tdmi.cpp" -o "$FWCHIP_OBJ_DIR/arm7tdmi.o"
 em++ -c "${FWCHIP_FLAGS[@]}" "$FWCHIP_GLUE/glue_necdsp.cpp" -o "$FWCHIP_OBJ_DIR/glue_necdsp.o"
 em++ -c "${FWCHIP_FLAGS[@]}" "$FWCHIP_GLUE/glue_armdsp.cpp" -o "$FWCHIP_OBJ_DIR/glue_armdsp.o"
 # the ARM is a cothread, as in ares: romdev's libco backend (Asyncify inside the module)
-emcc -c -O2 -I"$ARES_DIR/libco" "$PROJECT_DIR/scripts/patches/libco-wasm/libco-wasm.c" -o "$FWCHIP_OBJ_DIR/libco-wasm.o"
+emcc -c -O2 $PREFIX_MAP -I"$ARES_DIR/libco" "$PROJECT_DIR/scripts/patches/libco-wasm/libco-wasm.c" -o "$FWCHIP_OBJ_DIR/libco-wasm.o"
 emar rcs "$CORE_LIB" "$FWCHIP_OBJ_DIR"/*.o
 
 # Final emcc link → WASM module. Flags mirror retroemu's snes9x.sh so the
