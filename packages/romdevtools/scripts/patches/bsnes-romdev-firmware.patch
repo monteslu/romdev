@@ -1,0 +1,201 @@
+diff --git a/bsnes/sfc/cartridge/load.cpp b/bsnes/sfc/cartridge/load.cpp
+index 21b50de..c5f6f80 100644
+--- a/bsnes/sfc/cartridge/load.cpp
++++ b/bsnes/sfc/cartridge/load.cpp
+@@ -401,6 +401,18 @@ auto Cartridge::loadARMDSP(Markup::Node node) -> void {
+   }
+ }
+ 
++//romdev: a coprocessor firmware file the cart needs and romdev does not ship;
++//target-libretro/romdev_bsnes.cpp refuses the load with this message
++extern char romdev_load_error[512];
++static auto romdevFirmwareName(const Emulator::Game::Memory& memory) -> string {
++  if(memory.identifier) return string{memory.identifier}.downcase();
++  return string{memory.name()}.replace(".program.rom", "").replace(".data.rom", "");
++}
++static auto romdevMissingFirmware(string base) -> void {
++  if(romdev_load_error[0]) return;
++  snprintf(romdev_load_error, 512, "romdev: this cart's coprocessor needs its firmware, which romdev does not ship: put the user's copy in the system directory as %s.rom (the program ROM then the data ROM), or %s.program.rom and %s.data.rom\n", base.data(), base.data(), base.data());
++}
++
+ //processor(architecture=HG51BS169)
+ auto Cartridge::loadHitachiDSP(Markup::Node node, uint roms) -> void {
+   for(auto& word : hitachidsp.dataROM) word = 0x000000;
+@@ -428,7 +440,14 @@ auto Cartridge::loadHitachiDSP(Markup::Node node, uint roms) -> void {
+     }
+   }
+ 
+-  if(configuration.hacks.coprocessor.preferHLE) {
++  //romdev: without the Cx4's data ROM in the system directory (romdev does not
++  //ship it), the high-level emulation, which needs none
++  bool romdevNoData = false;
++  if(auto memory = node["memory(type=ROM,content=Data,architecture=HG51BS169)"]) {
++    if(auto file = game.memory(memory)) romdevNoData = !platform->open(ID::SuperFamicom, file->name(), File::Read);
++  }
++
++  if(configuration.hacks.coprocessor.preferHLE || romdevNoData) {
+     has.Cx4 = true;
+     for(auto map : node.find("map")) {
+       loadMap(map, {&Cx4::read, &cx4}, {&Cx4::write, &cx4});
+@@ -445,12 +464,6 @@ auto Cartridge::loadHitachiDSP(Markup::Node node, uint roms) -> void {
+     if(auto file = game.memory(memory)) {
+       if(auto fp = platform->open(ID::SuperFamicom, file->name(), File::Read)) {
+         for(auto n : range(1 * 1024)) hitachidsp.dataROM[n] = fp->readl(3);
+-      } else {
+-        for(auto n : range(1 * 1024)) {
+-          hitachidsp.dataROM[n]  = hitachidsp.staticDataROM[n * 3 + 0] <<  0;
+-          hitachidsp.dataROM[n] |= hitachidsp.staticDataROM[n * 3 + 1] <<  8;
+-          hitachidsp.dataROM[n] |= hitachidsp.staticDataROM[n * 3 + 2] << 16;
+-        }
+       }
+     }
+   }
+@@ -486,12 +499,13 @@ auto Cartridge::loaduPD7725(Markup::Node node) -> void {
+   }
+ 
+   bool failed = false;
++  string romdevMissing;  //romdev: the first firmware file not found
+ 
+   if(auto memory = node["memory(type=ROM,content=Program,architecture=uPD7725)"]) {
+     if(auto file = game.memory(memory)) {
+       if(auto fp = platform->open(ID::SuperFamicom, file->name(), File::Read)) {
+         for(auto n : range(2048)) necdsp.programROM[n] = fp->readl(3);
+-      } else failed = true;
++      } else { failed = true; romdevMissing = romdevFirmwareName(*file); }
+     }
+   }
+ 
+@@ -499,19 +513,15 @@ auto Cartridge::loaduPD7725(Markup::Node node) -> void {
+     if(auto file = game.memory(memory)) {
+       if(auto fp = platform->open(ID::SuperFamicom, file->name(), File::Read)) {
+         for(auto n : range(1024)) necdsp.dataROM[n] = fp->readl(2);
+-      } else failed = true;
++      } else { failed = true; if(!romdevMissing) romdevMissing = romdevFirmwareName(*file); }
+     }
+   }
+ 
+   if(failed || configuration.hacks.coprocessor.preferHLE) {
+     auto manifest = BML::serialize(game.document);
+-    if(manifest.find("identifier: DSP1")) {  //also matches DSP1B
+-      has.DSP1 = true;
+-      for(auto map : node.find("map")) {
+-        loadMap(map, {&DSP1::read, &dsp1}, {&DSP1::write, &dsp1});
+-      }
+-      return;
+-    }
++    //romdev: no DSP-1 high-level emulation: it reads the chip's data ROM, which
++    //romdev does not ship (scripts/patches/bsnes/strip-firmware.mjs); the chip
++    //runs from the user's firmware or the cart is refused
+     if(manifest.find("identifier: DSP2")) {
+       has.DSP2 = true;
+       for(auto map : node.find("map")) {
+@@ -529,6 +539,7 @@ auto Cartridge::loaduPD7725(Markup::Node node) -> void {
+   }
+ 
+   if(failed) {
++    romdevMissingFirmware(romdevMissing);
+     //throw an error to the user
+     platform->open(ID::SuperFamicom, "DSP3", File::Read, File::Required);
+     return;
+@@ -566,12 +577,13 @@ auto Cartridge::loaduPD96050(Markup::Node node) -> void {
+   }
+ 
+   bool failed = false;
++  string romdevMissing;  //romdev: the first firmware file not found
+ 
+   if(auto memory = node["memory(type=ROM,content=Program,architecture=uPD96050)"]) {
+     if(auto file = game.memory(memory)) {
+       if(auto fp = platform->open(ID::SuperFamicom, file->name(), File::Read)) {
+         for(auto n : range(16384)) necdsp.programROM[n] = fp->readl(3);
+-      } else failed = true;
++      } else { failed = true; romdevMissing = romdevFirmwareName(*file); }
+     }
+   }
+ 
+@@ -579,24 +591,18 @@ auto Cartridge::loaduPD96050(Markup::Node node) -> void {
+     if(auto file = game.memory(memory)) {
+       if(auto fp = platform->open(ID::SuperFamicom, file->name(), File::Read)) {
+         for(auto n : range(2048)) necdsp.dataROM[n] = fp->readl(2);
+-      } else failed = true;
++      } else { failed = true; if(!romdevMissing) romdevMissing = romdevFirmwareName(*file); }
+     }
+   }
+ 
+   if(failed || configuration.hacks.coprocessor.preferHLE) {
+     auto manifest = BML::serialize(game.document);
+-    if(manifest.find("identifier: ST010")) {
+-      has.ST0010 = true;
+-      if(auto memory = node["memory(type=RAM,content=Data,architecture=uPD96050)"]) {
+-        for(auto map : memory.find("map")) {
+-          loadMap(map, {&ST0010::read, &st0010}, {&ST0010::write, &st0010});
+-        }
+-      }
+-      return;
+-    }
++    //romdev: no ST010 high-level emulation: it reads tables from the chip's
++    //data ROM, which romdev does not ship (scripts/patches/bsnes/strip-firmware.mjs)
+   }
+ 
+   if(failed) {
++    romdevMissingFirmware(romdevMissing);
+     //throw an error to the user
+     platform->open(ID::SuperFamicom, "ST011", File::Read, File::Required);
+     return;
+diff --git a/bsnes/sfc/coprocessor/icd/icd.cpp b/bsnes/sfc/coprocessor/icd/icd.cpp
+index 1b5199c..5837620 100644
+--- a/bsnes/sfc/coprocessor/icd/icd.cpp
++++ b/bsnes/sfc/coprocessor/icd/icd.cpp
+@@ -78,16 +78,30 @@ auto ICD::clockFrequency() const -> uint {
+   return Frequency ? Frequency : system.cpuFrequency();
+ }
+ 
++//romdev: a firmware file the cart needs (sfc/cartridge/load.cpp)
++extern char romdev_load_error[512];
++
+ auto ICD::load() -> bool {
+   information = {};
+ 
++  //romdev: the Super Game Boy boot ROM is the user's (romdev does not ship
++  //it), sgb_boot.bin / sgb2_boot.bin from the system directory
++  const char* romdevBoot = Frequency == 0 ? "sgb_boot.bin" : "sgb2_boot.bin";
++  uint8_t romdevBootROM[256];
++  auto romdevFp = platform->open(ID::SuperFamicom, romdevBoot, File::Read);
++  if(!romdevFp || romdevFp->size() != 256) {
++    snprintf(romdev_load_error, 512, "romdev: the Super Game Boy needs its boot ROM, which romdev does not ship: put the user's copy in the system directory as %s (256 bytes)\n", romdevBoot);
++    return false;
++  }
++  romdevFp->read(romdevBootROM, 256);
++
+   GB_random_set_enabled(configuration.hacks.entropy != "None");
+   if(Frequency == 0) {
+     GB_init(&sameboy, GB_MODEL_SGB_NO_SFC);
+-    GB_load_boot_rom_from_buffer(&sameboy, (const unsigned char*)&SGB1BootROM[0], 256);
++    GB_load_boot_rom_from_buffer(&sameboy, romdevBootROM, 256);
+   } else {
+     GB_init(&sameboy, GB_MODEL_SGB2_NO_SFC);
+-    GB_load_boot_rom_from_buffer(&sameboy, (const unsigned char*)&SGB2BootROM[0], 256);
++    GB_load_boot_rom_from_buffer(&sameboy, romdevBootROM, 256);
+   }
+   GB_set_sample_rate_by_clocks(&sameboy, 256);
+   GB_set_highpass_filter_mode(&sameboy, GB_HIGHPASS_ACCURATE);
+diff --git a/bsnes/target-libretro/program.cpp b/bsnes/target-libretro/program.cpp
+index 187cfee..80e4d7e 100644
+--- a/bsnes/target-libretro/program.cpp
++++ b/bsnes/target-libretro/program.cpp
+@@ -250,6 +250,16 @@ auto Program::open(uint id, string name, vfs::file::mode mode, bool required) ->
+ 		result = vfs::memory::file::open(iplrom, sizeof(iplrom));
+ 	}
+ 
++	//romdev: the Super Game Boy boot ROM from the system directory (sfc/coprocessor/icd/icd.cpp)
++	if ((name == "sgb_boot.bin" || name == "sgb2_boot.bin") && mode == vfs::file::mode::read) {
++		const char *system_dir = nullptr;
++		if (environ_cb && environ_cb(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &system_dir) && system_dir) {
++			auto boot = file::read(string{string(system_dir).transform("\\", "/"), "/", name});
++			if (boot.size() == 256) return vfs::memory::file::open(boot.data(), boot.size());
++		}
++		return {};
++	}
++
+ 	if (name == "boards.bml" && mode == vfs::file::mode::read) {
+ 		result = vfs::memory::file::open(Boards, sizeof(Boards));
+ 	}

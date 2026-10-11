@@ -1,0 +1,62 @@
+diff --git a/libretro/Makefile.common b/libretro/Makefile.common
+index 09312e9..45d41b0 100644
+--- a/libretro/Makefile.common
++++ b/libretro/Makefile.common
+@@ -51,6 +51,7 @@ SOURCES_CXX := $(CORE_DIR)/apu/apu.cpp \
+ 				 $(CORE_DIR)/seta011.cpp \
+ 				 $(CORE_DIR)/seta018.cpp \
+ 				 $(CORE_DIR)/romdev_fwchip.cpp \
++				 $(CORE_DIR)/romdev_hledata.cpp \
+ 				 $(CORE_DIR)/snapshot.cpp \
+ 				 $(CORE_DIR)/snes9x.cpp \
+ 				 $(CORE_DIR)/spc7110.cpp \
+diff --git a/libretro/libretro.cpp b/libretro/libretro.cpp
+index faf1dd6..98588d8 100644
+--- a/libretro/libretro.cpp
++++ b/libretro/libretro.cpp
+@@ -1239,6 +1239,14 @@ bool retro_load_game(const struct retro_game_info *game)
+         }
+     }
+ 
++    // romdev: the cart's chip needs its data ROM in the system directory (romdev_hledata.cpp)
++    if (rom_loaded && romdev_hledata_error[0])
++    {
++        if (log_cb)
++            log_cb(RETRO_LOG_ERROR, romdev_hledata_error);
++        rom_loaded = false;
++    }
++
+     if (!rom_loaded && log_cb)
+         log_cb(RETRO_LOG_ERROR, "ROM loading failed...\n");
+ 
+diff --git a/memmap.cpp b/memmap.cpp
+index d8e4851..52dbc5e 100644
+--- a/memmap.cpp
++++ b/memmap.cpp
+@@ -2249,6 +2249,10 @@ void CMemory::InitROM (void)
+ 			break;
+ 	}
+ 
++	// romdev: the DSP-1, DSP-3 and ST010 emulation reads the chip's data ROM
++	// from the system directory (romdev_hledata.cpp)
++	romdev_hledata_select(Settings.DSP == 1 || Settings.DSP == 3 ? Settings.DSP : Settings.SETA == ST_010 ? 10 : 0);
++
+ 	// MSU1
+ 	Settings.MSU1 = S9xMSU1ROMExists();
+ 
+diff --git a/memmap.h b/memmap.h
+index 712c21a..cdacacd 100644
+--- a/memmap.h
++++ b/memmap.h
+@@ -200,6 +200,11 @@ struct SMulti
+ };
+ 
+ extern CMemory	Memory;
++
++// romdev: the chip data ROM tables (romdev_hledata.cpp); the error is empty
++// unless the cart's chip needs a data ROM that is not in the system directory
++extern char	romdev_hledata_error[512];
++void	romdev_hledata_select (int);
+ extern SMulti	Multi;
+ 
+ inline bool S9xInterlaceField()

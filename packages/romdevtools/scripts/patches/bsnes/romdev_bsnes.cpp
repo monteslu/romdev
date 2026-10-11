@@ -83,13 +83,22 @@ RETRO_API void retro_reset()
 	romdev_snapshot();
 }
 
+// a firmware file the cart needs and romdev does not ship (sfc/interface/romdev_bsnes_sfc.cpp)
+namespace SuperFamicom { extern char romdev_load_error[512]; }
+
 static const retro_game_info *romdev_game;
 static void romdev_root_load_game() { romdev_bool_result = romdev_impl_retro_load_game(romdev_game); }
 RETRO_API bool retro_load_game(const retro_game_info *game)
 {
+	SuperFamicom::romdev_load_error[0] = 0;
 	romdev_game = game;
 	romdev_co_run(romdev_root_load_game);
 	romdev_snapshot();
+	// a firmware file the cart needs is not in the system directory: refused, with the file named
+	if (romdev_bool_result && SuperFamicom::romdev_load_error[0]) {
+		if (libretro_print) libretro_print(RETRO_LOG_ERROR, SuperFamicom::romdev_load_error);
+		return false;
+	}
 	return romdev_bool_result;
 }
 

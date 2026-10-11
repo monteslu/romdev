@@ -35,3 +35,9 @@ extern "C" void romdev_seta_set (int byte, int address) { S9xSetSetaDSP((uint8) 
 #define ROMDEV_CS_SETA
 #include "romdev_chipstate.h"
 extern "C" int romdev_st011_chipstate (uint8 *o) { return (int) romdev_cs_st011(o); }
+
+/* the ST010's data ROM tables, from the cart's copy of the user's data ROM
+ * (options.firmware; romdev_hledata.h) */
+#define ROMDEV_HLEDATA_ST010
+#include "romdev_hledata.h"
+extern "C" int romdev_seta_hledata (const uint8 *data) { return romdev_hledata_install(10, data); }

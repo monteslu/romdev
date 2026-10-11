@@ -19,6 +19,7 @@
 import { unitWat, unitSize, unitFn, unitStart, chipstateWat, chipstateRegion, rtcRestoreWat } from "./chip-unit.js";
 import { sramMaskFor } from "./memmap.js";
 import { RTC_CLOCK } from "../../recompile-section.js";
+import { HLE_DATA, hleDataHint } from "./hle-data.js";
 
 const pagesFor = (bytes) => Math.ceil(bytes / 0x10000);
 /** The 64KB page after a unit where the cart keeps the chip's state (chip-unit.js chipstateWat). */
@@ -69,6 +70,33 @@ export function chipTimeWat(lay) {
     (local.get $t))`;
 }
 
+/**
+ * A chip snes9x emulates from its data ROM (the DSP-1, DSP-3, ST010;
+ * hle-data.js): romdev ships none of that data. The cart keeps the data ROM
+ * the build was given (options.firmware) in its own page after the unit's
+ * (and the chip state page, when there is one), and its reset fills the
+ * unit's tables from it (glue/romdev_hledata.h) before the chip starts.
+ * @param {string} id  loader.js coprocessor name
+ * @param {any} lay
+ * @param {any} d  describe()
+ * @param {string} unit
+ * @param {number} statePages  pages between the unit and the data
+ * @returns {{data: string, call: (fn: string, args?: string) => string}}
+ */
+function hleDataWat(id, lay, d, unit, statePages) {
+  const h = HLE_DATA[id];
+  if (!d.hleDataBytes) throw new Error(`snes recompile: the ${id} cart needs the chip's data ROM (options.firmware: ${hleDataHint(id)})`);
+  const at = lay.CHIP + (pagesFor(unitSize(unit)) + statePages) * 0x10000;
+  let s = "";
+  for (const v of d.hleDataBytes) s += "\\" + (v < 16 ? "0" : "") + v.toString(16);
+  return {
+    data: `
+  ;; the ${id}'s data ROM (options.firmware ${d.firmware.name}: ${h.what}), the user's copy
+  (data (i32.const ${at}) "${s}")`,
+    call: (fn, args = "") => `(drop (call ${fn}${args} (i32.const ${at})))`,
+  };
+}
+
 /** Map_LoROMMap / Map_HiROMMap are the only boards that call map_DSP / map_OBC1 / map_SetaRISC. */
 const plainBoard = (d, want) => d.board === want;
 
@@ -100,16 +128,20 @@ function dspWindows(api, dsp, d) {
 }
 
 function dspChip(n) {
+  const id = `DSP-${n}`;
+  // the DSP-1 and DSP-3 read their data ROM (hle-data.js): one more page
+  const hle = !!HLE_DATA[id];
   return {
-    id: `DSP-${n}`,
+    id,
     // the DSP-3 also keeps its state for the verifier (the page after the unit)
-    pages: pagesFor(unitSize("dsp")) + (n === 3 ? 1 : 0),
+    pages: pagesFor(unitSize("dsp")) + (n === 3 ? 1 : 0) + (hle ? 1 : 0),
     buildMap(api, lay, d) {
       if (plainBoard(d, "LoROM") || plainBoard(d, "HiROM")) dspWindows(api, n, d);
     },
     wat(lay, d) {
       const start = unitStart("dsp");
-      return unitWat("dsp", lay.CHIP) + `
+      const data = hle ? hleDataWat(id, lay, d, "dsp", n === 3 ? 1 : 0) : null;
+      return unitWat("dsp", lay.CHIP) + (data ? data.data : "") + `
   ;; getset.h MAP_DSP: S9xGetDSP(Address & 0xffff) / S9xSetDSP(Byte, Address & 0xffff)
   (func $chip_rd (param $a i32) (result i32)
     (call ${unitFn("dsp", "romdev_dsp_get")} (i32.and (local.get $a) (i32.const 0xFFFF))))
@@ -118,6 +150,8 @@ function dspChip(n) {
   ;; memmap.cpp InitROM (Settings.DSP = ${n}), then cpu.cpp S9xReset's S9xResetDSP
   (func $chip_reset
     ${start ? `(call ${start})` : ""}
+    ${data ? `;; the data ROM tables (romdev_hledata.h)
+    ${data.call(unitFn("dsp", "romdev_dsp_hledata"), ` (i32.const ${n})`)}` : ""}
     (call ${unitFn("dsp", "romdev_dsp_init")} (i32.const ${n}) (i32.const ${d.mapping === "hirom" ? 1 : 0}) (i32.const ${d.romSize}))
     (call ${unitFn("dsp", "romdev_dsp_reset")}))` + (n === 3 ? chipstateWat("dsp", "romdev_dsp3_chipstate", stateAddr(lay, "dsp")) : "");
     },
@@ -136,8 +170,9 @@ function setaChip(id, which) {
     board: () => "SetaDSPLoROM",
     boards: ["SetaDSPLoROM"],
     ...setaSram,
-    // the ST011 also keeps its state for the verifier (the page after the unit)
-    pages: pagesFor(unitSize("seta")) + (which === ST_011 ? 1 : 0),
+    // the ST011 also keeps its state for the verifier (the page after the
+    // unit); the ST010 its data ROM (hle-data.js)
+    pages: pagesFor(unitSize("seta")) + (which === ST_011 || which === ST_010 ? 1 : 0),
     // memmap.cpp Map_SetaDSPLoROMMap
     buildMap(api) {
       const { each, set, lorom, loSram, size, MAP_TYPE } = api;
@@ -152,7 +187,8 @@ function setaChip(id, which) {
     },
     wat(lay, d) {
       const start = unitStart("seta");
-      return unitWat("seta", lay.CHIP) + `
+      const data = which === ST_010 ? hleDataWat(id, lay, d, "seta", 0) : null;
+      return unitWat("seta", lay.CHIP) + (data ? data.data : "") + `
   ;; getset.h MAP_SETA_DSP: S9xGetSetaDSP(Address) / S9xSetSetaDSP(Byte, Address)
   (func $chip_rd (param $a i32) (result i32)
     (call ${unitFn("seta", "romdev_seta_get")} (local.get $a)))
@@ -161,6 +197,8 @@ function setaChip(id, which) {
   ;; memmap.cpp InitROM case 0xF630 (${id}); S9xReset resets no SETA chip
   (func $chip_reset
     ${start ? `(call ${start})` : ""}
+    ${data ? `;; the data ROM tables (romdev_hledata.h)
+    ${data.call(unitFn("seta", "romdev_seta_hledata"))}` : ""}
     (call ${unitFn("seta", "romdev_seta_init")} (i32.const ${which}) (i32.const ${lay.SRAM}) (i32.const ${sramMaskFor(d.sramSizeByte)})))` +
         (which === ST_011 ? chipstateWat("seta", "romdev_st011_chipstate", stateAddr(lay, "seta")) : "");
     },

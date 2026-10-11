@@ -6,9 +6,14 @@
 # Output: src/cores/wasm/snes9x_libretro.{js,wasm}.
 #
 # Repro: this script self-contains everything. Clones snes9x upstream,
-# applies scripts/patches/snes9x-romdev-memory-regions.patch, builds
-# with emscripten using the exact link flags retroemu uses, stages the
-# .js/.wasm under src/cores/wasm/.
+# applies scripts/patches/snes9x-romdev-memory-regions.patch (and the two
+# patches below), builds with emscripten using the exact link flags retroemu
+# uses, stages the .js/.wasm under src/cores/wasm/.
+#
+# The core carries no Nintendo code or chip data: the SPC700 boot ROM is
+# romdev's own (scripts/spc700-ipl), and the DSP-1 / DSP-3 / ST010 data ROM
+# tables are emptied and read from the user's data ROM in the system
+# directory (scripts/patches/snes9x/romdev_hledata.cpp).
 set -euo pipefail
 . "$(dirname "$0")/_lib.sh"
 # romdev's Python-free emscripten driver (scripts/wasm-emcc), never emsdk's emcc.
@@ -32,11 +37,15 @@ cd "$SNES9X_DIR"
 # Reset to clean state and reapply the patch idempotently. `git stash`
 # discards any prior partial apply attempts.
 require_git_toplevel
-# Two patches, in order: the memory regions, then the ST011 / ST018 on ares's
-# chips (scripts/patches/snes9x-ares-chips.patch, written against the first).
+# Three patches, in order: the memory regions, the ST011 / ST018 on ares's
+# chips (scripts/patches/snes9x-ares-chips.patch, written against the first),
+# then the chip data ROMs from the system directory
+# (scripts/patches/snes9x-romdev-hle-data.patch, against the first two).
 FWCHIP_PATCH="$PROJECT_DIR/scripts/patches/snes9x-ares-chips.patch"
-git checkout -- libretro/libretro.cpp getset.h cpuexec.cpp ppu.h gfx.cpp memmap.cpp cpu.cpp seta.h seta018.cpp libretro/Makefile.common 2>/dev/null || true
-for P in "$PATCH_FILE" "$FWCHIP_PATCH"; do
+HLEDATA_PATCH="$PROJECT_DIR/scripts/patches/snes9x-romdev-hle-data.patch"
+git checkout -- libretro/libretro.cpp getset.h cpuexec.cpp ppu.h gfx.cpp memmap.cpp memmap.h cpu.cpp seta.h seta018.cpp libretro/Makefile.common \
+  dsp1.cpp dsp3.cpp seta010.cpp apu/bapu/smp/iplrom.cpp 2>/dev/null || true
+for P in "$PATCH_FILE" "$FWCHIP_PATCH" "$HLEDATA_PATCH"; do
   if ! git apply --recount --check "$P" 2>/dev/null; then
     # Accept "already applied" only when THIS patch reverse-applies cleanly; an older
     # revision of the patch carries the same sentinel symbols.
@@ -51,6 +60,20 @@ for P in "$PATCH_FILE" "$FWCHIP_PATCH"; do
     echo "Applied $P"
   fi
 done
+
+# ── the SPC700 boot ROM ─────────────────────────────────────────────────────
+# romdev's own boot ROM (scripts/spc700-ipl/ipl.asm, MIT, a clean-room
+# reimplementation of the upload protocol) replaces upstream's iplrom.cpp, so
+# the built core carries no Nintendo code.
+node "$SCRIPT_DIR/spc700-ipl/install-ipl.mjs" --snes9x "$SNES9X_DIR/apu/bapu/smp/iplrom.cpp"
+
+# ── the chip data ROMs ──────────────────────────────────────────────────────
+# The DSP-1, DSP-3 and ST010 data ROM tables upstream embeds are emptied, and
+# romdev_hledata.cpp fills them from the user's data ROM in the system
+# directory (the same fill code as a recompiled cart: romdev_hledata.h).
+node "$PROJECT_DIR/scripts/recompile-gen/snes9x-chips/hle-data.mjs" "$SNES9X_DIR"
+cp "$PROJECT_DIR/scripts/patches/snes9x/romdev_hledata.cpp" "$SNES9X_DIR/romdev_hledata.cpp"
+cp "$PROJECT_DIR/scripts/recompile-gen/snes9x-chips/glue/romdev_hledata.h" "$SNES9X_DIR/romdev_hledata.h"
 
 # ── the ST011 / ST018 on ares's chips ──────────────────────────────────────
 # ares's uPD96050 and ARM cores (the pinned ares tree, fetched and patched by

@@ -45,15 +45,23 @@ fetch_pinned cores.bsnes "$SRC"
 
 cd "$SRC"
 require_git_toplevel
-# Re-apply the patch only when the tree does not already carry exactly it (a
-# reset touches every patched file, and ppu.hpp is in every object).
-if patch_already_applied "$PATCH_FILE"; then
-  echo "Patch already present (reverse-applies cleanly); keeping the tree."
+# Two patches: romdev's hooks, then the firmware romdev does not ship taken
+# from the system directory (bsnes-romdev-firmware.patch). Re-apply them only
+# when the tree does not already carry exactly them (a reset touches every
+# patched file, and ppu.hpp is in every object).
+FW_PATCH="$PROJECT_DIR/scripts/patches/bsnes-romdev-firmware.patch"
+if patch_already_applied "$PATCH_FILE" && patch_already_applied "$FW_PATCH"; then
+  echo "Patches already present (reverse-apply cleanly); keeping the tree."
 else
   git checkout -- . 2>/dev/null || true
   git apply --recount "$PATCH_FILE"
-  echo "Applied $PATCH_FILE"
+  git apply --recount "$FW_PATCH"
+  echo "Applied $PATCH_FILE and $FW_PATCH"
 fi
+# The firmware and chip data bsnes embeds (the DSP-1 and ST010 data ROM
+# tables, the Cx4 data ROM, the Super Game Boy boot ROMs) are emptied; the
+# patch takes the user's files from the system directory instead.
+node "$PROJECT_DIR/scripts/patches/bsnes/strip-firmware.mjs" "$SRC"
 # romdev's own files, copied in only when changed; the upstream Makefile has
 # no header dependencies, so the source that includes a changed file is
 # touched to make it rebuild.
@@ -62,10 +70,17 @@ put "$PROJECT_DIR/scripts/patches/libco-wasm/libco-wasm.c" "$SRC/libco/wasm.c" "
 put "$PROJECT_DIR/scripts/patches/bsnes/romdev_bsnes.cpp" "$SRC/bsnes/target-libretro/romdev_bsnes.cpp" "$SRC/bsnes/target-libretro/libretro.cpp"
 put "$PROJECT_DIR/scripts/patches/bsnes/romdev_bsnes_sfc.cpp" "$SRC/bsnes/sfc/interface/romdev_bsnes_sfc.cpp" "$SRC/bsnes/sfc/interface/interface.cpp"
 put "$PROJECT_DIR/scripts/patches/bsnes/romdev_bsnes_chipstate.h" "$SRC/bsnes/sfc/interface/romdev_bsnes_chipstate.h" "$SRC/bsnes/sfc/interface/interface.cpp"
+# romdev's own SPC700 boot ROM (scripts/spc700-ipl/ipl.asm, MIT, a clean-room
+# reimplementation of the upload protocol) replaces the one bsnes embeds for
+# ipl.rom (target-libretro/resources.hpp, included by program.cpp).
+RES="$SRC/bsnes/target-libretro/resources.hpp"
+RES_SUM="$(sha256sum "$RES")"
+node "$SCRIPT_DIR/spc700-ipl/install-ipl.mjs" "$RES"
+[ "$(sha256sum "$RES")" = "$RES_SUM" ] || touch "$SRC/bsnes/target-libretro/program.cpp"
 
 # The upstream Makefile tracks no header dependencies: when the patch or any
 # of romdev's files changed since the last build, every object is rebuilt.
-STAMP="$(cat "$PATCH_FILE" "$PROJECT_DIR"/scripts/patches/bsnes/* "$PROJECT_DIR/scripts/patches/libco-wasm/libco-wasm.c" | sha256sum | cut -d' ' -f1)"
+STAMP="$(cat "$PATCH_FILE" "$FW_PATCH" "$PROJECT_DIR"/scripts/patches/bsnes/* "$PROJECT_DIR/scripts/patches/libco-wasm/libco-wasm.c" "$PROJECT_DIR/scripts/spc700-ipl/romdev_iplrom.h" | sha256sum | cut -d' ' -f1)"
 if [ "$(cat .romdev-build-stamp 2>/dev/null)" != "$STAMP" ]; then
   find . -name '*.o' -delete
   echo "$STAMP" > .romdev-build-stamp

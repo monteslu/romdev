@@ -5,8 +5,9 @@
 //
 // The source is snes9x's bapu SMP: smp/core/oppseudo_{misc,mov,pc,read,rmw}.cpp
 // (one `case 0xNN:` per opcode, some split into resumable steps with
-// `switch(++opcode_cycle)`), smp/algorithms.cpp (op_adc ... op_ror) and
-// smp/iplrom.cpp (the 64-byte boot ROM). These files use a small C subset:
+// `switch(++opcode_cycle)`) and smp/algorithms.cpp (op_adc ... op_ror). The
+// 64-byte boot ROM is romdev's own (scripts/spc700-ipl, MIT), never snes9x's
+// iplrom.cpp. The SMP files use a small C subset:
 // assignments, compound assignments, pre/post increment, if/else, the
 // opcode_cycle switch, `break`, casts to int8, and calls to the op_* bus
 // helpers. This script parses exactly that subset and REFUSES anything
@@ -432,13 +433,16 @@ for (const f of opFiles) {
 const missing = ops.map((o, i) => (o === null ? i : -1)).filter((i) => i >= 0);
 if (missing.length) throw new Error(`spc700 gen: opcodes not defined: ${missing.map((i) => i.toString(16)).join(",")}`);
 
-// ---------------------------------------------------------------- iplrom.cpp
-const iplSrc = readFileSync(path.join(smpDir, "iplrom.cpp"), "utf8");
-const iplBody = iplSrc.slice(iplSrc.indexOf("iplrom[64] = {"));
-const iplrom = [...iplBody.slice(0, iplBody.indexOf("};")).replace(/\/\/[^\n]*/g, "").replace(/\/\*[^*]*\*\//g, "").matchAll(/0x([0-9a-f]{2})/gi)].map((x) => parseInt(x[1], 16));
-if (iplrom.length !== 64) throw new Error(`spc700 gen: iplrom has ${iplrom.length} bytes, expected 64`);
-// Structural invariants: reset vector $FFC0, first instruction mov x,#$ef.
-if (iplrom[62] !== 0xc0 || iplrom[63] !== 0xff || iplrom[0] !== 0xcd || iplrom[1] !== 0xef) throw new Error("spc700 gen: iplrom structure check failed");
+// ---------------------------------------------------------------- boot ROM
+// romdev's own SPC700 boot ROM (scripts/spc700-ipl/ipl.asm, MIT, a clean-room
+// reimplementation of the upload protocol), as build-ipl.mjs wrote it. The
+// snes9x core is built with the same bytes (scripts/spc700-ipl/install-ipl.mjs).
+const iplPath = path.join(pkg, "scripts", "spc700-ipl", "romdev_iplrom.h");
+const iplSrc = readFileSync(iplPath, "utf8");
+const iplrom = [...iplSrc.replace(/\/\/[^\n]*/g, "").matchAll(/0x([0-9a-f]{2})/gi)].map((x) => parseInt(x[1], 16));
+if (iplrom.length !== 64) throw new Error(`spc700 gen: romdev_iplrom.h has ${iplrom.length} bytes, expected 64`);
+// Structural invariant: the reset vector points into the boot ROM.
+if (iplrom[63] !== 0xff || iplrom[62] < 0xc0) throw new Error("spc700 gen: boot ROM reset vector check failed");
 
 // ---------------------------------------------------------------- SPC_DSP.cpp tables
 // The DSP itself is hand-ported in apu-wat.js (pointer-heavy C outside the
@@ -478,10 +482,10 @@ const data = {
     files: {
       ...fileSha,
       "apu/bapu/smp/algorithms.cpp": sha(algoSrc),
-      "apu/bapu/smp/iplrom.cpp": sha(iplSrc),
       "apu/bapu/dsp/SPC_DSP.cpp": sha(dspSrc),
     },
     generator: "scripts/recompile-gen/snes9x-apu.mjs",
+    iplrom: { source: "scripts/spc700-ipl/ipl.asm", license: "MIT (romdev)", sha256: sha(iplSrc), note: "romdev's own SPC700 boot ROM, a clean-room reimplementation of the boot upload protocol; not from snes9x" },
     note: "snes9x is under the snes9x license (non-commercial); this is a mechanical translation of its SMP core used only to build carts compared against the snes9x reference.",
   },
   iplrom,

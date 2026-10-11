@@ -283,7 +283,18 @@ export class LibretroHost {
       systemDir: opts.systemDir ?? "/romdev-system",
       saveDir: opts.saveDir ?? "/romdev-save",
     });
-    this.log = opts.log;
+    // The core's error-level log lines (RETRO_LOG_ERROR) are also kept, so a
+    // load the core refuses can say why in the core's own words (a missing
+    // firmware file, named by the core).
+    const userLog = opts.log;
+    this._coreErrors = [];
+    this.log = (level, msg) => {
+      if (level >= 3 && typeof msg === "string" && msg.trim()) {
+        this._coreErrors.push(msg.trim());
+        if (this._coreErrors.length > 8) this._coreErrors.shift();
+      }
+      if (userLog) userLog(level, msg);
+    };
     this.status = {
       platform: null,
       corePath: null,
@@ -726,6 +737,7 @@ export class LibretroHost {
     // flag while YIELDING to the JS event loop - the event loop must keep turning so emscripten
     // can service the app-thread's pooled-Worker grabs / postMessage wakeups. A blocking call
     // would freeze the event loop → the core's threads can't be scheduled → deadlock.
+    this._coreErrors.length = 0;
     let ok;
     if (this._proxied) {
       // Deferred retro_init (see loadCore): now that the system dir is mirrored into the app-thread
@@ -767,6 +779,10 @@ export class LibretroHost {
         `The '${platform}' core REFUSED this ${mediaKind || "media"} ` +
         `(${data ? data.length + " bytes" : "streamed from disk"}${ext ? `, ${ext}` : ""}, path ${mediaPath}). ` +
         `retro_load_game returned false - the bytes reached the core but it would not accept them. ` +
+        // the core's own reason, when it logged one (e.g. a firmware file it needs, by name)
+        (this._coreErrors.some((m) => m.startsWith("romdev:"))
+          ? `The core said: ${this._coreErrors.filter((m) => m.startsWith("romdev:")).join(" ")} `
+          : "") +
         `Common causes: (1) wrong platform for this file (a GB ROM loaded as 'nes', etc.) - ` +
         `confirm the platform matches the file; (2) a corrupt or TRUNCATED image - re-check the byte length; ` +
         `(3) an unsupported mapper/board or a missing/!bad header. ` +

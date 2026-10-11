@@ -76,3 +76,9 @@ extern "C" void romdev_dsp_set (int byte, int address) { S9xSetDSP((uint8) byte,
 #define ROMDEV_CS_DSP3
 #include "romdev_chipstate.h"
 extern "C" int romdev_dsp3_chipstate (uint8 *o) { return (int) romdev_cs_dsp3(o); }
+
+/* the DSP-1 / DSP-3 data ROM tables, from the cart's copy of the user's data
+ * ROM (options.firmware; romdev_hledata.h) */
+#define ROMDEV_HLEDATA_DSP
+#include "romdev_hledata.h"
+extern "C" int romdev_dsp_hledata (int dsp, const uint8 *data) { return romdev_hledata_install(dsp, data); }

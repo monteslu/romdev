@@ -497,9 +497,12 @@ Recompiled carts (WAT and native backends)
 
   SNES (wat/snes)
     from     snes9x: memory map and ROM loading, CPU timing, DMA/HDMA, PPU,
-             SPC700, the coprocessors (SA-1, SuperFX from fxinst.cpp,
-             S-DD1, CX4, SPC7110, DSP-1..4, ST010/011/018 HLE, OBC1, S-RTC,
-             BS-X, MSU-1), and the S-DSP from snes_spc (Shay Green)
+             SPC700 (its 64-byte boot ROM is romdev's own, MIT, see "SNES boot
+             ROM and chip data"), the coprocessors (SA-1, SuperFX from
+             fxinst.cpp, S-DD1, CX4, SPC7110, DSP-1..4, ST010/011/018 HLE,
+             OBC1, S-RTC, BS-X, MSU-1; no chip data ROM: a DSP-1, DSP-3 or
+             ST010 cart is built with the user's, options.firmware), and the
+             S-DSP from snes_spc (Shay Green)
              https://github.com/libretro/snes9x @ 185488cd
              SPC7110 carts: spc7110emu/dec (byuu and neviksti, ISC-style)
              CX4 carts: musl's sin/cos/atan (MIT)
@@ -557,6 +560,29 @@ Bundled data  (cheat database, used by cheats({op:'lookup'|'apply'|'make'}))
   https://github.com/libretro/libretro-database (cht/). The index is rebuilt
   from a local .cht tree with packages/romdevtools/scripts/build-cheat-index.mjs
   in the source repository.
+
+SNES boot ROM and chip data - romdev's own, or the user's
+--------------------------------------------------------
+  The SPC700 sound CPU starts from a 64-byte boot ROM (the IPL) that runs the
+  upload protocol over ports $2140-$2143. Upstream snes9x and bsnes embed
+  Nintendo's. romdev uses its own instead: a clean-room reimplementation
+  written from the public description of the protocol and of the state it
+  hands over (romdevtools scripts/spc700-ipl/ipl.asm, MIT), assembled with
+  asar. The snes9x core, the bsnes core and every recompiled SNES cart run
+  it; the builds replace the upstream array (scripts/spc700-ipl/install-ipl.mjs).
+
+  romdev ships no chip firmware, chip data ROM or boot ROM. snes9x embeds the
+  DSP-1 data ROM (and a sine table taken from it), the DSP-3 data ROM and the
+  ST010's data ROM tables; bsnes embeds the DSP-1 data ROM, the ST010 tables,
+  the Cx4 data ROM and the Super Game Boy boot ROMs. romdev builds both with
+  those tables emptied (scripts/recompile-gen/snes9x-chips/hle-data.mjs,
+  scripts/patches/bsnes/strip-firmware.mjs) and takes the user's files
+  instead: snes9x reads dsp1b.data.rom, dsp3.data.rom or st010.data.rom from
+  its system directory, a recompiled cart is built with the same file
+  (options.firmware), and bsnes reads each chip's firmware (and sgb_boot.bin /
+  sgb2_boot.bin) from its system directory. Without the file such a cart is
+  refused with the file and its size named; bsnes runs a Cx4 cart with its
+  high-level emulation when cx4.data.rom is absent.
 
 
 Where the licence texts and sources are
