@@ -35,8 +35,8 @@ staging), and copies into the shipping package's `wasm/`.
 | PC Engine | geargrafx | `build-geargrafx.sh` | `geargrafx-romdev-memory-regions.patch` | `romdev-core-geargrafx` |
 | MSX | bluemsx | `build-bluemsx.sh` | `bluemsx-romdev-memory-regions.patch`, `bluemsx-emscripten-build.patch` | `romdev-core-bluemsx` |
 | Atari 2600 | stella2014 | `build-stella2014.sh` | `stella2014-romdev-memory-regions.patch` | `romdev-platform-atari2600` |
-| SNES | snes9x | `build-snes9x.sh` | `snes9x-romdev-memory-regions.patch`, `snes9x-ares-chips.patch` (+ `patches/snes9x/`; links ares's uPD96050 / ARM chips, ISC, fetched by `fetch-ares.sh` with `ares-romdev.patch`, used only with the chip's firmware in the system directory) | `romdev-platform-snes` |
-| SNES (accuracy reference for the firmware coprocessors; `ALT_CORES`, not loadMedia's default) | bsnes | `build-bsnes.sh` | `bsnes-romdev.patch` (+ `patches/bsnes/`: memory regions, firmware; `patches/libco-wasm/`: libco on Asyncify) | `romdev-core-bsnes` |
+| SNES | snes9x | `build-snes9x.sh` | `snes9x-romdev-memory-regions.patch`, `snes9x-ares-chips.patch`, `snes9x-romdev-hle-data.patch` (+ `patches/snes9x/`; links ares's uPD96050 / ARM chips, ISC, fetched by `fetch-ares.sh` with `ares-romdev.patch`, used only with the chip's firmware in the system directory; romdev's SPC700 boot ROM from `spc700-ipl/`; the DSP-1 / DSP-3 / ST010 data ROM tables emptied by `recompile-gen/snes9x-chips/hle-data.mjs` and read from the user's data ROM) | `romdev-platform-snes` |
+| SNES (accuracy reference for the firmware coprocessors; `ALT_CORES`, not loadMedia's default) | bsnes | `build-bsnes.sh` | `bsnes-romdev.patch`, `bsnes-romdev-firmware.patch` (+ `patches/bsnes/`: memory regions, firmware, `strip-firmware.mjs` empties the embedded chip data and boot ROMs; `patches/libco-wasm/`: libco on Asyncify; romdev's SPC700 boot ROM from `spc700-ipl/`) | `romdev-core-bsnes` |
 | GBA | mgba | `build-mgba.sh` | `mgba-romdev-watchpoint.patch` | `romdev-platform-gba` |
 
 **`romdev-core-*` vs `romdev-platform-*`:** a `core` package is just an emulator

@@ -353,6 +353,48 @@ test("APU: the uploaded SPC700 program runs and answers through the ports", asyn
   assert.equal(ex.dbg_spcpc(), 0x20c, "the SPC700 parks on its bra *");
 });
 
+test("APU: romdev's boot ROM takes two blocks (one past 256 bytes) and starts the program with A = X = Y = 0, SP = $EF, PSW = $02", async () => {
+  // The boot ROM is romdev's own (scripts/spc700-ipl/ipl.asm); the cart's
+  // copy is the one build-ipl.mjs assembled.
+  const { readFileSync } = await import("node:fs");
+  const header = readFileSync(new URL("../../../../../scripts/spc700-ipl/romdev_iplrom.h", import.meta.url), "utf8");
+  const ipl = [...header.replace(/\/\/[^\n]*/g, "").matchAll(/0x([0-9a-f]{2})/g)].map((m) => parseInt(m[1], 16));
+  const { default: apu } = await import("./snes9x-apu.json", { with: { type: "json" } });
+  assert.deepEqual(apu.iplrom, ipl);
+  assert.deepEqual(ipl.slice(62), [0xc0, 0xff], "reset vector $FFC0");
+  // the program at $0200 stores A, X, Y, PSW, SP at $20-$24, then says $77
+  const prog = [0xc4, 0x20, 0xd8, 0x21, 0xcb, 0x22, 0x0d, 0xae, 0xc4, 0x23, 0x9d, 0xd8, 0x24, 0x8f, 0x77, 0xf5, 0x2f, 0xfe];
+  const data = Array.from({ length: 300 }, (_, i) => (i * 37 + 11) & 0xff);
+  const wait = [0xcd, 0x40, 0x21, 0xd0, 0xfb];                 // cmp $2140 / bne: the echo
+  const send = (src, len) => [0xa2, 0x00, 0x00,                // ldx #0
+    0xbd, src & 0xff, src >> 8, 0x8d, 0x41, 0x21, 0x8a, 0x8d, 0x40, 0x21, ...wait,
+    0xe8, 0xe0, len & 0xff, len >> 8, 0xd0, 0xeb];             // inx / cpx #len / bne
+  const code = [
+    0x78, 0x18, 0xfb, 0xc2, 0x10, 0xe2, 0x20,
+    0xa9, 0xaa, 0xcd, 0x40, 0x21, 0xd0, 0xfb, 0xa9, 0xbb, 0xcd, 0x41, 0x21, 0xd0, 0xfb,
+    // block 1: 300 bytes to $0300, kicked with $CC
+    0xa2, 0x00, 0x03, 0x8e, 0x42, 0x21, 0xa9, 0x01, 0x8d, 0x41, 0x21, 0xa9, 0xcc, 0x8d, 0x40, 0x21, ...wait,
+    ...send(0x8400, data.length),
+    // block 2: the program to $0200, kicked with the last index + 2
+    0xa2, 0x00, 0x02, 0x8e, 0x42, 0x21, 0xa9, 0x01, 0x8d, 0x41, 0x21, 0xa9, (data.length + 1) & 0xff, 0x8d, 0x40, 0x21, ...wait,
+    ...send(0x8200, prog.length),
+    // start at $0200
+    0xa2, 0x00, 0x02, 0x8e, 0x42, 0x21, 0x9c, 0x41, 0x21, 0xa9, (prog.length + 1) & 0xff, 0x8d, 0x40, 0x21,
+    0xa9, 0x77, 0xcd, 0x41, 0x21, 0xd0, 0xfb, 0x80, 0xfe,
+  ];
+  const rom = synthRom({ code });
+  rom.set(prog, 0x200);
+  rom.set(data, 0x400);
+  const { mem, ex } = await runCart(rom, 10);
+  assert.equal(ex.dbg_trapped(), 0);
+  const aram = mem.subarray(describeRom(rom).memory.ARAM);
+  assert.deepEqual([...aram.subarray(0x300, 0x300 + data.length)], data, "block 1, across the index wrap");
+  assert.deepEqual([...aram.subarray(0x200, 0x200 + prog.length)], prog, "block 2");
+  assert.deepEqual([...aram.subarray(0x20, 0x25)], [0x00, 0x00, 0x00, 0x02, 0xef], "A, X, Y, PSW, SP at the program's first instruction");
+  assert.deepEqual([...aram.subarray(0x00, 0x02)], [0x00, 0x02], "$00-$01 hold the entry address");
+  assert.equal(ex.dbg_spcpc(), 0x200 + prog.length - 2, "the program parks on its bra *");
+});
+
 /** The DSP test program (voice 0 keyed on with ADSR and echo) as an upload ROM. */
 function dspRom() {
   const pairs = [[0x00, 0x40], [0x01, 0x00], [0x02, 0x40], [0x03, 0x00],
@@ -390,7 +432,7 @@ test("APU: S-DSP voice, envelope and echo writes match snes9x's ARAM byte for by
   assert.deepEqual([mem[WRAM + 0x10], mem[WRAM + 0x11], aram[0x20]], [0x7f, 0xc7, 0x01]);
   assert.equal(aram.subarray(0x8000, 0x8800).filter((x) => x).length, 2016, "echo buffer written");
   const { createHash } = await import("node:crypto");
-  assert.equal(createHash("sha1").update(aram).digest("hex"), "a66773a52eceb7452859063b3197e11334e4151e");
+  assert.equal(createHash("sha1").update(aram).digest("hex"), "535946fb13e3afc9c423da4349d7b3b9d6f5edd0");
   // The DSP's output reaches the wasmcart host: a 32040 Hz int16 stereo ring.
   const info = new Uint32Array(mem.buffer, ex.wc_get_info(), 18);
   assert.equal(info[13], 32040);
@@ -785,7 +827,7 @@ test("an interrupt's entry cycles are one AddCycles: a line end they cross happe
 /** snes9x frames the SPC700 count is compared over, and what it read. */
 const WORD_ACCESS_FRAMES = 600;
 const WORD_ACCESS_ROM_SHA1 = "5e890018ffe831cefbd4f128577f6c85087e5572";
-const WORD_ACCESS_ARAM_SHA1 = "68af28b2f2193b0daa053eb0d4e143a2d0609782";
+const WORD_ACCESS_ARAM_SHA1 = "bee731bed4f3429daf0331901387b94340d96088";
 
 /**
  * A cart whose SPC700 counts in ARAM $10/$11 (incw $10, 6 SPC clocks each)
@@ -1027,7 +1069,7 @@ test("a per-title APU speedup (snes9x Timings.APUSpeedup) runs the SPC slower an
 });
 // snes9x, reference frames 1-20 (counts) and 1-60 (sample sha1)
 const SPEEDUP_COUNTS = [532, 534, 533, 533, 533, 533, 534, 532, 534, 533, 533, 533, 534, 532, 534, 533, 532, 534, 533, 533];
-const SPEEDUP_SHA1 = "afb7775b56164dca190e6d8994186b069c25c542";
+const SPEEDUP_SHA1 = "1597b843fd24fc03c4f6a014fcf303cbb58c4fcc";
 
 /** A synthetic cart under a given header name (and SRAM size byte). */
 function titled(rom, name, sram) {
@@ -1374,5 +1416,5 @@ test("PAL carts (region byte): 312 lines, the PAL APU clock ratio, as snes9x run
     if (f >= 5) counts.push((w - last + 4096) % 4096);
     last = w;
   }
-  assert.deepEqual(counts, [640, 641, 641, 640, 641, 641, 641, 640, 641, 641, 640, 641, 641, 640, 641, 641, 641, 640, 641, 641]);
+  assert.deepEqual(counts, [640, 641, 641, 640, 641, 641, 641, 640, 641, 641, 640, 641, 641, 641, 640, 641, 641, 640, 641, 641]);
 });

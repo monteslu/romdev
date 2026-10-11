@@ -19,9 +19,20 @@ used only when st011.rom / st018.rom is in the system directory). That code is
 license that only asks for its notice to be kept; the notice is in the romdev
 repo `NOTICE`. It adds no condition to snes9x's own license.
 
+**The snes9x core carries no Nintendo code or chip data.** Its SPC700 boot
+ROM (the 64-byte IPL) is romdev's own, a clean-room reimplementation of the
+upload protocol (MIT, `scripts/spc700-ipl/` in romdevtools), in place of the
+one upstream embeds. The DSP-1, DSP-3 and ST010 data ROM tables upstream
+embeds are emptied at build time; a cart with one of those chips needs the
+user's copy of the chip's data ROM in the system directory (`dsp1b.data.rom`,
+2048 bytes, the DSP-1B's, which snes9x uses for every DSP-1 cart, or
+`dsp1b.rom`, 8192; `dsp3.data.rom` or `dsp3.rom`; `st010.data.rom`, 4096
+bytes, or `st010.rom`) and is refused with the file named without it
+(`loadMedia({firmware})` copies a file there).
+
 This package redistributes the upstream binary built to WebAssembly; the source
 is fetched from a pinned upstream commit at build time (see the romdev repo's
 `scripts/versions.json` and `BUILDING.md`). See the romdev repo `NOTICE` for the
 full third-party inventory.
 
-**Built by:** `romdevtools/scripts/build-snes9x.sh + build-asar.sh + build-tcc816.sh + build-wladx.sh` + patch(es) `snes9x-romdev-memory-regions.patch`, `snes9x-ares-chips.patch` (with `fetch-ares.sh` and `ares-romdev.patch`). See `scripts/BUILD_MAP.md` in the romdev repo for the full recipe→package map.
+**Built by:** `romdevtools/scripts/build-snes9x.sh + build-asar.sh + build-tcc816.sh + build-wladx.sh` + patch(es) `snes9x-romdev-memory-regions.patch`, `snes9x-ares-chips.patch`, `snes9x-romdev-hle-data.patch` (with `fetch-ares.sh` and `ares-romdev.patch`). See `scripts/BUILD_MAP.md` in the romdev repo for the full recipe→package map.

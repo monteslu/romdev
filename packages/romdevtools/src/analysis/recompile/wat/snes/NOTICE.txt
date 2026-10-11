@@ -22,13 +22,20 @@ What is derived:
                                       per-title fixes)
   cpu-wat.js, frame-wat.js            snes9x's CPU timing, DMA/HDMA, frame
   ppu-wat.js                          snes9x ppu.cpp, gfx.cpp, tileimpl.h
-  apu-wat.js, snes9x-apu.json         the SPC700 (snes9x bapu smp, including
-                                      its 64-byte IPL boot ROM) and the S-DSP
+  apu-wat.js, snes9x-apu.json         the SPC700 (snes9x bapu smp) and the
+                                      S-DSP; the 64-byte boot ROM in
+                                      snes9x-apu.json is romdev's own
+                                      clean-room code (scripts/spc700-ipl,
+                                      MIT), not snes9x's
   sa1.js, superfx.js, sdd1.js, cx4.js, spc7110.js, bsx.js, msu1.js,
   chips-snes9x.js, chip-unit.js, snes9x-chips.json, snes9x-superfx.json
                                       snes9x's coprocessors, compiled from or
                                       ported from its source
   chips-ares.js, ares-chips.json      ares's chip cores (see NOTICE)
+  hle-data.js                         romdev's own: the DSP-1, DSP-3 and ST010
+                                      data ROM tables are not in
+                                      snes9x-chips.json; a cart is built with
+                                      the user's data ROM (options.firmware)
   snes9x-tables.json, snes9x-romfixes.json   data from snes9x's source
 The 65816 lowering (lower.js) and layout.js are romdev's own.
 

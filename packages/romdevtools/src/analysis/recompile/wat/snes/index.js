@@ -41,6 +41,7 @@ import { apuWat, apuDataWat, apuGlobalsWat, APU_OFF } from "./apu-wat.js";
 import { regwatchWat, stepHeadWat, frameWat } from "./frame-wat.js";
 import { chipFor, chipWat, chipNeedsFirmware } from "./coproc.js";
 import { ARES_FIRMWARE } from "./chips-ares.js";
+import { hleDataFor, hleDataHint, readHleData } from "./hle-data.js";
 import { findMsuPack, msuPages, msuDataWat } from "./msu1.js";
 import { readFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -167,8 +168,17 @@ export function describe(rom, opts = {}) {
       firmware = { chip: L.coprocessor, name: need.file, sha1: createHash("sha1").update(bytes).digest("hex"), length: bytes.length, bytes };
       chipImpl = "ares";
     }
+  } else if (hleDataFor(L.coprocessor)) {
+    // A chip snes9x emulates at a high level from its data ROM (the DSP-1,
+    // DSP-3, ST010; hle-data.js): romdev does not ship that data, the build
+    // is given it.
+    if (opts.firmware == null) {
+      if (!refusal) refusal = `cart uses the ${L.coprocessor}, whose emulation reads the chip's data ROM, which romdev does not ship; build it with options.firmware: '<path to ${hleDataFor(L.coprocessor).data}>', the user's own copy: ${hleDataHint(L.coprocessor)}`;
+    } else {
+      firmware = readHleData(L.coprocessor, String(opts.firmware));
+    }
   } else if (opts.firmware != null) {
-    throw new Error(`snes recompile: options.firmware given, but this cart's ${L.coprocessor ? L.coprocessor : "board"} runs no firmware the recompiler loads (only the ST011 and ST018 do)`);
+    throw new Error(`snes recompile: options.firmware given, but this cart's ${L.coprocessor ? L.coprocessor : "board"} runs no firmware or data ROM the recompiler loads (only the DSP-1, DSP-3, ST010, ST011 and ST018 do)`);
   }
   // A coprocessor's state (coproc.js), above everything computeLayout placed.
   const chip = chipFor(L.coprocessor, chipImpl);
@@ -261,7 +271,7 @@ export function describe(rom, opts = {}) {
       breakChip: "DEBUG / must-fail control: true flips bit 0 of every byte read from the coprocessor (CPU, B-bus, chip DMA)",
       saveRtc: "path to a battery-backed clock's saved registers (the 20-byte .rtc, RTCData) for an S-RTC or SPC7110+RTC cart; restored after the chip's reset, and the verifier writes it into the reference's rtc region (keep it beside the reference ROM)",
       saveRam: "path to a battery save (.srm, at most the cart's SRAM size) the cart powers on with; the verifier writes the same file into the reference's save_ram before its first frame (keep it beside the reference ROM under the same name)",
-      firmware: "path to the chip's firmware for an ST011 (st011.rom, 53248 bytes) or ST018 (st018.rom, 163840 bytes) cart, REQUIRED for those: the chip runs on ares's code (ISC-licensed) from it; the verifier gives the reference core the same file (keep it beside the reference ROM, or in a firmware/ directory there)",
+      firmware: "path to the chip's firmware, REQUIRED for these carts (romdev ships no chip firmware or data): an ST011 (st011.rom, 53248 bytes) or ST018 (st018.rom, 163840 bytes) runs on ares's code (ISC-licensed) from it; a DSP-1 (dsp1b.data.rom, 2048 bytes, the DSP-1B's data ROM, or dsp1b.rom, 8192), DSP-3 (dsp3.data.rom, 2048, or dsp3.rom, 8192) or ST010 (st010.data.rom, 4096, or st010.rom, 53248) runs snes9x's emulation with the tables it reads from the chip's data ROM. The verifier gives the reference core the same file (keep it beside the reference ROM, or in a firmware/ directory there)",
     },
     saveRam: saveRam ? { name: saveRam.name, sha1: saveRam.sha1, length: saveRam.length } : null,
     saveRtc: saveRtc ? { name: saveRtc.name, sha1: saveRtc.sha1, length: saveRtc.length } : null,
@@ -279,6 +289,8 @@ export function describe(rom, opts = {}) {
   if (opts.breakChip) res.breakChip = true;
   Object.defineProperty(res, "saveRtcBytes", { value: saveRtc?.bytes ?? null, enumerable: false });
   Object.defineProperty(res, "firmwareBytes", { value: firmware?.bytes ?? null, enumerable: false });
+  // the data ROM part of it, for a chip snes9x emulates from its data ROM (hle-data.js)
+  Object.defineProperty(res, "hleDataBytes", { value: firmware?.data ?? null, enumerable: false });
   return res;
 }
 
@@ -373,6 +385,8 @@ export function recompileSection(rom, sha1, opts = {}) {
         ? { regions: { ...L.regions, sram: L.diagnosticRegions.sram }, diagnosticRegions: {} } : {}),
       // the MSU-1 pack's files the reference core must find beside its ROM
       ...(d.companionFiles.length ? { companionFiles: d.companionFiles } : {}),
+      // the chip firmware or data ROM both sides run with (options.firmware)
+      ...(d.firmware ? { firmware: d.firmware } : {}),
       // the battery save both sides power on with (options.saveRam)
       ...(d.saveRam ? { saveRam: d.saveRam } : {}),
       ...(d.saveRtc ? { saveRtc: d.saveRtc } : {}),

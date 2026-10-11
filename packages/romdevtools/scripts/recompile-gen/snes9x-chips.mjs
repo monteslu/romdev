@@ -14,6 +14,10 @@
 // which are freestanding stand-ins (snes9x-chips/include) declaring the
 // fields the chips touch.
 //
+// The DSP-1, DSP-3 and ST010 data ROM tables in dsp1.cpp, dsp3.cpp and
+// seta010.cpp are emptied before compiling (snes9x-chips/hle-data.mjs); the
+// cart fills them from the user's data ROM (glue/romdev_hledata.h).
+//
 // Each unit is linked twice at two different --global-base values. A value
 // that differs between the two links by exactly the base difference is an
 // address inside the unit's own memory (an i32.const, a load/store offset,
@@ -36,6 +40,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { decodeModule, unitWat as printUnit } from "./lib/wasm-unit.mjs";
+import { HLE_TABLES, stripHleData } from "./snes9x-chips/hle-data.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const pkg = path.resolve(here, "..", "..");
@@ -71,12 +76,12 @@ const UNITS = {
   dsp: {
     sources: ["dsp.cpp", "dsp1.cpp", "dsp2.cpp", "dsp3.cpp", "dsp4.cpp"], headers: [],
     glue: "glue_dsp.cpp", stack: 0x4000,
-    exports: ["romdev_dsp_init", "romdev_dsp_reset", "romdev_dsp_get", "romdev_dsp_set", "romdev_set_openbus", "romdev_dsp3_chipstate"],
+    exports: ["romdev_dsp_init", "romdev_dsp_reset", "romdev_dsp_get", "romdev_dsp_set", "romdev_set_openbus", "romdev_dsp3_chipstate", "romdev_dsp_hledata"],
   },
   seta: {
     sources: ["seta.cpp", "seta010.cpp", "seta011.cpp"], headers: [],
     glue: "glue_seta.cpp", stack: 0x4000,
-    exports: ["romdev_seta_init", "romdev_seta_get", "romdev_seta_set", "romdev_set_openbus", "romdev_st011_chipstate"],
+    exports: ["romdev_seta_init", "romdev_seta_get", "romdev_seta_set", "romdev_set_openbus", "romdev_st011_chipstate", "romdev_seta_hledata"],
   },
   st018: {
     sources: ["seta018.cpp"], headers: [],
@@ -150,6 +155,9 @@ function buildUnit(name, u, base) {
     mkdirSync(path.dirname(dst), { recursive: true });
     copyFileSync(path.join(srcDir, f), dst);
     files[f] = sha(readFileSync(dst));
+    // the chips' data ROM tables are emptied before anything is compiled
+    // (snes9x-chips/hle-data.mjs): the units carry none of that data
+    if (HLE_TABLES[f]) writeFileSync(dst, stripHleData(f, readFileSync(dst, "utf8")));
   }
   const stubs = {};
   for (const sub of ["include", "glue"]) {
@@ -225,6 +233,7 @@ const data = {
     compiler: clangVersion,
     cflags: CFLAGS.join(" "),
     generator: "scripts/recompile-gen/snes9x-chips.mjs",
+    hleData: { transform: "scripts/recompile-gen/snes9x-chips/hle-data.mjs", sha256: sha(readFileSync(path.join(stubDir, "hle-data.mjs"))), note: "the DSP-1, DSP-3 and ST010 data ROM tables are emptied before compiling; a cart fills them from the user's data ROM" },
     note: "snes9x's coprocessor sources compiled to wasm32 and printed as WAT; @{n} is an address n bytes into the unit's memory",
   },
   units,

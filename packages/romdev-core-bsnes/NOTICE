@@ -4,8 +4,8 @@ romdev-core-bsnes
 wasm/bsnes_libretro.wasm and wasm/bsnes_libretro.js are built from bsnes
 (https://github.com/libretro/bsnes, the libretro port of bsnes by byuu / Near
 and contributors) at the commit pinned in romdevtools/scripts/versions.json
-(cores.bsnes), with romdev's patch (romdevtools/scripts/patches/
-bsnes-romdev.patch and patches/bsnes/).
+(cores.bsnes), with romdev's patches (romdevtools/scripts/patches/
+bsnes-romdev.patch, bsnes-romdev-firmware.patch and patches/bsnes/).
 
 bsnes is licensed under the GNU General Public License, version 3
 (GPL-3.0-only; the full text is GPLv3.txt in the bsnes source). libco and nall,
@@ -22,5 +22,9 @@ libco backend for WebAssembly (romdevtools/scripts/patches/libco-wasm/, MIT);
 the chip state layout this core writes (patches/bsnes/romdev_bsnes_chipstate.h,
 romdev's own, MIT) is matched field for field by the ares side's own header.
 
-No coprocessor firmware is included. The ST010/ST011/ST018 firmware is not
-part of bsnes or romdev; a user supplies it.
+No coprocessor firmware, chip data ROM or boot ROM is included. The SPC700
+boot ROM in this core is romdev's own clean-room reimplementation (romdevtools
+scripts/spc700-ipl/ipl.asm, MIT), not the one bsnes embeds. The DSP-1 data
+ROM, ST010 tables, Cx4 data ROM and Super Game Boy boot ROMs bsnes embeds are
+emptied before it is built (patches/bsnes/strip-firmware.mjs); the chips'
+firmware and the boot ROMs are not part of romdev, a user supplies them.

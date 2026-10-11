@@ -97,5 +97,5 @@ test("SPC7110: 16-bit accesses group their cycles by snes9x's map types, so the 
   }
   assert.equal(seen.size, 5, "the line end fell inside every instruction of the loop");
   assert.equal(ex.dbg_trapped(), 0);
-  assert.equal(sha1(Uint8Array.from(counts)), "1f8500e89bd06837806eeedcc85583ba69e9e86f");
+  assert.equal(sha1(Uint8Array.from(counts)), "c7cf954f476d663d28f68fb990707caa847d1696");
 });

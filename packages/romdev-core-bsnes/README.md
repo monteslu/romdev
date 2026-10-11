@@ -11,7 +11,8 @@ ROM, as the chips are dumped) in the core's system directory. romdev loads it
 with `loadMedia({platform:'snes', core:'bsnes'})` or as the reference of
 `frame({op:'verifyRecompile', referenceCore:'bsnes'})`.
 
-The build differs from upstream in three ways, all in romdev's patch:
+The build differs from upstream in these ways, all in romdev's patches and
+build script:
 
 - libco gets a WebAssembly backend: bsnes runs every chip as a cothread, and
   the cothreads switch with binaryen's Asyncify inside the module;
@@ -19,13 +20,22 @@ The build differs from upstream in three ways, all in romdev's patch:
   (system_ram, video_ram, save_ram, snes_oam, snes_cgram, snes_aram,
   snes_chipstate) and finds coprocessor firmware in the system directory;
 - the reference defaults are deterministic and accurate: no entropy, the
-  accurate PPU and DSP, no HLE preference.
+  accurate PPU and DSP, no HLE preference;
+- no Nintendo code or chip data: the SPC700 boot ROM is romdev's own
+  clean-room one (MIT, `scripts/spc700-ipl/`), and the DSP-1 data ROM, the
+  ST010 tables, the Cx4 data ROM and the Super Game Boy boot ROMs upstream
+  embeds are emptied. A DSP-1, DSP-2, DSP-3, DSP-4, ST010 or ST011 cart needs
+  the chip's firmware in the system directory (e.g. `dsp1b.rom`, `st010.rom`,
+  the program ROM then the data ROM) and is refused with the file named
+  without it (DSP-2 and DSP-4 fall back to bsnes's high-level emulation); a
+  Cx4 cart runs bsnes's high-level emulation unless `cx4.data.rom` is there;
+  the Super Game Boy needs `sgb_boot.bin` / `sgb2_boot.bin`.
 
 License: GPL-3.0 (bsnes; libco and nall are ISC). See NOTICE. Not intended for
 standalone use; loaded by romdev's core registry. This core is a separate
 reference: none of its code is compiled into romdev's snes9x core or into
 recompiled carts (their firmware coprocessors come from ares, ISC).
 
-**Built by:** `romdevtools/scripts/build-bsnes.sh` + `bsnes-romdev.patch` (and
-`patches/bsnes/`). See `scripts/BUILD_MAP.md` in the romdev repo for the full
+**Built by:** `romdevtools/scripts/build-bsnes.sh` + `bsnes-romdev.patch`,
+`bsnes-romdev-firmware.patch` (and `patches/bsnes/`). See `scripts/BUILD_MAP.md` in the romdev repo for the full
 recipe to package map.

@@ -13,6 +13,11 @@
 
 namespace SuperFamicom {
 
+/* a firmware file the cart needs and romdev does not ship (sfc/cartridge/load.cpp,
+ * sfc/coprocessor/icd/icd.cpp): retro_load_game refuses the cart with it
+ * (target-libretro/romdev_bsnes.cpp) */
+char romdev_load_error[512];
+
 /* the accurate PPU keeps OAM, CGRAM and VRAM private, and the S-CPU its
  * master clock count (ppu.hpp and cpu.hpp name this struct a friend) */
 struct RomdevAccess {

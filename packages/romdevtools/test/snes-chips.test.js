@@ -15,6 +15,8 @@ import { AUDIO, AUDIO_FRAMES } from "../src/analysis/recompile/wat/snes/layout.j
 import { RTC_CLOCK } from "../src/analysis/recompile/recompile-section.js";
 import { chipProgram, chipImage, CHIP_CASES, writeMsuTestPack, bsxTestBios, sufamiTestPair, srtcShowcase, msuShowcase } from "./snes-chips-synth.js";
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import { HLE_DATA, hleDataFor } from "../src/analysis/recompile/wat/snes/hle-data.js";
 
 /** snes9x's bytes at $7E0100 onward (one per read), after the case's frames. */
 const EXPECTED = {
@@ -60,17 +62,33 @@ const hex = (a) => Array.from(a, (v) => v.toString(16).padStart(2, "0")).join(""
 // carts are checked by the sms-wat snes-chips gate instead of here.
 const FIRMWARE_CHIPS = new Set(["ST011", "ST018"]);
 
+// The DSP-1, DSP-3 and ST010 read their chip's data ROM, which romdev does
+// not ship either (hle-data.js): those cases run when the user's copy is in
+// ROMDEV_SNES_FIRMWARE (a directory with dsp1b.data.rom, dsp3.data.rom,
+// st010.data.rom) and are skipped otherwise; the refusal without it is
+// checked below either way.
+const FIRMWARE_DIR = process.env.ROMDEV_SNES_FIRMWARE || null;
+/** options.firmware for a case's chip, or null; undefined when the file is missing. */
+function dataFor(name) {
+  const h = hleDataFor(name.split(" ")[0]);
+  if (!h) return null;
+  const p = FIRMWARE_DIR ? path.join(FIRMWARE_DIR, h.data) : null;
+  return p && existsSync(p) ? p : undefined;
+}
+const skipNoData = (name) => dataFor(name) === undefined ? `needs ${hleDataFor(name.split(" ")[0]).data} in ROMDEV_SNES_FIRMWARE` : false;
+
 for (const [name, c] of Object.entries(CHIP_CASES)) {
   if (FIRMWARE_CHIPS.has(name)) continue;
-  test(`${name}: the chip's register traffic reads back what snes9x reads`, async () => {
+  test(`${name}: the chip's register traffic reads back what snes9x reads`, { skip: skipNoData(name) }, async () => {
     const { code, reads } = chipProgram(c.ops);
     const rom = chipImage({ code, ...c.image });
-    const d = describeRom(rom);
+    const firmware = dataFor(name);
+    const d = describeRom(rom, firmware ? { firmware } : {});
     assert.equal(d.supported, true, d.refusal ?? "");
     assert.equal(d.coprocessor, name.split(" ")[0]);
     // arms only for the program's bank (the rest of the image is filler)
     const at = c.image.hirom ? 0x8000 : 0;
-    const mem = await runCart(rom, c.frames ?? 3, { armRanges: [[at, at + 0x8000]] });
+    const mem = await runCart(rom, c.frames ?? 3, { armRanges: [[at, at + 0x8000]], ...(firmware ? { firmware } : {}) });
     assert.equal(mem[0xff], 0xa5, "the program ran to its end");
     assert.equal(hex(mem.subarray(0x100, 0x100 + reads)), EXPECTED[name]);
   });
@@ -89,12 +107,13 @@ const CHIPSTATE = {
 };
 for (const [name, [len, sha]] of Object.entries(CHIPSTATE)) {
   if (FIRMWARE_CHIPS.has(name)) continue;
-  test(`${name}: the cart's chipstate region holds the bytes snes9x's snes_chipstate serves`, async () => {
+  test(`${name}: the cart's chipstate region holds the bytes snes9x's snes_chipstate serves`, { skip: skipNoData(name) }, async () => {
     const c = CHIP_CASES[name];
     const { code } = chipProgram(c.ops);
     const rom = chipImage({ code, ...c.image });
     const at = c.image.hirom ? 0x8000 : 0;
-    const opts = { armRanges: [[at, at + 0x8000]] };
+    const firmware = dataFor(name);
+    const opts = { armRanges: [[at, at + 0x8000]], ...(firmware ? { firmware } : {}) };
     const sec = recompileSection(rom, null, opts).json;
     const r = sec.regions.chipstate;
     assert.ok(r, "the section names a chipstate region");
@@ -138,15 +157,37 @@ test("options.saveRam / saveRtc: the cart powers on with the battery files and n
   }
 });
 
+test("the DSP-1, DSP-3 and ST010 without the chip's data ROM: refused, naming the file and its size", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "snes-hledata-"));
+  try {
+    for (const name of ["DSP-1", "DSP-1 HiROM", "DSP-3", "ST010"]) {
+      const c = CHIP_CASES[name];
+      const h = hleDataFor(name.split(" ")[0]);
+      const rom = chipImage({ code: chipProgram(c.ops).code, ...c.image });
+      const d = describeRom(rom);
+      assert.equal(d.supported, false, name);
+      assert.ok(d.refusal.includes(h.data) && d.refusal.includes(`${h.dataSize} bytes`), d.refusal);
+      // a file of the wrong size, and one of the right size that is not the data ROM
+      writeFileSync(path.join(dir, "short.rom"), new Uint8Array(h.dataSize - 2));
+      assert.throws(() => describeRom(rom, { firmware: path.join(dir, "short.rom") }), new RegExp(h.data.replace(/\./g, "\\.")));
+      writeFileSync(path.join(dir, "zero.rom"), new Uint8Array(h.dataSize));
+      assert.throws(() => describeRom(rom, { firmware: path.join(dir, "zero.rom") }), /FNV-1a/);
+    }
+    assert.equal(Object.keys(HLE_DATA).length, 3);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("options.breakChip (must-fail control): every chip read comes back with bit 0 flipped", async () => {
-  const c = CHIP_CASES["ST010"];
+  const c = CHIP_CASES["DSP-2"];
   const { code, reads } = chipProgram(c.ops);
   const rom = chipImage({ code, ...c.image });
   const opts = { armRanges: [[0, 0x8000]] };
   const good = await runCart(rom, c.frames ?? 3, opts);
   const bad = await runCart(rom, c.frames ?? 3, { ...opts, breakChip: true });
-  assert.equal(hex(good.subarray(0x100, 0x100 + reads)), EXPECTED.ST010);
-  assert.notEqual(hex(bad.subarray(0x100, 0x100 + reads)), EXPECTED.ST010);
+  assert.equal(hex(good.subarray(0x100, 0x100 + reads)), EXPECTED["DSP-2"]);
+  assert.notEqual(hex(bad.subarray(0x100, 0x100 + reads)), EXPECTED["DSP-2"]);
   assert.equal(recompileSection(rom, null, { ...opts, breakChip: true }).json.debugBreakChip, true);
 });
 
