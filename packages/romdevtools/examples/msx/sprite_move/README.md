@@ -6,17 +6,13 @@ whole 32x24 name table; the d-pad moves a white sprite over it and clamps it to
 the visible area. The minimal "draw a real tiled background → read input → move a
 sprite" loop every action game starts from.
 
-**Build** (link the helper lib + cart crt0):
+**Build** (fork, then build the project):
 ```
-buildForPlatform({
-  platform: "msx",
-  sources:  { "main.c": <main.c>, "msx_vdp.c": <lib>, "msx_crt0.s": <crt0> },
-  includes: { "msx_hw.h": <header> },
-  crt0: ".module empty\n",
-  sourceName: "main.c",
-})
+examples({op:'fork', example:'msx/sprite_move', name:'mygame', path:'/abs/path/to/projects'})
+build({output:'project', path:'/abs/path/to/projects/mygame'})
 ```
-Helper lib + crt0 live in `src/platforms/msx/lib/c/`.
+The fork copies `main.c` plus the helper lib (`msx_vdp.c`, `msx_hw.h`) and the cart
+crt0 (`msx_crt0.s`) into the project, so it builds before you change a line.
 
 ## What it shows
 
@@ -39,6 +35,6 @@ top-left `(x=2, y=2)`. Read back from VRAM sprite-attr at `0x1B00` (region
 
 **Input gotcha (verified against the bluemsx core):** the C code reads MSX
 joystick **1** (`msx_read_joystick(1)` → BIOS GTSTCK), and that maps to libretro
-retropad **port 0** - i.e. `host.setInput({ ports: [{ right: true }] })` (the
+retropad **port 0** - i.e. `input({op:'set', ports: [{ right: true }]})` (the
 FIRST port entry) drives the sprite. Joystick **0** is the keyboard cursor, which
 a gamepad does NOT drive. Don't put the d-pad on `ports[1]`; it's a no-op here.

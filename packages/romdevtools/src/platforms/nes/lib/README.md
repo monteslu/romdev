@@ -2,8 +2,8 @@
 
 Small, vetted ca65 routines for the common boilerplate that every NES
 homebrew project needs to get right before any of the interesting code
-runs. Drop them into your project as-is or via the `getStarterSnippets`
-MCP tool.
+runs. Drop them into your project as-is or fetch them with
+`examples({op:'snippets', platform:'nes', mode:'get'|'getAll'})`.
 
 | File | What it does |
 | --- | --- |

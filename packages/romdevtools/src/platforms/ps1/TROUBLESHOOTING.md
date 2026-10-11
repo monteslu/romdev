@@ -46,10 +46,10 @@ single-instruction smoke test hides this).
 
 `cpu({op:'read'})` and `audioDebug({op:'inspect', chip:'spu'})` ARE wired on PS1 (the
 core exports `romdev_mips_regs_get` + `romdev_spu_get`). `breakpoint`/`watch` are not
-yet - those need interpreter-step + memory-path hooks patched into beetle (cpuState/
+yet - those need interpreter-step + memory-path hooks patched into beetle (cpu({op:'read'})/
 audioDebug are plain reads). Use `cpu`/`audioDebug` + `memory` + `disasm`/`decompile`
 meanwhile.
 
-## "renderingContext returns N/A"
+## "background({view:'renderState'}) returns N/A"
 
 Correct - PS1 is a 3D GPU machine with no 2D tile/sprite VDP for that op. Not a bug.

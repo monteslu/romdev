@@ -24,7 +24,7 @@ Check:
 - Are there any extra `STA WSYNC` instructions hiding in your
   game-logic code that pushes you past 262?
 
-Use the cycle counter from `stella -trace` (or our `frame({op:'step'})` +
+Use the cycle counter from `stella -trace` (or romdev's `frame({op:'step'})` +
 `cpu({op:'read'})`) to verify your scanline count.
 
 ## "Sprites are wider than expected"

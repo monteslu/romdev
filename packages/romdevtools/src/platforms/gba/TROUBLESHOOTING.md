@@ -9,7 +9,7 @@
 When something's broken. Read MENTAL_MODEL.md first
 (via `platform({op:'doc', platform:"gba", name:"mental_model"})`).
 
-## ⚠️ ROM compiles + loads but the screen never updates (frozen on frame 1)
+## ROM compiles + loads but the screen never updates (frozen on frame 1)
 
 **Single most common GBA gotcha.** Symptom: `build({output:'run'})` returns a
 black screen (or only the very first frame's contents, never any
@@ -36,14 +36,14 @@ installs the master handler + `irq_add(II_VBLANK, NULL)` registers a
 no-op for vblank (just so the IRQ fires + the BIOS counter increments).
 With libgba, `irqInit()` does both steps.
 
-Every bundled R28 example (`tonc_hello`, `tonc_hello_sprite`, `shmup`,
+Every bundled example (`tonc_hello`, `tonc_hello_sprite`, `shmup`,
 `platformer`, `puzzle`, `sports`, `racing`) sets this up - copy the
 pattern.
 
 ## Text on screen
 
 **Use TTE (Tonc Text Engine) - that's the default runtime's path.**
-libtonc is the default GBA C runtime as of R28 and TTE handles text
+libtonc is the default GBA C runtime and TTE handles text
 rendering without needing libsysbase:
 
 ```c
@@ -62,26 +62,26 @@ int main(void) {
 libsysbase, no devkitPro setup, works out of the box with the
 bundled runtime.
 
-## ⚠️ iprintf doesn't work on the libgba path. Why?
+## iprintf doesn't work on the libgba path. Why?
 
 **Only an issue if you opt into `runtime: "libgba"` (the devkitPro
 SDK path) - the default libtonc runtime sidesteps this entirely with
 TTE.** Most devkitARM tutorials show `iprintf("Hello\n")` as the
-hello-world pattern. **This will NOT compile against our libgba build.**
+hello-world pattern. **This will NOT compile against the bundled libgba build.**
 
-### Why we excluded it
+### Why it is excluded
 
 libgba's `console.c` provides iprintf-style stdio routing: writes get
 captured by devkitPro's libsysbase and rendered as text on a
 tile-based BG. Implementing that requires `<sys/iosupport.h>` +
 `<sys/statvfs.h>` + `<sys/dir.h>` + ~a dozen more libsysbase headers
-that vanilla newlib does NOT ship. Porting devkitPro's libsysbase to
-our toolchain is multi-day work that is currently deferred.
+that vanilla newlib does NOT ship, and libsysbase is not part of the
+bundled toolchain.
 
-The trade-off: we got `#include <gba.h>` working end-to-end and 95% of
-the libgba API. iprintf is the 5% missing. R28 added libtonc as the
-default precisely because TTE provides the same capability without
-the libsysbase dependency.
+The trade-off: `#include <gba.h>` works end-to-end with most of the
+libgba API; iprintf is the missing piece. libtonc is the default
+runtime because TTE provides the same capability without the
+libsysbase dependency.
 
 ### Workarounds - pick the one that fits your case
 
@@ -111,7 +111,7 @@ void mgba_log(const char *msg) {
 }
 ```
 
-Works in our test pipeline + lets the agent inspect logs via mGBA's
+Works in romdev's mGBA core, and you can inspect the logs via mGBA's
 state. Won't work on real hardware but real hardware isn't usually
 the loop you're iterating in.
 
@@ -121,16 +121,6 @@ About 30 lines of C. Upload an 8x8 font into VRAM, set up a BG with a
 character map, write tile indices for the chars you want. Slower to
 write than iprintf the first time but works on real hardware AND mGBA.
 
-#### 3. Install devkitPro natively + use their libgba
-
-Apt-install devkitPro (`apt install devkitpro-pacman` + `dkp-pacman -S
-gba-dev`), then build your project against THAT libgba.a - which has
-console.c + libsysbase. Works as a fallback if you genuinely need
-iprintf and the above two don't cut it. You lose romdev's zero-
-install promise but everything else still works.
-
-A deferred enhancement is to port libsysbase into our build so
-iprintf "just works."
 
 ## Adding sound to your game
 
@@ -153,8 +143,9 @@ freq_period). Useful values: 1900 = pew, 1500 = boing, 1300 = blip,
 800 = low thump. `length_frames` is the 64-step countdown (~3.9ms
 each, max 63). Channels 3 (wave RAM) + Direct Sound (PCM via DMA) are
 NOT wrapped - that's a music-track concern, not a sfx concern, and
-needs more setup than a one-call helper provides. Reach for maxmod
-(separate library, not bundled) when you want music + samples.
+needs more setup than a one-call helper provides. Reach for the bundled
+maxmod (`build({maxmod:true})`, see the `gba/maxmod_demo` example) when
+you want music + samples.
 
 ## BG0 tile data disappears after TTE init
 
@@ -192,9 +183,9 @@ Three common modes:
 
 These are devkitARM startup-code symbols. Our build pipeline
 auto-links `crti.o`/`crtn.o` (for `_init`) and a generated
-`fake_heap_end` stub. If you're seeing these errors, you're probably
-running `buildGbaC` against an old cached version of the toolchain
-script. Restart the MCP server.
+`fake_heap_end` stub through `build()`. If you're seeing these errors,
+you're probably linking with a custom `linkerConfig` or your own crt0
+that drops those objects; build without the override first to confirm.
 
 ## "Build fails with `int8_t not defined` or `stdint.h not found`"
 
@@ -218,7 +209,7 @@ Real hardware checks the Nintendo logo at $04-$9F (156 bytes). Our
 `gba_crt0.s` leaves it zeroed because including the actual logo
 bytes would be a copyright issue. To boot on real hardware:
 
-1. Build with our toolchain.
+1. Build with the bundled toolchain.
 2. Run devkitARM's `gbafix` tool on the output `.gba` - it patches in
    the logo + checksum bytes. devkitPro distributes `gbafix` as part
    of their host tools; install separately when you're shipping to
@@ -241,16 +232,12 @@ your writes are lost.
 
 ## "First C build is slow (~1-2 s) but later ones are fast"
 
-Expected. The cc1.wasm is 141 MB unstripped - first invocation mmaps
-it into a worker, instantiates the module. Subsequent builds reuse the
-warm worker pool (R12). Steady-state builds are sub-second.
-
-A future optimization (R28?): rebuild cc1.wasm with `-O3 --strip-debug`
-to get it down to ~17 MB like the m68k toolchain has. Functionality
-is identical either way; just smaller bundle.
+Expected. The first invocation loads the large cc1.wasm into a worker
+and instantiates the module. Subsequent builds reuse the warm worker
+pool. Steady-state builds are sub-second.
 
 ## "Save states don't work on `.gba` ROMs"
 
 mGBA save states work - `state({op:'save'})` / `state({op:'load'})` MCP tools should
 function on any loaded GBA ROM. If you find a specific game where they
-don't, file an issue - most likely a mGBA-side bug, not ours.
+don't, file an issue at https://github.com/monteslu/romdev/issues.

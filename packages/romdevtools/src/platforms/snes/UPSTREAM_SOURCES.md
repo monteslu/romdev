@@ -6,7 +6,7 @@ Trust hierarchy:
 2. **Bundled runtime source** - `src/platforms/snes/lib/c/snes_sfx.c`,
    the SPC driver in `lib/audio/spc_driver.asm`, the `apu_blob.asm`
    uploader.
-3. **Bundled library source** (R58) - PVSnesLib at
+3. **Bundled library source** - PVSnesLib at
    `src/platforms/snes/lib/pvsneslib/source/`. The complete PVSnesLib
    source tree - every API (`consoleDrawText`, `setMode`,
    `WaitForVBlank`, `padsCurrent`, OAM helpers, palette helpers) has
@@ -16,9 +16,9 @@ Trust hierarchy:
    | What | Upstream |
    |---|---|
    | PVSnesLib | https://github.com/alekmaul/pvsneslib |
-   | tcc-65816 (the C compiler we ship for SNES) | https://github.com/alekmaul/tcc/tree/65816 |
-   | wla-dx (65816 assembler we link with) | https://github.com/vhelin/wla-dx |
-   | asar (the alternative 65816 asm we ship) | https://github.com/RPGHacker/asar |
+   | tcc-65816 (the C compiler romdev ships for SNES) | https://github.com/alekmaul/tcc/tree/65816 |
+   | wla-dx (65816 assembler romdev links with) | https://github.com/vhelin/wla-dx |
+   | asar (the alternative 65816 asm romdev ships) | https://github.com/RPGHacker/asar |
    | snes9x libretro core | https://github.com/libretro/snes9x |
 
 ## SNES hardware docs

@@ -149,7 +149,7 @@ games, stay in 32 KB.
 ## "First build is slow but later ones are fast"
 
 Expected. cc65 + ca65 + ld65 cold-load + cfg-parse takes ~1-2s.
-Steady-state builds are sub-second thanks to the worker pool (R12).
+Steady-state builds are sub-second thanks to the warm worker pool.
 
 ## "Screen has garbage strips / random pixel patterns / pink+black bands"
 

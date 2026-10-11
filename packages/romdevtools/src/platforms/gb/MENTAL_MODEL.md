@@ -1,7 +1,7 @@
 # Game Boy / Game Boy Color - mental model
 
 One page. Read once before you write your first game. The
-TROUBLESHOOTING.md alongside this file is for when something's broken;
+troubleshooting doc (`platform({op:'doc', platform:'gb', name:'troubleshooting'})`) is for when something's broken;
 this is the "what's going on" version.
 
 ## Blank screen? Verify rendering first (no vision needed)
@@ -16,14 +16,13 @@ as the first move when a change "did nothing."
 
 ## Toolchains
 
-Default is **C** via SDCC's sm83 port (the same SDCC that powers SMS/GG/MSX/
-Coleco). For hand-tuned asm, pass `language:"asm"` to route through RGBDS. The C
-path uses `__sfr __at 0xFFNN` to bind GB I/O regs; the helper headers under
-`src/platforms/gb/lib/c/gb_hardware.h` define LCDC/STAT/SCY/SCX/LY/BGP/OBP0/OBP1/
-etc. for both DMG and CGB. ⚠ SDCC 4.4.0 codegen quirk: `for (;;) { switch + write
+Default is **C** via SDCC's sm83 port (the same SDCC that powers SMS/GG/MSX). For hand-tuned asm, pass `language:"asm"` to route through RGBDS. The C
+path uses `__sfr __at 0xFFNN` to bind GB I/O regs; the helper header
+`gb_hardware.h` (copied into a forked project) defines LCDC/STAT/SCY/SCX/LY/BGP/OBP0/OBP1/
+etc. for both DMG and CGB. Note: SDCC 4.4.0 codegen quirk: `for (;;) { switch + write
 to __sfr }` crashes the register allocator - use `do { ... } while (1)` and
-table-lookup writes instead. (See the GB/GBC SDCC_GOTCHAS for the full set of
-sm83 codegen footguns.)
+table-lookup writes instead. (The GB/GBC SDCC gotchas list has the full set of
+sm83 codegen footguns: https://github.com/monteslu/romdev/blob/main/packages/romdevtools/src/platforms/gb/lib/c/SDCC_GOTCHAS.md.)
 
 ## MCP debug & inspection tooling
 
@@ -59,7 +58,7 @@ palettes, tiles, background/LCDC, CPU, and raw memory regions. This applies to
 | `gb_objpdata` | CGB OBJ palette RAM (64 bytes) |
 | `gb_cpu_regs` | SM83 register snapshot |
 
-⚠ **Gotcha: gambatte exposes `gb_vram`, NOT the generic `video_ram` region.**
+**Gotcha: gambatte exposes `gb_vram`, NOT the generic `video_ram` region.**
 Other platforms' cores expose video memory under `video_ram`; on GB/GBC you must
 ask for `gb_vram` (and the other `gb_*` names above). A `video_ram` read here
 returns nothing.
@@ -73,7 +72,7 @@ binutils serves both plain Z80 (SMS/GG/MSX) and the GB CPU. MBC-banked carts
 1+ @ their `$4000` window; refs tagged `romBank`) and split per-bank by
 `disasm({target:'project'})`.
 
-## Five silent-failure footguns to know before you start (R26 + R27)
+## Silent-failure footguns to know before you start
 
 If your ROM compiles cleanly but doesn't render - or sprites land in
 the wrong place, or VRAM stays empty, or "everything works for the
@@ -104,14 +103,14 @@ check these first. All five have shipped fixes in the bundled runtime
    `*((uint8_t*)0x8000) = x;` as dead code if the optimizer can't see
    side effects. Use `memcpy_vram(dst, src, n)` from `gb_runtime.h`
    (volatile-safe by construction) or cast through `volatile uint8_t *`.
-   See `gb_runtime/lib/c/SDCC_GOTCHAS.md` § "Writes to VRAM" for detail.
+   The SDCC gotchas list (link above) covers this under "Writes to VRAM".
 
 3b. **OAM DMA goes FIRST after `wait_vblank()` - before any staging work.**
    The vblank window is ~10 scanlines (~1140 cycles) and SDCC call overhead
    is brutal: even a few dozen `oam_set()` CALLS before the flush push the
    DMA out of vblank into active display, where it tears the sprites on one
    FIXED scanline every frame (the "horizontal line a third of the way down"
-   glitch). The robust frame shape is: stage OAM/BG writes into RAM any time
+   glitch). The reliable frame shape is: stage OAM/BG writes into RAM any time
    during the frame, then `wait_vblank(); oam_dma_flush();` as the very first
    thing, then a small bounded batch of BG map writes. One frame of sprite
    latency is imperceptible. Also: statics belong at `dataLoc 0xC200` or
@@ -120,28 +119,25 @@ check these first. All five have shipped fixes in the bundled runtime
 
 4. **OAM DMA must run from HRAM.** During the ~160 µs OAM DMA window
    the CPU can ONLY fetch from HRAM ($FF80-$FFFE). The bundled
-   `oam_dma_copy()` now installs a 9-byte stub at $FF80 and CALLs it;
-   the stub spins from HRAM where DMA can't conflict. Pre-r55 the spin
-   ran from ROM and fetched $FF for every instruction (the bus-conflict
+   `oam_dma_copy()` installs a 9-byte stub at $FF80 and CALLs it;
+   the stub spins from HRAM where DMA can't conflict. A spin that runs
+   from ROM fetches $FF for every instruction (the bus-conflict
    default), which decodes as `rst $38` → stack corruption →
-   intermittent LCDC = $FF, BG VRAM wiped, sprites jump. Symptom
-   classically appeared as "works clean for 3000 frames with no input,
+   intermittent LCDC = $FF, BG VRAM wiped, sprites jump. The symptom
+   is typically "works clean for 3000 frames with no input,
    corrupts within 100 frames once a button is held" because the
    gameplay code path's length / branches changed, shifting which DMAs
    ran during which fetches. **The fix is in `lcd_init_default()` -
    it auto-installs the stub.** Roll your own OAM DMA only if you
    call `oam_dma_init_hram()` yourself first.
 
-5. **`gb_crt0.s` zeros BSS correctly.** Pre-r55's gsinit had a typo:
-   it zeroed `_INITIALIZED` (the runtime shadow of init-value data,
-   which gets overwritten anyway) instead of `_DATA` (the actual BSS
-   where uninitialized `static` globals land). Result: every
-   `static uint8_t counter;` started with whatever WRAM garbage was
-   there at boot - spurious "active" flags on game objects, etc. The
-   fixed crt0 zeros `_DATA` from `s__DATA` for `l__DATA` bytes, then
-   does the `_INITIALIZER → _INITIALIZED` copy for init-value statics.
-   If you use the bundled `gb_crt0.s` you're good; if you bring your
-   own, make sure gsinit zeros `_DATA`.
+5. **`gb_crt0.s` zeros BSS correctly.** Its gsinit zeros `_DATA`
+   (the BSS where uninitialized `static` globals land) from `s__DATA`
+   for `l__DATA` bytes, then does the `_INITIALIZER → _INITIALIZED`
+   copy for init-value statics. If you bring your own crt0, make sure
+   gsinit zeros `_DATA`; otherwise every `static uint8_t counter;`
+   starts with whatever WRAM garbage was there at boot (spurious
+   "active" flags on game objects, etc.).
 
 6. **Don't poke a hardcoded `$C0xx` WRAM pointer for game state - it
    overlaps your statics.** SDCC links the C runtime's data + BSS (every
@@ -156,7 +152,7 @@ check these first. All five have shipped fixes in the bundled runtime
    (`build({includeSymbols:true})` → check `s__DATA`/`s__BSS`; your scratch
    must start above the end of `_BSS`). Full write-up + the
    "is-it-really-a-miscompile" repro in
-   `lib/c/SDCC_GOTCHAS.md` § "sm83 codegen traps in plain game logic".
+   the SDCC gotchas list (link above), section "sm83 codegen traps in plain game logic".
 
 ## Memory map you actually care about
 
@@ -167,7 +163,7 @@ $8000-$97FF  VRAM tile data - 384 tiles × 16 bytes (CGB: dual-banked, 768 total
 $9800-$9FFF  VRAM BG maps + CGB attribute map (in bank 1)
 $A000-$BFFF  Cart RAM (mappers only; not present in 32 KB ROM-only carts)
 $C000-$DFFF  WRAM (8 KB) - your variables, your stack
-             ⚠ statics start at $C000 (rng/grids/scores live here): NEVER
+             Note: statics start at $C000 (rng/grids/scores live here): NEVER
                hardcode a $C0xx pointer for game state - use a `static`
                array; for fixed scratch use $C200+ (see footgun #6).
 $FE00-$FE9F  OAM (40 sprites × 4 bytes) - written via DMA
@@ -360,8 +356,14 @@ Pattern: keep a `world_map[col][row]` array, a `camX` in pixels, convert
 actor world-X → screen-X as `worldX - camX`, and only ever touch the one
 column entering the screen per 8-px step.
 
+## Static recompilation
+
+Game Boy ROMs can be recompiled whole into a wasmcart with
+`disasm({target:'recompile', emit:'wasmcart', platform:'gb', path, outputPath})`. The cart's hardware is a port of gambatte, the reference core
+it is verified against with `frame({op:'verifyRecompile', cart, reference})`. Full guide: `platform({op:'doc', platform:'guide', name:'recompile'})`.
+
 ## Reverse-engineering & decompilation
 
 The Rizin/Ghidra analysis engine works here like everywhere: `disasm({target:'functions'})` to carve the program, `disasm({target:'cfg'|'xrefs'})` to trace it, `symbols({op:'analyze'})` for a one-shot structural map.
 
-**Decompiler quality on SM83: GOOD.** A dedicated SLEIGH plugin gives clean block-level pseudocode. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. See the cross-platform ROM-hacking playbook §5f for the full loop.
+**Decompiler quality on SM83: GOOD.** A dedicated SLEIGH plugin gives clean block-level pseudocode. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. The full loop is in the ROM-hacking playbook, section 5f (`platform({op:'doc', platform:'romhacking', name:'playbook'})`).

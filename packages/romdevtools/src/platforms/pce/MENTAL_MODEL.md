@@ -1,7 +1,7 @@
 # PC Engine / TurboGrafx-16 - mental model
 
 One page. Read once before you write your first PC Engine game. The
-TROUBLESHOOTING.md alongside this file is for when something's broken; this is
+troubleshooting doc (`platform({op:'doc', platform:'pce', name:'troubleshooting'})`) is for when something's broken; this is
 the "what's going on" version.
 
 ## Start here - don't write the register pokes from scratch
@@ -115,4 +115,4 @@ screen. Keep at least one (2+ byte) global. See TROUBLESHOOTING.md.
 
 The Rizin/Ghidra analysis engine works here like everywhere: `disasm({target:'functions'})` to carve the program, `disasm({target:'cfg'|'xrefs'})` to trace it, `symbols({op:'analyze'})` for a one-shot structural map.
 
-**Decompiler quality on HuC6280: MEDIUM.** The Ghidra HuC6280 SLEIGH covers all custom opcodes + MPR banking; pseudocode is usable. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. See the cross-platform ROM-hacking playbook §5f for the full loop.
+**Decompiler quality on HuC6280: MEDIUM.** The Ghidra HuC6280 SLEIGH covers all custom opcodes + MPR banking; pseudocode is usable. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. The full loop is in the ROM-hacking playbook, section 5f (`platform({op:'doc', platform:'romhacking', name:'playbook'})`).

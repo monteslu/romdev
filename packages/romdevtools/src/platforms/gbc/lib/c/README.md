@@ -70,11 +70,10 @@ Templates ship in `examples/{gb,gbc}/templates/`:
 ## SDCC 4.4.0 quirks
 
 **Read first: [`SDCC_GOTCHAS.md`](./SDCC_GOTCHAS.md).** Short doc -
-mostly covers C89 syntax requirements. The big "register allocator
-crash family" that motivated this whole document originally was
-diagnosed as an emscripten stack overflow on 2026-05-25; fixed at the
-build level. Patterns that used to require `unroll.h` workarounds
-compile cleanly now.
+mostly covers C89 syntax requirements. The "register allocator crash
+family" some SDCC builds show is a WASM stack overflow, not codegen; the
+bundled SDCC links with a large stack, so patterns that once needed
+`unroll.h` workarounds compile cleanly.
 
 `build({output:'rom'})` runs a **pre-flight linter** that catches C89 violations
 (mid-block declarations, C99 inline for-loop counters) before SDCC's

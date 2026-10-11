@@ -10,22 +10,22 @@ on the first try.
 
 ## The matrix
 
-For a Space-Invaders-shaped game (player at the bottom, a grid of enemies,
+For a fixed-screen shooter (player at the bottom, a grid of enemies,
 shields/HUD, shots):
 
 | Platform | Enemies / player / shots | Shields & HUD | The thing that bites you |
 | --- | --- | --- | --- |
-| **GBA** | hardware OBJ sprites (or bitmap mode) | OBJ or BG | Easiest target - lots of headroom, simple output looks good. ⚠ Set up IRQs (`irq_init`+`irq_add(II_VBLANK)`) before `VBlankIntrWait()` or the BIOS halts forever. |
-| **Genesis** | VDP sprites + tiles | sprites or BG plane | Strong fit. ⚠ Step 60+ frames after boot before judging output - the VDP init takes a moment. |
-| **SMS** | VDP sprites + BG tiles | BG tilemap | ⚠ 8 sprites per scanline. Put score/status on the BG tilemap, not sprites. |
+| **GBA** | hardware OBJ sprites (or bitmap mode) | OBJ or BG | Easiest target - lots of headroom, simple output looks good. Set up IRQs (`irq_init`+`irq_add(II_VBLANK)`) before `VBlankIntrWait()` or the BIOS halts forever. |
+| **Genesis** | VDP sprites + tiles | sprites or BG plane | Strong fit. Step 60+ frames after boot before judging output - the VDP init takes a moment. |
+| **SMS** | VDP sprites + BG tiles | BG tilemap | 8 sprites per scanline. Put score/status on the BG tilemap, not sprites. |
 | **Game Gear** | VDP sprites + BG | BG tiles | Same as SMS **plus** the visible screen is the center 160×144 of a 256×192 hardware space. Keep sprites inside the visible box (the GG example games ship `VIS_*` constants). |
-| **NES** | OAM sprites + CHR | BG nametable tiles | ⚠ 8 sprites per scanline → ≤5-6 enemies per row. ⚠ **Stage OAM (oam_clear/oam_spr) BEFORE `ppu_wait_nmi`** - the NMI DMAs shadow OAM at vblank start. ⚠ ~512 B of BSS on chr-ram (check `ramUsage` in the build result). |
-| **SNES** | OBJ sprites - use **chunky metasprites** (16×16 / 24×16), not lone 8×8 | OBJ or BG | The "looks like dots" trap: naive 8×8 OBJs are technically valid but tiny. Build a real CHR tileset, set OBJ size + the right palette line + CHR base. ⚠ Call `sfx_init()` AFTER `setScreenOn()` (a stalled SPC upload before screen-on = black screen). |
-| **GB / GBC** | OAM sprites | OAM + BG | ⚠ Copy tiles into VRAM with `memcpy_vram()`, never a raw `for(i){dst[i]=src[i]}` loop (SDCC miscompiles it → CPU crash). ⚠ uint16_t for loop bounds >255. On GBC, stage+DMA the first OAM frame before enabling the LCD. |
-| **C64** | VIC-II hardware sprites (cannon/shots) + character cells (invaders/shields) | character cells | It's a **computer/`.prg`**, not a ROM console. The character grid is great for the invader formation; hardware sprites for the few moving things. |
-| **Atari Lynx** | **full-redraw with `tgi_bar` rectangles** (Suzy blitter) | tgi_bar | ⚠ The loop MUST be: `while(tgi_busy()){}` → full-screen `tgi_bar` clear → draw → `tgi_updatedisplay()`. Skipping the busy-wait or using `tgi_clear()` = blank screen. Full redraw every frame is fine for a small game. |
-| **Atari 7800** | **MARIA display-list entries** (a "sprite" is a DL header) | DL entries / coarse | ⚠ No sprite table or tilemap. Build the DLL once at init; per frame, PATCH the existing DL entries in place (X / graphics ptr / palette). A full per-frame DLL rebuild = tearing/corruption. ≤~32 objects per scanline. |
-| **Atari 2600** | **TIA players + missiles, beam-raced** | reused player / coarse playfield | ⚠ The hardest. No framebuffer - everything is per-scanline register writes. P0 = ship (double-width), P1 + `NUSIZ1` hardware copies = invader row, P1 reused in a lower scanline region = shields, M0 = shot. Don't use playfield bits for aliens - it looks like a barcode. 128 B RAM. |
+| **NES** | OAM sprites + CHR | BG nametable tiles | 8 sprites per scanline → ≤5-6 enemies per row. **Stage OAM (oam_clear/oam_spr) BEFORE `ppu_wait_nmi`** - the NMI DMAs shadow OAM at vblank start. ~512 B of BSS on chr-ram (check `ramUsage` in the build result). |
+| **SNES** | OBJ sprites - use **chunky metasprites** (16×16 / 24×16), not lone 8×8 | OBJ or BG | The "looks like dots" trap: naive 8×8 OBJs are technically valid but tiny. Build a real CHR tileset, set OBJ size + the right palette line + CHR base. Call `sfx_init()` AFTER `setScreenOn()` (a stalled SPC upload before screen-on = black screen). |
+| **GB / GBC** | OAM sprites | OAM + BG | Copy tiles into VRAM with `memcpy_vram()`, never a raw `for(i){dst[i]=src[i]}` loop (SDCC miscompiles it → CPU crash). uint16_t for loop bounds >255. On GBC, stage+DMA the first OAM frame before enabling the LCD. |
+| **C64** | VIC-II hardware sprites (cannon/shots) + character cells (enemies/shields) | character cells | It's a **computer/`.prg`**, not a ROM console. The character grid is great for the enemy formation; hardware sprites for the few moving things. |
+| **Atari Lynx** | **full-redraw with `tgi_bar` rectangles** (Suzy blitter) | tgi_bar | The loop MUST be: `while(tgi_busy()){}` → full-screen `tgi_bar` clear → draw → `tgi_updatedisplay()`. Skipping the busy-wait or using `tgi_clear()` = blank screen. Full redraw every frame is fine for a small game. |
+| **Atari 7800** | **MARIA display-list entries** (a "sprite" is a DL header) | DL entries / coarse | No sprite table or tilemap. Build the DLL once at init; per frame, PATCH the existing DL entries in place (X / graphics ptr / palette). A full per-frame DLL rebuild = tearing/corruption. ≤~32 objects per scanline. |
+| **Atari 2600** | **TIA players + missiles, beam-raced** | reused player / coarse playfield | The hardest. No framebuffer - everything is per-scanline register writes. P0 = ship (double-width), P1 + `NUSIZ1` hardware copies = enemy row, P1 reused in a lower scanline region = shields, M0 = shot. Don't use playfield bits for aliens - it looks like a barcode. 128 B RAM. |
 
 ## The one rule behind all of it
 

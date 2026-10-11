@@ -1,19 +1,19 @@
 # Game Boy / Game Boy Color - quickstart
 
-The compressed version of "everything I had to learn the hard way
-building a GB ROM with romdev."
+The short version of what to know before building a GB ROM with romdev.
+The snippets in this directory are the RGBDS assembly path.
 
-## Language: RGBDS assembly
+## Language: RGBDS assembly (these snippets)
 
-Game Boy uses RGBDS (rgbasm + rgblink + rgbfix) - the canonical
+The asm path uses RGBDS (rgbasm + rgblink + rgbfix) - the canonical
 toolchain for GB homebrew. `build({output:'rom', platform:"gb", source: <asm>})`
 builds + links + runs `rgbfix` to fix the cart header. GBC builds the
 same way; pass `platform:"gbc"` to enable the CGB-only opcodes (KEY1,
 BCPS, etc.) - gambatte detects mode from the cart header byte at $0143.
 
-C is theoretically supported via GBDK (sdcc-gbz80 backend) but is NOT
-bundled today; the SM83 backend in sdcc 4.4.0 has been less tested for
-us than the z80 backend.
+C is the default language for GB/GBC: SDCC's sm83 port with the bundled
+runtime in `lib/c/` (see its README and the SDCC gotchas list there).
+Pass `language:"asm"` to use RGBDS instead.
 
 ## Snippets shipped in this directory
 
@@ -27,7 +27,7 @@ us than the z80 backend.
 | `load_tiles.asm` | Bulk VRAM upload. Assumes LCD is OFF - pause renders for big uploads. |
 | `dma_oam.asm` | The canonical HRAM-resident OAM DMA routine. Copies shadow OAM at $C000 to actual OAM at $FE00 in 160 µs. |
 
-Fetch any with `getStarterSnippet({platform:"gb", name:"<file>"})`.
+Fetch any with `examples({op:'snippets', platform:'gb', mode:'get', snippetName:'<file>'})`.
 
 ## The five gotchas that cost the most time
 

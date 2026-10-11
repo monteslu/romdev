@@ -35,4 +35,4 @@ examples aren't enough and you need ground truth.
   MacDonald / pcedev community docs. The register numbers and color format used
   by romdev's adapters match Geargrafx's implementation exactly (see above).
 - Sprite SATB, BAT (background map), and palette layouts are summarized in this
-  package's MENTAL_MODEL.md.
+  platform's mental model.

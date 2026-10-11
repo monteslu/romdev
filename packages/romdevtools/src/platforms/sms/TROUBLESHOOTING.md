@@ -9,7 +9,7 @@
 When something's broken. Read MENTAL_MODEL.md first for the
 "what's going on" version (via `platform({op:'doc', platform:"sms", name:"mental_model"})`).
 
-## "I drive the game with setInput but the fire/action button doesn't fire"
+## "I drive the game with input({op:'set'}) but the fire/action button doesn't fire"
 
 The SMS/GG button map is **inverted** vs the libretro names. genesis_plus_gx
 maps button 1 (TL, the main fire) onto libretro **b** and button 2 (TR) onto
@@ -75,10 +75,9 @@ Run on a real SMS-mode emulator to confirm.
 
 ## "SDCC crashes during compile (dbuf_append_str NULL / aopGet)"
 
-R7-era SDCC sm83 had multiple register-allocator regressions
-(see `feedback_sdcc_sm83_crashes.md`). Most are fixed in the
-4.4.0 we ship with the 8 MB stack patch (R12). If you still hit
-one:
+That assertion comes from an undersized WASM stack in SDCC, not from
+codegen; the bundled SDCC 4.4.0 links with an 8 MB stack, which removes
+the known cases. If you still hit one:
 
 - Wrap aggressive `for (;;) { switch + __sfr write }` loops in
   `do { ... } while (1)` (matches the bundled `default` template's
@@ -87,9 +86,9 @@ one:
 - Avoid mid-block `uint8_t var = expr;` - hoist to function top
   (SDCC z80 is C89-strict).
 
-The full list of patterns and workarounds is in
-`src/platforms/sms/lib/README.md` (look for the SMS-14 codegen
-notes).
+The C89 rules and the remaining codegen notes are in the SDCC gotchas
+list: https://github.com/monteslu/romdev/blob/main/packages/romdevtools/src/platforms/gb/lib/c/SDCC_GOTCHAS.md
+(sm83 and z80 share the SDCC frontend).
 
 ## "Sound from PSG is silent / distorted"
 
@@ -138,7 +137,7 @@ matters.
 
 ## "Save states don't restore VDP state"
 
-genesis_plus_gx (which we use for SMS) snapshots VDP/CRAM/VRAM
+genesis_plus_gx (the SMS core) snapshots VDP/CRAM/VRAM
 fully. If you find a sprite missing after `state({op:'load'})`, the cause
 is usually game-side: your shadow OAM lives in WRAM, which IS
 snapshotted, but your `oam_dma_flush`/`sms_sat_upload`-equivalent
@@ -149,4 +148,4 @@ stale SAT until your loop ticks once.
 
 Expected. SDCC z80 + sdasz80 + sdld cold-load takes ~1-2s for
 the WASM mmap + class init. Steady-state builds are sub-second
-thanks to the worker pool (R12).
+thanks to the warm worker pool.

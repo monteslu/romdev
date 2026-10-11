@@ -108,7 +108,7 @@ $00   GG-specific: bit 7 = START button (active low)
 $01-$05  GG-specific: link cable, sound balance, etc.
 ```
 
-### Driving input over MCP - the button map is INVERTED ⚠
+### Driving input over MCP - the button map is INVERTED
 
 Game Gear runs on genesis_plus_gx, which maps the two face buttons onto libretro
 the *opposite* of the obvious way (verified live against the core - same as SMS):
@@ -164,7 +164,7 @@ void main(void) {
 
 Game Gear runs on the same genesis_plus_gx (gpgx, patched) core as SMS, so the
 inspectors are identical. **The canonical reference lives in the SMS
-MENTAL_MODEL** (`src/platforms/sms/MENTAL_MODEL.md`, "MCP debug & inspection
+MENTAL_MODEL** (`platform({op:'doc', platform:'sms', name:'mental_model'})`, "MCP debug & inspection
 tooling" section): `sprites({op:'inspect'})`, `tiles({op:'png'})`,
 `cpu({op:'read'})` (Z80), `background({view:'renderState'})`,
 `audioDebug({op:'inspect', chip:'psg'})` (SN76489, the shared
@@ -198,8 +198,14 @@ layout, joypad polling, BG name table at $3800) is identical to SMS.
 You can use sms_hw.h notes + helpers as a reference; the GG runtime
 files in lib/c/ are direct ports.
 
+## Static recompilation
+
+Game Gear ROMs can be recompiled whole into a wasmcart with
+`disasm({target:'recompile', emit:'wasmcart', platform:'gg', path, outputPath})`. The cart's hardware is a port of genesis_plus_gx, the
+reference core it is verified against with `frame({op:'verifyRecompile', cart, reference})`. Full guide: `platform({op:'doc', platform:'guide', name:'recompile'})`.
+
 ## Reverse-engineering & decompilation
 
 The Rizin/Ghidra analysis engine works here like everywhere: `disasm({target:'functions'})` to carve the program, `disasm({target:'cfg'|'xrefs'})` to trace it, `symbols({op:'analyze'})` for a one-shot structural map.
 
-**Decompiler quality on Z80: GOOD.** Register-rich hand asm decompiles cleanly at the block level. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. See the cross-platform ROM-hacking playbook §5f for the full loop.
+**Decompiler quality on Z80: GOOD.** Register-rich hand asm decompiles cleanly at the block level. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. The full loop is in the ROM-hacking playbook, section 5f (`platform({op:'doc', platform:'romhacking', name:'playbook'})`).

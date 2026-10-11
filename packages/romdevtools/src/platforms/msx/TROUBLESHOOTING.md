@@ -44,7 +44,7 @@ users: set R1 bit 6.
   '__endasm'"). Put asm data (your message bytes + its label) INSIDE a function's
   asm block, jumped over with `jr`. See `hello_msx.c`.
 - Don't rely on SDCC's stack-frame calling convention for a char-print helper;
-  the robust pattern is one asm block that loads `hl` with the string address and
+  the reliable pattern is one asm block that loads `hl` with the string address and
   loops `ld a,(hl) / call $00A2 / inc hl`.
 
 ## Colors wrong on an MSX2 bitmap screen
@@ -80,10 +80,10 @@ periods/volumes stay 0 - total silence even though your code clearly ran.
 `__asm__("ei")`.** The bundled `msx_psg_tone`/`msx_psg_off` (and the music
 ticker) already do this; copy the pattern for any direct PSG access you write.
 
-## A `static x = 5;` boots as 0 (historical - fixed in the bundled crt0)
+## A `static x = 5;` boots as 0
 
-The old `msx_crt0.s` placed the SDCC `_INITIALIZER` area in RAM, so the boot
-copy duplicated uninitialised RAM onto itself: every value-initialised static
-read 0 and BSS was never zeroed. The bundled crt0 has been fixed (ROM-placed
-`_INITIALIZER` + a BSS-zero loop). If a project forked before 2026-06-09
-shows ghost zeros, refresh its `msx_crt0.s` from a freshly forked example.
+A crt0 that places the SDCC `_INITIALIZER` area in RAM makes the boot copy
+duplicate uninitialised RAM onto itself: every value-initialised static reads 0
+and BSS is never zeroed. The bundled `msx_crt0.s` ROM-places `_INITIALIZER` and
+zeroes BSS. If your project carries an older or hand-written crt0 and shows
+ghost zeros, replace its `msx_crt0.s` with the one from a freshly forked example.

@@ -1,10 +1,10 @@
 # Game Boy Advance - mental model
 
 One page. Read once before you write your first GBA game. The
-TROUBLESHOOTING.md alongside this file is for when something's broken;
+troubleshooting doc (`platform({op:'doc', platform:'gba', name:'troubleshooting'})`) is for when something's broken;
 this is the "what's going on" version.
 
-## Runtimes (R28)
+## Runtimes
 
 Two C runtimes ship bundled. Pass `runtime:` to `build({output:'rom'})` /
 `build({output:'run'})` to pick:
@@ -63,7 +63,7 @@ Mode 4: 240×160 palettized 8bpp framebuffer + a back buffer. Faster.
 Mode 5: 160×128 BGR555 framebuffer + back buffer.
 ```
 
-Most published GBA games use mode 0. The `MODE_3` path (used in our
+Most published GBA games use mode 0. The `MODE_3` path (used in romdev's
 `gba_hello` template) is the simplest - write directly to the
 framebuffer like a modern game.
 
@@ -120,8 +120,10 @@ Two parallel paths:
    modern path for sample-based music. Programmed via $04000082 + DMA.
 
 libgba sound API in `gba_sound.h` covers the tone channels but the
-DMA-driven PCM streaming is something you'd typically pair with
-maxmod (separate library, not bundled here).
+DMA-driven PCM streaming is what maxmod is for: it is bundled; pass
+`maxmod:true` to `build()`, call `mmInit`/`mmStart` and hook
+`mmVBlank`, and convert music with `encodeAudio({target:'maxmod'})`
+(the `gba/maxmod_demo` example shows the wiring).
 
 **Debugging sound:** `audioDebug({op:'inspect', chip:"gba"})` decodes the live APU -
 per-channel freq→note/duty/volume for the 4 tone channels plus the 2 Direct
@@ -235,8 +237,8 @@ $BC-$BF  Reserved
 ```
 
 mGBA does NOT enforce the Nintendo logo (which is good - bundling it
-would be a copyright issue). The `gba_crt0.s` we ship leaves it as
-zeros. Real-hardware ROMs need it; mGBA and our test pipeline run
+would be a copyright issue). The bundled `gba_crt0.s` leaves it as
+zeros. Real-hardware ROMs need it; mGBA and romdev's test pipeline run
 fine without it.
 
 ## Build pipeline
@@ -258,17 +260,16 @@ Loadable via mGBA (`loadMedia`).
 ## What's NOT bundled
 
 - **`agbcc` (the legacy GBA compiler).** romdev's GBA C path is **modern
-  `arm-none-eabi-gcc` 14.2.0** only. The byte-exact decompilations + romhacks
-  (pokeruby / pokeemerald / pokefirered, etc.) build with agbcc + a custom
-  `ld_script.txt`, so romdev **cannot reproduce a matching retail ROM** for those.
+  `arm-none-eabi-gcc` 14.2.0** only. Byte-exact GBA decompilation projects
+  that build with agbcc + a custom `ld_script.txt` therefore cannot be
+  rebuilt to a matching retail ROM inside romdev.
   That's a hard limit, not a missing feature - see "romdev's build model" below.
 - **libgba's `console.c`** (iprintf-style stdio output). Pulls in
-  devkitPro's libsysbase header chain - not yet ported. See
-  TROUBLESHOOTING.md for the trade-off rationale and workarounds.
-- **maxmod** (sample-based music driver). Separate library; not
-  bundled. Add manually if you need it.
+  devkitPro's libsysbase header chain, which is not bundled. See
+  `platform({op:'doc', platform:'gba', name:'troubleshooting'})` for the trade-off and workarounds.
 - **devkitARM's `bin2s`** (binary → assembly converter for asset
-  pipelines). Not bundled; ship binary assets as C arrays for now.
+  pipelines). Not needed: `encodeArt` and `encodeAudio` emit C arrays,
+  and `build()` takes `binaryIncludePaths` for raw blobs.
 
 Everything else from a stock devkitARM install (homebrew-style) works.
 
@@ -281,12 +282,12 @@ project's `Makefile`** as `$(TOOLCHAIN)/bin`. (The `.mjs` wrappers under `node_m
 export a worker factory, not a CLI `main` - invoking one directly exits 0 and writes
 nothing.)
 
-So for an **existing decomp/romhack** (agbcc-era or any project with its own Makefile):
-build it **on the host** with its own toolchain, then point romdev at the resulting
-`.gba` for the run / inspect / debug / decompile loop. Confirmed host recipe for the
-Pokémon Gen-III decomps: `brew install arm-none-eabi-gcc arm-none-eabi-binutils`, clone
-`pret/agbcc` → `./build.sh` → `./install.sh <repo>`, then `make <target>` (yields a
-byte-matching ROM). romdev's value here is everything AFTER the build, not the build.
+So for an **existing decomp/romhack** with its own Makefile (an agbcc-era matching
+decompilation, for example): build it with that project's own toolchain as its README
+describes, then point romdev at the resulting `.gba` for the run / inspect / debug /
+decompile loop. For changes to an existing ROM without its source, use
+`disasm({target:'project'})` + `build({output:'reassemble'})`, which need nothing
+outside romdev.
 
 ## Horizontal scrolling (for side-scrollers)
 
@@ -299,8 +300,14 @@ goes on its own BG layer left unscrolled (or via an HBlank IRQ that resets the
 offset for the HUD scanlines). Track camX in pixels; actor screen-X = worldX -
 camX.
 
+## Static recompilation
+
+GBA ROMs can be recompiled whole into a wasmcart with
+`disasm({target:'recompile', emit:'wasmcart', platform:'gba', path, outputPath})`. The cart's hardware is a port of mGBA, the reference core it
+is verified against with `frame({op:'verifyRecompile', cart, reference})`. Full guide: `platform({op:'doc', platform:'guide', name:'recompile'})`.
+
 ## Reverse-engineering & decompilation
 
 The Rizin/Ghidra analysis engine works here like everywhere: `disasm({target:'functions'})` to carve the program, `disasm({target:'cfg'|'xrefs'})` to trace it, `symbols({op:'analyze'})` for a one-shot structural map.
 
-**Decompiler quality on ARM7TDMI: EXCELLENT.** Most GBA code was compiled C, so the decompiler often recovers something close to the original source - lean on it. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. See the cross-platform ROM-hacking playbook §5f for the full loop.
+**Decompiler quality on ARM7TDMI: HIGH.** Most GBA code was compiled C, so the decompiler often recovers something close to the original source - lean on it. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. The full loop is in the ROM-hacking playbook, section 5f (`platform({op:'doc', platform:'romhacking', name:'playbook'})`).

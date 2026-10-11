@@ -11,13 +11,13 @@ name:"mental_model"})`). Most DMG-era troubleshooting from GB applies
 unchanged - including the **two SDCC sm83 codegen footguns below**, which are
 the #1 cause of a clean-building GBC C game that boots but never renders.
 
-## ⚠ "Sprites/tiles never show AND the CPU crashed (PC near $002B)" - the #1 SDCC footgun
+## "Sprites/tiles never show AND the CPU crashed (PC near $002B)" - the #1 SDCC footgun
 
 SDCC's sm83 backend **miscompiles a byte-copy loop through an `__xdata`
 pointer** - the "copy tiles into VRAM" pattern:
 ```c
 uint8_t *dst = (uint8_t *)0x8000;
-for (uint8_t i = 0; i < 16; i++) dst[i] = src[i];   // ☠ writes to the return
+for (uint8_t i = 0; i < 16; i++) dst[i] = src[i];   // BUG: writes to the return
                                                     //   address → CPU crash
 ```
 The build succeeds and the ROM boots, so it looks like a logic bug, but it's
@@ -26,16 +26,16 @@ stays zero. **Fix:** use the bundled `memcpy_vram(dst, src, n)` (in every
 project's `gb_runtime.c`) for ALL copies into VRAM/`__xdata`, never a raw
 for-loop. `build({output:'rom'})` with `lint:"strict"` also flags the raw pattern.
 
-## ⚠ "Loop never ends / dead code after a loop" - uint8 loop-bound trap
+## "Loop never ends / dead code after a loop" - uint8 loop-bound trap
 
 ```c
-uint8_t i; for (i = 0; i < 32 * 32; i++) { ... }   // ☠ 255 < 1024 always true
+uint8_t i; for (i = 0; i < 32 * 32; i++) { ... }   // BUG: 255 < 1024 always true
 ```
 A `uint8_t` can't reach a bound >255 → infinite loop, all later code dead. SDCC
 gives no warning. Use `uint16_t` for any bound that can exceed 255. (Linter
 flags it.) See [[sdcc-uint8-loop-bound-trap]].
 
-## ⚠ "Flat-color screen, no sprites, OAM reads all zero on the first frame(s)"
+## "Flat-color screen, no sprites, OAM reads all zero on the first frame(s)"
 
 Your sprites are staged in `shadow_oam` but never reached hardware OAM before
 the LCD turned on - so the first visible frame shows power-on garbage / nothing.
@@ -128,7 +128,7 @@ pokes the BG map "whenever the state changes" will have SOME of those pokes
 land mid-frame and vanish: stale cells, a piece that visually lags the
 logical grid, glitches that move around as code timing shifts.
 
-The robust pattern (used by the bundled puzzle example games):
+The reliable pattern (used by the bundled puzzle example games):
 
 1. **COLLECT** - during the frame, don't touch VRAM. Append (addr, tile)
    pairs to a small RAM queue whenever game state changes a cell.

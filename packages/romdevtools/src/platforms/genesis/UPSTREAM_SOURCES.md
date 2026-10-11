@@ -6,7 +6,7 @@ Trust hierarchy:
 2. **Bundled runtime source** - `(shipped in romdev-toolchain-m68k-gcc) share/genesis/c/
    genesis_sfx.c` (PSG wrapper); `lib/sgdk/sega.s` (boot crt0);
    `lib/sgdk/rom_header.c` (cart header builder).
-3. **Bundled library source** (R58) - full SGDK source tree at
+3. **Bundled library source** - full SGDK source tree at
    `(shipped in romdev-toolchain-m68k-gcc) share/genesis/sgdk/src/`. Every SGDK API (VDP_*,
    SPR_*, JOY_*, XGM2_*, BMP_*, etc.) has readable C here.
 4. **Upstream GitHub** (NOT bundled):
@@ -15,7 +15,7 @@ Trust hierarchy:
    |---|---|
    | SGDK | https://github.com/Stephane-D/SGDK |
    | m68k-elf-gcc / binutils / newlib (bundled WASM, build instructions only) | https://gcc.gnu.org/ |
-   | vasm (the assembler we ship as the alternative path) | http://sun.hasenbraten.de/vasm/ |
+   | vasm (the assembler romdev ships as the alternative path) | http://sun.hasenbraten.de/vasm/ |
    | genesis_plus_gx libretro core | https://github.com/libretro/Genesis-Plus-GX |
 
 ## Genesis hardware docs
@@ -29,7 +29,7 @@ Trust hierarchy:
 ## YM2612 + PSG (audio)
 
 The Genesis has TWO audio chips:
-- **SN76489 PSG** (3 squares + 1 noise) - what our `genesis_sfx`
+- **SN76489 PSG** (3 squares + 1 noise) - what romdev's `genesis_sfx`
   wrapper drives via SGDK's `PSG_*` helpers
 - **YM2612 FM synth** (6 channels of 4-op FM) - driven by the Z80
   side via SGDK's XGM2 driver (compiled XGM2 blobs)

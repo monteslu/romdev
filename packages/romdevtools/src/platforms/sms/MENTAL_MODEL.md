@@ -1,7 +1,7 @@
 # Sega Master System / Game Gear - mental model
 
 One page. Read once before you write your first SMS / GG game. The
-TROUBLESHOOTING.md alongside this file is for when something's broken;
+troubleshooting doc (`platform({op:'doc', platform:'sms', name:'troubleshooting'})`) is for when something's broken;
 this is the "what's going on" version.
 
 ## CPU memory map (Z80, 16-bit address space)
@@ -16,8 +16,8 @@ $FFFC-$FFFF   mapper registers (Sega mapper, page select per slot)
 Cartridge is paged in 16 KB slots ($0000, $4000, $8000) via the Sega
 mapper at $FFFC-$FFFF. Slot 0 (`$0000-$3FFF`) holds the boot ROM /
 fixed bank with the interrupt vectors and the first chunk of code;
-slots 1 and 2 are bank-switched on demand. Our minimal templates
-fit in 32 KB so we never page.
+slots 1 and 2 are bank-switched on demand. The minimal templates
+fit in 32 KB so they never page.
 
 The Z80 has separate **I/O port** address space (`in`/`out`
 instructions). Game logic talks to the VDP and joypads via ports,
@@ -200,7 +200,7 @@ JOY_B2    0x20
 
 Edge-detect by AND'ing `pad & !prev`.
 
-### Driving input over MCP - the SMS button map is INVERTED ⚠
+### Driving input over MCP - the SMS button map is INVERTED
 
 genesis_plus_gx (the SMS core) maps the two face buttons onto libretro the
 *opposite* way you'd guess (verified live against the core):
@@ -343,8 +343,14 @@ The `platformer` example is single-screen. To make it a side-scroller:
 Track `camX` in pixels; actor screen-X = `worldX - camX`. (Game Gear is the
 same VDP - only the visible window differs.)
 
+## Static recompilation
+
+Master System ROMs can be recompiled whole into a wasmcart with
+`disasm({target:'recompile', emit:'wasmcart', platform:'sms', path, outputPath})`. The cart's hardware is a port of genesis_plus_gx, the
+reference core it is verified against with `frame({op:'verifyRecompile', cart, reference})`. Full guide: `platform({op:'doc', platform:'guide', name:'recompile'})`.
+
 ## Reverse-engineering & decompilation
 
 The Rizin/Ghidra analysis engine works here like everywhere: `disasm({target:'functions'})` to carve the program, `disasm({target:'cfg'|'xrefs'})` to trace it, `symbols({op:'analyze'})` for a one-shot structural map.
 
-**Decompiler quality on Z80: GOOD.** Register-rich hand asm decompiles cleanly at the block level. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. See the cross-platform ROM-hacking playbook §5f for the full loop.
+**Decompiler quality on Z80: GOOD.** Register-rich hand asm decompiles cleanly at the block level. `disasm({target:'decompile', address})` returns C-like pseudocode (the `qualityNote` field restates this). Read it to UNDERSTAND a routine; use `disasm({target:'project'})` to actually edit + rebuild. The full loop is in the ROM-hacking playbook, section 5f (`platform({op:'doc', platform:'romhacking', name:'playbook'})`).

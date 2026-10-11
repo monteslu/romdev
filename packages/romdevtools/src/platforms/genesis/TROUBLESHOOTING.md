@@ -20,7 +20,7 @@ way: if you passed `language:"asm"`, drop it; if your source has no `.c`
 filename AND no obvious C tokens, pass `language:"c"` explicitly. (Reverse case:
 a `.s` asm file builds via vasm68k - that's correct.)
 
-## "I drive the game with setInput but the jump/action button doesn't fire"
+## "I drive the game with input({op:'set'}) but the jump/action button doesn't fire"
 
 The Genesis button map is **inverted** vs the libretro names. genesis_plus_gx
 maps Genesis A/B/C onto libretro **y/b/a** - so `input({op:'set', a:true})` presses
@@ -118,10 +118,10 @@ per-target `#ifdef` is needed.
 You listed the project's `rom_header.c` in `sourcesPaths` (or your project dir
 build picked it up). The build **supplies the header itself**: it compiles its
 own bundled `rom_header.c` and assembles `sega.s`, which carries `rom_header`
-at `.text.keepboot+0x100` - so a second copy is always a duplicate. Since
-0.136.0 `build()` drops a `rom_header.c` translation unit with a
-`droppedSources` note instead of failing; on older servers, remove it from the
-manifest. Editing `rom_header.c` in place still works - it is picked up by
+at `.text.keepboot+0x100` - so a second copy is always a duplicate. `build()`
+drops a `rom_header.c` translation unit with a `droppedSources` note instead
+of failing. If you still see this error, another file in the build also
+defines `rom_header` (a renamed copy of rom_header.c or sega.s); remove it. Editing `rom_header.c` in place still works - it is picked up by
 name - just never pass it as a source.
 
 ## "`foo.h: No such file or directory` though the file is right there"
@@ -170,7 +170,7 @@ Three layered things to check:
 
 1. **YM2612 is muted at reset.** SGDK's XGM2_init() unmutes it; if
    you're using XGM2, just call `XGM2_init()` once before
-   `XGM2_play()`. (The R58 driver fn is `XGM2_play`, not `XGM2_startPlay` -
+   `XGM2_play()`. (The driver fn is `XGM2_play`, not `XGM2_startPlay` -
    and feed it a COMPILED XGM2 blob from `encodeAudio({target:'xgm2', vgmPath})`,
    not raw VGM.)
 2. **Z80 reset/busreq isn't released.** If you bypass SGDK's sound
@@ -207,7 +207,7 @@ snapshotted.
 
 This is expected. cc1-m68k.wasm is 17.5 MB and gets mmap-loaded into
 a worker on first invocation. Subsequent builds reuse the warm worker
-pool (R12 crash-isolation infrastructure). The cold-start hit is
+pool. The cold-start hit is
 unavoidable; the steady-state cost is sub-second.
 
 ## "Genesis ROM header is wrong (region, IO support, ROM range)"
@@ -223,9 +223,9 @@ your code+data; don't hand-edit it.
 
 **Edit it in place, never list it as a source.** The build compiles its own
 copy of `rom_header.c` (and assembles `sega.s`, which also defines
-`rom_header`), so passing the project's `rom_header.c` in `sourcesPaths` is a
-guaranteed `multiple definition of 'rom_header'` - since 0.136.0 the build
-drops it with a `droppedSources` note rather than failing.
+`rom_header`), so the project's `rom_header.c` must never be a second
+source; the build drops it from `sourcesPaths` with a `droppedSources` note
+rather than failing.
 
 ## "My splash / title screen is the right shapes but all one color and choppy/striped"
 
@@ -244,9 +244,8 @@ call:
 
 ```
 # 1. Source must be 320×224.
-# 2. Quantize to the Genesis palette:
-palette({ source:'platformMaster', platform:"genesis", format:"png", outputPath:"/tmp/gen_pal.png" })
-magick splash.png -dither FloydSteinberg -remap /tmp/gen_pal.png splash_q.png
+# 2. Quantize to the Genesis palette (4 lines × 16 colours):
+encodeArt({ stage:'quantize', platform:"genesis", path:"splash.png", outputPath:"splash_q.png" })
 # 3. Convert:
 encodeArt({ stage:'tilemap', platform:"genesis", pngPath:"splash_q.png", outputDir:"splash_out/" })
 ```
@@ -270,10 +269,11 @@ First choice for any PNG → tiles+tilemap+palette conversion: the
 **`encodeArt({stage:'tilemap'})` MCP tool** (see the splash-screen section above). It
 needs no native tools and produces ready-to-DMA blobs.
 
-Some SGDK helper tools (`rescomp`, `bintos`, `convsym`) aren't ported to WASM;
-you can run them natively on a build machine to produce .bin / .o / .pal /
-.tileset blobs, then drop them into your romdev project as binary includes - the
-build will just incbin them.
+Some SGDK helper tools (`rescomp`, `bintos`, `convsym`) are not part of romdev.
+The bundled equivalents cover the same ground: `encodeArt` (tiles, tilemaps,
+palettes), `importArt` (Aseprite/Tiled/GIF/TexturePacker or another ROM) and
+`encodeAudio`. Any other blob you already have can go in through
+`binaryIncludePaths` and an `.incbin`.
 
 **Music is covered, though:** VGM→XGM2 compilation (SGDK's Java `xgm2tool`) is
 ported to pure JS and exposed as `encodeAudio({target:'xgm2', vgmPath, name})`

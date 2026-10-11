@@ -49,7 +49,7 @@ title demands it.) `build({platform:'dreamcast'})` produces the loadable image.
 
 Homebrew reads controllers over the **Maple bus** (`0xA05F_6C00`+) - the DC's
 peripheral protocol. KOS abstracts this (`maple_enum_*`, controller state). The host's
-`setInput`/`run` holdInputs drive the emulated controller; the game polls Maple.
+`input({op:'set'})` / `build({output:'run', holdInputs})` drive the emulated controller; the game polls Maple.
 
 ## Sound
 
@@ -60,18 +60,18 @@ samples to AICA RAM and triggers channels. KOS ships an AICA sound driver
 ## MCP debug & inspection tooling - current state
 
 - **`run` / `screenshot` / `frame({op:'verify'})`** - boots + presents + render-health.
-  ✅ (reios HLE; the framebuffer path captures pixels.)
-- **`memory({op:'read', region:'system_ram'})`** - SH-4 main RAM. ✅
-- **`disasm` / `decompile`** - SH-4 via rizin (`sh`) + Ghidra (SuperH4 SLEIGH). ✅
+  Works. (reios HLE; the framebuffer path captures pixels.)
+- **`memory({op:'read', region:'system_ram'})`** - SH-4 main RAM. Works.
+- **`disasm` / `decompile`** - SH-4 via rizin (`sh`) + Ghidra (SuperH4 SLEIGH). Works.
   (Good decompile quality; SH-4 is a clean 32-bit RISC.)
-- **`build`** - sh-elf-gcc → WASM toolchain. ✅
+- **`build`** - sh-elf-gcc → WASM toolchain. Works.
 - **`cpu({op:'read'})`** - live SH-4 register file (`romdev_sh4_regs_get`: r0..r15, pc,
-  pr, gbr, vbr, sr, mac, fpul + decoded SR flags). ✅
+  pr, gbr, vbr, sr, mac, fpul + decoded SR flags). Works.
 - **`audioDebug({op:'inspect', chip:'aica'})`** - the AICA's 64 PCM/ADPCM channels
-  (key-on / volume / pitch / loop / format) + master volume (`romdev_aica_get`). ✅
+  (key-on / volume / pitch / loop / format) + master volume (`romdev_aica_get`). Works.
 - **`breakpoint` / `watch`** - not yet (need interpreter-step + memory-path hooks in
-  flycast; cpuState/audioDebug are plain reads and ARE wired).
-- **`renderingContext`** is **N/A** - 3D TA machine, no 2D tile VDP to decode.
+  flycast; cpu({op:'read'}) and audioDebug are plain reads and are wired).
+- **`background({view:'renderState'})`** (the `renderingContext` capability) is **N/A** - 3D TA machine, no 2D tile VDP to decode.
 
 ## Build pipeline
 
@@ -83,5 +83,5 @@ against KallistiOS for libc + the TA/AICA/Maple drivers. `#include` the bundled
 ## What's NOT bundled / hardware limits
 
 - No GD-ROM/CDDA streaming or VMU save emulation in the dev loop.
-- `breakpoint`/`watch` not yet (need interpreter-step hooks; cpuState/audioDebug ARE wired).
-- `renderingContext` is N/A (3D TA, no tile VDP).
+- `breakpoint`/`watch` not yet (need interpreter-step hooks; cpu({op:'read'}) and audioDebug are wired).
+- `background({view:'renderState'})` is N/A (3D TA, no tile VDP).

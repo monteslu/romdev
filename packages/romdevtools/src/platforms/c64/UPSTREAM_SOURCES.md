@@ -5,7 +5,7 @@ Trust hierarchy:
 1. **Bundled examples** (`examples/c64/templates/*.c`).
 2. **Bundled runtime** - `src/platforms/c64/lib/c/c64_sfx.c`,
    `c64_music.c`, `c64_registers.h`, asm helpers in `lib/*.s`.
-3. **Bundled cc65 C64 libsrc** (R58) at `src/platforms/c64/lib/
+3. **Bundled cc65 C64 libsrc** at `src/platforms/c64/lib/
    cc65-src/`. cc65's C64 target: joystick, conio, VIC/SID/CIA
    helpers, header builder, the BASIC stub.
 4. **Upstream**:
