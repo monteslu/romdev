@@ -110,11 +110,12 @@ produces a zero-size window), `letterbox(winW, winH, aspect)`,
 `framebufferToRgba(fb, out?)` (pass the previous return value as `out` to
 reuse the buffer across ticks - no per-frame allocation), and
 `drawFpsOverlay(rgba, width, height, fps)` (the corner fps counter, pure
-pixel writes), plus `initSdl()` (the hardened loader) and
+pixel writes), plus `initSdl()` (the SDL loader with the self-repair step above) and
 `sdlPackageRoot()`.
 
 ## Requirements
 
 Node >= 24, ESM only. Software-rendered cores work everywhere SDL does;
-the 3D cores additionally want the `native-gles` optional dependency (see
-the `romdev-core-host` README).
+the 3D cores also need a working GPU for the headless GL context that
+`romdev-core-host` creates through its `native-gles` dependency (see the
+`romdev-core-host` README).

@@ -2,12 +2,13 @@
 
 The bundled game-code / cheat database for
 [romdev](https://github.com/monteslu/romdev), split into its own package so the
-main `romdev-mcp` package stays small and the database can grow and version
+main `romdevtools` package stays small and the database can grow and version
 independently.
 
 It is a **data package** - no runtime logic of its own beyond a tiny lazy
-loader. `romdev-mcp` depends on it and resolves it at runtime, then reads **one
-platform's index at a time** (never the whole DB into memory).
+loader. `romdevtools` depends on it, resolves it at run time and reads one
+platform's index at a time (never the whole database into memory). It backs
+romdevtools' `cheats({op:'lookup'})`.
 
 ## What's inside
 
@@ -34,7 +35,8 @@ RetroArch/RetroDECK community cheats tree actually carries:
 | MSX | `msx` |
 
 (C64 has no entry: the community cheats tree ships no Commodore-64 cheat folder.
-Raw `ADDR:VAL` pokes via `makeCheat` still work on C64 in romdev.)
+Raw `ADDR:VAL` pokes made with `cheats({op:'make'})` still work on C64 in
+romdev.)
 
 ## API
 
@@ -51,6 +53,6 @@ listPlatforms(); // ["atari2600","atari7800","gb","gba",...]
 
 Cheat codes are community-aggregated data from the libretro-database / RetroArch
 cheats lineage (originally Game Genie code books and GameHacking.org). The index
-here is **pre-parsed** (decoded + compacted) by
-`romdev/scripts/build-cheat-index.mjs` rather than a redistribution of the raw
-`.cht` tree.
+here is pre-parsed (decoded and compacted) by
+`packages/romdevtools/scripts/build-cheat-index.mjs` in the romdev repo rather
+than a redistribution of the raw `.cht` tree.

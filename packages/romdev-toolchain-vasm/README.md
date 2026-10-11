@@ -2,19 +2,25 @@
 
 vasm (m68k, Motorola syntax) - Sega Genesis assembler, as WebAssembly.
 
-A binary package for [romdev](https://github.com/monteslu/romdev) - it ships the
-prebuilt WebAssembly + JS glue and is resolved by the main `romdev` package on
-demand. You normally install `romdev`, not this package directly.
+A binary package for [romdev](https://github.com/monteslu/romdev). It ships the
+prebuilt WebAssembly and JS glue, and the main `romdevtools` package loads it on
+demand. You normally install `romdevtools` (`npx romdevtools`), not this package
+directly.
 
-## Upstream & license
+## Upstream and license
 
-Bundles: **vasm**.
+Bundles: **vasm** (m68k CPU module, Motorola syntax), http://sun.hasenbraten.de/vasm/.
 
-**License:** vasm custom license - "free for any use", including commercial; see upstream.
+**License:** the vasm license (Volker Barthelmann, Frank Wille). In summary:
+the upstream archive may be redistributed unmodified and used for
+non-commercial purposes; commercial use needs the authors' written consent,
+except for M68k code targeting AmigaOS. Read the full terms in `doc/vasm.texi`
+of the upstream archive before using this package commercially.
 
-This package redistributes the upstream binary built to WebAssembly; the source
-is fetched from a pinned upstream commit at build time (see the romdev repo's
-`scripts/versions.json` and `BUILDING.md`). See the romdev repo `NOTICE` for the
-full third-party inventory.
+This package redistributes the upstream source built to WebAssembly. Upstream
+publishes only a rolling tarball, so it is pinned by sha256 in `packages/romdevtools/scripts/versions.json` in the
+romdev repo, and the repo's `NOTICE` has the full third-party inventory.
 
-**Built by:** `romdevtools/scripts/build-vasm68k.sh` (no patch - built clean). See `scripts/BUILD_MAP.md` in the romdev repo for the full recipe→package map.
+**Built by:** `packages/romdevtools/scripts/build-vasm68k.sh` (no patches). See
+[BUILD_MAP.md](https://github.com/monteslu/romdev/blob/main/packages/romdevtools/scripts/BUILD_MAP.md)
+for the recipe-to-package map.

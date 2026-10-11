@@ -1,23 +1,31 @@
 # romdev-toolchain-sdcc
 
-SDCC (sdcc/sdasz80/sdasgb/sdld/mcpp) - Z80/SM83 C compiler, plus its target share
-tree, as WebAssembly. Also ships the native **z80-elf binutils**
-(as/ld/objcopy/objdump) that power Z80 + SM83 `disassembleRom` and byte-exact
-`disassembleProject` - one z80-elf serves both `-m z80` and `-m gbz80`.
+SDCC (`sdcc`, `sdasgb`, `sdasz80`, `sdld`, `mcpp`), the Z80 and SM83 C compiler,
+plus its target share tree, as WebAssembly. The package also ships z80-elf GNU
+binutils (`as`, `ld`, `objcopy`, `objdump`), which serve Z80 and SM83
+disassembly for `disasm({target:'rom'})` and byte-exact
+`disasm({target:'project'})`. One z80-elf build covers both `-m z80` and
+`-m gbz80`.
 
-A binary package for [romdev](https://github.com/monteslu/romdev) - it ships the
-prebuilt WebAssembly + JS glue and is resolved by the main `romdev` package on
-demand. You normally install `romdev`, not this package directly.
+A binary package for [romdev](https://github.com/monteslu/romdev). It ships the
+prebuilt WebAssembly and JS glue, and the main `romdevtools` package loads it on
+demand. You normally install `romdevtools` (`npx romdevtools`), not this package
+directly.
 
-## Upstream & license
+## Upstream and license
 
-Bundles: **SDCC**, **GNU binutils** (z80-elf target).
+Bundles: **SDCC 4.4.0** (https://sdcc.sourceforge.net) and **GNU binutils
+2.42** (z80-elf target).
 
-**License:** SDCC: GPL-2.0-or-later (runtime libraries: GPL with linking exception - does not encumber compiled ROMs). binutils: GPL-3.0.
+**License:** SDCC: GPL-2.0-or-later; its runtime libraries are GPL with a
+linking exception, so linking them does not place conditions on a compiled
+ROM. binutils: GPL-3.0-or-later.
 
-This package redistributes the upstream binary built to WebAssembly; the source
-is fetched from a pinned upstream commit at build time (see the romdev repo's
-`scripts/versions.json` and `BUILDING.md`). See the romdev repo `NOTICE` for the
-full third-party inventory.
+This package redistributes the upstream source built to WebAssembly. The
+upstream versions are pinned in `packages/romdevtools/scripts/versions.json` in
+the romdev repo, and the repo's `NOTICE` has the full third-party inventory.
 
-**Built by:** `romdevtools/scripts/build-sdcc.sh + build-z80-binutils-wasm.sh` (no patch - built clean). See `scripts/BUILD_MAP.md` in the romdev repo for the full recipe→package map.
+**Built by:** `packages/romdevtools/scripts/build-sdcc.sh` and
+`build-z80-binutils-wasm.sh` (no patches). See
+[BUILD_MAP.md](https://github.com/monteslu/romdev/blob/main/packages/romdevtools/scripts/BUILD_MAP.md)
+for the recipe-to-package map.

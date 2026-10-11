@@ -2,19 +2,21 @@
 
 Atari 2600 bundle: stella2014 emulator core + dasm assembler, as WebAssembly.
 
-A binary package for [romdev](https://github.com/monteslu/romdev) - it ships the
-prebuilt WebAssembly + JS glue and is resolved by the main `romdev` package on
-demand. You normally install `romdev`, not this package directly.
+A binary package for [romdev](https://github.com/monteslu/romdev). It ships the
+prebuilt WebAssembly and JS glue, and the main `romdevtools` package loads it on
+demand. You normally install `romdevtools` (`npx romdevtools`), not this package
+directly.
 
-## Upstream & license
+## Upstream and license
 
-Bundles: **stella2014, dasm**.
+Bundles: **stella2014** (https://github.com/libretro/stella2014-libretro) and **dasm** (https://github.com/dasm-assembler/dasm).
 
 **License:** GPL-2.0-or-later (stella2014 GPL-2.0, dasm GPL-2.0).
 
-This package redistributes the upstream binary built to WebAssembly; the source
-is fetched from a pinned upstream commit at build time (see the romdev repo's
-`scripts/versions.json` and `BUILDING.md`). See the romdev repo `NOTICE` for the
-full third-party inventory.
+This package redistributes the upstream source built to WebAssembly. The
+upstream version is pinned in `packages/romdevtools/scripts/versions.json` in the
+romdev repo, and the repo's `NOTICE` has the full third-party inventory.
 
-**Built by:** `romdevtools/scripts/build-stella2014.sh + build-dasm.sh` + patch(es) `stella2014-romdev-memory-regions.patch`. See `scripts/BUILD_MAP.md` in the romdev repo for the full recipe→package map.
+**Built by:** `packages/romdevtools/scripts/build-stella2014.sh` and `build-dasm.sh` with patch(es) `stella2014-romdev-memory-regions.patch`. See
+[BUILD_MAP.md](https://github.com/monteslu/romdev/blob/main/packages/romdevtools/scripts/BUILD_MAP.md)
+for the recipe-to-package map.

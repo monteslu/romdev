@@ -3,14 +3,14 @@
 The [romdev](https://github.com/monteslu/romdev) libretro host runtime,
 published standalone: load a `romdev-core-*` emulator core (WASM), run
 frames, read the framebuffer / audio / memory, drive input, save and load
-state. This is the SAME host the romdev MCP server runs (the server consumes
-this package too), so there is exactly one host implementation in the
-ecosystem. Bundles NO cores; pass any `romdev-core-*` package.
+state. This is the same host the romdevtools MCP server runs (the server
+consumes this package too), so there is one host implementation. It bundles no
+cores; pass any `romdev-core-*` package.
 
-**Isomorphic**: the core surface has no top-level `node:` imports and no
-pngjs. Under Node you load cores and ROMs by path; in a browser or worker
-bundle you pass the Emscripten factory + wasm bytes and ROM bytes, and the
-same host runs unchanged (see "Browser / bytes-only use" below).
+The same code runs in Node and in a browser: the core surface has no top-level
+`node:` imports and no pngjs. Under Node you load cores and ROMs by path; in a
+browser or worker bundle you pass the Emscripten factory, the wasm bytes and the
+ROM bytes, and the same host runs unchanged (see "Browser / bytes-only use" below).
 
 ```js
 import { LibretroHost } from "romdev-core-host";
@@ -83,8 +83,9 @@ write watchpoints, read watches, PC breakpoints, `runUntilPC(addr)` /
 (`exportDiskImage`, `importDiskImage`, `putDiskFile`). MSX: the bundled
 open C-BIOS system dir resolves automatically. The 3D cores (N64, PS1,
 Dreamcast) hardware-render through a headless GL context: pass
-`{ hwRender: true }` to `loadCore` and install the optional `native-gles`
-dependency; the software-rendered cores need neither. native-gles 0.6.0+
+`{ hwRender: true }` to `loadCore`. `native-gles` and `webgl-node` are regular
+dependencies of this package and load lazily, only when a hardware-rendered
+core boots; the software-rendered cores never touch GL. native-gles 0.6.0+
 is multi-context: each core owns the context it renders into (created for
 it via webgl-node) and re-asserts it before every frame, so several GL
 consumers - more cores, an active-bezel compositor, a wasmcart cart - can
@@ -150,18 +151,44 @@ For the full agent tooling surface (MCP server, build toolchains,
 disassembly, playtest) see
 [`romdevtools`](https://www.npmjs.com/package/romdevtools).
 
-## 0.13.1 - exact PC coverage bitmap
+## Coverage, instruction trace and clock
 
-`pcBitmapSupported()` / `logPCBitmap(lo, hi, frames, {shift})`: on a core
-built with the 0.13.0 shared debug lib (`romdev_covbits_set/get`), run
-`frames` frames recording EVERY executed PC in `[lo, hi)` as one bit per PC -
-O(1) per instruction, no distinct-PC cap - and return `{pcs, distinct, total,
-words, shift, granularityBytes, exact}`. The bit granularity is `1 << shift`
-bytes and defaults to `pcAlignShift()` for the loaded platform: 2 (word) on
-MIPS (n64, ps1, psp), 1 (halfword) on the 68000 / Thumb / SH-4 machines
-(genesis, gba, dreamcast, sync32), 0 (byte) on every byte-addressed CPU (6502,
-Z80, SM83, 65816, HuC6280, W65C02) and when the platform is unknown. The core
-reports the shift it recorded at; `exact` is false only when a caller asked for
-a granularity coarser than the CPU's instruction alignment. `logPCRange` is
-the older 8192-entry distinct ring (`romdev_cov_set/get`), still exported by
-every core. Every romdev core carries the bitmap.
+These are feature-detected like the rest of the debug tier.
+
+**PC coverage.** `pcBitmapSupported()` / `logPCBitmap(lo, hi, frames, {shift})`
+runs `frames` frames and records every executed PC in `[lo, hi)` as one bit,
+with no cap on distinct PCs, returning `{pcs, distinct, total, words, shift,
+granularityBytes, exact}`. The granularity defaults to `pcAlignShift()` for the
+loaded platform: word on MIPS (n64, ps1), halfword on the 68000, Thumb and SH-4
+machines (genesis, gba, dreamcast, sync32), byte on the 8-bit CPUs.
+`logPCRange(lo, hi, frames)` is the older 8192-entry distinct-PC log.
+
+**Instruction trace.** Every executed instruction's PC, and the core's clock at
+dispatch, in order, recorded while the core runs normally (unlike
+`stepInstruction()`, which freezes the CPU while the rest of the machine
+finishes the frame).
+
+- `traceSupported()`: whether the loaded core build records a trace.
+- `traceCpuMask()`: which dispatching CPUs to record for the platform (bit 0 is
+  the main CPU; on SMS and Game Gear the Z80 is cpu 1 in genesis_plus_gx).
+- `setTrace({capacity, enabled, cpuMask, registers})`: arm, restart or disarm
+  the ring; returns the capacity allocated. `registers: true` adds
+  per-instruction register columns where the core provides them.
+- `traceRegisterNames()`: those columns for the platform (NES, GB/GBC, GBA,
+  Genesis, SMS/GG, SNES).
+- `traceInfo()`: `{enabled, capacity, count, cpuMask, ...}`.
+- `readTrace(from, to)`: `{from, to, lost, pc, clock, regs}` as typed arrays;
+  entries already overwritten in the ring are counted in `lost`.
+
+**Pinned clock.** `setPinnedClock({baseMs, stepMs, startRun})` pins the wall
+clock a core reads (for example a cartridge real-time clock) to a frame clock,
+`baseMs + runs * stepMs` in UTC, so two runs see the same time. Set it before
+`loadMedia`; `setPinnedClock(null)` restores the host clock.
+
+**Additional memory regions.** On sync32: `sync32_timing` (0x1A3, per-frame
+cycle counts) and `sync32_profile` (0x1A4, a writable PC-sampling profiler).
+On gambatte: `gb_apu_raw` (the APU's stereo samples before resampling) and
+`gb_lcdlog` (a ring of LCD timing decisions). On mGBA: `gba_audio_raw` (the
+stereo samples before resampling). On Genesis carts with the SVP chip:
+`genesis_svp_dram`, `genesis_svp_iram` and `genesis_svp_ssp` (size 0 on carts
+without it). Region names map to ids through `MemoryRegionToRetro`.
