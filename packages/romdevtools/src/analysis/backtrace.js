@@ -1,7 +1,7 @@
 // Call-stack reconstruction from a CPU register snapshot + the stack RAM. Turns
 // "who called this routine?" from a captureMemory read + several lines of by-hand,
 // off-by-one-prone return-address pointer math into one decoded field on a
-// breakpoint hit. (v0.41.0 feedback note 005444 N1.)
+// breakpoint hit.
 //
 // The ISA-specific part is the return-address convention. Phase 1 covers the
 // 6502 family (the dominant RE target); the structure generalizes to Z80 / SM83 /

@@ -551,7 +551,7 @@ void main(void) {
      *   5. sfx_update() IMMEDIATELY after - MIKEY voice writes must land in
      *      vblank: handy reschedules its timer sweep on the spot when a voice
      *      CTL bit-3 write lands, and mid-frame that sweep can preempt an
-     *      in-flight Suzy blit and eat sprites (the R57 bug - history in
+     *      in-flight Suzy blit and eat sprites (history in
      *      lynx_sfx.c). sfx_tone()/sfx_noise() only STAGE; sfx_update() is
      *      the hardware flush. */
     while (tgi_busy()) { }

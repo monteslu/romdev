@@ -20,7 +20,7 @@
 //          " .text.update   0x00001a40   0x53c /work/main.o"
 //      This is the ONLY place a `static` file-local global appears (shape 1 is
 //      skipped for statics) - so without parsing shape 2 we'd miss exactly the
-//      file-local variables the v0.6.0 feedback flagged. We extract the name
+//      file-local variables. The name is extracted
 //      from `.<seg>.<name>` for the standard segments.
 //
 // SGDK links 68k work-RAM through its $E0FF0000 mirror (hardware mirrors

@@ -1,7 +1,7 @@
 ; SPC700 driver - command-driven SFX + music dispatcher.
 ;
-; R46 extension: adds continuous music playback on voice 1 layered on
-; top of the R31 two-sample sfx system (voice 0). Voices 2-7 are free.
+; adds continuous music playback on voice 1 layered on
+; top of the two-sample sfx system (voice 0). Voices 2-7 are free.
 ;
 ; Commands (sent by SNES via STA $2140 -> SPC reads $F4):
 ;   $00 = no-op / release (resets edge detector)
@@ -30,7 +30,7 @@
 ;     fine - at 62.5 Hz vs main loop spin rate we'll never miss many).
 ;
 ; CRITICAL: DSP $6C = FLG (not $5C - that's KOFF). Power-on FLG = $E0
-; (reset+mute set); must be cleared. Same hard-won lesson from R31.
+; (reset+mute set); must be cleared.
 
 arch spc700
 norom

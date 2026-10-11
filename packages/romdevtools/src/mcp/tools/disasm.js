@@ -813,7 +813,7 @@ async function disassembleRomCore(args) {
         startAddress = 0x0200;
       }
 
-      // `bank` handling - NEVER silently ignore it (field report: SNES LoROM
+      // `bank` handling - NEVER silently ignore it (SNES LoROM
       // `{startAddress:$83CD, bank:2}` used to read BANK 0's bytes and return a
       // plausible disassembly under the caller's bank-2 label - silently the
       // wrong 32KB, worse than an error).

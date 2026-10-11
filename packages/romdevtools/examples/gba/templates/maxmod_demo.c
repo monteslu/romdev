@@ -1,4 +1,4 @@
-/* ── maxmod_demo.c - Game Boy Advance maxmod music demo (R34) ───────
+/* ── maxmod_demo.c - Game Boy Advance maxmod music demo ───────
  *
  * Plays a CC0 tracker module compiled into a Maxmod soundbank.
  * Demonstrates the canonical Maxmod boot dance:

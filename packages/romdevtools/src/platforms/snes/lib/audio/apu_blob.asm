@@ -3,7 +3,7 @@
 ; This file is the top-level asar input for building apu_blob.bin (the
 ; payload the SNES uploads into SPC700 ARAM at $0200).
 ;
-; ARAM layout produced (R46):
+; ARAM layout produced:
 ;   $0200..$02xx    driver code   (~230 bytes - sfx + music engine)
 ;   $02xx..$0FFF    padding       (zero-filled by org)
 ;   $1000..$2417    sample bank   (5656 bytes - directory + BRR samples)

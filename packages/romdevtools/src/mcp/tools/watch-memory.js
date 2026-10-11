@@ -266,7 +266,7 @@ export async function stepInstructionsCore(sessionKey, { count = 16, withRegiste
   const finalPc = stops.length ? stops[stops.length - 1] : null;
 
   // Classify each step's control FLOW from its opcode. This is the fix for the
-  // width paper cut (field report): `width` was reported as the raw PC delta, so
+  // width bug: `width` was reported as the raw PC delta, so
   // a TAKEN forward branch (2-byte `beq` to +3) looked exactly like a 3-byte
   // instruction - silently mis-validating a decode. The delta is the true
   // instruction size ONLY on a sequential step; on any branch/jsr/jmp it's the
@@ -508,7 +508,7 @@ export function makePressDriver(host, presses) {
  * run's frame 0 - the game latches the pad into its own RAM each frame, and the
  * new run's frame-0 logic reads that stale chord before the new input propagates.
  * That makes a negative control (hold A to prove A does NOT reach a B-only branch)
- * FALSE-POSITIVE on frame 1. (v0.41.0 feedback 213831 #1.) Calling this first sets
+ * FALSE-POSITIVE on frame 1. Calling this first sets
  * the pad neutral and steps `n` frames so the game's input shadow settles to
  * neutral; then the schedule drives a clean run. Only steps when a press schedule
  * is actually given (no-op otherwise, so it never disturbs an inherited pad).
@@ -526,13 +526,13 @@ function settleHeldInput(host, n, driven) {
 // (host/types.js). Derived from the host map so new regions flow through
 // automatically and the two tools never disagree. Used by the ONE primary
 // `on:'mem'` region enum (kept discoverable on purpose); every SECONDARY region
-// sub-param uses the lean regionStr string instead (0.28.0/0.30.0 feedback #5).
+// sub-param uses the lean regionStr string instead.
 const MEMORY_REGIONS = /** @type {[string, ...string[]]} */ (Object.keys(MemoryRegionToRetro));
 
 // A region param that does NOT inline the full ~62-value enum into the JSON
 // schema. The enum array is ~214 tokens PER param site; inlining it on every
 // secondary region sub-param across this file was the dominant tool-schema
-// bloat (0.28.0 feedback #5). Used on SECONDARY/sub params; the PRIMARY region
+// bloat. Used on SECONDARY/sub params; the PRIMARY region
 // inputs keep z.enum so the full list stays discoverable where the region IS
 // the choice. A plain string - validated at RUNTIME by the handler (the
 // host.readMemory / MemoryRegionToRetro lookup throws on an unknown region with
@@ -576,8 +576,7 @@ function makeAbortGuard(host, abortIf) {
 }
 
 // No-hit note for bpFindWriter. The full "two reasons" explainer (~100 tokens)
-// is useful ONCE; as a repeated payload it's pure overhead (v0.15.0 feedback
-// #2b). Emit the long form only on the first miss per MCP session, a one-liner
+// is useful ONCE; as a repeated payload it's pure overhead. Emit the long form only on the first miss per MCP session, a one-liner
 // after.
 const _bpNoHitSeen = new Set();
 function noHitNote(sessionKey) {
@@ -823,7 +822,7 @@ function makeRomByteReader(host, platform) {
 }
 
 /**
- * v0.98.0 feedback #3: a watch armed while the CPU sits at an UN-CLEARED
+ * A watch armed while the CPU sits at an UN-CLEARED
  * breakpoint hit silently misses everything that already executed inside the
  * broken frame - and an empty result then reads as a clean negative, which is
  * load-bearing evidence in RE work. Detectable at arm time; say so.
@@ -1264,7 +1263,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       if (condition === "equals" && conditionValue == null) {
         throw new Error("breakpoint({on:'write', condition:'equals'}): `conditionValue` (the value to stop on) is required.");
       }
-      // 16-BIT condition (v0.94.0 feedback): on 65816/68k the interesting state
+      // 16-BIT condition: on 65816/68k the interesting state
       // is often a word written by one store. Explicit conditionWidth:16, or
       // inferred when conditionValue > 255 (a byte condition can't mean that).
       let width = conditionWidth ?? ((condition === "equals" && conditionValue != null && conditionValue > 0xFF) ? 16 : 8);
@@ -1352,7 +1351,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       // Abort-guard: sample caller-named "still valid?" bytes each frame; if any
       // changes, a driven run that DERAILED (player died → title screen, scene
       // flipped, ...) stops immediately instead of burning all maxFrames and
-      // returning a meaningless found:false. (v0.15.0 feedback #2.)
+      // returning a meaningless found:false.
       const guard = makeAbortGuard(host, abortIf);
       let result = null;
       let aborted = null;
@@ -1426,7 +1425,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
           ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
           ...(abortIf && abortIf.length ? { abortIfArmed: guard.count } : {}),
           // One-line hint by default; the full "two reasons" explainer is verbose
-          // boilerplate as a repeated payload (v0.15.0 feedback #2b) - gated to the
+          // boilerplate as a repeated payload - gated to the
           // FIRST miss per session.
           note: noHitNote(sessionKey),
         });
@@ -1452,7 +1451,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         pcRaw: result.lastPC,
         // valueByte, not value: this is the ONE BYTE that landed on the watched
         // address - a word/long store shows only its byte here, not the operand
-        // (a real session read 0x00 as "the move.l wrote zero").
+        // (0x00 here does not mean "the move.l wrote zero").
         valueByte: "0x" + result.lastValue.toString(16).toUpperCase().padStart(2, "0"),
         ...(result.lastOldValue != null ? { oldValueByte: "0x" + (result.lastOldValue & 0xFF).toString(16).toUpperCase().padStart(2, "0") } : {}),
         ...(condition ? { condition, ...(coreHandledCond ? {} : { conditionAppliedBy: "host" }) } : {}),
@@ -1559,7 +1558,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         host.setPCBreak(0, false, false); // disarm
       }
       if (!hit) {
-        // Diagnostics on a miss (0.27.0 feedback #8): a bare "drive it with
+        // Diagnostics on a miss: a bare "drive it with
         // pressDuring" is useless when the caller DID supply input. Report
         // where the CPU actually is, and tailor the advice.
         const pcNow = tryGetPC(host);
@@ -1646,7 +1645,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       // cores that don't snapshot.
       // Terse per-hit note - the full explanation lives in the breakpoint tool
       // description (loaded once), so a hit doesn't re-charge ~600 chars of
-      // boilerplate every time (field report: this repeated on all 3 pc-breaks).
+      // boilerplate every time.
       const frozenNote = atHit
         ? "Use registersAtHit (not a follow-up cpu read - that's end-of-frame). captureMemory:[...] reads RAM at the hit inline."
         : "No hit-snapshot on this core: prefer memory({op:'read'}) side effects; a live cpu read is end-of-frame on run-to-end cores (fceumm).";
@@ -1662,7 +1661,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         frame: host.status.frameCount,
         framesRun,
         // The core's hits counter doesn't tick on a watchdog stop - normalize so
-        // hit:true never reports hits:0 (a real session read that as contradictory).
+        // hit:true never reports hits:0 (that reads as contradictory).
         hits: fin.hits || 1,
         ...(presses.length ? { pressesScheduled: presses.length, pressesApplied: pressDriver.applied() } : {}),
         note: frozenNote,
@@ -1993,7 +1992,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
         maxFrames, ...(maxInstructions ? { maxInstructions } : {}), sandbox, pure,
         ...(callMode ? { callMode } : {}),
       });
-      // The poisoned-call caveat (a real session lost hours to this): when the
+      // The poisoned-call caveat: when the
       // call spanned FRAMES of emulation, the game's own per-frame logic (VBlank
       // handlers via RAM vectors, music drivers) ran CONCURRENTLY and may have
       // written over the routine's output buffer. Loud, up front, with the fix.
@@ -2064,8 +2063,8 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
     "output buffer.** Mechanism per platform (reported as `pureMode`): Genesis/SMS/GG step ONLY the CPU ('cpu-only'); every " +
     "other core suppresses interrupt DELIVERY for the duration ('irq-blocked' - video/timers advance harmlessly, no game " +
     "handler executes); the 2600 has no interrupts at all ('no-interrupts'). Without pure, a call that spans frames runs " +
-    "the game's frame logic alongside your routine (the result carries a ⚠ caveat) - a real session spent " +
-    "hours diffing a CORRECT codec against that poisoned output. Prefer pure for every decompressor/codec call.\n" +
+    "the game's frame logic alongside your routine (the result carries a caveat), so a CORRECT codec can look wrong " +
+    "when diffed against that output. Prefer pure for every decompressor/codec call.\n" +
     "• op:'decompress' - convenience wrapper over op:'call' for the common decompressor shape: call `entryPC` with " +
     "A0=`sourceAddress` (and optionally A1=`destAddress`), run until it returns, then read `destAddress`. For the " +
     "the 'pre-rendered name + portrait are LZ-compressed' wall: point it at the game's own decompressor.",
@@ -2169,7 +2168,7 @@ export function registerWatchMemoryTools(server, z, sessionKey) {
       // Each writer's hit count + a sample address/value, sorted by frequency. This
       // is what a "who writes here?" query actually needs; the per-event flood (a
       // per-frame counter inc'd at one PC → hundreds of near-identical rows) is
-      // ~95% wasted tokens for that question. (v0.41.0 feedback 133737 N1.)
+      // ~95% wasted tokens for that question.
       const byPC = new Map();
       for (const e of r.events) {
         let g = byPC.get(e.pc);

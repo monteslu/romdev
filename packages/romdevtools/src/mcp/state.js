@@ -23,8 +23,7 @@ const hosts = new Map();
  * Disk path for a playtest session's rolling auto-checkpoint (eviction
  * survivability). Deterministic per (session, rom) so the eviction-recovery hint
  * can name it WITHOUT any bookkeeping. Next to the ROM when it's a real on-disk
- * file; else a stable per-session file under the OS temp dir. (v0.41.0 feedback
- * note 125904.) Shared by the playtest tool (writer) and getHost (recovery hint).
+ * file; else a stable per-session file under the OS temp dir. Shared by the playtest tool (writer) and getHost (recovery hint).
  * @param {string} sessionKey
  * @param {string|null} mediaPath
  */
@@ -165,11 +164,10 @@ export function getHostOrNull(sessionKey) {
 //  1. It didn't work. Every gate script is its own MCP session, so a 21-gate
 //     suite mints 21+ hosts in 12 minutes; the transport-idle reaper
 //     (SESSION_IDLE_MS, 30 min) never fired during the run, and scripts that
-//     just exit never close their transport at all. Two kernel OOM kills on
-//     2026-08-19, ~5.4 GB RSS each, one agent.
+//     just exit never close their transport at all. A long-lived server reached
+//     about 5.4 GB RSS with one client.
 //  2. It is about to be impossible. MCP 2026-07-28 removes protocol sessions
-//     entirely - there is no connection close to hang eviction on. See
-//     internal-romdev/PLAN_mcp_v2_stateless_and_host_lifetime.md.
+//     entirely, so there is no connection close to hang eviction on.
 //
 // So: stamp every host access, evict on host inactivity, and cap the total.
 // An evicted session self-heals - `lastMedia` survives eviction and getHost

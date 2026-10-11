@@ -29,7 +29,7 @@ HMM0     = $22
 HMOVE    = $2A
 SWCHA    = $280
 NUSIZ0   = $04
-; TIA audio (R41)
+; TIA audio
 AUDC0    = $15
 AUDF0    = $17
 AUDV0    = $19

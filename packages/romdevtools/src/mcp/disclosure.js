@@ -1,28 +1,8 @@
-// Progressive disclosure: ship a tiny entry-tier of tools at session init;
-// register the rest on demand via loadCategory.
-//
-// Why: Anthropic's own benchmarks (MCP design research, 2026-05-23 session)
-// show lazy tool loading moves Opus 4 from 49% → 74% on tool-selection
-// accuracy. The benefit is larger for weaker models: a 5-tool surface is
-// navigable; a 65-tool surface induces decision paralysis even before the
-// agent picks the wrong one.
-//
-// Design constraint: "narrow at entry, deep once in."
-// Recipes don't gate primitives; categories don't hide capabilities. Any
-// agent can load any category at any time. The "all" pseudo-category
-// loads everything in one call for power users who don't want the dance.
-//
-// Mitigations for weaker-model failure modes:
-// 1. loadCategory's response includes the FULL SCHEMAS of every tool it
-//    just registered, so the agent can call them immediately without
-//    waiting for tools/list_changed to propagate (which is async).
-// 2. listCategories and per-tool descriptions include a `next_steps`
-//    hint pointing weaker agents at the right load call.
-// 3. Tool-not-found errors include the category to load when the tool
-//    exists but hasn't been loaded yet.
-//
-// Capable agents skip all this by calling loadCategory({category:"all"})
-// as their first call; they then have the full surface unchanged.
+// Per-session category registry. Tools are grouped into categories (see
+// CATEGORIES in tools/index.js); the server registers every category at
+// session init through the internal loadCategory("all"), so nothing is
+// hidden behind a load call. This module tracks what is registered, answers
+// catalog's category listing, and hands out one-shot hints.
 
 /**
  * @typedef {Object} Category

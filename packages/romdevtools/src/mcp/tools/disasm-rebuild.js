@@ -129,8 +129,8 @@ const PLANNERS = {
     }
     // BANKED mapper (>0 or >2 PRG banks): emit COMPLETE working glue - the old
     // recipe pointed at bank0 only with the flat NROM cfg, which cannot rebuild
-    // a banked ROM and cost a real RE session an hour of hand-written segments
-    // + cfg (0.27.0 feedback #1). Components:
+    // a banked ROM and left the caller to hand-write segments + cfg.
+    // Components:
     //   nes_header.asm    - HEADER segment with the ORIGINAL 16 iNES bytes
     //   bankN_seg.asm     - `.segment "PRGn"` wrapper that includes bankN.asm
     //   nes_chars.asm     - CHARS segment .incbin of chr.bin (when CHR-ROM)

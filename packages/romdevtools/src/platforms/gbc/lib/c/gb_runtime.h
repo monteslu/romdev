@@ -83,7 +83,7 @@ void    lcd_init_default(void);
  * any `oam_dma_flush()` / `oam_dma_copy()`. `lcd_init_default()` calls
  * it for you; only call directly if you're bypassing lcd_init_default.
  *
- * Why this is mandatory (R55 fix): during OAM DMA the CPU can only
+ * Why this is mandatory: during OAM DMA the CPU can only
  * fetch from HRAM. Pre-r55 oam_dma_copy spun in main code, fetching
  * $FF (the bus-conflict default) for every instruction - that decodes
  * as `rst $38` which corrupts the stack. Symptom under long-running

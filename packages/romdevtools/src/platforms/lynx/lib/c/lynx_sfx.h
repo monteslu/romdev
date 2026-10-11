@@ -20,7 +20,7 @@
  *   period = 160  → ~3 kHz (mid blip)
  *   period = 200  → ~2 kHz (low thump)
  *
- * ─── R57 IMPORTANT - call sfx_update() DURING VBLANK ───────────────
+ * ─── IMPORTANT: call sfx_update() DURING VBLANK ───────────────
  *
  * sfx_tone / sfx_noise stage their config in shadow RAM and do NOT
  * write to MIKEY hardware until sfx_update() runs. The actual MIKEY
@@ -41,7 +41,7 @@
  *   }
  *
  * Round 29 friction reported "audio APIs wedge TGI rendering" -
- * confirmed: pre-R57 sfx_tone wrote MIKEY synchronously which
+ * confirmed: an earlier sfx_tone wrote MIKEY synchronously which
  * interrupted Suzy blits. The defer-to-update pattern fixes it.
  */
 

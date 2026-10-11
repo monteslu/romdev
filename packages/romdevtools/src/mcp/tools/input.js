@@ -27,8 +27,8 @@ export function resolveButtonAlias(button, platform) {
   // genesis_plus_gx maps the Genesis face buttons A/B/C onto libretro y/b/a
   // respectively (verified empirically against the running core 2026-06-05),
   // so the Genesis-native button C is libretro 'a'. (Earlier this mapped
-  // c→y, which actually pressed Genesis A - the inverted bug a feedback agent
-  // hit when SGDK BUTTON_A wouldn't fire. Genesis A/B are libretro y/b, reached
+  // c→y, which actually pressed Genesis A - the inverted bug that showed
+  // up when SGDK BUTTON_A wouldn't fire. Genesis A/B are libretro y/b, reached
   // via setInput({y/b}) or the spatial east/south/west names.)
   if (platform === "genesis" || platform === "megadrive" || platform === "md") {
     if (button === "c") return "a";   // Genesis C = libretro A

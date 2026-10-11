@@ -91,8 +91,8 @@ _boot:
         ;; ROM group here - BEFORE the `_DATA` RAM block. If it isn't, sdld
         ;; places `_INITIALIZER` in RAM right after `_INITIALIZED`, so the
         ;; gsinit copy below copies uninitialised RAM onto itself and every
-        ;; `static uint8_t x = 5;` boots as 0. (Bug found 2026-06-08: a GBC
-        ;; Columns agent's `static uint32_t rng = 0x1357;` booted as 0, so
+        ;; `static uint8_t x = 5;` boots as 0. (Example: a GBC
+        ;; puzzle game's `static uint32_t rng = 0x1357;` booted as 0, so
         ;; the xorshift PRNG stayed 0 and every "random" roll came out the
         ;; same - a "monochrome RNG" that looked like an SDCC codegen bug
         ;; but was really this missing ROM placement. The sm83 GB crt0 has

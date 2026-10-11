@@ -469,7 +469,7 @@ const TEMPLATES = {
         "xorshift16 PRNG",
       ],
     },
-    /* R44 (2026-05-26): bundled-driver music demo. FamiTone2 engine +
+    /* bundled-driver music demo. FamiTone2 engine +
      * cc65 bridge + example track, all ship as source under lib/asm. */
     music_demo: {
       main: "templates/music_demo.c",
@@ -646,7 +646,7 @@ const TEMPLATES = {
         "divide-free digit math",
       ],
     },
-    /* R45 - hUGEDriver music demo. Ships a compact SDCC-native music
+    /* hUGEDriver music demo. Ships a compact SDCC-native music
      * driver with the upstream hUGEDriver function surface plus a
      * hand-authored sample song. Source-visible: the full upstream
      * RGBDS asm is bundled alongside as hUGEDriver.upstream.asm. */
@@ -991,7 +991,7 @@ const TEMPLATES = {
       techniques: ["hand-authored car sprites", "scrolling-road illusion (moving dashes)", "camera() screen-shake", "__music__ loop + SFX"] },
   },
 };
-// R37: GBC has its own scaffold tree at examples/gbc/templates/ +
+// GBC has its own scaffold tree at examples/gbc/templates/ +
 // src/platforms/gbc/lib/c/. Same runtime files as GB (the APU + Z80 +
 // most VRAM layout are identical) but the scaffolds add visible
 // CGB-mode color via BCPS/BCPD palette writes. Output ext is .gbc so
@@ -1101,7 +1101,7 @@ TEMPLATES.gbc = {
       "battery SRAM best-distance ($0A enable dance)",
     ],
   },
-  /* R45 - same hUGEDriver music_demo as GB, with BCPS/BCPD palette
+  /* same hUGEDriver music_demo as GB, with BCPS/BCPD palette
    * writes so it boots in CGB mode (gambatte flips on .gbc + $0143=$80).
    * The APU is identical between DMG and CGB so the driver code is
    * unchanged - only the visual palette path differs. */
@@ -1129,7 +1129,7 @@ TEMPLATES.gbc = {
 // register addresses / cart layout. SMS has a fleshed-out lib/c/sms_hw.h
 // + working main.c we use directly; the other three reuse the same
 // example main.c shape and get a minimal __sfr declaration sketch.
-// R22: the modular SMS runtime under src/platforms/sms/lib/c/ is what
+// the modular SMS runtime under src/platforms/sms/lib/c/ is what
 // hello_sprite + tile_engine + shmup + platformer + puzzle templates link
 // against. Factored to a constant so adding a new template is a one-line
 // change at the bottom.
@@ -1146,10 +1146,10 @@ const SMS_RUNTIME = [
   { src: "lib/c/vblank_wait.c",   dst: "vblank_wait.c" },
   { src: "lib/c/joypad_read.c",   dst: "joypad_read.c" },
   { src: "lib/c/sprite_table.c",  dst: "sprite_table.c" },
-  // R35: PSG sound wrapper (SN76489 - same chip as Genesis PSG).
+  // PSG sound wrapper (SN76489 - same chip as Genesis PSG).
   { src: "lib/c/sms_sfx.h",       dst: "sms_sfx.h" },
   { src: "lib/c/sms_sfx.c",       dst: "sms_sfx.c" },
-  // R47: 3-voice tracker on top of the PSG (continuous music).
+  // 3-voice tracker on top of the PSG (continuous music).
   { src: "lib/c/sms_music.h",     dst: "sms_music.h" },
   { src: "lib/c/sms_music.c",     dst: "sms_music.c" },
 ];
@@ -1283,7 +1283,7 @@ TEMPLATES.sms = {
     describe: "Continuous 3-voice music demo via sms_music.{h,c} - a tiny tracker on top of the SN76489 PSG. Voice 0 melody, voice 1 harmony, voice 2 bass. Noise channel stays free for game sfx. Source-visible: the parallel per-voice freq/length arrays in sms_music.c ARE the song.",
   },
 };
-// R36: GG is tier-1 - full runtime + scaffolds + PSG sound, mirrors SMS.
+// GG is tier-1 - full runtime + scaffolds + PSG sound, mirrors SMS.
 // The genesis_plus_gx core handles GG natively. GG's visible viewport
 // is 160×144 (centered in a 256×192 framebuffer); scaffolds render to
 // the whole framebuffer but content positioning targets the center.
@@ -1432,18 +1432,18 @@ TEMPLATES.gg = {
   },
 };
 
-// ── C64: cc65 + SID sound (R39 brings tier-1 parity) ────────────────────
+// ── C64: cc65 + SID sound (tier-1 parity) ────────────────────────
 const C64_RUNTIME = [
   { src: "lib/c64_registers.h", dst: "c64_registers.h" },
   { src: "lib/c/c64_sfx.h",     dst: "c64_sfx.h" },
   { src: "lib/c/c64_sfx.c",     dst: "c64_sfx.c" },
 ];
-// R58b: ship cc65 C64 libsrc into project. Joystick driver,
+// ship cc65 C64 libsrc into project. Joystick driver,
 // VIC-II / SID / CIA helpers, conio, header builder - all readable.
 const C64_VENDOR_DIRS = [
   { src: "lib/cc65-src", dst: "vendor/cc65/libsrc/c64" },
 ];
-// R49: music_demo gets its own 3-voice SID music driver instead of the
+// music_demo gets its own 3-voice SID music driver instead of the
 // one-shot sfx wrapper. Note table IS the song - open c64_music.c.
 const C64_MUSIC_RUNTIME = [
   { src: "lib/c64_registers.h", dst: "c64_registers.h" },
@@ -1550,7 +1550,7 @@ TEMPLATES.c64 = {
     describe: "Continuous 3-voice SID music demo. Per-frame note-table sequencer (c64_music.c IS the song - edit it). Melody / bass / harmony over an Am-F-C-G loop; FIRE on joy port 2 toggles playback.",
   },
 };
-// R31: SNES audio assets shared by all C-mode genre scaffolds. The
+// SNES audio assets shared by all C-mode genre scaffolds. The
 // SPC700 driver source + sample BRR files are visible alongside the
 // prebuilt apu_blob.bin (which gets .incbin'd into the ROM via
 // snes_sfx_data.asm). User can rebuild apu_blob with asar - see
@@ -1567,7 +1567,7 @@ const SNES_SFX_RUNTIME = [
   { src: "lib/audio/sample_bank.bin", dst: "sample_bank.bin" },
 ];
 
-// R58b: ship the full PVSnesLib source tree into every SNES C
+// ship the full PVSnesLib source tree into every SNES C
 // project so the agent can grep snes/sound.h, consoleDrawText,
 // setMode, padsCurrent, etc. instead of stabbing at the precompiled
 // .obj. Same rationale as the Lynx cc65-src bundling - the agent
@@ -1619,7 +1619,7 @@ TEMPLATES.snes = {
     ext: ".sfc",
     describe: "PVSnesLib text-mode starter: consoleDrawText writes ASCII into a tile-mapped BG0. Stub font in data.asm - replace with .incbin of a real .pic/.pal for legible glyphs.",
   },
-  // R21: parity templates with NES + Genesis. tcc-65816 is C89, so all
+  // parity templates with NES + Genesis. tcc-65816 is C89, so all
   // declarations live at block top. Two-file projects (.c + .asm) because
   // PVSnesLib's runtime expects tilfont/palfont symbols to be linkable;
   // sprite templates also ship tilsprite + palsprite hand-authored bytes.
@@ -1743,7 +1743,7 @@ TEMPLATES.snes = {
       "SPC700 driver init-race avoidance",
     ],
   },
-  // R46: continuous-music demo on the SPC700 driver. Showcases
+  // continuous-music demo on the SPC700 driver. Showcases
   // sfx_music_play / sfx_music_stop alongside the existing sfx_play
   // path - the SPC walks a song table autonomously while the 65816
   // just polls input.
@@ -1771,14 +1771,14 @@ const SGDK_RUNTIME = [
   { src: "lib/sgdk/md.ld",               dst: "md.ld" },
   { src: "lib/sgdk/LICENSE",             dst: "LICENSE-SGDK" },
   { src: "lib/sgdk/COPYING.RUNTIME",     dst: "COPYING-SGDK-RUNTIME" },
-  // R30: minimal PSG sound-effects wrapper. 3 functions matching the
+  // minimal PSG sound-effects wrapper. 3 functions matching the
   // NES/GB/GBA scaffold sound shape.
   { src: "lib/c/genesis_sfx.h",          dst: "genesis_sfx.h" },
   { src: "lib/c/genesis_sfx.c",          dst: "genesis_sfx.c" },
 ];
 const SGDK_RUNTIME_DIRS = [
   { src: "lib/sgdk/include", dst: "include" },
-  // R58b: ship the full SGDK src tree into the project. Agent can grep
+  // ship the full SGDK src tree into the project. Agent can grep
   // it directly instead of guessing what SPR_addSprite / VDP_drawText /
   // JOY_readJoypad / XGM2_play actually do. SGDK is compiled FROM this
   // source by the build (no prebuilt libmd.a).
@@ -1789,7 +1789,7 @@ const SGDK_RUNTIME_DIRS = [
 ];
 const SGDK_LANG = "C (m68k-elf-gcc + SGDK)";
 
-// R42: XGM2 music runtime - adds the demo .vgm source + compiled .xgc blob
+// XGM2 music runtime - adds the demo .vgm source + compiled .xgc blob
 // alongside the standard SGDK headers/libmd. .vgm is the human-editable
 // chiptune (regen via scripts/build-genesis-demo-vgm.js + xgm2tool); .xgc
 // is what gets .incbin'd into ROM via the data.s sibling.
@@ -1832,9 +1832,9 @@ TEMPLATES.genesis = {
     ext: ".bin",
     describe: "Alias of template:\"default\" (kept for backward-compat with earlier scripts that named it explicitly).",
   },
-  // R42: XGM2 music playback - counterpart to the R30 PSG sfx wrapper.
+  // XGM2 music playback - counterpart to the PSG sfx wrapper.
   // Two-file project (main.c + data.s sibling); data.s does the .incbin
-  // of demo.xgc, matching R31's snes_sfx_data.asm pattern. The compiled
+  // of demo.xgc, matching the snes_sfx_data.asm pattern. The compiled
   // .xgc plus its source .vgm both ship in the project tree so users can
   // regen with xgm2tool.
   xgm2_demo: {
@@ -1978,14 +1978,13 @@ TEMPLATES.genesis = {
 // Empty today; every supported platform now has a full TEMPLATES entry.
 const SIMPLE_STARTERS = {};
 
-// R38: Lynx tier-1 with full template set + MIKEY sound + tgi graphics.
-// R43: music_demo template - cc65's lynx_snd_play streaming music engine.
-// R58b: ship the cc65 Lynx libsrc INTO each project so the agent can
+// Lynx tier-1 with full template set + MIKEY sound + tgi graphics.
+// music_demo template - cc65's lynx_snd_play streaming music engine.
+// ship the cc65 Lynx libsrc INTO each project so the agent can
 //   grep the TGI driver / lynx_snd engine / joystick driver without
-//   leaving their project dir. The 1500-frame TGI wedge round
-//   (rounds 28-32) was caused entirely by the agent debugging a
-//   blackbox driver. R58 copy-into-install was the half-step;
-//   R58b shipping into the PROJECT closes the loop.
+//   leaving their project dir. Debugging the TGI driver as a black
+//   box is slow; with the source in the project it can be read and
+//   searched like the game's own code.
 const LYNX_VENDOR_DIRS = [
   { src: "lib/cc65-src", dst: "vendor/cc65/libsrc/lynx" },
 ];
@@ -2090,7 +2089,7 @@ TEMPLATES.lynx = {
   },
 };
 
-// R24 + R28: Game Boy Advance C tier-1 via arm-none-eabi-gcc + EITHER
+// Game Boy Advance C tier-1 via arm-none-eabi-gcc + EITHER
 // libtonc (default, Tonc-tutorial-aligned) OR libgba (devkitPro
 // official). Same self-containment policy as Genesis SGDK - the
 // entire runtime bundle gets copied INTO the user's project so they
@@ -2122,7 +2121,7 @@ const GBA_LIBTONC_RUNTIME = [
 const GBA_LIBTONC_RUNTIME_DIRS = [
   { src: "lib/libtonc/include",    dst: "include" },
   { src: "lib/libgba/sysinclude",  dst: "sysinclude" },   // shared with libgba
-  // R58b: ship the FULL libtonc source tree INTO the project so the
+  // ship the FULL libtonc source tree INTO the project so the
   // agent can grep/read every implementation (TTE, OAM helpers, IRQ
   // setup, etc.) instead of stabbing in the dark against libtonc.a.
   // The 1500-frame Lynx wedge took 5 rounds partly because cc65 TGI
@@ -2143,7 +2142,7 @@ const GBA_LIBGBA_RUNTIME = [
 const GBA_LIBGBA_RUNTIME_DIRS = [
   { src: "lib/libgba/include",    dst: "include" },
   { src: "lib/libgba/sysinclude", dst: "sysinclude" },
-  // R58b: ship full libgba source so the agent can grep irqInit /
+  // ship full libgba source so the agent can grep irqInit /
   // irqSet / VBlankIntrWait / GBA register defines directly.
   { src: "lib/libgba/src",        dst: "vendor/libgba/src" },
 ];
@@ -2270,7 +2269,7 @@ TEMPLATES.gba = {
     ext: ".gba",
     describe: "Alternate GBA C starter using devkitPro's libgba SDK. MODE_3 framebuffer + red pixel. Pass runtime:'libgba' to build({output:'run'}) - or just use the Tonc path (gba_hello_tonc) which is better aligned with what published tutorials teach.",
   },
-  // R34: maxmod music demo. Ships a hand-authored CC0 chiptune.xm +
+  // maxmod music demo. Ships a hand-authored CC0 chiptune.xm +
   // its pre-built soundbank.bin. build({output:'run'}) must be called with
   // `maxmod: true` AND binaryIncludes:{ "soundbank.bin": <bytes> } -
   // the buildGbaC layer auto-emits a `.incbin "soundbank.bin"` asm
@@ -2301,7 +2300,7 @@ TEMPLATES.gba = {
   },
 };
 
-// R22: Atari 2600 promoted to multi-template platform. The 2600 has no
+// Atari 2600 promoted to multi-template platform. The 2600 has no
 // C compiler (asm only via dasm) and the genre-shmup/platformer/puzzle
 // scaffolds from other platforms don't map cleanly - its hardware
 // forces "race the beam" rendering. Three templates here that ARE
@@ -2446,18 +2445,18 @@ TEMPLATES.atari2600 = {
   },
 };
 
-// R22: Atari 7800 promoted to multi-template platform. Each template is
+// Atari 7800 promoted to multi-template platform. Each template is
 // a standalone .c file under examples/atari7800/templates/. The 7800's
 // MARIA architecture (display lists, no traditional tilemap) makes the
 // scaffolds work differently from the NES - see the comments in each
 // template for the per-object-DL vs framebuffer trade-off.
-// R40: TIA sound wrapper for 7800 scaffolds. 2 voices (no noise channel
+// TIA sound wrapper for 7800 scaffolds. 2 voices (no noise channel
 // per se - but distortion mode 8 = white noise). See atari7800_sfx.h.
 const ATARI7800_SFX_RUNTIME = [
   { src: "lib/c/atari7800_sfx.h", dst: "atari7800_sfx.h" },
   { src: "lib/c/atari7800_sfx.c", dst: "atari7800_sfx.c" },
 ];
-// R44: TIA 2-voice music driver - separate runtime since music_demo
+// TIA 2-voice music driver - separate runtime since music_demo
 // pulls in the song-player tables (atari7800_music.*) instead of the
 // one-shot sfx wrapper. Other scaffolds still use ATARI7800_SFX_RUNTIME.
 const ATARI7800_MUSIC_RUNTIME = [
@@ -2659,7 +2658,7 @@ export async function createProjectImpl({ platform, name, path: projPath, title,
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);
   const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
-  // R37 (revisited): gbc gets its own tree now - color-aware scaffolds,
+  // gbc gets its own tree now - color-aware scaffolds,
   // GBC-specific docs, distinct examples/gbc/templates/ + src/platforms/
   // gbc/lib/c/. Same Z80 + APU + most VRAM layout as GB, but BCPS/BCPD
   // palette setup and visibly colorful tile art make the difference.
@@ -2750,7 +2749,7 @@ export async function createProjectImpl({ platform, name, path: projPath, title,
     }
   }
 
-  // R20 stage 3: runtimeDirs recursively copies a whole directory tree
+  // runtimeDirs recursively copies a whole directory tree
   // (used by the SGDK Genesis template to ship the include/ header tree).
   if (tmpl?.runtimeDirs) {
     for (const { src, dst } of tmpl.runtimeDirs) {
@@ -2760,12 +2759,12 @@ export async function createProjectImpl({ platform, name, path: projPath, title,
     }
   }
 
-  // R58b: auto-vendor cc65 platform libsrc when present. Cheap blanket
+  // auto-vendor cc65 platform libsrc when present. Cheap blanket
   // policy - every cc65-using platform gets `vendor/cc65/libsrc/<p>/`
   // dropped into the project unless the template already wired it via
   // runtimeDirs. The TGI driver, joystick driver, conio, sound engine,
-  // crt0 - all the things an agent would otherwise have to file a
-  // feedback round to debug - now live in their project tree, greppable.
+  // crt0 - all the things an agent would otherwise debug as a black
+  // box - now live in their project tree, greppable.
   // Lynx already wires this via LYNX_VENDOR_DIRS, so the skip-if-present
   // check below avoids double-copying for it.
   const cc65SrcDir = path.join(PLATFORM_LIB_DIR, "lib", "cc65-src");
@@ -2809,7 +2808,7 @@ export async function createProjectImpl({ platform, name, path: projPath, title,
     writtenFiles.push(tmpl.linkerConfig.dst);
   }
 
-  // R22: ship MENTAL_MODEL.md + TROUBLESHOOTING.md from src/platforms/
+  // ship MENTAL_MODEL.md + TROUBLESHOOTING.md from src/platforms/
   // <LIB_PLATFORM>/ into the project tree when they exist. Without this
   // copy, template comments like "see TROUBLESHOOTING.md" point at a
   // file the user can't find - they'd have to call getPlatformDoc.
@@ -2974,7 +2973,7 @@ Compiles **C89**, not C99/C11. Stick to:
           "`#include \"snes_sfx.c\"`). Omit any one and the build fails."
         : "");
   } else if (platform === "snes" || platform === "genesis") {
-    // R30: Genesis SGDK templates ship genesis_sfx.{h,c} as runtime helpers.
+    // Genesis SGDK templates ship genesis_sfx.{h,c} as runtime helpers.
     // If the template's runtime list includes .c files, emit a multi-file
     // sourcesPaths block; otherwise stick with the single-source form.
     //
@@ -3207,7 +3206,7 @@ async function _createGameCore({ platform, genre, name, path: projPath, title, o
       // TEMPLATES[platform] has a matching template entry - we DERIVE
       // availability from TEMPLATES rather than maintain a parallel table,
       // so createGame can never drift out of sync with the registered
-      // templates (R61: the old hardcoded GENRE_MAP did exactly that - it
+      // templates (the old hardcoded GENRE_MAP did exactly that - it
       // omitted c64/gba/lynx even though their genre templates were registered).
       //
       // R23 + R23e note: GB / GBC have no native 2P hardware (no second

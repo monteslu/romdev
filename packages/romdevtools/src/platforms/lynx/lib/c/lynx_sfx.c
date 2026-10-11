@@ -11,8 +11,8 @@
  *                       bit 3    = ENABLE_COUNT  ← writing 1 here triggers
  *                                                   handy to reschedule
  *                                                   the next timer event
- *                                                   to NOW (see R57 fix
- *                                                   below)
+ *                                                   to NOW (see the vblank
+ *                                                   staging below)
  *                       bit 4    = ENABLE_RELOAD
  *                       bit 5    = integrate
  *                       bit 6    = reset done flag
@@ -26,7 +26,7 @@
  *                              bits 4-7 mute right for voice 0-3.
  *                              Set to 0 = all voices to both speakers.
  *
- * ─── R57 fix: defer voice-enable writes to vblank ───────────────────
+ * ─── defer voice-enable writes to vblank ───────────────────
  *
  * Round 29 friction report: calling sfx_tone() during the active frame
  * intermittently corrupted TGI playfield rendering ("basket + coins
@@ -60,7 +60,7 @@
 
 static uint8_t sfx_remaining[4];
 
-/* R57: shadow-RAM trigger queue. sfx_tone / sfx_noise stage their
+/* shadow-RAM trigger queue. sfx_tone / sfx_noise stage their
  * config here; sfx_update flushes the staged channels to hardware
  * during the (caller's) vblank window. */
 static uint8_t sfx_pending_kind[4];   /* 0 = no change, 1 = tone, 2 = noise */
@@ -81,7 +81,7 @@ void sfx_init(void) {
 void sfx_tone(uint8_t channel, uint8_t period, uint8_t length_frames) {
   if (channel > 3) return;
   /* Stage only - actual hardware writes happen in sfx_update() during
-   * the caller's vblank, NOT now. See R57 comment block above. */
+   * the caller's vblank, NOT now. See the comment block above. */
   sfx_pending_kind[channel] = 1;
   sfx_pending_period[channel] = period;
   sfx_remaining[channel] = length_frames;
@@ -117,7 +117,7 @@ static void sfx_flush_pending(void) {
 }
 
 /* ── background music: 16-step melody loop on voice 1 ───────────────
- * Ticked from sfx_update() through the SAME staged-write path (R57),
+ * Ticked from sfx_update() through the SAME staged-write path,
  * so every scaffold that already calls sfx_init() + sfx_update() gets
  * continuous music for free - "no sound at all" was the Lynx playtest
  * verdict. sfx_music(0) turns it off. SFX use voice 0 (+ noise on 3).
@@ -141,7 +141,7 @@ static void music_tick(void) {
   if (music_timer == 0) {
     p = music_period[music_step & 15];
     if (p) {
-      sfx_pending_kind[1] = 1;          /* staged like any tone (R57-safe) */
+      sfx_pending_kind[1] = 1;          /* staged like any tone  */
       sfx_pending_period[1] = p;
       sfx_remaining[1] = 8;             /* hold 8 of 9 frames - articulated */
     }
@@ -154,7 +154,7 @@ static void music_tick(void) {
 void sfx_update(void) {
   uint8_t i;
   music_tick();
-  /* R57: flush any sfx_tone/sfx_noise requests from THIS frame. The
+  /* flush any sfx_tone/sfx_noise requests from THIS frame. The
    * caller is expected to have just returned from tgi_updatedisplay
    * (or wait_vblank), so the synchronous timer-event sweep that handy
    * triggers on the ENABLE_COUNT write lands during vblank where it

@@ -41,7 +41,7 @@ HMBL     = $24
 HMOVE    = $2A
 CTRLPF   = $0A
 SWCHA    = $280
-; ── TIA audio (R41) ────────────────────────────────────────────────
+; ── TIA audio ────────────────────────────────────────────────
 AUDC0    = $15
 AUDF0    = $17
 AUDV0    = $19
@@ -325,7 +325,7 @@ MAIN:
 
   JMP MAIN
 
-  ; ── TIA sfx helpers (R41) ─────────────────────────────────────────
+  ; ── TIA sfx helpers ─────────────────────────────────────────
   ; sfx_wall - short blip on wall bounce (4-frame ringing tone)
 sfx_wall:
   LDA #$04

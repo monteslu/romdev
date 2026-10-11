@@ -1,7 +1,7 @@
 // 65816 -> WAT lowering for the SNES recompiler: one instruction at one ROM
 // file offset becomes one WAT arm body.
 //
-// Ported from sms-wat's m65816.py (lower()) line for line; the differential
+// Ported from the earlier Python 65816 lowering line for line; the differential
 // gate compares this module's output against the Python emitter's.
 //
 // WHY THE OPCODE BYTE AND NOT OPERAND TEXT. An IR operand string is

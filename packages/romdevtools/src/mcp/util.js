@@ -39,7 +39,7 @@ export function writeOutput(data, { outputPath, inline = false, what = "output",
 
 /**
  * Parse a hex string to bytes, tolerating whitespace/underscore/$ separators
- * and naming the real cause on failure (v0.98.0 feedback #2). Shared by
+ * and naming the real cause on failure. Shared by
  * memory({op:'write'}) and wasm({op:'write'}) so both behave identically.
  * @param {string} hex
  * @param {string} [label] tool name for the error message (default "hex")
@@ -257,8 +257,8 @@ export function withClearToolErrors(server, z) {
 // (`{address: 0xC06C}`) gets a HARD parse error, and even valid JSON can't carry
 // hex. We accept the STRING forms `"0x..."`, `"$..."`, and decimal strings on
 // address-like params and coerce them to a number BEFORE validation, so the
-// natural thing an agent reaches for just works. (Reported repeatedly in v0.41.0
-// feedback as the #1 first-try-fail.)
+// natural thing an agent reaches for just works. (This was the most common
+// first-try failure.)
 //
 // Matched by KEY NAME (not schema introspection - robust across zod versions).
 // DELIBERATELY NARROW: only names that are unambiguously a numeric address/offset

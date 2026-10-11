@@ -16,8 +16,8 @@
 // Mapper, slot-1 paging and RAM-resident code are derived from the ROM where
 // possible (see describe()); the rest are documented options.
 //
-// Ported from sms-wat src/emit_bank.py (the path its verified SMS and GG
-// carts are built with) plus the modules it imports. The emitted WAT equals
+// Ported from the earlier Python banked emitter (the path its verified SMS
+// and GG carts were built with) plus the modules it imports. The emitted WAT equals
 // the Python emitter's after comment/whitespace normalisation.
 //
 // Plain JS ESM + JSDoc.
@@ -144,7 +144,7 @@ function segaHeader(img) {
  *                            each frame (default true)
  *   region: 'export'|'japan' console region (GG port $00 bit 6, SMS I/O port
  *                            mirrors); default from the header region code
- *   legacy: boolean          reproduce sms-wat's emit_bank.py module exactly
+ *   legacy: boolean          reproduce the earlier Python emitter's module exactly
  *                            (interrupts sampled only at scanline starts, no
  *                            register probe); for the differential gate.
  *   ramInterpreter: boolean  (default true; the banked, non-legacy model)
@@ -192,7 +192,7 @@ function segaHeader(img) {
  *                            instruction; the section carries a warning.
  *   emitter: 'banked'|'flat' 'banked' (default) is the full model: paged
  *                            windows, scanline budget carry, line interrupts.
- *                            'flat' is sms-wat's older emitter for carts of
+ *                            'flat' is the older Python emitter for carts of
  *                            32KB or less (no mapper, IRQ at line 192 only),
  *                            kept so a cart built with it can be reproduced.
  *
@@ -223,7 +223,7 @@ export function describe(rom, opts = {}) {
   let mapper = cmHeader ? "codemasters" : (koreanStores > 0 && segaStores === 0) ? "korean-a000" : "sega";
   const mapperEvidence = { codemastersHeader: cmHeader, bank0StoresA000: koreanStores, bank0StoresFFFF: segaStores };
   // gpgx sms_cart_init: a cart of 48KB or less has no mapper hardware
-  // ($FFFC-$FFFF are plain RAM); the legacy model kept sms-wat's Sega mapper.
+  // ($FFFC-$FFFF are plain RAM); the legacy model kept the Sega mapper.
   if (mapper === "sega" && img.length <= 0xC000 && opts.legacy !== true) mapper = "none";
   // gpgx's database entry wins over what the ROM suggests.
   let bankShift = true;

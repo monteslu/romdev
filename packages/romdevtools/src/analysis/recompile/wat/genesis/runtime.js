@@ -1,6 +1,6 @@
 // Genesis runtime for recompiled carts: memory map, I/O, VDP, renderer and
 // the Z80/YM2612 bus side, each a port of the genesis_plus_gx function named
-// beside it. Ported from sms-wat's md_rt.py (the verified Python emitter);
+// beside it. Ported from the earlier verified Python emitter;
 // the WAT text is kept identical to what it produced.
 //
 // Why a port and not a model: the verification target is gpgx's own picture

@@ -1,6 +1,6 @@
 // Static pointer/jump-table decoder. The literal "which index dispatches to this
 // handler?" map, the static complement to the LIVE breakpoint({on:'jumptable'})
-// resolver. Handles the three forms a real dispatcher uses (v0.41.0 feedback N2):
+// resolver. Handles the three forms a real dispatcher uses:
 //
 //   1. CONTIGUOUS little-endian words - `dw handler0, handler1, ...` at one base.
 //   2. SPLIT lo/hi - low bytes in one array, high bytes in a SEPARATE array at a

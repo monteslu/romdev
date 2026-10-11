@@ -21,7 +21,7 @@ HMOVE    = $2A
 HMP0     = $20
 SWCHA    = $280
 INPT4    = $3C
-; ── TIA audio (R41) ────────────────────────────────────────────────
+; ── TIA audio ────────────────────────────────────────────────
 AUDC0    = $15      ; channel 0 waveform/distortion (0..15)
 AUDF0    = $17      ; channel 0 frequency divider (0..31)
 AUDV0    = $19      ; channel 0 volume (0..15)

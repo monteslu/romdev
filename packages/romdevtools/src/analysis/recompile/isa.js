@@ -7,7 +7,7 @@
 //
 // Adding an ISA needs two things that are NOT here, because neither can be
 // faked: a working objdump arch, and a cycle table extracted from a core we
-// verify against. See internal-romdev/recomp/01_PORTING_A_PLATFORM.md.
+// verify against.
 import { z80Cycles, z80Flags, z80Control, CYCLE_PROVENANCE } from "./z80-metadata.js";
 import { liftZ80, DOCUMENTED_Z80 } from "./lift-z80.js";
 import { m68kCycles, m68kControl, M68K_CYCLE_PROVENANCE } from "./m68k-metadata.js";

@@ -89,7 +89,7 @@ const LANGUAGE_TOOLCHAIN = {
     c:   { toolchain: "m68k-elf-gcc", available: true, note: "C for Genesis via gcc 14.2.0 + binutils + newlib, all compiled to WASM. The SGDK runtime IS bundled (built from source) and auto-linked - sprite engine, VDP, controller, PSG/Z80 sound, resource helpers all work; #include <genesis.h>. `examples({op:'fork'})` gives you a complete working SGDK C project (the recommended path). Pass options.sgdk:false for the bare-gcc minimum-viable path." },
   },
   gba: {
-    c: { toolchain: "arm-none-eabi-gcc", available: true, note: "C for GBA via gcc 14.2.0 + binutils + newlib + libtonc 1.4.5 (default) OR libgba 0.5.4 (opt-in via runtime:\"libgba\"), all compiled to WASM (R24 + R28). #include <tonc.h> + tte_write/tte_printf works out of the box - that's the canonical Tonc-tutorial API every published GBA C resource uses. Caveat: tte_iohook (libtonc) and console.c (libgba) - the libsysbase-backed iprintf bridges - are NOT bundled. Use tte_printf directly, which is what the Tonc tutorial actually does." },
+    c: { toolchain: "arm-none-eabi-gcc", available: true, note: "C for GBA via gcc 14.2.0 + binutils + newlib + libtonc 1.4.5 (default) OR libgba 0.5.4 (opt-in via runtime:\"libgba\"), all compiled to WASM. #include <tonc.h> + tte_write/tte_printf works out of the box - that's the canonical Tonc-tutorial API every published GBA C resource uses. Caveat: tte_iohook (libtonc) and console.c (libgba) - the libsysbase-backed iprintf bridges - are NOT bundled. Use tte_printf directly, which is what the Tonc tutorial actually does." },
   },
   sms:    { c: { toolchain: "sdcc", available: true }, asm: { toolchain: "sdcc", available: true } },
   gg:     { c: { toolchain: "sdcc", available: true }, asm: { toolchain: "sdcc", available: true } },
@@ -598,14 +598,14 @@ export async function buildForPlatform(args) {
   }
 
   if (args.platform === "gba") {
-    // R24 + R28: language:"c" routes through the arm-none-eabi gcc +
+    // language:"c" routes through the arm-none-eabi gcc +
     // binutils WASM toolchain (cc1-arm → as → ld → objcopy). Three
     // runtime modes:
     //   - "libtonc" (default) - Tonc tutorial-aligned. `#include <tonc.h>`,
     //     TTE for text, tonccpy/toncset, OBJ_ATTR sprite API.
     //   - "libgba"            - devkitPro's official SDK. `#include <gba.h>`.
     //   - "none"              - bare gcc + newlib only.
-    // Legacy `libgba: true|false` flag still accepted for R24 callers.
+    // Legacy `libgba: true|false` flag still accepted for older callers.
     // language defaults to "c" since no asm path is wired yet - saves
     // every caller from having to spell it out.
     if (args.language === "c" || args.language == null) {
@@ -614,10 +614,10 @@ export async function buildForPlatform(args) {
         source: args.source,
         sources: args.sources,
         headers: args.includes,
-        binaryIncludes: args.binaryIncludes,  // R34 - soundbank.bin et al.
+        binaryIncludes: args.binaryIncludes,  // soundbank.bin et al.
         runtime: args.runtime,    // explicit wins
-        libgba:  args.libgba,     // legacy R24 flag (undef passes through)
-        maxmod:  args.maxmod,     // R33 - opt-in maxmod music link
+        libgba:  args.libgba,     // legacy flag (undef passes through)
+        maxmod:  args.maxmod,     // opt-in maxmod music link
         rebuildSdk: args.rebuildSdk, // compile SDK from source vs seed
       });
       return {
@@ -640,18 +640,16 @@ export async function buildForPlatform(args) {
   }
 
   if (args.platform === "genesis") {
-    // R20: language:"c" routes through the m68k-elf gcc + binutils WASM
-    // toolchain (cc1 → as → ld → objcopy) with our minimum-viable sega.s
-    // crt0 + genesis.ld linker script. Bare `int main(void)` produces a
-    // runnable Genesis ROM. SGDK runtime helpers (sprite engine, VDP,
-    // sound) follow in stage 3 of R20.
+    // language:"c" routes through the m68k-elf gcc + binutils WASM
+    // toolchain (cc1 -> as -> ld -> objcopy). The bundled SGDK runtime is
+    // linked by default; sgdk:false gives the bare crt0 + genesis.ld path.
     if (args.language === "c") {
       const { buildGenesisC } = await import("romdev-toolchain-m68k-gcc");
       const r = await buildGenesisC({
         source: args.source,
         sources: args.sources,
         headers: args.includes,
-        // R42: binaryIncludes lets data.s siblings .incbin music/sample
+        // binaryIncludes lets data.s siblings .incbin music/sample
         // blobs (e.g. demo.xgc for XGM2) without going through rescomp.
         binaryIncludes: args.binaryIncludes,
         // Default: link against bundled SGDK runtime. Pass sgdk:false in
@@ -772,7 +770,7 @@ export async function buildForPlatform(args) {
   }
 
   if (args.platform === "snes") {
-    // R15: language:"c" routes through the tcc-65816 + wla-65816 + wlalink
+    // language:"c" routes through the tcc-65816 + wla-65816 + wlalink
     // pipeline, with our minimum-viable crt0 + hdr.asm bundled. Bare
     // `int main(void) { ... }` produces a runnable 32 KB LoROM. Anything
     // beyond that (graphics, sound, console helpers) the agent writes in

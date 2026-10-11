@@ -15,7 +15,7 @@
  *
  *   java -jar xgm2tool.jar demo.vgm demo.xgc -s -n
  *
- * This pattern mirrors src/platforms/snes/lib/c/snes_sfx_data.asm (R31)
+ * This pattern mirrors src/platforms/snes/lib/c/snes_sfx_data.asm
  * - both ship audio assets as binary siblings incbin'd from a tiny .asm.
  */
 

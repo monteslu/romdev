@@ -85,7 +85,7 @@ export function registerWasmInspectTools(server, z, sessionKey) {
     "and `dbg.reply` plus u32 fields `dbg.cmd_seq`, `dbg.reply_seq`, `dbg.reply_len` in its debug table; this op writes " +
     "`text` to dbg.cmd, bumps dbg.cmd_seq, steps frames until dbg.reply_seq catches up (the cart answers at the start of " +
     "its next frame, so ONE frame runs per command; pause the game first if that matters), and returns the reply " +
-    "(parsed as JSON when it is JSON). `help` lists a cart's commands. cartwheel carts with debug on implement it.\n" +
+    "(parsed as JSON when it is JSON). `help` lists a cart's commands. Only carts built with a debug channel answer.\n" +
     "REFUSES on an emulator host (use disasm/symbols/memory there).",
     {
       op: z.enum(["conformance", "info", "exports", "debugState", "events", "read", "write", "save", "command"])
@@ -109,7 +109,7 @@ export function registerWasmInspectTools(server, z, sessionKey) {
         const f = (n) => fields.find((x) => x.name === n);
         const missing = ["dbg.cmd", "dbg.cmd_seq", "dbg.reply", "dbg.reply_seq", "dbg.reply_len"].filter((n) => !f(n));
         if (missing.length) {
-          throw new Error(`wasm({op:'command'}): this cart has no debug channel (missing ${missing.join(", ")} in its debug table). A cartwheel cart needs .debug = true in its app desc.`);
+          throw new Error(`wasm({op:'command'}): this cart has no debug channel (missing ${missing.join(", ")} in its debug table). The cart has to be built with its debug channel enabled.`);
         }
         const cmd = f("dbg.cmd");
         const bytes = Buffer.from(text + "\0", "utf8");

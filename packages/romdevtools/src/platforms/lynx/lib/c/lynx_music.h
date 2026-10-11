@@ -5,7 +5,7 @@
  * `demo_music` as `const` causes a "discards qualifiers" warning at
  * every call site. We keep it non-const here so it matches the cc65
  * signature; the bytestream is logically read-only (lives in ROM) but
- * the cc65 API wants a writable pointer. (R56 fix; was const pre-r56.)
+ * the cc65 API wants a writable pointer. (It used to be const.)
  */
 
 #ifndef LYNX_MUSIC_H

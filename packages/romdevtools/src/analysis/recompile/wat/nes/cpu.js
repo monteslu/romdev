@@ -19,7 +19,7 @@
 // The dummy reads only matter when they hit I/O ($2002/$2007/$4016 have read
 // side effects), so they are emitted only when the address can be I/O.
 //
-// Ported from sms-wat src/nes_cpu.py (commit 219d233); the emitted text is
+// Ported from the earlier Python emitter; the emitted text is
 // kept identical so the two can be diffed.
 //
 // Plain JS ESM + JSDoc.

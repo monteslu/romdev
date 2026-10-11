@@ -8,7 +8,7 @@
 // frame. On a recompiled wasmcart: the trace ring its romdev.recompile
 // section declares, armed for the run and read back in execution order.
 //
-// Replaces sms-wat's reference/cart pc dumpers (refdump.py, refseq.py,
+// Replaces the earlier Python reference/cart pc dumpers (refdump.py, refseq.py,
 // snes_reftrace.py, snes_pcdump.py, cosim reference captures).
 
 import { writeFileSync, mkdirSync } from "node:fs";

@@ -6,7 +6,7 @@
 //   ld.wasm   - link user .o + sega.o + libmd.a + libgcc → .elf
 //   objcopy.wasm - strip ELF down to raw .bin Genesis ROM
 //
-// Each WASM tool runs in a fresh worker (R12 subprocess isolation), so
+// Each WASM tool runs in a fresh worker (subprocess isolation), so
 // a crash in one stage doesn't take out the server.
 //
 // ENV INJECTION (0.95.0, browser IDEs): pass `env` to run the identical
@@ -507,7 +507,7 @@ export function finalizeGenesisRom(bin) {
 }
 
 /**
- * Minimum-viable Genesis C path (no SGDK). R20 stage-1 behavior.
+ * Minimum-viable Genesis C path (no SGDK).
  * Same code path as before - only this implementation handles the
  * minimal sega.s / genesis.ld bundled under lib/c/.
  */

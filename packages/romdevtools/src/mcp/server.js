@@ -9,8 +9,8 @@
 // instances come and go, and the process dies with "Check failed:
 // jit_page.has_value()" (or "end > addr") in ThreadIsolation, under
 // Runtime_TierUpWasmToJSWrapper -> WasmImportWrapperCache::Free. A server
-// loading and unloading many carts hits it (twice on 2026-10-10 while
-// cartwheel gates ran WebGPU carts; reproduced after 65-76 cart loads). V8
+// loading and unloading many carts hits it (reproduced after 65-76
+// WebGPU cart loads). V8
 // fixed it in 9b8ca54d5a ("Fix lookup of wrappers marked is_dying"); no Node
 // 24 release has it yet (nodejs/node#66366). Without code GC, dead import
 // wrappers and code a module tiered past are not freed early; a module's code
@@ -275,7 +275,7 @@ async function main() {
   const transports = new Map();
   // Session id → last-activity timestamp (ms). Bumped on every request so
   // the idle reaper below can evict sessions whose client vanished without
-  // a clean MCP close (restarted Codex/Claude, crashed client, abandoned
+  // a clean MCP close (restarted client, crashed client, abandoned
   // tab). Without this the transports map - and the /livestream session
   // list - grows forever: each reconnect mints a new session and the dead
   // one is never closed.
@@ -300,8 +300,6 @@ async function main() {
     // Mcp-Session-Id), but an explicit client handle must WIN so a caller can
     // pin its own session -- which is the only mechanism that still exists
     // under MCP 2026-07-28, where there is no protocol session at all.
-    // Workstream B of
-    // internal-romdev/PLAN_mcp_v2_stateless_and_host_lifetime.md.
     const { sessionKey } = resolveSessionKey({
       meta: requestedHandle ? { [SESSION_META_KEY]: requestedHandle } : undefined,
     });

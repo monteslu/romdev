@@ -1,4 +1,4 @@
-// intent.js - R17 intent axis for the asset-pipeline tools.
+// intent.js - intent axis for the asset-pipeline tools.
 //
 // Two values. Required arg on every asset-pipeline tool that touches
 // palettes / quantization / validation:

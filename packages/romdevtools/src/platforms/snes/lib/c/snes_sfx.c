@@ -1,7 +1,6 @@
 /* ── snes_sfx.c - SPC driver uploader + sfx + music dispatch ────────
  *
- * Direct C port of the apu_upload routine from
- * rom-games/snes/invaders/main.asm. The protocol is well-known but
+ * Direct C port of an assembly apu_upload routine. The protocol is well-known but
  * timing-sensitive - every byte transfer requires a handshake with
  * the SPC700 driver, which is why it's spelled out byte-by-byte here.
  *
@@ -21,9 +20,9 @@
  * The driver, once running, watches $F4 (= main side's $2140) and
  * dispatches on edge-detected command changes.
  *
- * R46 update: payload size is now read from the linker-defined
+ * payload size is now read from the linker-defined
  * `apu_blob_end` symbol so the song table can grow without touching
- * this file. The R46 driver added music engine state + an extra
+ * this file. The music driver added music engine state + an extra
  * voice config (voice 1), bumping the driver from ~150 to ~230 bytes,
  * and song data lives at ARAM $5000 - so the upload payload jumped
  * from 9240 to ~20 KB.

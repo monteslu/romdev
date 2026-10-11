@@ -217,8 +217,8 @@ export function lintSdccSource(source, file = "main.c", opts = {}) {
   // over its own statics - the seed of a PRNG, a collision grid, the score -
   // and the symptom looks EXACTLY like an SDCC codegen bug (a 32-bit xorshift
   // that "degenerates" because its seed got clobbered, never a real
-  // miscompile). This was the real root cause behind a GBC Columns agent's
-  // "monochrome RNG" report (2026-06-08); the math itself compiles correctly.
+  // miscompile). This was the real root cause of a GBC game's
+  // "monochrome RNG"; the math itself compiles correctly.
   //
   // ONLY for the sm83/z80 GB/SMS-family, whose WRAM base is $C000. Flag the
   // low 256 bytes ($C000-$C0FF) where _DATA/_INITIALIZED live (small projects'

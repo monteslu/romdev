@@ -4,8 +4,8 @@
 // code the game builds in WRAM (one LoROM cart builds an OAM-clear
 // routine at $7F8000 during reset).
 //
-// The WAT bodies are carried over byte-for-byte from sms-wat's emit_snes.py
-// (globals_wat, mem_wat) and m65816.py (interp_wat, interp_tables_wat); the
+// The WAT bodies are carried over byte-for-byte from the earlier Python
+// emitter (globals, memory, interpreter and its tables); the
 // differential gate compares the whole emitted module against the Python
 // emitter's. `lay` is the per-ROM layout from layout.js.
 //

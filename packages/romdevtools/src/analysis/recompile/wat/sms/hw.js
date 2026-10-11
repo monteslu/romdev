@@ -2,7 +2,7 @@
 // the scanline renderer, the CRAM -> RGB conversion and the small Z80 block
 // helpers that are simpler as calls than inline.
 //
-// Ported from sms-wat src/hw.py and src/emit.py (misc_wat, cram/start
+// Ported from the earlier Python emitter (misc, cram and start
 // bodies). The WAT text is the Python emitter's with its commentary removed;
 // the rationale for each behaviour (the genesis_plus_gx frame order, the
 // 565 palette round-trip, status-port latch rules, TH region detection on
@@ -1253,7 +1253,7 @@ export function psgWat(AUDIO, ABI, opts = {}) {
 export function miscWat(opts = {}) {
   const text = miscLegacyWat();
   if (!opts.exact) return text;
-  // sms-wat implemented INI/IND as OUTI/OUTD (writing memory to the port
+  // The earlier emitter implemented INI/IND as OUTI/OUTD (writing memory to the port
   // instead of reading the port into memory). These follow gpgx's INI/IND
   // macros: read port BC, B-1, store at HL, HL+-1, flags from B and
   // ((C+-1) & $FF) + value.
@@ -1644,7 +1644,7 @@ export function cramBody(platform, base) {
 /**
  * START handling in wc_render. The GG has a real START on port $00 bit 7,
  * active low. The Master System's is the PAUSE button: exact mode takes it
- * as an NMI (pauseNmiWat), as genesis_plus_gx does; sms-wat's legacy model
+ * as an NMI (pauseNmiWat), as genesis_plus_gx does; the legacy model
  * aliased it to button 1.
  * @param {'sms'|'gg'} platform
  * @param {boolean} [exact]

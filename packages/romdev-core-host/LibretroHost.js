@@ -873,9 +873,9 @@ export class LibretroHost {
     //   - snes9x defaults to 256×224 but games select 256×239 or
     //     512×448 (interlaced) based on PPU regs the ROM sets up.
     //
-    // The rom-games agent reasonably expected fbWidth/Height after
-    // loadMedia to reflect "what screenshot will show me". Step a
-    // small number of frames here so the agent sees the ROM-chosen
+    // Callers expect fbWidth/Height after loadMedia to reflect "what
+    // screenshot will show me". Step a small number of frames here so
+    // the caller sees the ROM-chosen
     // geometry, not the pre-init default.
     //
     // 8 frames is generous - Genesis games typically settle their
@@ -949,10 +949,8 @@ export class LibretroHost {
    *
    * This is what makes host eviction actually reclaim anything. Without it a
    * long-lived server accumulates one full core heap per host it has ever
-   * created - which is how the server got OOM-killed twice on 2026-08-19
-   * (~5.4 GB RSS, 300-500 GB of mapped address space) under a single agent
-   * running a 21-gate suite that loads 20+ carts. See
-   * internal-romdev/PLAN_mcp_v2_stateless_and_host_lifetime.md.
+   * created, which reached about 5.4 GB RSS (300-500 GB of mapped address
+   * space) under one client running a test suite that loads 20+ carts.
    *
    * Ordering matters: unload the game, then `retro_deinit` so the core frees
    * its own allocations while its heap is still valid, then drop every
@@ -2610,8 +2608,8 @@ export class LibretroHost {
       // interrupt raising). Without it, each "frame" of the call runs the
       // game's OWN per-frame logic concurrently (VBlank handlers via RAM
       // vectors etc.), which can stomp the buffer the driven routine is
-      // writing - a real session diffed a CORRECT codec reimplementation
-      // against that poisoned output for hours. gpgx (Genesis/SMS/GG) only.
+      // writing, so a CORRECT codec reimplementation can look wrong when
+      // diffed against that output. gpgx (Genesis/SMS/GG) only.
       pure = false,
       // presetMemory: [{addr, bytes}] CPU-space writes applied before the call
       // (codecs that read a global from RAM - a dest stride, a mode flag, etc).
@@ -2681,7 +2679,7 @@ export class LibretroHost {
       }
       // Set caller-supplied registers.
       // regs accepts NAMES ('a','x','y','p','sp',..., per the platform's regNames
-      // map) OR raw numeric ids - field report: no 65816 reg-id table meant a
+      // map) OR raw numeric ids; without a 65816 reg-id table a
       // caller couldn't preset A without guessing. A name with no mapping, or a
       // non-numeric key on a platform without regNames, throws clearly.
       for (const [key, val] of Object.entries(regs)) {
@@ -2814,7 +2812,7 @@ export class LibretroHost {
       // Use the platform's REAL register file (getCPUState decodes per-core: A/X/Y/
       // P/DB/DP on 65816, D0-D7/A0-A7 on m68k, ...). The old _readCallRegs hardcoded
       // m68k names {D0,D1,A0,A1,PC,SP}, so on a 65816 core the values came back
-      // under WRONG labels - a caller couldn't read A/X/Y/P (field report). Fall
+      // under WRONG labels - a caller couldn't read A/X/Y/P. Fall
       // back to the raw m68k-id read only if the per-core decode is unavailable.
       try {
         const st = getCPUState(this, this._loadArgs?.platform);
@@ -2941,8 +2939,8 @@ export class LibretroHost {
       case "snes":
         // 65816: A=0,X=1,Y=2,P=3,S=4,DB=5,D=6,PC=16. retBytes DEFAULTS to 3 for a
         // JSL/RTL callee; a JSR/RTS callee pushes only 2 (PCL,PCH) - pass
-        // callMode:'jsr' to size the sentinel/return-pop to 2 (field report: a
-        // plain jsr helper "returned" 1 byte off into vector-stub land). The
+        // callMode:'jsr' to size the sentinel/return-pop to 2 (otherwise a
+        // plain jsr helper "returns" 1 byte off into vector-stub land). The
         // 65816 stack is in bank 0; WRAM low mirror.  ~3.58MHz / ~6 cyc / 60 ≈ 10k.
         return { spReg: 4, pcReg: 16, retBytes: 3, retBigEndian: false, defaultSentinel: 0, ramMask: 0x1FFF, retAdjust: -1, instrPerFrame: 12000,
           regNames: { a: 0, x: 1, y: 2, p: 3, s: 4, sp: 4, db: 5, d: 6, dp: 6, pc: 16 },

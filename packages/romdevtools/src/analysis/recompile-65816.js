@@ -19,7 +19,7 @@
 // NES-PPU-on-SNES runtime shim (the seam is STUBBED here, see emitSeam), APU
 // audio, mappers > 0, undocumented opcodes (refused), cycle-timed raster splits.
 //
-// Plain JS ESM + JSDoc. See internal-romdev/PORTING_MENTAL_MODELS.md Part 4.
+// Plain JS ESM + JSDoc.
 
 import { NES_REGISTERS } from "../platforms/common/registers.js";
 import { recompile } from "./recompile/index.js";

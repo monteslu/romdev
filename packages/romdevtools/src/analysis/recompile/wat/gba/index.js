@@ -23,8 +23,8 @@
 // wc_render. The first wc_render therefore runs four extra warm-up frames, so
 // cart frame N and reference frame N are the same emulated frame.
 //
-// Output is the same WAT, character for character, as sms-wat's Python
-// emitter (src/emit_gba.py): that differential is the port's acceptance gate.
+// Output is the same WAT, character for character, as the earlier Python
+// emitter: that differential is the port's acceptance gate.
 // The module is 1-3 GB of text for a 4-8 MB ROM, so emitWat yields chunks and
 // never holds the module as one string.
 //
@@ -76,13 +76,13 @@ const SAVE_NAMES = {
  * @property {'positional'|'byName'} [buttons='positional']  pad reading.
  *   positional: the east face button (WC_BTN_B) is the GBA's A and south
  *   (WC_BTN_A) is B, matching the wasmcart host's positional translation.
- *   byName: WC_BTN_A is the GBA's A (sms-wat's original cart; the only
+ *   byName: WC_BTN_A is the GBA's A (the earlier emitter's reading; the only
  *   difference in the emitted text, used by the differential gate)
  * @property {object} [stats]  filled by emitWat: arm counts
  * @property {number|string|null} [breakThumb]  DEBUG / MUST-FAIL CONTROL:
  *   compile this one Thumb opcode's static arm as a no-op (hex string or
  *   number), so a differential run has to report a divergence. Never set
- *   for a real build. (sms-wat's SMSWAT_GBA_BREAK_THUMB; 0x1C20 diverges at
+ *   for a real build. (0x1C20 diverges at
  *   frame 1 on every verified cart.)
  */
 
@@ -173,7 +173,7 @@ function uniqueWords(a, b) {
 }
 
 /**
- * Linear-memory layout (sms-wat emit_gba.layout).
+ * Linear-memory layout.
  * @param {number} romLen @param {boolean} staticRom @param {number} [nArm] unique ARM words
  */
 export function computeLayout(romLen, staticRom, nArm = 0) {
@@ -234,7 +234,7 @@ export function computeLayout(romLen, staticRom, nArm = 0) {
  * The `romdev.recompile` section (recompile-section.js schema v1): where the
  * machine lives in the cart's linear memory and which reference region or
  * CPU field each span mirrors. Rich enough for a per-frame divergence finder
- * (the in-romdev replacement of sms-wat's native-mGBA differ, g2diff.py).
+ * (replaces the earlier native-mGBA differ).
  * @param {Record<string, number>} L
  * @param {string} romSha1
  */
@@ -258,7 +258,7 @@ function sectionFor(L, romSha1, buttons, hardware = 0) {
     // (and localtime's zone, UTC) to the same frames
     ...(hardware & HW_RTC ? { clock: { ...RTC_CLOCK } } : {}),
     // positional: east (WC_BTN_B) is the GBA's A; "byName" only for a cart
-    // built with buttons:'byName' (sms-wat's original reading)
+    // built with buttons:'byName' (the earlier emitter's reading)
     buttons,
     screen: { origin: [0, 0] },
     framebuffer: { offset: L.FB, width: video.FB_W, height: video.FB_H, format: "argb8888" },
@@ -304,7 +304,7 @@ function sectionFor(L, romSha1, buttons, hardware = 0) {
       bank: { offset: L.BANK, note: "6 banks x 7 words (sp, lr, r8-r12), then 6 banked SPSRs" },
       checkpoint: {
         offset: L.CKPT, length: 116,
-        note: "written after every wc_render, laid out like sms-wat's native mGBA gbatrace_checkpoint",
+        note: "written after every wc_render, laid out like the native mGBA trace checkpoint",
         fields: { time: 0, r0: 4, cpsr: 68, spsr: 72, halted: 76, fnvEwram: 80, fnvIwram: 84, fnvVram: 88,
           fnvPal: 92, fnvOam: 96, fnvIo: 100, vcount: 104, cycles: 108, nextEvent: 112 },
         hash: "FNV-1a 32-bit over EWRAM 0x40000, IWRAM 0x8000, VRAM 0x18000, PAL 0x400, OAM 0x400, IO 0x60",
@@ -620,7 +620,7 @@ export async function* emitWat(rom, opts = {}) {
   // convention, and what the wasmcart host's input translation assumes):
   // the east face button (WC_BTN_B, bit 1) is the GBA's A, south (WC_BTN_A,
   // bit 0) is B, so one romdev input name presses the same physical button
-  // on the cart and on mGBA. buttons:'byName' keeps sms-wat's original
+  // on the cart and on mGBA. buttons:'byName' keeps the earlier emitter's
   // reading (WC bit 0 = GBA A) and emits the Python emitter's exact text.
   const PAD_AB = d.buttons === "byName" ? "(i32.and (local.get $b) (i32.const 3))"
     : "(i32.or (i32.and (i32.shr_u (local.get $b) (i32.const 1)) (i32.const 1)) (i32.and (i32.shl (local.get $b) (i32.const 1)) (i32.const 2)))";

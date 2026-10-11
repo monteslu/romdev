@@ -9,7 +9,7 @@
 // address hits whatever is there, and two probes sharing an address produce
 // a reading that is neither one.
 //
-// Ported from sms-wat's hw_snes.py / emit_snes.py constants.
+// Ported from the earlier Python emitter's constants.
 //
 // Plain JS ESM + JSDoc.
 

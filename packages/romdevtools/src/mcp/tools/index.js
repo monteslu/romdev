@@ -393,7 +393,7 @@ export function registerTools(server, z, sessionKey) {
           ...base,
           // Which debug ops the loaded core + installed toolchain implement, so
           // an agent picks a working trace strategy up front instead of probing
-          // by failure (~4 dead calls/session). v0.41.0 feedback #2 (002129).
+          // by failure (~4 dead calls/session).
           ...hostCapabilities(host),
           playtestWindowOpen: human.windowOpen,
           ...(playStatus(sessionKey) ? { play: playStatus(sessionKey) } : {}),

@@ -6,7 +6,7 @@
 // Flags live in $f as the real F register (S Z 5 H 3 PV N C) because games
 // read them through push af / pop af and conditional returns.
 //
-// Ported rule for rule from sms-wat src/z80.py; the emitted WAT is identical
+// Ported rule for rule from the earlier Python emitter; the emitted WAT is identical
 // to the Python emitter's after comment/whitespace normalisation (the
 // differential gate in sms.test.js / the PLAN doc).
 //
@@ -226,10 +226,10 @@ function need(o, n, what) {
  * @param {number} addr  CPU address of the instruction
  * @param {number} size  its length in bytes
  * @param {{exact?: boolean}} [mode]  exact: genesis_plus_gx semantics where
- *   sms-wat's lowering differed: `ei` also arms the one-instruction EI delay
+ *   the earlier lowering differed: `ei` also arms the one-instruction EI delay
  *   ($eidelay), DI/EI set IFF2 as well as IFF1, reti/retn copy IFF2 into
  *   IFF1 (the pause NMI clears IFF1 only), and `adc hl,rr` adds the carry
- *   (sms-wat routed it through the add path). The banked emitter uses it
+ *   (the earlier lowering routed it through the add path). The banked emitter uses it
  *   unless `legacy`.
  * @returns {[string, object|null]} [wat, flow]; flow says how control leaves the block
  */

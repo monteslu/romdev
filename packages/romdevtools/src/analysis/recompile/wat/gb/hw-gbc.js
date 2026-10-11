@@ -27,7 +27,7 @@
 // 115,200/115,200 pixels over 5 frames of a GBC cart, including pure (255,0,0) red,
 // which any colour-correction mode would have moved.
 //
-// Ported from sms-wat src/hw_gbc.py; the emitted text is byte-identical.
+// Ported from the earlier Python emitter; the emitted text is byte-identical.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -72,7 +72,7 @@ export function ioTable(cgb) {
 }
 
 // ---- fitted timing constants ------------------------------------------
-// These were SMSWAT_GB_* environment knobs while they were being fitted.
+// These were environment knobs while they were being fitted.
 // They are fixed now: every verified cart was verified with exactly these.
 //
 // Mid-line write position: pixel x = dots into the line - 80 - PIXDELAY.

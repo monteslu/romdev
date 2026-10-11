@@ -3,7 +3,7 @@
 // packed list, the gambatte-derived machine model (hw-gbc.js) and the CGB or
 // DMG PPU.
 //
-// Ported from sms-wat src/emit_gb.py (the "NEW" machine model it builds for
+// Ported from the earlier Python emitter (the "NEW" machine model it builds for
 // every CGB and DMG cart). The WAT this produces is identical to the Python
 // emitter's for every verified cart; that differential is the port's gate.
 import { lower } from "./lower.js";

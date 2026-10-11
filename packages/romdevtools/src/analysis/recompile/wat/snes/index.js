@@ -1,6 +1,6 @@
 // SNES WAT backend: statically recompile a whole LoROM or HiROM SNES
-// cartridge into one WAT module (a wasmcart), ported from sms-wat's
-// emit_snes.py. The cart carries snes9x's bus (memmap.js), CPU timing and
+// cartridge into one WAT module (a wasmcart), ported from the earlier
+// Python emitter. The cart carries snes9x's bus (memmap.js), CPU timing and
 // DMA/HDMA (cpu-wat.js, frame-wat.js), PPU (ppu-wat.js) and a port of its
 // SPC700 + S-DSP (apu-wat.js) whose output goes to the wasmcart audio ring.
 //

@@ -24,7 +24,7 @@
 // WRAM) and instructions straddling a bank window run through $dynop: the
 // same lowering with the operand bytes read at run time.
 //
-// Ported from sms-wat src/emit_nes.py (commits 1dd6c1a + 219d233, 8 mapper-0
+// Ported from the earlier Python emitter (8 mapper-0
 // carts cycle-exact against fceumm through frame 2905 with input). The WAT
 // text is kept identical to the Python emitter's so the two can be diffed;
 // the one intended difference is that emit_nes.py's wr8 carried the

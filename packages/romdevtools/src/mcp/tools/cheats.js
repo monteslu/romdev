@@ -211,7 +211,7 @@ export async function cheatsApplyCore({ code, desc, path: romPath, index, enable
       // Slot selection: an explicit `index` wins. Otherwise, if an active cheat
       // already targets the SAME address, REUSE its slot - applying `005C:03` over
       // an active `005C:02` should REPLACE the freeze, not stack a second one that
-      // fights for the same byte (v0.41.0 feedback 213831 #3). Only append a new
+      // fights for the same byte. Only append a new
       // slot when nothing targets this address yet.
       const newAddr = cheatAddress(codeToApply);
       let replacedSlot = null;
@@ -267,8 +267,7 @@ function cheatAddress(code) {
 }
 
 /** op:'remove' - disable ONE active cheat (by slot index or by code/address),
- *  leaving the rest in place. The single-slot complement to op:'clear' (nuke-all).
- *  v0.41.0 feedback 213831 #3. */
+ *  leaving the rest in place. The single-slot complement to op:'clear' (nuke-all). */
 export async function cheatsRemoveCore({ slot, code }, sessionKey) {
       const host = getHost(sessionKey);
       if (!host.listActiveCheats) return { removed: false, reason: "no cheat interface on this core", active: [] };

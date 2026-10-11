@@ -17,8 +17,7 @@
 // call. It is deliberately tiny and does nothing else: no behaviour, no
 // policy, no error shaping -- those already live in safeTool /
 // withClearToolErrors, which wrap the handler before it ever gets here.
-//
-// See internal-romdev/PLAN_mcp_v2_stateless_and_host_lifetime.md (workstream C).
+
 
 import { z } from "zod";
 import { SESSION_ARG } from "./session-key.js";

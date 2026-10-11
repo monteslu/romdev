@@ -29,12 +29,13 @@ import { parseSplatAsm } from "./splat-map.js";
 
 export const KNOWN_SOURCE_SCHEMA = "romdev-decomp-known-source-v1";
 
-/** Reference repositories to search, if the user has them checked out. */
+/**
+ * Reference repositories to search: the directories listed in
+ * ROMDEV_DECOMP_REFERENCES (path-delimiter separated) that exist.
+ */
 function referenceRoots() {
   const out = [];
   if (process.env.ROMDEV_DECOMP_REFERENCES) out.push(...process.env.ROMDEV_DECOMP_REFERENCES.split(path.delimiter));
-  const home = process.env.HOME ?? "";
-  out.push(path.join(home, "code", "cliemu", "n64-decomp-reference"));
   return out.filter((d) => { try { return fs.existsSync(d); } catch { return false; } });
 }
 

@@ -9,7 +9,7 @@
 //
 // Bare path: a small crt0 sets the stack (top of 16 MB DC RAM), zeroes .bss, and
 // calls main(). newlib libc/libm + libgcc are linked (SH-4, little-endian). The
-// romdev DC helper (rom-games/dreamcast/.../dc.h) brings up the PowerVR2 framebuffer.
+// romdev DC helper (lib/dc.h) brings up the PowerVR2 framebuffer.
 
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";

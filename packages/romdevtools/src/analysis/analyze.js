@@ -440,9 +440,8 @@ export async function analyzeFunctions(romPath, platformOverride, opts = {}) {
    *
    * A 32KB cc65 NROM yields ~91-115 functions, roughly half of them 1-15 byte
    * runtime stubs with no RE signal at all. Returned whole that is ~12KB of
-   * JSON, and a field report measured this single response as costing more
-   * context than every cross-platform enum loaded in a whole session -- the
-   * highest-value context fix in the tool set.
+   * JSON, which costs more context than every cross-platform enum loaded in
+   * a whole session.
    *
    * Same knobs symbols({op:'analyze'}) already has, so there is one convention
    * to learn: `minSize` drops the stub noise, `topN` raises or lowers the cap.

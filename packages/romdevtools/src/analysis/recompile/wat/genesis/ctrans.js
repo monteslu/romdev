@@ -16,7 +16,7 @@
 //     C register struct laid out in linear memory (PAIR unions alias the way
 //     they do in C); the prefix tables dispatch through call_indirect.
 //
-// This is a line-for-line port of sms-wat's m68k_tr.py / z80_tr.py (the
+// This is a line-for-line port of the earlier Python translators (the
 // verified Python emitter), including its evaluation order and temp
 // numbering, so the WAT it produces is identical to the Python output.
 //

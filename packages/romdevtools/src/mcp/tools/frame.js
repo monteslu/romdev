@@ -498,7 +498,7 @@ export function registerFrameTools(server, z, sessionKey) {
     const { width, height, rgba } = host.screenshotRgba();
     // Default to ONE cell per 8×8 tile (so a 256×224 NES frame → 32×28, legible
     // game state). The old /16 default (16×14 for NES) was too coarse to read
-    // anything - feedback 0.44.0 #1. The terminal symbol's own subcell shape adds
+    // anything. The terminal symbol's own subcell shape adds
     // detail back, so this stays cheap.
     if (cols == null) cols = Math.max(8, Math.floor(width / 8));
     if (rows == null) rows = Math.max(8, Math.floor(height / 8));

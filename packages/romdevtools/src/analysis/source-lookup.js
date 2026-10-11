@@ -3,7 +3,7 @@
 // emits per line (`... ; E4DB 20 E4 D2`). The single most-repeated navigation
 // op in an annotation session: "show me my commented source for $E4DB".
 //
-// v0.98.0 feedback #1 (headline): the alternatives all miss -
+// Why it exists: the alternatives all miss -
 // target:'rom' re-decodes fresh (loses the annotations + re-decodes data as
 // code), target:'source' is PICO-8-only, symbols({op:'lookup'}) gives the
 // enclosing symbol name but not the text. The fallback was a hand-built

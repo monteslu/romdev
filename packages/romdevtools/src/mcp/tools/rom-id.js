@@ -223,7 +223,7 @@ export function registerRomIdTools(server, z, _sessionKey) {
 export async function extractSpriteSheetCore({ platform, path: romPath, offset, bank, count = 256, tilesPerRow = 16, paletteFromEmulator, paletteIndex = 0, outputPath, intent }, sessionKey) {
       const d = resolveIntent(intent);
       const { readFile } = await import("node:fs/promises");
-      // R15: atari2600 has no tile region - sprites are raw bitmap rows scattered
+      // atari2600 has no tile region - sprites are raw bitmap rows scattered
       // through code (LDA imm / STA GRP0|GRP1). Refusing here saves a wasted
       // call that would otherwise return 4 KB of noise.
       if (platform === "atari2600") {

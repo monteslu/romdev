@@ -18,8 +18,7 @@
 ; the corresponding hi-table entry means the size bit defaults to
 ; whatever was previously there, AND your sprite's X high bit may be
 ; stuck - making sprite 3 appear at X=$1FF (off-screen-right) when you
-; wrote X=$80 to its low byte. The rom-games agent burned 4 hours on
-; exactly this in the snes-invaders rebuild.
+; wrote X=$80 to its low byte.
 ;
 ; Workflow:
 ;   1. Build the sprite table in WRAM ($0200..$041F is the typical layout:

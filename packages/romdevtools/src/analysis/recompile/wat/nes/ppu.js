@@ -23,7 +23,7 @@
 // write, so this file never changes per mapper. Nametable mirroring is the
 // mapper's `ntSel` expression.
 //
-// Ported from sms-wat src/hw_nes.py (commit 1dd6c1a); the emitted text is
+// Ported from the earlier Python emitter; the emitted text is
 // kept identical so the two can be diffed.
 //
 // Plain JS ESM + JSDoc.

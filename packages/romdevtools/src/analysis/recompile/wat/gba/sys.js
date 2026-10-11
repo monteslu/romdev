@@ -10,7 +10,7 @@
 // requested six cycles early). Quirks are behaviour the reference has, and a
 // frame-exact cart has to have them too.
 //
-// The WAT text is the text of sms-wat's gba_sys.py, carried over
+// The WAT text is the text of the earlier Python emitter, carried over
 // mechanically (the differential gate compares the two emitters' output).
 //
 // Plain JS ESM + JSDoc.

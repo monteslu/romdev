@@ -359,7 +359,7 @@ export async function snapshotPatternTables(host) {
   // (rather than guessing from all-zero live reads). iNES byte 5 = chrBanks:
   //   > 0  → CHR-ROM cart, baked-in tiles never change at runtime → use file.
   //   = 0  → CHR-RAM cart, tiles are written by the game at runtime → use live.
-  // Agent feedback (2026-05-23): the all-zero heuristic mis-classified a real
+  // The earlier all-zero heuristic mis-classified a real
   // CHR-ROM cart as CHR-RAM when the live read happened to return zeros before
   // the core fully loaded. Reading byte 5 is unambiguous.
   const { readFile } = await import("node:fs/promises");

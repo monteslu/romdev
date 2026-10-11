@@ -214,7 +214,7 @@ export function decodeOAM(oam, opts = {}) {
     // Renderability: an OBJ is renderable this frame only if it overlaps the
     // 256×224 (or ×239) screen box AND isn't parked at the off-screen-top
     // Y=$E0..$FF convention games use to "hide" sprites. This is the real
-    // distinction Codex asked for - a populated OAM slot is NOT the same as
+    // distinction: a populated OAM slot is NOT the same as
     // a drawn sprite.
     const onX = sx + w > 0 && sx < 256;
     const onY = y < 0xE0 && (y + h) > 0;      // Y≥0xE0 is the hide convention
@@ -265,7 +265,7 @@ export function decodeOAM(oam, opts = {}) {
 /**
  * Inspect the OBJ palette lines that renderable sprites actually reference and
  * flag the ones that look UNINTENTIONAL - not just all-zero, but stale/default
- * "garbage" too. The classic SNES bug (Codex's Asteroids) is a sprite naming
+ * "garbage" too. The classic SNES bug is a sprite naming
  * OBJ palette line 1 or 3 when only line 0 was uploaded: the unused lines hold
  * whatever was in CGRAM (zero on some paths, a default ramp / leftover junk on
  * others), so the sprite renders with wrong/garbage colors. An all-zero-only

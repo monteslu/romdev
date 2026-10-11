@@ -15,9 +15,8 @@
 //
 // `playtest({op:'open'})` is the one call in the system that knows a human is
 // about to watch, and before this it could only detect the slow path and warn
-// -- leaving every caller to re-derive the same save/reload/restore dance by
-// hand. (Field report: internal-romdev/feedback/2026-08-20_playtest-open-
-// cannot-fix-the-readback-path-it-detects.md.) This is that dance, once.
+// -- leaving every caller to re-derive the same save/reload/restore sequence by
+// hand. This is that sequence, once.
 //
 // It is OPT-IN (`fastPresent:true`) rather than automatic, for two reasons
 // that both come from the constraints above:

@@ -311,8 +311,7 @@ export async function playtest(args) {
   // manual progress - the recovery hint can only restore a fresh boot. Writing a
   // rolling .state to disk every N seconds means their progress is never more than
   // N seconds from recoverable (state({op:'load', path})). F2 also writes here on
-  // demand (so "I saved it" produces a real, reportable file). (v0.41.0 feedback
-  // note 125904 #2/#3.)
+  // demand (so "I saved it" produces a real, reportable file).
   const checkpointPath = args.autoCheckpointPath ?? null;
   const checkpointEverySec = args.checkpointIntervalSec ?? 15;
   let lastCheckpointTick = 0;

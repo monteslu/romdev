@@ -223,6 +223,6 @@ test("wcGetInfoWat fills inputPtr and timePtr and refuses the known footguns", a
   assert.throws(() => assertHostSpans({ info: 0x1000, input: 0x2000, time: 0x2100, others: [["RAM", 0x2040, 0x100]] }), /input .*overlaps RAM/);
 });
 
-test("watBytes matches sms-wat's escaping", () => {
+test("watBytes matches the earlier emitter's escaping", () => {
   assert.equal(watBytes(Uint8Array.from([0x41, 0x22, 0x5c, 0x00, 0x7f, 0xff, 0x20])), "A\\22\\5c\\00\\7f\\ff ");
 });

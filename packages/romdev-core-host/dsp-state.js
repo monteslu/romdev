@@ -1,6 +1,6 @@
 // SNES S-DSP state introspection.
 //
-// Per the rom-games agent's audio-debugging asks: distinguish "voice
+// Purpose: distinguish "voice
 // never produced output" (BRR/envelope issue) from "voice produced
 // output but mixer muted it" (master volume issue). The data lives in
 // the savestate's "SND" block, AFTER the SMP::save_state region. We

@@ -12,7 +12,7 @@
 // instruction that follows it): `ei; halt` is the idiom that needs it, since
 // taking a pending interrupt before the `halt` sleeps a whole extra frame.
 //
-// Ported from sms-wat src/gb.py; the text this produces is byte-identical to
+// Ported from the earlier Python emitter; the text this produces is byte-identical to
 // it (the differential gate compares the whole cart's WAT).
 
 export class Unsupported extends Error {}

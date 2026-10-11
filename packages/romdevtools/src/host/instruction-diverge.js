@@ -3,8 +3,8 @@
 // free-running instruction trace (romdev_trace_*), for ONE frame, with the
 // first divergent instruction and context from both sides.
 //
-// Backs frame({op:'findDiverge', level:'instruction'}). Replaces the sms-wat
-// pc differs (snes_pcdiff2.py, snes_reftrace.py, snes_pcdump.py,
+// Backs frame({op:'findDiverge', level:'instruction'}). Replaces the earlier
+// Python pc differs (snes_pcdiff2.py, snes_reftrace.py, snes_pcdump.py,
 // snesverify/pcdiff.py, pcdiff.py, lockstep.py, cosim_*.py/cjs, g2trace.py,
 // g2regdiff.py, s1_differ.py, refdump.py, refseq.py). What they learned is
 // kept here once:

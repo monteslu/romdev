@@ -1,4 +1,4 @@
-// lospec.js - R17 helper to fetch a CC0 retro palette from lospec.com
+// lospec.js - helper to fetch a CC0 retro palette from lospec.com
 // by id, with optional snap to a target platform's master palette via
 // nearest-neighbour. Feeds straight into quantizePngForPlatform's
 // per-palette overrides.

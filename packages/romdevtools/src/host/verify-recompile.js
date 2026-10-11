@@ -3,9 +3,8 @@
 // axis. Backs frame({op:'verifyRecompile'}) and the recompile mode of
 // frame({op:'findDiverge'}).
 //
-// Replaces the per-platform Python verifiers that sms-wat carried (see
-// internal-romdev/PLAN_wat_recompiler_in_romdev.md for the list). Everything
-// they learned is kept here once:
+// Replaces the per-platform Python verifiers of the earlier Python
+// recompiler. Everything they learned is kept here once:
 //
 //  * FRAME AXIS. loadMedia runs settle frames on a core (5) and ONE wc_render
 //    on the wasmcart host, and a cart may run warm-up frames inside that first
@@ -50,7 +49,7 @@ export function splitPortButton(name) {
 }
 
 /**
- * Normalise an input schedule. Accepts the compact string the sms-wat
+ * Normalise an input schedule. Accepts the compact string the earlier
  * verifiers used ("300:start:10,900:a+right:6" = frame:buttons:hold) or an
  * array of {frame, buttons, hold} where buttons is "a+right", ["a","right"]
  * or {a:true, right:true}. Frames are REFERENCE frames (frames stepped after
@@ -199,7 +198,7 @@ export const PLAY_POOL = Object.freeze(["right", "left", "up", "down", "a", "b",
 /**
  * A deterministic pseudo-random play script over [from, endFrame): presses
  * drawn from `pool`, held 4..43 frames, 0..11 released frames between them
- * (the LCG the sms-wat play scripts used, so the same seed gives the same
+ * (the LCG the earlier play scripts used, so the same seed gives the same
  * script everywhere it is used).
  * @returns {{frame:number, buttons:string[], hold:number}[]}
  */
@@ -1201,7 +1200,7 @@ export async function findRecompileDivergence(a) {
  * keeps presenting the last picture at full frame rate), and a run on the
  * verified schedule only covers the code that schedule reaches; random play
  * reaches the rest (RAM routines a discovery pass never saw, rarely used
- * paths). Replaces sms-wat's fuzz.cjs / run_ak.cjs / run_gh.cjs.
+ * paths). Replaces the earlier per-cart fuzz scripts.
  *
  * @param {object} a
  * @param {() => Promise<object>} a.openCart

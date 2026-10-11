@@ -1,5 +1,5 @@
 // GBA scanline renderer for the WAT cart (BG modes 0-5, OBJ, windows,
-// colour effects). The WAT text is sms-wat's hw_gba.py renderer carried over
+// colour effects). The WAT text is the earlier Python renderer carried over
 // mechanically; the differential gate compares the two emitters' output.
 //
 // COLOUR IS BGR555, NOT RGB555: a GBA halfword is 0BBBBBGGGGGRRRRR, blue in

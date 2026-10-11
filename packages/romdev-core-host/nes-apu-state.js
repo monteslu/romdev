@@ -1,6 +1,6 @@
 // NES 2A03 APU state introspection.
 //
-// Per the rom-games music-analysis asks: give NES titles the same "what is
+// Gives NES titles the same "what is
 // each channel playing this frame?" decode that getAudioState already gives
 // SNES (dsp) and Genesis (psg/ym2612). Before this, an NES music job had to
 // reverse-engineer the game's private sound-driver RAM by hand; now the

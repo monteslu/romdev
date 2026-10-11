@@ -9,7 +9,7 @@
 // gets a fresh one.
 //
 // This is the chokepoint that gives MCP the "one bad build can't kill
-// the server" property requested in Round 11 feedback.
+// the server" property.
 
 import { fork } from "node:child_process";
 import os from "node:os";

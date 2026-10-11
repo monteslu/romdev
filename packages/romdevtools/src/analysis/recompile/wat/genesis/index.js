@@ -10,9 +10,8 @@
 // function for function because the carts are verified against gpgx's
 // picture and memory at the same frame.
 //
-// Ported from sms-wat's emit_md.py; the WAT text is identical to what the
-// Python emitter produced for the verified carts (see the differential under
-// sms-wat/work/romdev-port/).
+// Ported from the earlier Python emitter; the WAT text is identical to what
+// it produced for the verified carts.
 //
 // Any pc with no compiled arm (code the game builds or copies into work RAM,
 // RAM code whose words changed, a re-based cartridge bank) runs in the 68000
@@ -828,7 +827,7 @@ const ESC = (() => {
   return t;
 })();
 
-/** Bytes as a WAT string body (sms-wat's _wat_bytes). */
+/** Bytes as a WAT string body. */
 function watBytes(b) {
   const parts = [];
   const CH = 65536;

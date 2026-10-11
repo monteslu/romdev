@@ -17,7 +17,7 @@ import { jsonContent, safeTool } from "../util.js";
 // hardware-register regions like nes_apu_regs). The region is a runtime-validated
 // string rather than an inlined ~62-value schema enum - the per-sample
 // host.readMemory(region,...) lookup throws on an unknown region with a clear
-// message, so the schema enum was pure deferred-load weight (0.28.0 feedback #5).
+// message, so the schema enum was pure deferred-load weight.
 export function registerRecordTools(server, z, sessionKey) {
   const inputShape = z.object({
     up: z.boolean().optional(), down: z.boolean().optional(),

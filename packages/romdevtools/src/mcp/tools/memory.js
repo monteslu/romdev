@@ -205,7 +205,7 @@ async function memRead(sessionKey, { region, offset = 0, length, offsets, output
         });
         // compact:true - the "sample N flags" shape: one {"0xOFF":"hex"} map
         // instead of an object per read (~4x fewer tokens on a dozen 1-2 byte
-        // probes; v0.94.0 feedback). Region/endianness still echoed once.
+        // probes). Region/endianness still echoed once.
         if (compact) {
           const map = {};
           for (const r of reads) map["0x" + r.offset.toString(16)] = r.hex;
@@ -253,7 +253,7 @@ async function memRead(sessionKey, { region, offset = 0, length, offsets, output
         wordSize: info.wordSize ?? 1,
         // Only emit `note` when there's actually one - a region with no note
         // (system_ram, most work-RAM) used to return `note: null` every read
-        // (field report: pure noise on a batch RE loop).
+        // (noise in a batch RE loop).
         ...(note ? { note } : {}),
       };
       // Large reads: path-or-inline. Write the RAW bytes to disk (not hex) so
@@ -265,7 +265,7 @@ async function memRead(sessionKey, { region, offset = 0, length, offsets, output
       // Small read WITH an explicit outputPath: honor it - write the raw bytes
       // to disk AND (by default) still return the hex inline. Pass echo:false
       // to get just {path, bytes}: a 2KB RAM dump's ~4KB hex echo was the
-      // largest avoidable token cost in a real RE session (0.27.0 feedback #4)
+      // largest avoidable token cost in an RE loop
       // when the whole point of outputPath was keeping it out of context.
       const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
       if (outputPath) {
@@ -289,9 +289,8 @@ async function memWrite(sessionKey, { region, offset = 0, hex, base64, data, byt
       }
       let buf;
       if (hex) {
-        // Strip whitespace/underscore/$ separators FIRST (v0.98.0 feedback #2:
-        // "AB CD" failed the odd-length check and the error blamed length, so
-        // the caller re-counted nibbles instead of spotting the space). Same
+        // Strip whitespace/underscore/$ separators FIRST: "AB CD" failed the odd-length check and the error blamed length, so
+        // the caller re-counted nibbles instead of spotting the space. Same
         // cleaning findHex has always done.
         buf = parseHexBytes(hex, "writeMemory: hex");
       } else if (base64) {
@@ -570,7 +569,7 @@ async function memReadCart(sessionKey, { offset = 0, length = 16, cpuAddress, ba
         });
       }
 
-      // Banked CPU-address read (0.28.0 feedback #2a): map {cpuAddress, bank?} →
+      // Banked CPU-address read: map {cpuAddress, bank?} →
       // PRG bytes, the inverse of the breakpoint result's bank/prgOffset. Saves
       // the caller the hand-computed `cpuAddr - 0x8000 + bank*0x4000` arithmetic
       // that bit them twice. NES + SNES today (reuses the disasm mappers).
@@ -580,7 +579,7 @@ async function memReadCart(sessionKey, { offset = 0, length = 16, cpuAddress, ba
           m = mapNesAddress(rom.raw, cpuAddress >>> 0, length, bank);
         } else if (rom.platform === "snes") {
           // SNES: the bank IS the address's high byte. `mapSnesAddress` ignores a
-          // separate `bank` param - field report: a bank-local addr + bank:2 read
+          // separate `bank` param, so a bank-local addr + bank:2 used to read
           // BANK 0 silently. Compose it into the 24-bit address, same fix as
           // disasm({target:'rom', bank}).
           let addr = cpuAddress >>> 0;
@@ -649,8 +648,7 @@ async function memSnapshot(sessionKey, { region, name = "default", offset = 0, l
 // Runs the SAME starting state twice (savestate restore in between) under two
 // different held inputs, then diffs the two post-run memories. Replaces the
 // hand-rolled save → hold A → step → dump → restore → hold B → step → dump →
-// client-side python diff loop (~6 calls + a 4KB context hit) with ONE call
-// (0.27.0 feedback #6). The emulator is left at the END OF RUN B.
+// client-side python diff loop (~6 calls + a 4KB context hit) with ONE call.
 async function memDiffRuns(sessionKey, { region, frames = 60, portsA, portsB, offset = 0, length, minDelta, maxClusters = 64, gap = 4 }) {
       const host = getHost(sessionKey);
       assertHostHasRegions(host, region);
@@ -718,7 +716,7 @@ async function memDiff(sessionKey, { region, name = "default", view = "summary",
 
       // Collect changed offsets once, applying server-side predicate filters so
       // the lives/score/ammo hunt is ONE call instead of dumping the whole diff
-      // and filtering client-side (0.28.0 feedback #3). All filters AND together:
+      // and filtering client-side. All filters AND together:
       //   minDelta   - |after-before| >= minDelta (drop small wiggles; 0.27.0 #5)
       //   changeDir  - 'dec' (after<before) | 'inc' (after>before)
       //   deltaEq    - after-before === deltaEq EXACTLY (signed; e.g. -1 for "lost one life")
@@ -766,7 +764,7 @@ async function memDiff(sessionKey, { region, name = "default", view = "summary",
         : null;
       // Per-cluster before/after for SMALL clusters (≤8 bytes): the summary
       // view used to give only ranges, forcing a fall back to view:'raw' to
-      // see the values (0.27.0 feedback #5). Large clusters stay range-only.
+      // see the values. Large clusters stay range-only.
       const out = clusters.slice(0, maxClusters).map((c) => {
         const entry = {
           start: "0x" + c.startDec.toString(16).toUpperCase(),
@@ -802,8 +800,7 @@ async function memDiff(sessionKey, { region, name = "default", view = "summary",
       return diffOut(result, { outputPath, echo, region, heavyKey: "clusters", count: changedCount });
 }
 
-// Honor outputPath/echo for diff results, mirroring memRead (0.28.0 feedback
-// #2): write the FULL JSON to outputPath regardless of size; with echo:false
+// Honor outputPath/echo for diff results, mirroring memRead: write the FULL JSON to outputPath regardless of size; with echo:false
 // return only the slim envelope (counts + path), dropping the heavy array so a
 // large diff never streams through context.
 function diffOut(result, { outputPath, echo, region, heavyKey, count }) {
@@ -906,8 +903,7 @@ async function memSearch(sessionKey, { value, size = 1, as = "raw", region = "sy
       // Baseline EVERY candidate at seed time so relative compares
       // ('inc'/'dec'/'changed'/'unchanged') work as the FIRST narrow. Pre-fix,
       // the baseline only existed after a value-based round - the first
-      // relative searchNext silently returned 0 candidates (a real session
-      // burned rounds on this; it was documented as a footgun instead of fixed).
+      // relative searchNext silently returned 0 candidates).
       const prevMap = new Map();
       for (const a of candidates) prevMap.set(a, value >>> 0);
       searchSessions(sessionKey).set(name, { ...s, addrs: Uint32Array.from(candidates), prev: prevMap, kMap });
@@ -929,7 +925,7 @@ async function memSearch(sessionKey, { value, size = 1, as = "raw", region = "sy
 // its current value), with NO value filter. Then narrow across in-game events
 // with searchNext compare:'dec'/'inc'/'unchanged'/'changed'/'gt'/'lt'. This is
 // the canonical "find the lives/score/timer address you can't see" loop, which
-// op:'search' (requires a value) can't do. (0.28.0 feedback #1.)
+// op:'search' (requires a value) can't do.
 async function memSearchUnknown(sessionKey, { size = 1, as = "raw", region = "system_ram", name = "default", maxCandidates: _maxCandidates = 64 }) {
       const host = getHost(sessionKey);
       assertHostHasRegions(host, region);
@@ -1009,7 +1005,7 @@ async function memSearchNext(sessionKey, { compare, value, name = "default", max
  * There are 126 region ids across all cores, and until now the only index was
  * the enum inside an error message, which the response truncates. A caller who
  * guessed wrong saw the first ~40 (all `nes_*`) and reasonably concluded the
- * platform-specific regions did not exist -- one filed feedback asking for
+ * platform-specific regions did not exist -- one report asked for
  * `sms_cram` to be ADDED when it had been there all along, after inferring
  * palette correctness from rendered pixels instead of diffing 32 bytes.
  *

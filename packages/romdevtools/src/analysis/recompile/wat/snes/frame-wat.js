@@ -5,8 +5,8 @@
 // (render at HC 512, HDMA at HC 1106, the H/V timer IRQ) and the dbg_*
 // exports and PROBE mirror the verify tooling reads.
 //
-// The WAT bodies are carried over byte-for-byte from sms-wat's
-// emit_snes.py build(); the differential gate compares the whole emitted
+// The WAT bodies are carried over byte-for-byte from the earlier
+// Python emitter; the differential gate compares the whole emitted
 // module against the Python emitter's.
 //
 // Plain JS ESM + JSDoc.

@@ -7,7 +7,7 @@
 // with the undocumented index-half forms checked against genesis_plus_gx's
 // cc_xy table, which the Zilog manual does not cover.
 //
-// Ported from sms-wat src/cycles.py; the WAT the backend emits depends on
+// Ported from the earlier Python emitter's cycle tables; the WAT the backend emits depends on
 // every value here, so it is kept rule for rule.
 //
 // Plain JS ESM + JSDoc.

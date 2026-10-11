@@ -7,7 +7,7 @@
 // Bundled as WASM via scripts/build-wladx.sh. The build is two-stage
 // (native generator then WASM library); see that script for details.
 //
-// Used by the SNES C build pipeline (R15): tcc-65816 emits wla-dx
+// Used by the SNES C build pipeline: tcc-65816 emits wla-dx
 // assembly, which we assemble with wla-65816 and link with wlalink.
 // See `src/toolchains/index.js` SNES dispatch.
 

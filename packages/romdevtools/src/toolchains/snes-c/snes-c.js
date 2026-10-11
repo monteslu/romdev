@@ -2,7 +2,7 @@
 //
 // Two modes:
 //
-//   pvsneslib: true  (default, R18)
+//   pvsneslib: true  (default)
 //     Idiomatic SNES homebrew. Link against the bundled PVSnesLib runtime
 //     (precompiled .obj files for crt0, libm, libtcc, libc + headers). The
 //     `<snes.h>` API works out of the box - consoleDrawText, bgSetGfxPtr,
@@ -13,8 +13,7 @@
 //     Bare-metal. Original minimum crt0 + hdr.asm; bare `int main(void)`
 //     compiles, but the user writes everything else (DMA, OAM, VBlank, etc.)
 //     against direct register addresses. Useful as a baseline for educational
-//     work or when you want zero runtime dependencies. R16's original
-//     behavior.
+//     work or when you want zero runtime dependencies.
 //
 // Pipeline (both modes): tcc-65816 → wla-65816 → wlalink.
 
@@ -28,9 +27,9 @@ import { CBuild, BuildError } from "../common/c-build.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-// Minimum-viable runtime (R16, original code).
+// Minimum-viable runtime (original code).
 const MINIMAL_LIB_DIR = path.resolve(__dirname, "..", "..", "platforms", "snes", "lib", "c");
-// PVSnesLib bundled runtime (R18). Headers + the .asm SOURCE for the runtime
+// PVSnesLib bundled runtime. Headers + the .asm SOURCE for the runtime
 // (crt0/libc/libm/libtcc) - assembled from source in-build, not linked from a
 // prebuilt .obj black box.
 const PVSNESLIB_DIR = path.resolve(__dirname, "..", "..", "platforms", "snes", "lib", "pvsneslib");
@@ -275,7 +274,7 @@ async function buildWithPvSnesLib({ sources, headers, tccOptions, wlaOptions, bi
 }
 
 /**
- * Minimum-viable path (R16 original behavior). No PVSnesLib runtime;
+ * Minimum-viable path (the original behavior). No PVSnesLib runtime;
  * bundled original crt0.asm + hdr.asm support a bare `int main()`.
  */
 async function buildMinimal({ sources, headers, tccOptions, wlaOptions, _binaryIncludes = {} }) {

@@ -6,7 +6,7 @@
 //   ld.wasm      - link user .o + gba_crt0.o + libgba.a + libgcc → .elf
 //   objcopy.wasm - strip ELF down to raw .gba ROM
 //
-// Each WASM tool runs in a fresh worker (R12 subprocess isolation), so
+// Each WASM tool runs in a fresh worker (subprocess isolation), so
 // a crash in one stage doesn't take out the server.
 //
 // ENV INJECTION (0.95.0, browser IDEs): pass `env` to run the identical
@@ -114,18 +114,18 @@ async function buildCtx(env) {
  *     `tte_init_chr4c`, `tte_write`, `tte_printf`, `tonccpy`,
  *     `REG_DISPCNT`, the canonical Tonc API every published GBA
  *     tutorial uses. Caveat: tte_iohook (iprintf auto-routing) is
- *     excluded - use `tte_printf` directly instead. R28.
+ *     excluded - use `tte_printf` directly instead.
  *
  *   runtime: "libgba" - devkitPro's libgba SDK. Different API
  *     surface (`SetMode`, `oamSet`, etc.), more "thin wrapper over
  *     hardware registers" style. Same iprintf caveat (console.c
- *     excluded). R24.
+ *     excluded).
  *
  *   runtime: "none" - minimum-viable. Bare gcc + newlib only. User
  *     writes against raw GBA hardware registers. Smallest binaries.
  *
  * Legacy `libgba: true | false` arg still accepted for back-compat
- * with R24 (true → libgba, false → none). If both `runtime` and
+ * (true → libgba, false → none). If both `runtime` and
  * `libgba` are present, `runtime` wins.
  *
  * @param {Object} args

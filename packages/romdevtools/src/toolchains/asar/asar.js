@@ -74,7 +74,7 @@ export async function runAsar(args) {
   // `[worker] Abort in WASM: <ptr>` line even though asar DID write proper
   // diagnostics (e.g. `...: error: (Elabel_not_found): ...`). That line reads as a
   // silent crash + the heap-pointer "<number>" looks like an OOM/trap - it cost
-  // real diagnosis time (v0.70.0 feedback #5). When the log already has a real
+  // real diagnosis time. When the log already has a real
   // asar diagnostic, this was an ordinary error exit: drop the misleading line.
   if (exitCode !== 0 && /:\s*(error|warning)\s*:/i.test(log)) {
     log = log.replace(/\n?\s*\[worker\] Abort in WASM:[^\n]*\n?/g, "\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
@@ -111,7 +111,7 @@ export async function runAsar(args) {
     // asar-WASM has a known resource issue where reading enough distinct files
     // that way (the canonical commercial-disassembly asset-conversion idiom, e.g.
     // an incpal macro converting many .pal palettes) can abort with no diagnostic
-    // (v0.70.0 feedback #1). Surfacing the count turns a silent dead-end into a
+    //. Surfacing the count turns a silent dead-end into a
     // lead. (incbin of the same files does NOT trip it - only readfile1/filesize.)
     const distinctReadfileFiles = countReadfileFiles(source);
     const readfileHint = distinctReadfileFiles >= READFILE_DISTINCT_WARN
@@ -577,7 +577,7 @@ function asarPreflight(source, { binaryIncludes = {}, includes = {} } = {}) {
 // enough DISTINCT files - the canonical commercial-disassembly asset-conversion
 // idiom (an incpal-style macro converting many .pal palettes at assemble time).
 // We can't always predict the exact ceiling, so warn above this many distinct
-// files so the build doesn't silently dead-end (v0.70.0 feedback #1).
+// files so the build doesn't silently dead-end.
 const READFILE_DISTINCT_WARN = 40;
 
 /**

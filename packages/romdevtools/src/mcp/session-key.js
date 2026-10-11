@@ -23,8 +23,7 @@
 // come from the transport at all. Introducing the indirection now, while the
 // transport still supplies an id, means the stateless migration changes which
 // branch fires -- not the identity model, and not any handler.
-//
-// See internal-romdev/PLAN_mcp_v2_stateless_and_host_lifetime.md (workstream B).
+
 
 import { randomUUID } from "node:crypto";
 

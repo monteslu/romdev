@@ -77,7 +77,7 @@ uint8_t joypad_read(void) {
   return (uint8_t)((dpad << 4) | btns);
 }
 
-/* ── OAM DMA - the HRAM-stub idiom (R55 fix) ────────────────────────
+/* ── OAM DMA - the HRAM-stub idiom ────────────────────────
  *
  * The GB OAM DMA engine ($FF46) transfers 160 bytes from `$XX00` (high
  * byte set by the write) to OAM at $FE00-$FE9F. It takes ~160 µs

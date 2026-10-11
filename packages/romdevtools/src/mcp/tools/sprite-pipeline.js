@@ -1,4 +1,4 @@
-// sprite-pipeline.js - R15 cross-game sprite-lift tools.
+// sprite-pipeline.js - cross-game sprite-lift tools.
 //
 // Three primitives that close the gap between extractSpriteSheet and
 // loadSpriteSheet for cross-platform sprite imports:

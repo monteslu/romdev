@@ -141,7 +141,7 @@ test("layout places the ROM last and the tables before it", () => {
   const L = computeLayout(0x10000, true, 5000);
   for (const k of ["BIOS", "REGS", "PROBE", "CKPT", "TRACE", "ABI", "ATAB", "BTAB", "AHASH"]) assert.ok(L[k] < L.ROM, k);
   assert.equal(L.ROM % 0x1000, 0);
-  // the machine ends at ROM + twice the image (sms-wat's layout); audio.js's
+  // the machine ends at ROM + twice the image (the earlier emitter's layout); audio.js's
   // block (resampler tables, buffers, state) follows it, page aligned
   assert.equal(L.AUD, Math.ceil((L.ROM + 2 * 0x10000) / 0x1000) * 0x1000);
   assert.ok(L.END > L.AUD);

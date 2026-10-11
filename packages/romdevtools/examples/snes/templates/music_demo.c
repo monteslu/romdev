@@ -1,6 +1,6 @@
 /* ── music_demo.c - SNES SPC700 continuous-music demo ──────────────
  *
- * Standalone demo of the R46 music engine in the bundled SPC driver.
+ * Standalone demo of the music engine in the bundled SPC driver.
  * After sfx_init(), calling sfx_music_play() kicks off a looping
  * 16-step C-major arpeggio on voice 1. Press B to layer the "shoot"
  * sfx (voice 0) on top; press A to stop the music; press START to

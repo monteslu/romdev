@@ -10,7 +10,7 @@ import { notifyActiveBezel } from "../active-bezel.js";
 // Resolve a state-file `path`. An ABSOLUTE path is used as-is. A RELATIVE path
 // is resolved against the LOADED ROM's directory (the agent's mental model is
 // "save states live next to my ROM") - NOT the server's CWD, which is opaque to
-// the caller and was a silent ENOENT footgun (v0.15.0 feedback #1). Falls back
+// the caller and was a silent ENOENT footgun. Falls back
 // to CWD only when no ROM path is known (e.g. ROM loaded from base64).
 export function resolveStatePath(p, host) {
   if (!p || path.isAbsolute(p)) return p;
@@ -37,7 +37,7 @@ function stateDiffSnapshots(key) {
  * The cheat sidecar path for a state file: `rig.state` -> `rig.state.cheats.json`.
  *
  * A SIDECAR rather than a field inside the blob, deliberately. A rig's cheat
- * requirements currently live in CLAUDE.md prose, so a `.state` shared between
+ * requirements otherwise live only in notes, so a `.state` shared between
  * sessions silently needs knowledge that does not travel with it. Recording them
  * makes the rig self-describing - but the states already on disk are working
  * assets people have invested in, and changing the blob format would put every
@@ -207,7 +207,7 @@ async function loadStateCore({ name, path: inPath, render = true, probeLiveness 
       }
       // A state saved with cheats active carries a sidecar listing them, so a
       // rig shared between sessions announces what it needs instead of relying
-      // on the reader having seen a note in CLAUDE.md.
+      // on the reader having seen a note elsewhere.
       let cheatsFromSidecar = null;
       if (resolvedIn) {
         try {

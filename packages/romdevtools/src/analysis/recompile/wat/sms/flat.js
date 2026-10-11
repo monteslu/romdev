@@ -1,6 +1,6 @@
 // Flat (unbanked) SMS/GG emitter for carts of 32KB or less: one arm per ROM
 // byte offset in $0000-$7FFF, the ROM copied into the Z80 address space at
-// init, no mapper. This is the older of sms-wat's two emitters (src/emit.py)
+// init, no mapper. This is the older of the two earlier Python emitters
 // and the one its verified 32KB carts were built with; its frame model is
 // simpler than the banked emitter's (a fixed 228 T per line with no carry, the
 // VBlank interrupt taken only at line 192, no line interrupt).

@@ -295,7 +295,7 @@ export function registerToolchainTools(server, z, sessionKey) {
       }
       // linkerConfigPath: read the .cfg from disk so a large multi-bank
       // config (e.g. a disasm'd mapper-2 rebuild) isn't re-streamed through
-      // context on every build (0.27.0 feedback #2).
+      // context on every build.
       if (linkerConfigPath && linkerConfig == null) {
         linkerConfig = await readFile(linkerConfigPath, "utf-8");
       }

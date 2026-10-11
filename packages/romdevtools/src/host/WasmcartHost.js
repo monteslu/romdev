@@ -777,8 +777,7 @@ export class WasmcartHost {
       // one frame per call to get that, thousands of calls per run. It also
       // frees what the cart released: Dawn objects go only after V8 collects
       // their JS wrappers AND a later turn runs the native finalizer, and a
-      // long synchronous burst grew VRAM about 0.9 MiB per frame (cliemu-43,
-      // RX 7600). Input timing is unchanged: ports are set before the burst
+      // long synchronous burst grew VRAM about 0.9 MiB per frame. Input timing is unchanged: ports are set before the burst
       // and each frame still reads them.
       if (i > 0) {
         await new Promise(resolve => setImmediate(resolve));

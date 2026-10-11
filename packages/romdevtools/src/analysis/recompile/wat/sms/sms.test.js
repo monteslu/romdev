@@ -105,8 +105,8 @@ test("a synthetic cart assembles, validates and runs the program", async () => {
   assert.equal(e.dbg_trapped.value, 0);
 });
 
-test("exact mode fixes the sms-wat semantics that differed from genesis_plus_gx", () => {
-  // adc hl,rr adds the carry (sms-wat lowered it through the add path)
+test("exact mode fixes the earlier semantics that differed from genesis_plus_gx", () => {
+  // adc hl,rr adds the carry (the earlier lowering took the add path)
   assert.match(lower("adc", "hl,de", 0, 2, { exact: true })[0], /\$adc16/);
   assert.match(lower("adc", "hl,de", 0, 2)[0], /\$add16/);
   // EI arms the one-instruction delay; RETI/RETN copy IFF2 into IFF1
@@ -114,7 +114,7 @@ test("exact mode fixes the sms-wat semantics that differed from genesis_plus_gx"
   assert.equal(lower("reti", "", 0, 2, { exact: true })[0], "(global.set $iff (global.get $iff2))");
   // CP takes F bits 5/3 from the operand
   assert.match(lower("cp", "$28", 0, 2, { exact: true })[0], /0xD7/);
-  // INI/IND read the port (sms-wat ran OUTI/OUTD)
+  // INI/IND read the port (the earlier emitter ran OUTI/OUTD)
   const misc = miscWat({ exact: true });
   assert.match(misc, /\(func \$ini \(call \$ini_step \(i32\.const 1\)\)\)/);
   assert.match(miscWat(), /\(func \$ini \(call \$outi_step\)\)/);

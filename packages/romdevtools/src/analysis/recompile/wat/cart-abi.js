@@ -281,8 +281,8 @@ export function readRecompileInfo(wasm) {
 }
 
 /**
- * Escape bytes for a WAT data string, in the exact form sms-wat's emitters
- * use (printable ASCII literal, `"` as \22, `\` as \5c, everything else \hh),
+ * Escape bytes for a WAT data string, in the exact form the earlier Python emitters
+ * used (printable ASCII literal, `"` as \22, `\` as \5c, everything else \hh),
  * so ported backends produce byte-identical text.
  * @param {Uint8Array} b
  */

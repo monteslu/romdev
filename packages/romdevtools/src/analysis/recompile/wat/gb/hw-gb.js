@@ -15,9 +15,9 @@
 // $gb_render_line/$gb_window/$gb_sprites are the original DMG renderer. The
 // current machine model draws with hw-gbc.js (CGB or DMG PPU); these
 // functions are still emitted (dead) so the cart's text stays identical to
-// the verified sms-wat build it was ported from.
+// the verified Python build it was ported from.
 //
-// Ported from sms-wat src/hw_gb.py.
+// Ported from the earlier Python emitter.
 
 export const FB_W = 160, FB_H = 144;
 

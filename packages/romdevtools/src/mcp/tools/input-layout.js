@@ -250,7 +250,7 @@ export function getInputLayoutCore({ platform }) {
         hardwareBitsCaveat:
           "libretroJoypadIds are PROTOCOL ids for the input tool; they are NOT the bit positions a ROM reads from the hardware register. " +
           "hardwareBits gives the actual register bits a ROM tests (e.g. SNES: `lda $4218 ; bit #$1000` for start). " +
-          "Confusing the two silently breaks input handling - verified by the rom-games agent's 30-min bisection that prompted this field.",
+          "Confusing the two silently breaks input handling.",
         note2: "Names from libretroJoypadIds work universally. Spatial face-button names (north/east/south/west) translate to the right physical button per platform - east is A on NES/SNES, C on Genesis. Prefer spatial names in cross-platform code.",
       };
 }

@@ -27,7 +27,7 @@
 //   $thumb        executionMode. $cc: the instruction's currentCycles.
 //   $shop $shc    shifterOperand / shifterCarryOut.
 //
-// The emitted text is identical to sms-wat's gba_cpu.py (the differential
+// The emitted text is identical to the earlier Python emitter's (the differential
 // gate). Values follow Python's model: a known value is a JS number, a
 // decided condition is a JS boolean, anything else is a WAT expression string.
 //
