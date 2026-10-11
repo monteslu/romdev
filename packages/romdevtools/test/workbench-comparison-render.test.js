@@ -34,7 +34,7 @@ test("an anonymous section target is called out; the symbol caution precedes the
 test("raw above words is explained once, as relocation-controlled; the payload carries acceptance", () => {
   const r = cmp(RELOC_TARGET, RELOC_CANDIDATE, "demo");
   const lines = rawVersusWordsLines(r).join("\n");
-  if (r.raw_word_mismatches > r.word_mismatches) { assert.ok(lines.includes("relocation-controlled")); assert.ok(lines.includes("words=0 is the honest gate")); }
+  if (r.raw_word_mismatches > r.word_mismatches) { assert.ok(lines.includes("relocation-controlled")); assert.ok(lines.includes("words=0 is the real gate")); }
   const p = comparisonPayload(r, { cross_rom: false });
   assert.equal(p.accepted, r.exact); assert.ok(["function-exact", "mismatch"].includes(p.acceptance_basis));
 });

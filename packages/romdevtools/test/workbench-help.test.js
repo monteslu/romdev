@@ -4,7 +4,7 @@
 // executing the workbench's own parser-building code (its add_argument calls,
 // argument groups, subcommand registration and formatter classes) against a
 // recording parser and laying it out with the standard formatter's rules.
-// 164 of the 171 texts are the upstream text byte for byte; the seven listed
+// 157 of the 171 texts are the upstream text byte for byte; the fourteen listed
 // in DEVIATIONS say what romdev actually does, and are pinned here as romdev's
 // own text.
 import { test } from "node:test";
@@ -26,6 +26,13 @@ const DEVIATIONS = {
   "decomp-workbench permute sweep": "--permuter-dir holds romdev's JS permuter programs, not a Python checkout",
   "decomp-workbench permute doctor": "--permuter-dir holds romdev's JS permuter programs, not a Python checkout",
   "decomp-workbench doctor": "doctor reports the node runtime, not a Python interpreter",
+  "decomp-workbench view": "plain wording: --emit-force-spec help drops \"honest\"",
+  "decomp-workbench view-dumps": "plain wording: --emit-force-spec help drops \"honest\"",
+  "decomp-workbench diagnose": "plain wording: --emit-force-spec help drops \"honest\"",
+  "decomp-workbench diagnose-dumps": "plain wording: --emit-force-spec help drops \"honest\"",
+  "decomp-workbench object": "plain wording: the score subcommand help drops \"honest\"",
+  "decomp-workbench note-reserve": "plain wording: drops \"honestly\"",
+  "decomp-workbench fetch-scratch": "plain wording: drops \"honestly\"",
 };
 
 test("every parser's --help is the recorded text", async () => {
