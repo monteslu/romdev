@@ -44,9 +44,16 @@ source "$EMSDK/emsdk_env.sh" > /dev/null 2>&1
 ROOT="$BUILD_DIR/arm-toolchain"
 SRC_DIR="$ROOT/src"
 WASM_PREFIX="$ROOT/wasm-deps"
+# Builder paths reach the binaries through __FILE__ (gcc/binutils/gmp/mpfr/isl
+# assertions) and through the configured prefix (default search dirs, ld's
+# SEARCH_DIRs). Map the whole tree to /romdev and configure the tools with
+# --prefix=/romdev so neither carries this machine's paths. The prefix is never
+# installed to: the tools are relinked from the build dirs, and romdev passes
+# every include and library path.
+MAP="-ffile-prefix-map=$ROOT=/romdev"
 NATIVE_PREFIX="$ROOT/install"
 OUT="$PROJECT_DIR/src/toolchains/arm-none-eabi-gcc/wasm"
-NCPU="$(nproc)"
+NCPU="${JOBS:-$(nproc)}"
 TARGET=arm-none-eabi
 
 if [ ! -x "$NATIVE_PREFIX/bin/$TARGET-gcc" ]; then
@@ -93,6 +100,7 @@ if [ ! -f "$WASM_PREFIX/lib/libgmp.a" ]; then
   cd "$ROOT"; mkdir -p build-wasm-gmp; cd build-wasm-gmp
   emconfigure "../src/gmp-$GMP_VER/configure" \
     --prefix="$WASM_PREFIX" \
+    CPPFLAGS="$MAP" \
     --disable-shared --enable-static \
     --disable-assembly \
     --host=none-none-none
@@ -105,6 +113,7 @@ if [ ! -f "$WASM_PREFIX/lib/libmpfr.a" ]; then
   cd "$ROOT"; mkdir -p build-wasm-mpfr; cd build-wasm-mpfr
   emconfigure "../src/mpfr-$MPFR_VER/configure" \
     --prefix="$WASM_PREFIX" \
+    CPPFLAGS="$MAP" \
     --with-gmp="$WASM_PREFIX" \
     --disable-shared --enable-static \
     --host=none-none-none
@@ -117,6 +126,7 @@ if [ ! -f "$WASM_PREFIX/lib/libmpc.a" ]; then
   cd "$ROOT"; mkdir -p build-wasm-mpc; cd build-wasm-mpc
   emconfigure "../src/mpc-$MPC_VER/configure" \
     --prefix="$WASM_PREFIX" \
+    CPPFLAGS="$MAP" \
     --with-gmp="$WASM_PREFIX" --with-mpfr="$WASM_PREFIX" \
     --disable-shared --enable-static \
     --host=none-none-none
@@ -129,6 +139,7 @@ if [ ! -f "$WASM_PREFIX/lib/libisl.a" ]; then
   cd "$ROOT"; mkdir -p build-wasm-isl; cd build-wasm-isl
   emconfigure "../src/isl-$ISL_VER/configure" \
     --prefix="$WASM_PREFIX" \
+    CPPFLAGS="$MAP" \
     --with-gmp-prefix="$WASM_PREFIX" \
     --disable-shared --enable-static \
     --host=none-none-none
@@ -141,8 +152,9 @@ if [ ! -f "$ROOT/build-wasm-gcc/gcc/cc1" ]; then
   cd "$ROOT"; mkdir -p build-wasm-gcc; cd build-wasm-gcc
   if [ ! -f Makefile ]; then
     emconfigure "$SRC_DIR/gcc-14.2.0/configure" \
+      CFLAGS="-O2 $MAP" CXXFLAGS="-O2 $MAP" \
       --target="$TARGET" \
-      --prefix="$WASM_PREFIX/gcc-wasm" \
+      --prefix=/romdev \
       --host=wasm32-unknown-emscripten \
       --build="$(gcc -dumpmachine)" \
       --enable-languages=c \
@@ -202,6 +214,11 @@ if [ ! -f "$ROOT/build-wasm-gcc/gcc/cc1" ]; then
     all-libbacktrace \
     all-zlib \
     configure-gcc
+  # configargs.h records the configure command line (CFLAGS with the prefix map,
+  # --with-gmp=...); keep the builder's paths out of it as the prefix map does
+  # for sources.
+  sed -i "s|$ROOT|/romdev|g" gcc/configargs.h
+  if grep -q "$ROOT" gcc/configargs.h; then echo "FATAL: builder path left in configargs.h" >&2; exit 1; fi
   cd gcc
   emmake make -j"$NCPU" \
     CC_FOR_BUILD=gcc \
@@ -215,8 +232,9 @@ if [ ! -f "$ROOT/build-wasm-binutils/gas/as-new" ]; then
   cd "$ROOT"; mkdir -p build-wasm-binutils; cd build-wasm-binutils
   if [ ! -f Makefile ]; then
     emconfigure "$SRC_DIR/binutils-2.42/configure" \
+      CFLAGS="-O2 $MAP" CXXFLAGS="-O2 $MAP" \
       --target="$TARGET" \
-      --prefix="$WASM_PREFIX/binutils-wasm" \
+      --prefix=/romdev \
       --host=wasm32-unknown-emscripten \
       --build="$(gcc -dumpmachine)" \
       --disable-nls --disable-werror \
@@ -242,47 +260,47 @@ if [ ! -f "$ROOT/build-wasm-binutils/gas/as-new" ]; then
   emmake make -j"$NCPU" CC_FOR_BUILD=gcc CXX_FOR_BUILD=g++
 fi
 
-# ── 5. Wrap each tool with MODULARIZE+EXPORT_ES6 ───────────────────
-# The raw bin/exe files emcc produced are LLVM bitcode behind a JS shim.
-# We need to relink each one as a standalone .wasm + .mjs ESM module
-# with our standard knobs:
+# ── 5. Re-link each tool as a MODULARIZE + EXPORT_ES6 module ─────────
+# The emcc link of each tool (cc1, as-new, ld-new, objcopy, objdump) writes a
+# plain JS launcher + .wasm, which cannot be fed back into emcc. Re-run the
+# tool's own link step from its build dir with our standard knobs instead
+# (EM_WRAP_FLAGS in _lib.sh, plus a larger stack):
 #   -s MODULARIZE=1            wrap in async factory function
 #   -s EXPORT_NAME=...         JS-visible factory name
-#   -s EXPORT_ES6=1            emit .mjs ESM module
+#   -s EXPORT_ES6=1            emit an ESM module
 #   -s ALLOW_MEMORY_GROWTH=1   cc1 grows past 16 MB on real input
 #   -s INITIAL_MEMORY=128MB    cc1 OOMs at the default 16 MB cap
 #   -s EXIT_RUNTIME=1          let callMain return cleanly
-#   -s INVOKE_RUN=0            we'll call ccall("main",...) ourselves
-#   -s NODERAWFS=0             use MEMFS (we mount files via MOUNT_FS)
+#   -s INVOKE_RUN=0            romdev calls callMain itself
+#   -s STACK_SIZE=8MB          cc1 is built at -O0 here and its frames overrun
+#                              emscripten's 64KB default stack on real input
+#   -g0                        no DWARF in the shipped modules
+# Staged into src/toolchains/arm-none-eabi-gcc/wasm/ and romdev-platform-gba/wasm/.
+PKG_OUT="$PROJECT_DIR/../romdev-platform-gba/wasm"
+mkdir -p "$PKG_OUT"
+WRAP_LDFLAGS="-O2 -g0 -s MODULARIZE=1 -s EXPORT_ES6=1 -s ENVIRONMENT=node -s ALLOW_MEMORY_GROWTH=1 -s INITIAL_MEMORY=134217728 -s STACK_SIZE=8388608 -s EXIT_RUNTIME=1 -s INVOKE_RUN=0 -s EXPORTED_RUNTIME_METHODS=callMain,FS"
+
 wrap_tool() {
-  local in_bin="$1"        # absolute path to the emcc-produced binary
-  local out_name="$2"      # logical name (used for EXPORT_NAME + .mjs/.wasm)
-  local export_name="$3"   # createXxx - the JS factory name
-
-  echo "Wrapping $in_bin → $OUT/$out_name.{mjs,wasm}"
-
-  # Strategy: emcc takes the LLVM IR/bitcode embedded in the binary and
-  # re-links with our flags. We do this via emcc <in_bin> -o out.mjs.
-  # For cc1 (big - 100+ MB of IR) we need ALLOW_MEMORY_GROWTH +
-  # INITIAL_MEMORY=128MB; smaller binutils tools tolerate the default but
-  # we set them anyway for consistency.
-  # EM_WRAP_FLAGS (_lib.sh) carries the shared gcc-family relink knobs
-  # (MODULARIZE/EXPORT_ES6/128MB heap/EXIT_RUNTIME=1/...); only the per-tool
-  # factory name stays inline here.
-  emcc "$in_bin" \
-    -o "$OUT/$out_name.mjs" \
-    "${EM_WRAP_FLAGS[@]}" \
-    -s "EXPORT_NAME=$export_name"
+  local dir="$1"           # build dir holding the make target
+  local target="$2"        # make target (cc1, as-new, ld-new, objcopy, objdump)
+  local out_name="$3"      # logical name (staged .mjs/.wasm basename)
+  local export_name="$4"   # createXxx - the JS factory name
+  echo "Re-linking $dir/$target -> $out_name.{mjs,wasm}"
+  ( cd "$dir" && rm -f "$target" "$target.wasm" && \
+    emmake make "$target" LDFLAGS="$WRAP_LDFLAGS -s EXPORT_NAME=$export_name" )
+  cp "$dir/$target" "$OUT/$out_name.mjs"
+  cp "$dir/$target.wasm" "$OUT/$out_name.wasm"
+  cp "$OUT/$out_name.mjs" "$OUT/$out_name.wasm" "$PKG_OUT/"
 }
 
-wrap_tool "$ROOT/build-wasm-gcc/gcc/cc1"                  "cc1-arm"             "createCc1arm"
-wrap_tool "$ROOT/build-wasm-binutils/gas/as-new"          "arm-none-eabi-as"    "createArmAs"
-wrap_tool "$ROOT/build-wasm-binutils/ld/ld-new"           "arm-none-eabi-ld"    "createArmLd"
-wrap_tool "$ROOT/build-wasm-binutils/binutils/objcopy"    "arm-none-eabi-objcopy" "createArmObjcopy"
+wrap_tool "$ROOT/build-wasm-gcc/gcc"           cc1     cc1-arm               createCc1arm
+wrap_tool "$ROOT/build-wasm-binutils/gas"      as-new  arm-none-eabi-as      createArmAs
+wrap_tool "$ROOT/build-wasm-binutils/ld"       ld-new  arm-none-eabi-ld      createArmLd
+wrap_tool "$ROOT/build-wasm-binutils/binutils" objcopy arm-none-eabi-objcopy createArmObjcopy
 # objdump = the ARM/Thumb DISASSEMBLER (`-D -b binary -m arm`, +`-M force-thumb`).
 # Unlocks GBA disassembly (the platform was previously rejected for lack of an
 # ARM disassembler). Ships in romdev-platform-gba alongside as/ld/objcopy.
-wrap_tool "$ROOT/build-wasm-binutils/binutils/objdump"    "arm-none-eabi-objdump" "createArmObjdump"
+wrap_tool "$ROOT/build-wasm-binutils/binutils" objdump arm-none-eabi-objdump createArmObjdump
 
 echo ""
 echo "Stage 2 complete. Artifacts:"

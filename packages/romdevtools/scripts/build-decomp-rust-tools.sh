@@ -46,6 +46,20 @@ sync_glue() {
   fi
 }
 
+# Rust bakes the source path of every panic location (file!() in the crate and
+# in each dependency) into the binary. Map the cargo registry and this build
+# dir to fixed prefixes so the builder's home directory never ships: a
+# dependency reads as /crates/<name>-<version>/src/..., our crates as /src/...
+# RUSTFLAGS reaches every target crate, not only the final one `cargo rustc --`
+# would pass flags to.
+CARGO_DIR="${CARGO_HOME:-$HOME/.cargo}"
+REMAP="--remap-path-prefix=$ROOT=/src"
+for idx in "$CARGO_DIR"/registry/src/*/; do
+  REMAP="$REMAP --remap-path-prefix=${idx%/}=/crates"
+done
+REMAP="$REMAP --remap-path-prefix=$CARGO_DIR/git/checkouts=/crates-git"
+export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }$REMAP"
+
 LINK="-sMODULARIZE=1 -sEXPORT_ES6=1 -sNODERAWFS=1 -sENVIRONMENT=node -sEXIT_RUNTIME=1 -sINVOKE_RUN=0 -sWASM_ASYNC_COMPILATION=0 -sALLOW_MEMORY_GROWTH=1 -sEXPORTED_RUNTIME_METHODS=callMain,FS,ENV -g0"
 
 # A library that also builds as a cdylib/staticlib cannot link for this target

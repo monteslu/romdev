@@ -20,7 +20,13 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ROOT="${ROMDEV_BUILD_DIR:-$PROJECT_DIR/build}/mips-toolchain"
 SRC_DIR="$ROOT/src"
 WASM_PREFIX="$ROOT/wasm-deps"
-NCPU="$(nproc)"
+# Builder paths reach the binaries through __FILE__ (gcc/gmp/mpfr/isl assertions)
+# and through the configured prefix (default search dirs). Map the whole tree
+# to /romdev and configure with --prefix=/romdev so neither carries this
+# machine's paths. The prefix is never installed to: the tools are relinked
+# from the build dirs, and romdev passes every include and library path.
+MAP="-ffile-prefix-map=$ROOT=/romdev"
+NCPU="${JOBS:-$(nproc)}"
 OUT="$PROJECT_DIR/src/toolchains/mips-elf-gcc/wasm"
 PKG_OUT="$PROJECT_DIR/../romdev-toolchain-mips-gcc/wasm"
 mkdir -p "$WASM_PREFIX" "$OUT" "$PKG_OUT"
@@ -45,26 +51,26 @@ done
 # ── 1. WASM prereq libs ─────────────────────────────────────────────
 if [ ! -f "$WASM_PREFIX/lib/libgmp.a" ]; then
   cd "$ROOT"; rm -rf build-wasm-gmp; mkdir build-wasm-gmp; cd build-wasm-gmp
-  emconfigure "$SRC_DIR/gmp-$GMP_VER/configure" --prefix="$WASM_PREFIX" \
+  emconfigure "$SRC_DIR/gmp-$GMP_VER/configure" --prefix="$WASM_PREFIX" CPPFLAGS="$MAP" \
     --disable-shared --enable-static --host=none-none-none
   emmake make -j"$NCPU"; emmake make install
 fi
 if [ ! -f "$WASM_PREFIX/lib/libmpfr.a" ]; then
   cd "$ROOT"; rm -rf build-wasm-mpfr; mkdir build-wasm-mpfr; cd build-wasm-mpfr
-  emconfigure "$SRC_DIR/mpfr-$MPFR_VER/configure" --prefix="$WASM_PREFIX" \
+  emconfigure "$SRC_DIR/mpfr-$MPFR_VER/configure" --prefix="$WASM_PREFIX" CPPFLAGS="$MAP" \
     --with-gmp="$WASM_PREFIX" --disable-shared --enable-static --host=none-none-none
   emmake make -j"$NCPU"; emmake make install
 fi
 if [ ! -f "$WASM_PREFIX/lib/libmpc.a" ]; then
   cd "$ROOT"; rm -rf build-wasm-mpc; mkdir build-wasm-mpc; cd build-wasm-mpc
-  emconfigure "$SRC_DIR/mpc-$MPC_VER/configure" --prefix="$WASM_PREFIX" \
+  emconfigure "$SRC_DIR/mpc-$MPC_VER/configure" --prefix="$WASM_PREFIX" CPPFLAGS="$MAP" \
     --with-gmp="$WASM_PREFIX" --with-mpfr="$WASM_PREFIX" \
     --disable-shared --enable-static --host=none-none-none
   emmake make -j"$NCPU"; emmake make install
 fi
 if [ ! -f "$WASM_PREFIX/lib/libisl.a" ]; then
   cd "$ROOT"; rm -rf build-wasm-isl; mkdir build-wasm-isl; cd build-wasm-isl
-  emconfigure "$SRC_DIR/isl-$ISL_VER/configure" --prefix="$WASM_PREFIX" \
+  emconfigure "$SRC_DIR/isl-$ISL_VER/configure" --prefix="$WASM_PREFIX" CPPFLAGS="$MAP" \
     --with-gmp-prefix="$WASM_PREFIX" --disable-shared --enable-static --host=none-none-none
   emmake make -j"$NCPU"; emmake make install
 fi
@@ -88,9 +94,9 @@ if [ ! -f "$ROOT/build-wasm-gcc/gcc/cc1.wasm" ]; then
     # tail of ".../foo.h"), so an in-place rewrite silently corrupts unrelated
     # data. See never-byte-edit-prebuilt-binaries.
   [ -f Makefile ] || env $PSIGNAL_CACHE emconfigure "$SRC_DIR/gcc-$GCC_VER/configure" \
-    CFLAGS="-O2 -ffile-prefix-map=$SRC_DIR=/src" \
-    CXXFLAGS="-O2 -ffile-prefix-map=$SRC_DIR=/src" \
-    --target=$TARGET --prefix="$WASM_PREFIX/gcc-wasm" \
+    CFLAGS="-O2 $MAP" \
+    CXXFLAGS="-O2 $MAP" \
+    --target=$TARGET --prefix=/romdev \
     --host=wasm32-unknown-emscripten --build="$(gcc -dumpmachine)" \
     --enable-languages=c --disable-nls --disable-multilib \
     --disable-shared --disable-threads --disable-libssp --disable-libstdcxx \
@@ -100,7 +106,20 @@ if [ ! -f "$ROOT/build-wasm-gcc/gcc/cc1.wasm" ]; then
   # Build JUST cc1 (the C frontend we need), NOT all-gcc - the aux tools
   # (gcov-tool, lto-plugin) reference ftw/liblto_plugin.so that emscripten lacks
   # and abort the whole all-gcc target. cc1 is self-contained.
-  ( cd gcc && emmake make -j"$NCPU" cc1 )
+  emmake make -j"$NCPU" all-build
+  emmake make -j"$NCPU" all-libcpp all-libiberty all-libdecnumber all-libbacktrace
+  emmake make -j"$NCPU" configure-gcc
+  # configargs.h records the configure command line (CFLAGS with the prefix map,
+  # --with-gmp=...); keep the builder's paths out of it as the prefix map does
+  # for sources.
+  sed -i "s|$ROOT|/romdev|g" gcc/configargs.h
+  if grep -q "$ROOT" gcc/configargs.h; then echo "FATAL: builder path left in configargs.h" >&2; exit 1; fi
+  # gcc/'s own Makefile drops -O2 from CFLAGS/CXXFLAGS (the top-level make passes
+  # them back in); building cc1 from gcc/ directly needs them named here, or cc1
+  # is compiled at -O0 (larger and slower than the shipped -O2 build).
+  ( cd gcc && emmake make -j"$NCPU" cc1 \
+      CFLAGS="-O2 $MAP" CXXFLAGS="-O2 $MAP" \
+      CC_FOR_BUILD=gcc CXX_FOR_BUILD=g++ )
 fi
 
 # ── 3. binutils as WASM ─────────────────────────────────────────────
@@ -112,9 +131,9 @@ fi
 if [ ! -f "$ROOT/build-wasm-binutils/gas/as-new.wasm" ]; then
   cd "$ROOT"; mkdir -p build-wasm-binutils; cd build-wasm-binutils
   [ -f Makefile ] || emconfigure "$SRC_DIR/binutils-$BINUTILS_VER/configure" \
-    CFLAGS="-O2 -ffile-prefix-map=$SRC_DIR=/src" \
-    CXXFLAGS="-O2 -ffile-prefix-map=$SRC_DIR=/src" \
-    --target=$TARGET --prefix="$WASM_PREFIX/binutils-wasm" \
+    CFLAGS="-O2 $MAP" \
+    CXXFLAGS="-O2 $MAP" \
+    --target=$TARGET --prefix=/romdev \
     --host=wasm32-unknown-emscripten --build="$(gcc -dumpmachine)" \
     --disable-nls --disable-werror --disable-multilib
   # Build the support libs then the tool subdirs via the TOP makefile (all-gas /

@@ -1,0 +1,189 @@
+flycast core changes the WASM SH-4 dynarec backend (core/rec-wasm/, staged
+from patches/flycast-wasm-jit/) needs in the upstream tree.
+
+  - driver.cpp: call wasm_dynarec_init() from Sh4Recompiler::Init (the static
+    constructor in rec_wasm.cpp can be dropped by the linker when the archive
+    member is otherwise unreferenced), and skip the magic-PC / low-space cache
+    resets, which on this backend throw away every compiled module.
+  - shil_canonical.h: a CPU_GENERIC cvt_f2i_t (same semantics as ARM).
+  - ssa.cpp: no compile-time constant reads of "read-only" pages, since
+    mprotect is a no-op under emscripten.
+  - virtmem.h: the code cache is a malloc'd pointer under emscripten.
+  - posix_vmem.cpp: decline fast-vmem (emscripten has no usable mmap for the
+    512MB reservation), and hand the block manager a malloc'd buffer from
+    prepare_jit_block (both overloads) since no native code is written.
+
+These were applied by hand to the tree the shipped romdev-core-flycast was
+built from; build-flycast.sh now applies them (its own posix_vmem init()
+edit then finds the change present and skips) so a fresh checkout of the
+pinned commit reproduces that build.
+diff --git a/core/hw/sh4/dyna/driver.cpp b/core/hw/sh4/dyna/driver.cpp
+index 4e1fbf3..8c0a572 100644
+--- a/core/hw/sh4/dyna/driver.cpp
++++ b/core/hw/sh4/dyna/driver.cpp
+@@ -1,6 +1,10 @@
+ #include "types.h"
+ #include <unordered_set>
+ 
++#ifdef __EMSCRIPTEN__
++#include <emscripten.h>
++#endif
++
+ #include "hw/sh4/sh4_interpreter.h"
+ #include "hw/sh4/sh4_core.h"
+ #include "hw/sh4/sh4_interrupts.h"
+@@ -15,6 +19,10 @@
+ 
+ #if FEAT_SHREC != DYNAREC_NONE
+ 
++#if defined(__EMSCRIPTEN__) && HOST_CPU == CPU_GENERIC
++extern "C" void wasm_dynarec_init();
++#endif
++
+ constexpr u32 CODE_SIZE = 10_MB;
+ constexpr u32 TEMP_CODE_SIZE = 1_MB;
+ constexpr u32 FULL_SIZE = CODE_SIZE + TEMP_CODE_SIZE;
+@@ -158,8 +166,21 @@ static DynarecCodeEntryPtr compilePC(u32 blockcheck_failures)
+ {
+ 	const u32 pc = Sh4cntx.pc;
+ 
++#if defined(__EMSCRIPTEN__) && HOST_CPU == CPU_GENERIC
++	// WASM backend: the "magic PC" triggers (0x8c0000e0 / 0xac010000 /
++	// 0xac008300) cause a full cache flush on native JITs where reset is
++	// cheap. On our backend, a reset discards every compiled WebAssembly
++	// module and forces a multi-frame interpreter spiral to recover -
++	// measured at ~2.6k blocks / 4-5 s of wall time per reset. SMC is
++	// already handled per-block by the inline hash check in c_dispatch_loop,
++	// so the reset is redundant for correctness. Also skip the 32 KB free-
++	// space check - the WASM backend only advances codeBuffer by 4 bytes
++	// per block (dummy host_code_size marker), so pressure never hits.
++	(void)pc;
++#else
+ 	if (codeBuffer.getFreeSpace() < 32_KB || pc == 0x8c0000e0 || pc == 0xac010000 || pc == 0xac008300)
+ 		Sh4Recompiler::Instance->ResetCache();
++#endif
+ 
+ 	RuntimeBlockInfo* rbi = sh4Dynarec->allocateBlock();
+ 
+@@ -360,6 +381,12 @@ void Sh4Recompiler::Init()
+ 	verify(CodeCache != nullptr);
+ 
+ 	TempCodeCache = CodeCache + CODE_SIZE;
++#if defined(__EMSCRIPTEN__) && HOST_CPU == CPU_GENERIC
++	// Ensure WASM dynarec is initialized - the static constructor may not have
++	// run if the linker stripped the translation unit from the archive.
++	wasm_dynarec_init();
++#endif
++	verify(sh4Dynarec != nullptr);
+ 	sh4Dynarec->init(*getContext(), codeBuffer);
+ 	bm_ResetCache();
+ }
+diff --git a/core/hw/sh4/dyna/shil_canonical.h b/core/hw/sh4/dyna/shil_canonical.h
+index a1be200..3727ab8 100644
+--- a/core/hw/sh4/dyna/shil_canonical.h
++++ b/core/hw/sh4/dyna/shil_canonical.h
+@@ -747,6 +747,22 @@ u32,f1,(f32 f1),
+ 	}
+ 	return res;
+ )
++#else
++// CPU_GENERIC (Emscripten/WASM) - same behavior as ARM (NaN -> 0x80000000)
++shil_canonical
++(
++u32,f1,(f32 f1),
++	s32 res;
++	if (f1 > 2147483520.0f) {
++		res = 0x7fffffff;
++	}
++	else {
++		res = (s32)f1;
++		if (std::isnan(f1))
++			res = 0x80000000;
++	}
++	return res;
++)
+ #endif
+ 
+ shil_compile
+diff --git a/core/hw/sh4/dyna/ssa.cpp b/core/hw/sh4/dyna/ssa.cpp
+index 85c1fdf..a62439b 100644
+--- a/core/hw/sh4/dyna/ssa.cpp
++++ b/core/hw/sh4/dyna/ssa.cpp
+@@ -489,6 +489,11 @@ void SSAOptimizer::ConstPropPass()
+ 				// and if those pages are read-only, then we can directly read the memory at compile time
+ 				// and propagate the read value as a constant.
+ 				if (op.op == shop_readm  && block->read_only
++#ifdef __EMSCRIPTEN__
++						&& false  // WASM: mprotect is a no-op, so read-only pages
++						          // aren't actually protected. Compile-time reads
++						          // become stale when the page is written to.
++#endif
+ 						&& (op.rs1._imm >> 12) >= (block->vaddr >> 12)
+ 						&& (op.rs1._imm >> 12) <= ((block->vaddr + block->sh4_code_size - 1) >> 12)
+ 						&& op.size <= 4)
+diff --git a/core/linux/posix_vmem.cpp b/core/linux/posix_vmem.cpp
+index 2d42410..74cdb63 100644
+--- a/core/linux/posix_vmem.cpp
++++ b/core/linux/posix_vmem.cpp
+@@ -163,6 +163,13 @@ static size_t reserved_size;
+ // memory using a fallback (that is, regular mallocs and falling back to slow memory JIT).
+ bool init(void **vmem_base_addr, void **sh4rcb_addr, size_t ramSize)
+ {
++#if defined(__EMSCRIPTEN__)
++	// romdev/WASM: emscripten has no usable mmap for a 512MB contiguous reservation
++	// (it traps rather than returning MAP_FAILED). Decline fast-vmem so addrspace's
++	// malloc-based fallback ("nvmem DISABLED") engages - correct, just slower.
++	(void)vmem_base_addr; (void)sh4rcb_addr; (void)ramSize;
++	return false;
++#endif
+ 	// Firt let's try to allocate the shm-backed memory
+ 	vmem_fd = allocate_shared_filemem(ramSize);
+ 	if (vmem_fd < 0)
+@@ -248,6 +255,18 @@ void create_mappings(const Mapping *vmem_maps, unsigned nummaps) {
+ // Prepares the code region for JIT operations, thus marking it as RWX
+ bool prepare_jit_block(void *code_area, size_t size, void **code_area_rwx)
+ {
++#if defined(__EMSCRIPTEN__)
++	// WASM JIT: no native code execution, but we need a valid buffer for the block manager.
++	// Allocate a dummy buffer - rec_wasm doesn't write native code into it, but driver.cpp expects non-null.
++	static u8* wasmJitBuffer = nullptr;
++	if (!wasmJitBuffer)
++		wasmJitBuffer = (u8*)malloc(size);
++	if (!wasmJitBuffer)
++		return false;
++	memset(wasmJitBuffer, 0, size);
++	*code_area_rwx = wasmJitBuffer;
++	return true;
++#endif
+     // Try to map is as RWX, this fails apparently on OSX (and perhaps other systems?)
+ 	if (code_area != nullptr && region_set_exec(code_area, size))
+     {
+@@ -289,6 +308,12 @@ void release_jit_block(void *code_area, size_t size)
+ // Use two addr spaces: need to remap something twice, therefore use allocate_shared_filemem()
+ bool prepare_jit_block(void *code_area, size_t size, void **code_area_rw, ptrdiff_t *rx_offset)
+ {
++#if defined(__EMSCRIPTEN__)
++	bool rc = prepare_jit_block(code_area, size, code_area_rw);
++	if (rc && rx_offset)
++		*rx_offset = 0;
++	return rc;
++#endif
+ 	int fd = allocate_shared_filemem(size);
+ 	if (fd < 0)
+ 		return false;
+diff --git a/core/oslib/virtmem.h b/core/oslib/virtmem.h
+index 1a62db5..6572913 100644
+--- a/core/oslib/virtmem.h
++++ b/core/oslib/virtmem.h
+@@ -1,7 +1,10 @@
+ #pragma once
+ #include "types.h"
+ 
+-#if defined(_WIN32) || defined(__APPLE__)
++#if defined(__EMSCRIPTEN__)
++// Emscripten: no native code execution. Use a pointer (allocated via malloc in prepare_jit_block).
++#define DECLARE_CODE_CACHE(Name, Size) static u8 *Name;
++#elif defined(_WIN32) || defined(__APPLE__)
+ #define DECLARE_CODE_CACHE(Name, Size) static u8 *Name;
+ #elif defined(__ANDROID__)
+ #define DECLARE_CODE_CACHE(Name, Size) alignas(4096) static u8 Name[Size];

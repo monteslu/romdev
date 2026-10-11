@@ -215,6 +215,18 @@
       "platforms": [
         "pico8"
       ]
+    },
+    "flycast": {
+      "kind": "git",
+      "url": "https://github.com/flyinghead/flycast.git",
+      "ref": "master",
+      "commit": "1251a53aed36da52ddd3499152d12a85b53d8e8c",
+      "license": "GPL-2.0-or-later",
+      "patch": "scripts/patches/flycast-romdev-wasm-dynarec.patch",
+      "note": "The commit the shipped romdev-core-flycast was built from. build-flycast.sh applies the patch, its in-script edits and the WASM SH-4 backend in patches/flycast-wasm-jit/; submodules are taken at the commits this flycast commit records.",
+      "platforms": [
+        "dreamcast"
+      ]
     }
   },
   "toolchains": {

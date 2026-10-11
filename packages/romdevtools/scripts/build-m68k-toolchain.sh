@@ -45,7 +45,7 @@ TARGET=m68k-elf
 ROOT="$BUILD_DIR/m68k-toolchain"
 SRC_DIR="$ROOT/src"
 PREFIX="$ROOT/install"
-NCPU="$(nproc)"
+NCPU="${JOBS:-$(nproc)}"
 PATCH_DIR="$(cd "$(dirname "$0")/patches" && pwd)"
 
 mkdir -p "$SRC_DIR" "$PREFIX"

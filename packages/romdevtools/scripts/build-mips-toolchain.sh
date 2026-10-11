@@ -30,7 +30,7 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ROOT="${ROMDEV_BUILD_DIR:-$PROJECT_DIR/build}/mips-toolchain"
 SRC_DIR="$ROOT/src"
 PREFIX="$ROOT/install"
-NCPU="$(nproc)"
+NCPU="${JOBS:-$(nproc)}"
 mkdir -p "$SRC_DIR" "$PREFIX"
 cd "$SRC_DIR"
 
@@ -99,9 +99,13 @@ if [ ! -f "$PREFIX/$TARGET/lib/libc.a" ]; then
 fi
 
 # ── 4. libgcc (needs newlib headers) ────────────────────────────────
+# libgcc keeps its DWARF (the configure default -g -O2), and DWARF records the
+# source, build and install directories; map the whole tree to /romdev so the
+# shipped libgcc.a carries no builder path.
+LIBGCC_TARGET_CFLAGS="-g -O2 -ffile-prefix-map=$ROOT=/romdev"
 if [ ! -f "$PREFIX/lib/gcc/$TARGET/$GCC_VER/libgcc.a" ]; then
   cd build-gcc
-  make -j"$NCPU" all-target-libgcc; make install-target-libgcc
+  make -j"$NCPU" all-target-libgcc CFLAGS_FOR_TARGET="$LIBGCC_TARGET_CFLAGS"; make install-target-libgcc
   cd "$SRC_DIR"
 fi
 
