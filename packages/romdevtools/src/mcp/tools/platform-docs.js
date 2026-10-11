@@ -47,10 +47,22 @@ const EXTRA_DOCS = {
 
 // Cross-platform GUIDES (not tied to one platform). Surfaced through the same
 // getPlatformDoc tool under a pseudo-platform id so agents have one way to read
-// docs. e.g. getPlatformDoc({platform:'romhacking', name:'playbook'}).
+// docs. e.g. platform({op:'doc', platform:'romhacking', name:'playbook'}) or
+// platform({op:'doc', platform:'guide', name:'recompile'}).
 const GUIDES = {
   romhacking: { playbook: "_guides/ROMHACKING_PLAYBOOK.md" },
+  guide: {
+    recompile: "_guides/RECOMPILE.md",
+    debugging: "_guides/DEBUGGING.md",
+    assets: "_guides/ASSETS.md",
+    music: "_guides/MUSIC_SOURCING.md",
+    wasmcart: "_guides/WASMCART.md",
+    bezels: "_guides/ACTIVE_BEZELS.md",
+    sessions: "_guides/SESSIONS.md",
+    playbook: "_guides/ROMHACKING_PLAYBOOK.md",
+  },
 };
+GUIDES.guides = GUIDES.guide;
 
 /**
  * For a single platform, list which docs exist on disk.
