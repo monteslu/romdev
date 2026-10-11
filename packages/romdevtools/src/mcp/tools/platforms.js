@@ -174,7 +174,8 @@ export function registerPlatformTools(server, z) {
     "'toolchains': the bundled homebrew toolchains (all Tier-1 = bundled WASM, no install). Pass `id` to confirm a " +
     "specific toolchain's install status (everything is bundled, so it is always installed).\n" +
     "'docs': the doc names available for a platform. 'doc': the full markdown of one (`name`: mental_model / " +
-    "troubleshooting / upstream_sources; `platform:'romhacking'` + `name:'playbook'` for the RE decision tree). " +
+    "troubleshooting / upstream_sources; `platform:'romhacking'` + `name:'playbook'` for the RE decision tree; " +
+    "`platform:'guide'` for the cross-platform guides: recompile, debugging, assets, music, wasmcart, bezels, sessions). " +
     "Read MENTAL_MODEL before writing code, and the romhacking playbook before a hack.",
     {
       op: z.enum(["list", "capabilities", "resolve", "toolchains", "docs", "doc"]).describe("list=platforms (pass `platform` to get just ONE, `slim:true` to drop the verbose notes); capabilities=per-platform op support matrix; resolve=core + toolchain artifact paths; toolchains; docs=a platform's doc names; doc=read one doc."),

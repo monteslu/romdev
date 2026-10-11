@@ -19,8 +19,8 @@ import { toolJsonSchema } from "./tool-registry.js";
 export const mcpPreamble = [
   "romdev: homebrew retro game development + reverse-engineering for coding agents - 19 platforms (NES through GBA, C64, GameTank, sync32, + the 3D consoles N64/PlayStation/Dreamcast).",
   "HARD RULE: NEVER install a host compiler or emulator (no clang/gcc/Xcode/devkitPro/brew/apt, no downloaded emulator). romdev BUNDLES every compiler (cc65, sdcc, gcc, arm/m68k/mips/sh-gcc, tcc, wla, rgbds, vasm, asar, dasm) + every emulator core as WASM and runs them through these tools - build({output:'rom'|'run'}) compiles, loadMedia+frame runs. If you're about to install or call a host toolchain, STOP and use the romdev build tool instead; an install kicking off is a DEFECT to report.",
-  "All 38 tools register at session init - call any by name directly, no loading step. Each is a domain VERB with an operation axis: memory({op}), build({output}), breakpoint({on}), cpu({op}), sprites({op}), tiles({op}), disasm({target}), romPatch({op}), ...",
-  "RE engine (every platform except sync32): disasm({target:'functions'}) auto-detects functions, disasm({target:'cfg'}) graphs control flow, disasm({target:'xrefs'}) finds cross-references, disasm({target:'decompile'}) emits Ghidra C pseudocode, symbols({op:'analyze'}) maps a ROM's structure in one call.",
+  "All ~32 tools register at session init - call any by name directly, no loading step. Each is a domain VERB with an operation axis: memory({op}), build({output}), breakpoint({on}), cpu({op}), sprites({op}), tiles({op}), disasm({target}), romPatch({op}), ...",
+  "RE engine (all 18 platforms): disasm({target:'functions'}) auto-detects functions, disasm({target:'cfg'}) graphs control flow, disasm({target:'xrefs'}) finds cross-references, disasm({target:'decompile'}) emits Ghidra C pseudocode, symbols({op:'analyze'}) maps a ROM's structure in one call.",
   "catalog({op:'categories'}) maps the tools by purpose (a guide, not a gate); catalog({op:'status'}) is a session re-orient.",
 ].join("\n");
 
@@ -29,7 +29,7 @@ export const mcpPreamble = [
  */
 export const skillPreamble = [
   "romdev gives you homebrew retro game development + reverse-engineering for 19 platforms (NES, SNES, Game Boy, Genesis, GBA, Atari, C64, GameTank, sync32, the 3D consoles N64/PlayStation/Dreamcast, and more) - build, run, screenshot, inspect, patch, disassemble, convert assets, drive emulators.",
-  "It also ships a full RE analysis engine (Rizin + Ghidra, every platform except sync32): control-flow graphs, cross-references, auto-detected functions, a one-shot structural map, and a C-pseudocode decompiler - `disasm({target:'cfg'|'xrefs'|'functions'|'decompile'})` and `symbols({op:'analyze'})`.",
+  "It also ships a full RE analysis engine (Rizin + Ghidra, all 18 platforms): control-flow graphs, cross-references, auto-detected functions, a one-shot structural map, and a C-pseudocode decompiler - `disasm({target:'cfg'|'xrefs'|'functions'|'decompile'})` and `symbols({op:'analyze'})`.",
   "",
   "## HARD RULE: never install a compiler or emulator - romdev already bundles every one",
   "Every compiler/assembler/linker (cc65, sdcc, gcc, arm/m68k/mips/sh-gcc, tcc, wla, rgbds, vasm, asar, dasm) and every emulator core ships as WASM INSIDE romdev and runs in-process through these tools - `build({output:'rom'|'run'})` compiles, `loadMedia`+`frame` runs. You do NOT need, and must NOT install, a host `clang`/`gcc`/Xcode/Command-Line-Tools/devkitPro/`brew`/`apt` compiler or any emulator to build or run a ROM here. If you catch yourself about to install or invoke a host compiler/emulator - STOP. That's never the move: use the romdev `build` tool. (`platform({op:'toolchains'})` lists what's bundled for each platform.) A compiler/emulator install kicking off while using romdev is a DEFECT to report, not a step to take.",

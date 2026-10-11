@@ -438,7 +438,7 @@ export function registerCheatTools(server, z, sessionKey) {
       enabled: z.boolean().default(true).describe("op=apply: false disables the slot instead of enabling."),
       slot: z.number().int().min(0).optional().describe("op=remove: the active-cheat slot to disable (from apply's `slot` / active[].index). Provide slot OR code."),
       // make / search / lookup share `platform`
-      platform: z.enum([...MAKE_CHEAT_PLATFORMS]).optional().describe("op=lookup: override platform detection. op=search: OPTIONAL - omit to search ALL platforms (each match returns its own `platform`); pass one only to scope the search. op=make: REQUIRED - the target platform (all 14 tier-1)."),
+      platform: z.enum([...MAKE_CHEAT_PLATFORMS]).optional().describe("op=lookup: override platform detection. op=search: OPTIONAL - omit to search ALL platforms (each match returns its own `platform`); pass one only to scope the search. op=make: REQUIRED - the target platform (all 15 classic platforms)."),
       address: z.number().int().min(0).optional().describe("op=make: address to cheat (RAM addr, or the ROM addr to patch)."),
       value: z.number().int().min(0).max(255).optional().describe("op=make: replacement byte (0-255). Provide value OR values."),
       values: z.array(z.number().int().min(0).max(255)).min(1).max(64).optional().describe("op=make: batch - a code per value at the same address. Returns variants[]."),
