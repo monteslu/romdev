@@ -29,11 +29,14 @@ const { shutdown } = await import("../src/toolchains/_worker/pool.js");
 after(async () => { await shutdown(); if (!process.env.KEEP_TMP) fs.rmSync(TMP, { recursive: true, force: true }); });
 
 function dir(name) { const d = path.join(TMP, name); fs.mkdirSync(d, { recursive: true }); return d; }
+// The project's Go packages, which make its <project>-disk / <project>-assets names map to the shipped tools.
+function projectTools(d, project) { for (const t of ["disk", "assets"]) { fs.mkdirSync(path.join(d, "tools", `${project}-${t}`), { recursive: true }); fs.writeFileSync(path.join(d, "tools", `${project}-${t}`, "go.mod"), "module x\n"); } }
 const has = (f) => { try { f(); return true; } catch { return false; } };
 const sha1 = (b) => createHash("sha1").update(b).digest("hex");
 
 test("classify: the project's wrapper and scripts are recognised by content", () => {
   const d = dir("classify");
+  projectTools(d, "sotn");
   fs.writeFileSync(path.join(d, "sotn.sh"), '#!/usr/bin/env sh\ngo run ./tools/sotn-assets "$@"');
   assert.deepEqual(classifyPsxSetup(["./sotn.sh", "extract-assets", "config/assets.us.yaml"], d), { kind: "go-tool", tool: "psx-assets", args: ["extract-assets", "config/assets.us.yaml"] });
   assert.equal(classifyPsxSetup(["go", "run", "./tools/sotn-assets", "build-assets", "x"], d).tool, "psx-assets");
@@ -41,7 +44,9 @@ test("classify: the project's wrapper and scripts are recognised by content", ()
   assert.equal(classifyPsxSetup(["go", "build", "-C", "tools/sotn-disk", "-o", "../../bin/sotn-disk", "."], d).kind, "go-build-shipped");
   // a different wrapper is a different program
   fs.writeFileSync(path.join(d, "sotn.sh"), "#!/bin/sh\nexec something-else\n");
-  assert.equal(classifyPsxSetup(["./sotn.sh", "x"], d).kind, "unsupported");
+  assert.notEqual(classifyPsxSetup(["./sotn.sh", "x"], d)?.kind, "go-tool");
+  // a name of the project shape without the project's Go package is not a shipped tool
+  assert.equal(classifyPsxSetup(["bin/other-disk", "x"], d), null);
   // a script whose bytes differ from the ported one is not assumed to match it
   fs.mkdirSync(path.join(d, "tools"), { recursive: true });
   fs.writeFileSync(path.join(d, "tools/gfxstage.py"), "print('not it')\n");
@@ -138,6 +143,7 @@ test("psx-str (WASM) in a pipeline encodes _S/_S2 strings like its own unit test
 const haveGo = has(() => goToolWasm("psx-disk")) && has(() => goToolWasm("psx-assets"));
 test("Go tools (wasip1) run under node:wasi in the project directory", { skip: !haveGo && "Go tools not built (scripts/build-decomp-go-tools.sh)" }, async () => {
   const d = dir("go");
+  projectTools(d, "sotn");
   const r = await runRecipeLine("bin/sotn-disk list missing.cue", { cwd: d, tmpRoot: d });
   assert.notEqual(r.code, 0); // a missing image is an error, raised from inside the WASM tool
   assert.match(r.log, /missing\.cue/);

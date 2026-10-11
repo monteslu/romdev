@@ -45,8 +45,8 @@ export const DECOMP_GCC = {
 // through it) is built from the pinned project tree the same way and ships as
 // psx-str; recipes name it by the project's binary name, mapped below.
 export const DECOMP_TOOLS = ["slinky-cli", "pigment64", "crunch64", "raw-deflate", "psx-str"];
-// Project binary names for shipped decomp tools.
-const PROJECT_DECOMP_TOOLS = { sotn_str: "psx-str" };
+// The PS1 project names its string encoder <project>_str.
+const PROJECT_STR_RE = /^[a-z0-9]+_str$/;
 
 function packageDir(pkg) {
   try {
@@ -171,7 +171,7 @@ export function toolName(cmd) {
   if (bin && bin[1] && /mips/.test(bin[1])) return { kind: "binutils", tool: bin[2], prefix: bin[1] };
   if (base === "armips") return { kind: "armips" };
   if (DECOMP_TOOLS.includes(base)) return { kind: "decomp-tool", tool: base };
-  if (PROJECT_DECOMP_TOOLS[base]) return { kind: "decomp-tool", tool: PROJECT_DECOMP_TOOLS[base] };
+  if (PROJECT_STR_RE.test(base)) return { kind: "decomp-tool", tool: "psx-str" };
   const fam = decompGccFamily(cmd);
   if (fam) return { kind: "decomp-gcc", family: fam, program: DECOMP_GCC[fam].aliases[base] ?? base };
   const ido = /(?:^|[/_-])(?:ido)?[/_-]?(5\.3|7\.1)(?:[/_]|$)/i.exec(cmd);
