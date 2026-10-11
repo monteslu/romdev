@@ -7,9 +7,8 @@
 ; isn't).
 ;
 ; Fields below are positional and must be the exact byte counts shown.
-; vasm68k pads strings to their declared length with spaces if you use
-; .ascii "..." inside a fixed area, but it's safer to space-pad manually
-; to avoid subtle off-by-ones.
+; dc.b "..." emits exactly the characters you write, so space-pad every
+; string to its field width by hand.
 
   org $00000000
 
@@ -50,9 +49,9 @@ vector_table:
 ;   $1D0-$1EF  notes      (32)    ← NOT 40
 ;   $1F0-$1FF  region     (16)
 ;
-; A label at _header_end (= $200) below would catch any miscount via
-; vasm's section-overlap detection (gives a more readable error than
-; "instruction at $1F8 collides with code at $200").
+; Each org starts a new block, and the build refuses blocks that overlap
+; ("org blocks overlap"), so a header that runs past $200 into the code
+; block is caught at build time.
   org $00000100
   dc.b "SEGA MEGA DRIVE "                          ; $100 system name (16)
   dc.b "(C)YOU 2026.JAN "                          ; $110 copyright (16)

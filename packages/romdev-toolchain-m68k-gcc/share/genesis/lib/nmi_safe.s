@@ -10,7 +10,7 @@
 ;
 ; Critical gotchas this skeleton handles:
 ;
-; 1. **The vector table at $00-$0FF points at handlers.** vasm68k will
+; 1. **The vector table at $00-$0FF points at handlers.** The assembler will
 ;    happily build a ROM with random garbage at vector $78 (VINT vector)
 ;    if you forget; the CPU will then jump to garbage on the first VBlank.
 ;    See header.s for the vector table.

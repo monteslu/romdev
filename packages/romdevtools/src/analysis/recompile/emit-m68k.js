@@ -1,4 +1,4 @@
-// IR → m68k (Genesis / Mega Drive, vasm68k syntax) emitter. This is the proof
+// IR → m68k (Genesis / Mega Drive, Motorola syntax) emitter. This is the proof
 // that the recompile engine is GENERIC: a 6502-sourced IR targets the 68000 here
 // through the SAME pipeline that targets the 65816 - no second bespoke recompiler.
 //

@@ -12,7 +12,7 @@ That starts the server on `http://127.0.0.1:7331`. It works the same on Linux, W
 
 romdev exposes 38 tools over MCP and plain HTTP. Each tool is a verb with an operation axis, such as `memory({op:'search'})` or `disasm({target:'cfg'})`.
 
-- **Building.** Per-platform toolchains (cc65, SDCC, RGBDS, asar, vasm, gcc for m68k/ARM/MIPS/SH, SGDK, PVSnesLib, libtonc and more) compiled to WebAssembly. Fork a working example game with `examples({op:'fork'})`, then `build({output:'run'})` builds, loads, runs and screenshots it in one call. Output ROMs get the checksums and headers real hardware needs.
+- **Building.** Per-platform toolchains (cc65, SDCC, RGBDS, asar, gcc and binutils for m68k/ARM/MIPS/SH, SGDK, PVSnesLib, libtonc and more) compiled to WebAssembly. Fork a working example game with `examples({op:'fork'})`, then `build({output:'run'})` builds, loads, runs and screenshots it in one call. Output ROMs get the checksums and headers real hardware needs.
 - **Assets.** `encodeArt` turns PNGs into tiles, tilemaps and palettes; `importArt` reads Aseprite/LibreSprite, Tiled, GIF and TexturePacker files; `sprites({op:'capture'})` lifts a multi-sprite character from a running game; `encodeAudio` produces SNES BRR, Genesis XGM2, GBA maxmod soundbanks, NES FamiTone2 data and note tables for the other sound chips.
 - **Running and inspecting.** libretro emulator cores as WebAssembly: step frames, take screenshots, drive input, read and write memory, inspect sprites, palettes, tilemaps, CPU and sound-chip state, save and restore states. `frame({op:'verify'})` reports whether a game is rendering without needing to look at the picture.
 - **Reverse engineering.** Value search, write/read/execution breakpoints, single-stepping, coverage traces, byte-exact rebuildable disassembly (`disasm({target:'project'})` and `build({output:'reassemble'})`), a bundled cheat database as a labeled RAM map, ROM patching with re-injection of compressed assets, custom-font text tools, and a [romhacking playbook](packages/romdevtools/src/platforms/_guides/ROMHACKING_PLAYBOOK.md).
@@ -44,7 +44,7 @@ The tools work just as well called by hand or from scripts.
 | Master System | 1985 | C / Z80 asm (SDCC) | Easy | Medium | Simple Z80 and VDP; near twin of the Game Gear. |
 | Atari 7800 | 1986 | C / 6502 asm (cc65) | Hard | Hard | MARIA display-list graphics with sparse documentation. |
 | PC Engine / TurboGrafx-16 | 1987 | C / HuC6280 asm (cc65) | Medium | - | romdev ships a direct-register helper library; HuCards need no BIOS. |
-| Genesis / Mega Drive | 1988 | C (SGDK) / 68000 asm (vasm) | Medium | Easy | Flat 68000 addressing and no bank switching make it the easiest to hack. |
+| Genesis / Mega Drive | 1988 | C (SGDK) / 68000 asm (Motorola syntax, GNU as) | Medium | Easy | Flat 68000 addressing and no bank switching make it the easiest to hack. |
 | Game Boy | 1989 | C / SM83 asm (SDCC, RGBDS) | Easy | Easy | The recommended starting point. |
 | Atari Lynx | 1989 | C / 6502 asm (cc65) | Medium | - | Suzy/Mikey sprite engine with few references. |
 | Game Gear | 1990 | C / Z80 asm (SDCC) | Easy | Medium | Master System VDP with a smaller window and 12-bit colour. |
@@ -73,7 +73,7 @@ Every classic platform ships starter projects, a sound API, a music demo on that
 | NES | fceumm | cc65 | FamiTone2 |
 | Game Boy / Color | gambatte | SDCC, RGBDS | hUGEDriver |
 | SNES | snes9x (bsnes as an alternate) | PVSnesLib, asar | SPC700 driver |
-| Genesis | genesis_plus_gx | SGDK (m68k gcc), vasm | XGM2 |
+| Genesis | genesis_plus_gx | SGDK (m68k gcc), 68000 asm (m68k GNU as) | XGM2 |
 | Master System / Game Gear | genesis_plus_gx | SDCC | PSG tracker |
 | C64 | VICE x64 | cc65 | SID sequencer |
 | GBA | mGBA | libtonc, libgba (arm gcc) | maxmod |
@@ -103,7 +103,7 @@ The package you install is `romdevtools`. It depends on `romdev-*` packages that
 | Emulator cores (15) | `romdev-core-fceumm`, `-gambatte`, `-gpgx`, `-vice`, `-handy`, `-prosystem`, `-geargrafx`, `-bluemsx`, `-gametank`, `-bsnes`, `-fake08`, `-s32core`, `-parallel-n64`, `-beetle-psx-hw`, `-flycast` |
 | Core runtime (2) | [`romdev-core-host`](./packages/romdev-core-host) (the libretro host, usable without the server) and [`romdev-core-runner`](./packages/romdev-core-runner) (an SDL window over it) |
 | Platform bundles (4) | `romdev-platform-snes`, `-gba`, `-atari2600`, `-sync32`: a core and compiler used by no other platform |
-| Toolchains (8) | `romdev-toolchain-cc65`, `-sdcc`, `-rgbds`, `-vasm`, `-m68k-gcc`, `-mips-gcc` (also armips and mips-linux-gnu binutils), `-sh-gcc`, `-decomp-gcc` (KMC, EGCS and PS1 gcc for decomp projects) |
+| Toolchains (7) | `romdev-toolchain-cc65`, `-sdcc`, `-rgbds`, `-m68k-gcc`, `-mips-gcc` (also armips and mips-linux-gnu binutils), `-sh-gcc`, `-decomp-gcc` (KMC, EGCS and PS1 gcc for decomp projects) |
 | Analysis (2) | `romdev-analysis` (Rizin), `romdev-analysis-decompiler` (Ghidra decompiler and SLEIGH specs) |
 | Decomp tools (6) | `romdev-splat`, `romdev-spimdisasm`, `romdev-rabbitizer`, `romdev-m2c`, `romdev-permuter`, `romdev-pycparser`: JavaScript and WebAssembly ports of the community decomp tools |
 | Audio (4) | `romdev-famitone`, `romdev-maxmod`, `romdev-xgm2`, `romdev-audio-resampler` |

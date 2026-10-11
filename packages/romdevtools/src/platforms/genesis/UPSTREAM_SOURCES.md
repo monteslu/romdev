@@ -15,7 +15,7 @@ Trust hierarchy:
    |---|---|
    | SGDK | https://github.com/Stephane-D/SGDK |
    | m68k-elf-gcc / binutils / newlib (bundled WASM, build instructions only) | https://gcc.gnu.org/ |
-   | vasm (the assembler romdev ships as the alternative path) | http://sun.hasenbraten.de/vasm/ |
+   | GNU as (binutils), the assembler for the 68000 assembly path | https://sourceware.org/binutils/ |
    | genesis_plus_gx libretro core | https://github.com/libretro/Genesis-Plus-GX |
 
 ## Genesis hardware docs

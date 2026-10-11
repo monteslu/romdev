@@ -63,20 +63,31 @@ test("gcc/cc1 unused-variable warning (needs -Wall) → structured", () => {
   assert.ok(w, "gcc unused-var warning not parsed: " + JSON.stringify(iss));
 });
 
-test("vasm error → structured, even with NO `--- stage ---` marker (genesis-asm path)", () => {
-  // vasm output has no stage marker, so the whole log hits the unknown-stage
-  // fallback - which used to skip parseVasm and swallow the error.
-  const log = 'error 2 in line 1 of "/work/main.s": unknown mnemonic <bogus>\n>  bogus d0,d1';
+test("Genesis asm (m68k-as) error → structured file/line", () => {
+  // The exact shape runM68kAsm writes: a stage marker, then diagnostics
+  // already mapped back onto the original source file and line.
+  const log = "--- m68k-as ---\nmain.s:12: error: undefined symbol plyer_x\n" +
+    "seam.asm:3: warning: short branch to the following instruction turned into a nop (in macro WAIT called from main.s:40)";
   const iss = parseBuildLog(log);
-  const e = find(iss, (i) => i.severity === "error" && i.stage === "vasm");
-  assert.ok(e && e.line === 1 && /unknown mnemonic/.test(e.message), JSON.stringify(iss));
+  const e = find(iss, (i) => i.severity === "error" && i.stage === "m68k-as");
+  assert.ok(e && e.file === "main.s" && e.line === 12 && /undefined symbol plyer_x/.test(e.message), JSON.stringify(iss));
+  const w = find(iss, (i) => i.severity === "warning" && i.file === "seam.asm" && i.line === 3);
+  assert.ok(w, JSON.stringify(iss));
+  assert.equal(iss.length, 2, "each diagnostic reported once: " + JSON.stringify(iss));
 });
 
-test("vasm `fatal error ... could not open <x.bin>` (missing incbin asset) → structured", () => {
-  const log = 'fatal error 13 in line 1 of "/work/main.s": could not open <art.bin> for input\naborting...';
+test("Genesis asm missing incbin asset → structured (the #1 agent mistake)", () => {
+  const log = "--- m68k-as ---\nmain.s:1: error: could not open <art.bin> for input (pass it in binaryIncludes)";
   const iss = parseBuildLog(log);
   const e = find(iss, (i) => i.severity === "error" && /could not open <art\.bin>/.test(i.message));
-  assert.ok(e, "missing-incbin (the #1 agent mistake) not surfaced: " + JSON.stringify(iss));
+  assert.ok(e && e.line === 1, "missing-incbin not surfaced: " + JSON.stringify(iss));
+});
+
+test("Genesis asm link error without a line (overlapping org blocks) → structured", () => {
+  const log = "--- m68k-as ---\nerror: org blocks overlap: $0-$1ff and $100-$10f (an org block ran past the start of the next one)";
+  const iss = parseBuildLog(log);
+  const e = find(iss, (i) => i.severity === "error" && /org blocks overlap/.test(i.message));
+  assert.ok(e, JSON.stringify(iss));
 });
 
 test("dasm assembler error → structured (dasm's `file (line): error:` format)", () => {

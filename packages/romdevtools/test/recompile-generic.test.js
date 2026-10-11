@@ -1,7 +1,7 @@
 // Generic recompile engine (analysis/recompile/) - the source/target-agnostic
 // port engine. Proves the IR pipeline targets BOTH 65816 (SNES, 1:1 emulation
 // mode) and m68k (Genesis, real 6502→68000 logic translation) through the SAME
-// lift→IR→emit path, and that the NES→Genesis logic port BUILDS (vasm68k) and
+// lift→IR→emit path, and that the NES→Genesis logic port BUILDS (m68k-asm) and
 // BOOTS (gpgx) with the translated logic actually executing.
 
 import { test } from "node:test";
@@ -11,7 +11,7 @@ import { recompile, supportedPairs } from "../src/analysis/recompile/index.js";
 import { lift6502 } from "../src/analysis/recompile/lift-6502.js";
 import { IR } from "../src/analysis/recompile/ir.js";
 import { runAsar } from "../src/toolchains/asar/asar.js";
-import { runVasm68k } from "../src/toolchains/vasm68k/vasm68k.js";
+import { runM68kAsm } from "../src/toolchains/m68k-asm/m68k-asm.js";
 import { resolveCore } from "../src/cores/registry.js";
 import { LibretroHost } from "romdev-core-host/index.js";
 
@@ -75,11 +75,11 @@ test("e2e: NES→SNES builds with asar", { timeout: 120000 }, async () => {
   assert.ok(asar.binary && asar.binary.length > 0);
 });
 
-test("e2e: NES→Genesis builds (vasm68k) AND boots (gpgx) with the logic executing", { timeout: 180000 }, async () => {
+test("e2e: NES→Genesis builds (m68k-asm) AND boots (gpgx) with the logic executing", { timeout: 180000 }, async () => {
   const r = recompile(SAMPLE, { source: "nes", target: "genesis" });
-  const vasm = await runVasm68k({ source: r.mainAsm, includes: { [r.seamFile]: r.seamAsm } });
-  assert.equal(vasm.exitCode, 0, `vasm68k failed: exit ${vasm.exitCode}`);
-  assert.ok(vasm.binary && vasm.binary.length > 0, "produced a Genesis ROM image");
+  const asm = await runM68kAsm({ source: r.mainAsm, includes: { [r.seamFile]: r.seamAsm } });
+  assert.equal(asm.exitCode, 0, `m68k-asm failed: ${asm.log}`);
+  assert.ok(asm.binary && asm.binary.length > 0, "produced a Genesis ROM image");
 
   // Boot it and prove the TRANSLATED logic ran: the 6502 `sta $0010`/`sta $0011`
   // (now `move.b d0,($FF0010/$FF0011).l`) must have written $42/$99 into the
@@ -87,7 +87,7 @@ test("e2e: NES→Genesis builds (vasm68k) AND boots (gpgx) with the logic execut
   const core = resolveCore("genesis");
   const host = new LibretroHost();
   await host.loadCore(core.jsPath, core.wasmPath);
-  await host.loadMedia({ platform: "genesis", bytes: new Uint8Array(vasm.binary), virtualName: "/rom.bin" });
+  await host.loadMedia({ platform: "genesis", bytes: new Uint8Array(asm.binary), virtualName: "/rom.bin" });
   host.stepFrames(10);
   const ram = host.readMemory("system_ram", 0x10, 2);
   assert.equal(ram[0], 0x42, "translated `sta $0010` wrote $42 to Genesis work RAM");

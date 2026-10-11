@@ -1820,9 +1820,9 @@ TEMPLATES.genesis = {
       { src: "lib/vdp_init.s", dst: "vdp_init.s" },
       { src: "lib/vblank_wait.s", dst: "vblank_wait.s" },
     ],
-    lang: "68k assembly (vasm68k)",
+    lang: "68k assembly (Motorola syntax, m68k-elf-as)",
     ext: ".bin",
-    describe: "Raw 68k Genesis starter (vasm68k): header + VDP init + vblank wait. Use when you need cycle-accurate control (raster splits, mid-frame DMA). For most game work prefer template:\"default\" (SGDK C).",
+    describe: "Raw 68k Genesis starter (Motorola-syntax assembly): header + VDP init + vblank wait. Use when you need cycle-accurate control (raster splits, mid-frame DMA). For most game work prefer template:\"default\" (SGDK C).",
   },
   sgdk_hello: {
     main: "templates/sgdk_hello.c",

@@ -7,7 +7,7 @@
 # bit-reproducible across emcc versions, so a bump is a real change.
 #
 # Covers the "light" builds: all emulator cores + the cc65/sdcc/asar/dasm/
-# vasm/rgbds toolchains (emcc + a Makefile/cmake). The heavy gcc-family
+# rgbds toolchains (emcc + a Makefile/cmake). The heavy gcc-family
 # cross-toolchains (arm-gcc for GBA, m68k-gcc for Genesis-C) need a native
 # cross-gcc bootstrap and are NOT covered here yet - follow-up image.
 FROM emscripten/emsdk:4.0.18

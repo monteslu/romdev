@@ -4,7 +4,8 @@
 import { runDasm } from "./dasm/dasm.js";
 import { buildC, buildAsm } from "./cc65/cc65.js";
 import { runAsar } from "./asar/asar.js";
-import { runVasm68k } from "./vasm68k/vasm68k.js";
+import { runM68kAsm } from "./m68k-asm/m68k-asm.js";
+import { genesisAsmPreflight } from "./m68k-asm/genesis-preflight.js";
 import { finalizeGenesisRom } from "romdev-toolchain-m68k-gcc";
 import { buildGB, runRgbfix } from "./rgbds/rgbds.js";
 import { buildZ80C, SDCC_PORTS } from "./sdcc/sdcc.js";
@@ -85,7 +86,7 @@ const LANGUAGE_TOOLCHAIN = {
     c:   { toolchain: "tcc816+wladx", available: true, note: "C for SNES via tcc-65816 + wla-65816 + wlalink. The PVSnesLib runtime IS bundled (built from source) and auto-linked - #include <snes.h> gives you consoleDrawText, setMode, oamSet, WaitForVBlank, etc. out of the box. `examples({op:'fork'})` gives you a complete working PVSnesLib C project. Pass options.pvsneslib:false for the bare-main minimum-viable path." },
   },
   genesis: {
-    asm: { toolchain: "vasm68k",      available: true },
+    asm: { toolchain: "m68k-elf-as",  available: true, note: "68k assembly in Motorola syntax (org, dc.b/dc.w/dc.l, equ, rept, macro, .local labels), assembled by GNU as from the m68k-elf toolchain through romdev's Motorola-syntax front end." },
     c:   { toolchain: "m68k-elf-gcc", available: true, note: "C for Genesis via gcc 14.2.0 + binutils + newlib, all compiled to WASM. The SGDK runtime IS bundled (built from source) and auto-linked - sprite engine, VDP, controller, PSG/Z80 sound, resource helpers all work; #include <genesis.h>. `examples({op:'fork'})` gives you a complete working SGDK C project (the recommended path). Pass options.sgdk:false for the bare-gcc minimum-viable path." },
   },
   gba: {
@@ -319,7 +320,7 @@ function finalizeSnesRom(bin) {
  * IMPROVEMENT, never a behavior change for inputs that already worked.
  *
  * This fixes the genesis foot-gun: `runSource({platform:"genesis", source:
- * cCode})` with no `language` used to assemble C as 68k via vasm68k; the C
+ * cCode})` with no `language` used to assemble C as 68k; the C
  * content tell now routes it to m68k-elf-gcc + SGDK (the advertised default).
  * Only relevant for platforms with BOTH a C and an asm toolchain producing
  * different binaries (genesis, gba, gb/gbc, snes); cc65/sdcc platforms route
@@ -362,7 +363,7 @@ function resolveEffectiveLanguage(args) {
  * Heuristic "is this C source?" for error messaging only (not dispatch). Looser
  * than the dispatch sniff on purpose: here we WANT to catch a C file that ended
  * up at an assembler so we can tell the agent to pass language:"c". Used to
- * annotate a failed vasm68k/asm build with the real fix.
+ * annotate a failed assembly build with the real fix.
  * @param {string} [src]
  */
 function looksLikeCSource(src) {
@@ -676,61 +677,64 @@ export async function buildForPlatform(args) {
       };
     }
 
-    // Default (language:"asm" or undefined): vasm68k path.
-    // vasm68k is single-source. Accept either `source` (preferred) or
-    // `sources` (multi-file shortcut) - when given the latter, pick a
-    // canonical entry-point and write the rest into includes so the
-    // entry can `incsrc "other.s"` them.
-    //
-    // Without this resolution, passing `sources` left args.source as
-    // undefined, which crashed Emscripten with "Unsupported data type"
-    // when MEMFS.writeFile got handed undefined.
+    // Default (language:"asm" or undefined): Motorola-syntax 68k assembly,
+    // assembled by GNU as (m68k-asm). Single entry source: accept either
+    // `source` (preferred) or `sources` (multi-file shortcut) - given the
+    // latter, pick a canonical entry point and pass the rest as includes so
+    // the entry can `include "other.s"` them.
     let source = args.source;
+    let mainName = args.sourceName && /\.(s|asm|68k|i|inc)$/i.test(args.sourceName) ? args.sourceName : "main.s";
     let extraIncludes = {};
     if (!source && args.sources) {
       const entries = Object.entries(args.sources);
-      if (entries.length === 0) throw new Error("vasm68k: sources is empty");
+      if (entries.length === 0) throw new Error("genesis asm: sources is empty");
       // Pick main.s if present, else first key.
       const mainKey = args.sources["main.s"] != null ? "main.s" : entries[0][0];
       source = args.sources[mainKey];
-      // Stage the others as text includes so the agent can `incsrc` them.
+      mainName = mainKey;
       for (const [name, content] of entries) {
         if (name !== mainKey) extraIncludes[name] = content;
       }
     }
     if (!source) {
-      throw new Error("vasm68k requires `source` or `sources` with at least one entry");
+      throw new Error("genesis asm requires `source` or `sources` with at least one entry");
     }
-    const r = await runVasm68k({
+    const r = await runM68kAsm({
       source,
+      mainName,
       includes: { ...(args.includes ?? {}), ...extraIncludes },
       binaryIncludes: args.binaryIncludes,
       options: args.options,
     });
-    const vasmOk = r.exitCode === 0 && r.binary !== null;
-    // If vasm68k FAILED on what is obviously C source, say so - don't let the
-    // agent read "missing reset vector / identifier expected" and conclude
+    const asmOk = r.exitCode === 0 && r.binary !== null;
+    // Preflight lint (warnings only): a missing vector table / SEGA string
+    // assembles fine and then does not boot.
+    const preflight = genesisAsmPreflight(source);
+    let log = (preflight ? preflight + "\n" : "") + r.log;
+    // If the assembler FAILED on what is obviously C source, say so - don't let
+    // the agent read "missing reset vector / bad expression" and conclude
     // "Genesis wants hand-written asm." (Belt-and-suspenders: the language
     // resolver above already routes C to gcc; this only fires if someone forced
     // language:"asm" on a C file, or an exotic C file dodged every tell.)
-    let log = r.log;
-    if (!vasmOk && looksLikeCSource(source)) {
-      log = "[romdev] This source looks like C but was assembled as 68000 by vasm68k, " +
-        "which is why you're seeing 'identifier expected' / 'missing reset vector'. " +
+    if (!asmOk && looksLikeCSource(source)) {
+      log = "[romdev] This source looks like C but was assembled as 68000 assembly, " +
+        "which is why you're seeing assembler errors / 'missing reset vector'. " +
         "Genesis C builds through m68k-elf-gcc + SGDK - pass language:\"c\" (or give the " +
-        "file a .c name). You do NOT need to write 68k assembly.\n\n" + r.log;
+        "file a .c name). You do NOT need to write 68k assembly.\n\n" + log;
     }
     return {
-      ok: vasmOk,
+      ok: asmOk,
       // Same SGDK-style finalize (pad + $18E checksum) for hand-written
       // asm ROMs - they hit the exact same strict-core load failure.
-      binary: vasmOk && r.binary ? finalizeGenesisRom(r.binary) : r.binary,
+      binary: asmOk && r.binary ? finalizeGenesisRom(r.binary) : r.binary,
       listing: "",
-      symbols: "",
+      // label → address lines (GNU ld map shape) for symbols({op:'resolve'})
+      symbols: r.symbols ?? "",
       log,
       issues: parseBuildLog(log),
       exitCode: r.exitCode,
-      toolchain: "vasm68k",
+      toolchain: "m68k-elf-as",
+      ...(r.stage && !asmOk ? { stage: r.stage } : {}),
     };
   }
 
@@ -1145,8 +1149,8 @@ export async function buildForPlatform(args) {
   }
 
   throw new Error(
-    `no bundled toolchain for platform '${args.platform}'. Supported: atari2600 (dasm), nes/c64/atari7800/lynx (cc65), snes (C via tcc-65816+wla+PVSnesLib, or asm via asar), genesis (C via m68k-gcc+SGDK, or asm via vasm68k), gba (C via arm-gcc+libtonc/libgba), gb/gbc (sdcc sm83 / rgbds), sms/gg (sdcc), sync32 (C via arm-gcc cortex-m33 + the sync32 SDK), pico8 (.p8 cart packager). Call listPlatforms for the live matrix.`,
+    `no bundled toolchain for platform '${args.platform}'. Supported: atari2600 (dasm), nes/c64/atari7800/lynx (cc65), snes (C via tcc-65816+wla+PVSnesLib, or asm via asar), genesis (C via m68k-gcc+SGDK, or Motorola-syntax asm via m68k-elf-as), gba (C via arm-gcc+libtonc/libgba), gb/gbc (sdcc sm83 / rgbds), sms/gg (sdcc), sync32 (C via arm-gcc cortex-m33 + the sync32 SDK), pico8 (.p8 cart packager). Call listPlatforms for the live matrix.`,
   );
 }
 
-export { runDasm, buildC, buildAsm, runAsar, runVasm68k, buildGB };
+export { runDasm, buildC, buildAsm, runAsar, runM68kAsm, buildGB };

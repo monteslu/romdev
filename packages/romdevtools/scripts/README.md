@@ -51,7 +51,6 @@ This will:
 ./scripts/build-dasm.sh        # Atari 2600 (6502/6507)
 ./scripts/build-cc65.sh        # cc65 + ca65 + ld65 + da65 (6502 / 65816 / huc6280)
 ./scripts/build-asar.sh        # SNES (65816)
-./scripts/build-vasm68k.sh     # Genesis (68k)
 ./scripts/build-rgbds.sh       # Game Boy / GBC (sm83 asm path - opt-in via language:"asm")
 ./scripts/build-sdcc.sh        # Z80 + SM83 + ez80 family - Game Boy (default C path), SMS, GG, MSX, ColecoVision, ZX (also pulls build-mcpp.sh). Native pass requires system bison + flex.
 ./scripts/build-mcpp.sh        # mcpp 2.7.2 - chained preprocessor for sdcc (bypasses Emscripten's no-fork limit)

@@ -24,18 +24,18 @@ into a project.
 
 ## Five common mistakes
 
-### 1. vasm Motorola syntax: NO SPACES after commas
+### 1. Motorola syntax: whitespace ends the operand field
 
 ```asm
-move.w #$2700, sr       ; ERROR: "number or identifier expected"
 move.w #$2700,sr        ; OK
+move.w d0,d1 copy it    ; OK: everything after the operands is a comment
+dc.w 1 + 2              ; assembles dc.w 1 - " + 2" is a comment
 ```
 
-vasm's Motorola syntax tokenizer treats the space as terminating the
-operand. This applies to ALL multi-operand instructions: `move`, `add`,
-`movem`, `lea`, etc. The starter snippets in this directory are all
-no-space; don't add spaces when editing them even if your editor
-auto-formats.
+In Motorola syntax the operand field ends at the first space or tab, and the
+rest of the line is a comment. A space right after a comma is skipped
+(`move.w #$2700, sr` works), but a space anywhere else inside an operand or
+expression cuts it short. Write expressions without spaces: `dc.w 1+2`.
 
 ### 2. WRAM variables: use `equ`, not `org`
 
@@ -54,8 +54,8 @@ pattern.
 
 Several online references claim the "notes" field at $1D0 is 40 bytes.
 It is 32. ($1D0-$1EF, with region at $1F0-$1FF.) If you size it as
-40, region overlaps your code section at $200 and vasm yells
-"sections must not overlap." `header.s` has the authoritative layout
+40, region overlaps your code section at $200 and the build fails with
+"org blocks overlap." `header.s` has the authoritative layout
 in a prominent comment at the top.
 
 ### 4. VDP control reads: bit 3 of LOW byte, address $C00005
@@ -77,9 +77,8 @@ add.w d0, total_lines               ; OK
 The 68000's instruction set requires at least one operand of most
 arithmetic ops to be a register (D0-D7 or A0-A7). Coming from cc65 or
 asar (where memory-to-memory is sometimes legal), this is easy to miss.
-The "instruction not supported on selected architecture" error from
-vasm means "this addressing-
-mode combination is invalid for the 68000," not "your CPU is too old."
+An "operands mismatch" error from the assembler means "this addressing-mode
+combination is invalid for the 68000," not "your CPU is too old."
 
 ## Build + iterate workflow
 

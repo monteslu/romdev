@@ -11,7 +11,7 @@
 // Each CPU routes to the right assembler:
 //   6502, 65c02, huc6280  → ca65 + ld65 with synthesized minimal config
 //   65816                 → asar (uses inline `org` directive, emits raw)
-//   68k                   → vasm68k -Fbin
+//   68k                   → m68k-asm (Motorola syntax, GNU as), flat binary
 //   z80                   → sdasz80 + sdld (via the existing sdcc helpers)
 //   sm83 (gb/gbc)         → rgbasm + rgblink + rgbfix -p 0 (flat binary)
 //   spc700                → NOT YET BUNDLED - throws structured error
@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
 
 import { runCa65, runLd65 } from "./cc65/cc65.js";
 import { runAsar } from "./asar/asar.js";
-import { runVasm68k } from "./vasm68k/vasm68k.js";
+import { runM68kAsm } from "./m68k-asm/m68k-asm.js";
 import { runSdasz80, runSdld, ihxToBin } from "./sdcc/sdcc.js";
 import { runRgbasm, runRgblink } from "./rgbds/rgbds.js";
 import { parseBuildLog } from "./parse-errors.js";
@@ -57,8 +57,8 @@ const CPU_ASSEMBLERS = {
   "65c02":   assembleCa65,
   "huc6280": assembleCa65,
   "65816":   assembleAsar,
-  "68k":     assembleVasm68k,
-  "m68k":    assembleVasm68k,   // alias
+  "68k":     assembleM68k,
+  "m68k":    assembleM68k,      // alias
   "z80":     assembleSdcc,
   "sm83":    assembleRgbds,     // GB/GBC LR35902
   "gb":      assembleRgbds,     // alias for sm83
@@ -183,11 +183,11 @@ async function assembleAsar({ origin, code }) {
   return { bytes: bin.slice(start, end), log: r.log ?? "" };
 }
 
-// ─── vasm68k (m68k) ────────────────────────────────────────────────────
-// vasm has -Fbin output mode that emits raw bytes (no header, no symtab).
-// We pass org via the source itself.
-async function assembleVasm68k({ origin, code }) {
-  // vasm motorola syntax treats lines starting in column 0 as labels. We
+// ─── m68k (Motorola syntax via GNU as) ─────────────────────────────────
+// m68k-asm writes a flat binary that starts at the lowest org, so the org
+// in the source places the snippet.
+async function assembleM68k({ origin, code }) {
+  // Motorola syntax treats lines starting in column 0 as labels. We
   // auto-indent any line that doesn't already start with whitespace and
   // doesn't look like a label definition (ends with `:` or starts with a
   // dot for local labels).
@@ -198,9 +198,9 @@ async function assembleVasm68k({ origin, code }) {
     return "\t" + line;
   }).join("\n");
   const source = `\torg $${origin.toString(16).toUpperCase()}\n${indented}\n`;
-  const r = await runVasm68k({ source, options: ["-Fbin"] });
+  const r = await runM68kAsm({ source, mainName: "snippet.s" });
   if (!r.binary || (r.exitCode != null && r.exitCode !== 0)) {
-    throw asmError("vasm68k", r.log);
+    throw asmError("m68k-as", r.log);
   }
   return { bytes: r.binary, log: r.log ?? "" };
 }

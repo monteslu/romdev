@@ -530,7 +530,7 @@ export function registerToolchainTools(server, z, sessionKey) {
       }
       // Symbols/map info: only include when the underlying toolchain
       // produced something. SDCC stuffs the .map file here; cc65 writes
-      // a .sym table; vasm68k emits a listing. Keep it small.
+      // a .sym table; Genesis asm emits a label map. Keep it small.
       if (result.symbols && result.symbols.length > 0) {
         payload.symbolsBytes = result.symbols.length;
         // Don't embed the whole map by default - it can be 30+ KB on
@@ -573,7 +573,7 @@ export function registerToolchainTools(server, z, sessionKey) {
         if (r.linkerConfig != null && linkerConfig == null) linkerConfig = r.linkerConfig;
         if (r.runtime != null && runtime == null) runtime = r.runtime;
         if (r.maxmod != null && maxmod == null) maxmod = r.maxmod;
-        // Single-source toolchains (dasm/atari2600, vasm/asm) need `source`, not
+        // Single-source toolchains (dasm/atari2600, genesis asm) need `source`, not
         // a `sources` map. Collapse a lone source so those targets build via the
         // dir path too. (resolveLinkerConfig support-sources, if any, force the
         // map form below.)
@@ -581,7 +581,7 @@ export function registerToolchainTools(server, z, sessionKey) {
         if (srcNames.length === 1 && r.crt0 == null && r.linkerConfig == null) {
           // Leave `source` null and set sourcePath - runSourceImpl reads it +
           // derives sourceName (extension) for language inference. Single-source
-          // targets (dasm/vasm) require this form, not a `sources` map.
+          // targets (dasm, genesis asm) require this form, not a `sources` map.
           sourcePath = path.join(projPath, srcNames[0]);
         } else {
           sources = r.sources;
@@ -1353,7 +1353,7 @@ export async function buildProjectCore({ path: projPath, platform, outputPath, o
     crt0Rel = asm.rel;
   }
 
-  // Single-source toolchains (dasm/atari2600, vasm/asm) take `source`, not the
+  // Single-source toolchains (dasm/atari2600, genesis asm) take `source`, not the
   // multi-TU `sources` map. When the dir has exactly one source file and no
   // preset support sources, pass it as `source` so those targets still build
   // (the original asm-only buildProject behavior).

@@ -1,10 +1,11 @@
 // Round-trip every shipped Genesis starter snippet through build({output:'rom'})
-// to guarantee they're vasm68k-valid. vasm rejects subtle syntax (e.g.
-// space after comma in operands); without this test we'd happily ship
-// snippets that don't assemble - bug #48 from the rom-games agent.
+// to guarantee they assemble. The assembler rejects subtle syntax (e.g. a
+// space after a comma inside an instruction's operands, which starts the
+// comment field); without this test we'd happily ship snippets that don't
+// assemble - bug #48 from the rom-games agent.
 //
 // header.s is a full ROM on its own; the others are subroutine snippets
-// that need a minimal preamble (vector table + reset) so vasm has
+// that need a minimal preamble (vector table + reset) so the assembler has
 // something to bracket them with. We provide one and concatenate.
 
 import { test } from "node:test";
@@ -22,7 +23,7 @@ const __dirname = path.dirname(__filename);
 const LIB_DIR = path.resolve(__dirname, "..", "..", "..", "..", "romdev-toolchain-m68k-gcc", "share", "genesis", "lib");
 
 // Each snippet is included as a TEXT include via `incsrc` from a minimal
-// driver program. This validates syntax without forcing layout - vasm
+// driver program. This validates syntax without forcing layout - the assembler
 // errors on bad syntax inside the include even though the include's own
 // `org`s aren't enforced relative to the driver. Stubs cover labels the
 // snippets reference but the driver doesn't define.

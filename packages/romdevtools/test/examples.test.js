@@ -23,7 +23,7 @@ const cases = [
   { platform: "atari7800", file: "atari7800/main.c", toolchain: "cc65" },
   { platform: "lynx", file: "lynx/main.c", toolchain: "cc65" },
   { platform: "snes", file: "snes/main.asm", toolchain: "asar" },
-  { platform: "genesis", file: "genesis/main.s", toolchain: "vasm68k" },
+  { platform: "genesis", file: "genesis/main.s", toolchain: "m68k-elf-as" },
   // GB has two examples: main.c (default) via SDCC sm83, main.asm via RGBDS.
   { platform: "gb", file: "gb/main.c",   toolchain: "sdcc",  language: "c" },
   { platform: "gb", file: "gb/main.asm", toolchain: "rgbds", language: "asm" },

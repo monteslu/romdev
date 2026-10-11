@@ -61,6 +61,32 @@ the `romdev-mcp` bin is kept as an alias.)
 - **GL carts get a private GL context.** Every GL wasmcart session has its own
   context, which fixes server crashes with parallel GL sessions. Set
   `ROMDEV_SHARED_GL=1` to restore the shared context.
+- **Genesis assembly is assembled by GNU as.** `build({platform:'genesis'})`
+  for assembly sources, `assembleSnippet({cpu:'68k'})` and the recompiler's
+  m68k target now run the m68k-elf GNU as from `romdev-toolchain-m68k-gcc`
+  through a Motorola-syntax front end (`src/toolchains/m68k-asm/`) instead of
+  vasm. The source syntax is unchanged (org, dc/dcb/ds, equ/set/=, rs and
+  offset, rept, macros with \1..\9 \0 \@ \# NARG and mexit, conditional
+  assembly, include/incdir/incbin, .local and 1$ labels, equr/reg,
+  cnop/align/even), and the encoding choices are kept (moveq/addq/lea forms,
+  shortest branches, short absolute addresses for labels below $8000), so
+  existing sources build to the same bytes. What changes:
+  - The build result's `toolchain` is `"m68k-elf-as"` (was `"vasm68k"`), and
+    diagnostics read `main.s:12: error: message` with `issues[].stage`
+    `"m68k-as"` (was vasm's `error N in line L of "file"` with stage
+    `"vasm"`).
+  - An underscore between digits is a digit separator (`$7000_0083` is
+    $70000083; vasm read $7000). This fixes the precomputed VDP command in the
+    shipped `sprite_table.s` snippet. `0x` hex is accepted (vasm read 0).
+  - A space after a comma inside instruction operands is accepted.
+  - `suba.w #$8000,An` is no longer rewritten into a `lea` that subtracted in
+    the wrong direction.
+  - `rorg`, `comm`, `dr.*` and extended/packed floating point data are
+    reported as unsupported; section directives have no effect (one flat
+    image laid out by `org`).
+  - Assembler options: `-D NAME=VALUE`/`--define`, `-I` and `-m68000`..`-m68060`
+    are honored, other vasm flags are ignored with a note.
+  - The build result now carries `symbols` (each label and its address).
 
 ### Prebuilt binary fixes
 
@@ -257,6 +283,11 @@ the `romdev-mcp` bin is kept as an alias.)
   embed (DSP-1, DSP-3, ST010, Cx4, Super Game Boy) are removed at build time
   and become user-supplied, like the ST011 and ST018 program ROMs.
 - `romdev-platform-gba` ships the libgba and libtonc licence files.
+- vasm is no longer bundled and `romdev-toolchain-vasm` is retired (its
+  licence allows non-commercial use only and redistribution of the unmodified
+  archive only). Genesis assembly uses the GPL-3.0 GNU binutils already in
+  `romdev-toolchain-m68k-gcc`; as with every bundled toolchain, its licence
+  does not encumber the ROMs you build.
 - Shipped toolchain and core binaries no longer contain build-machine paths:
   the GBA, m68k, MIPS, SH and decomp toolchains, cc65's libraries and
   flycast are rebuilt with mapped paths. Built ROMs are unchanged.

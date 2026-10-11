@@ -264,12 +264,7 @@ Compiler toolchains  (their licences do not encumber compiled ROMs)
   binutils 2.42, z80-elf    Z80/SM83 disassembly    GPL-3.0           romdev-toolchain-sdcc
                             and reassembly
   RGBDS                     GB/GBC (asm)            MIT               romdev-toolchain-rgbds
-  vasm (m68k)               Genesis (asm)           vasm licence      romdev-toolchain-vasm
-                                                    (redistribution and
-                                                    non-commercial use;
-                                                    commercial use needs
-                                                    the authors' consent)
-  m68k-elf gcc 14.2.0,      Genesis (C)             GPL-3.0 with the  romdev-toolchain-m68k-gcc
+  m68k-elf gcc 14.2.0,      Genesis (C and asm)     GPL-3.0 with the  romdev-toolchain-m68k-gcc
   binutils 2.42, newlib                             GCC Runtime
   4.4.0                                             Library Exception;
                                                     newlib BSD-style
@@ -316,10 +311,9 @@ Compiler toolchains  (their licences do not encumber compiled ROMs)
 
   Upstream sources: gcc, binutils and newlib from https://gnu.org and
   https://sourceware.org/newlib; cc65 https://github.com/cc65/cc65; SDCC
-  https://sdcc.sourceforge.net; RGBDS https://github.com/gbdev/rgbds; vasm
-  http://sun.hasenbraten.de/vasm; SGDK https://github.com/Stephane-D/SGDK;
-  asar https://github.com/RPGHacker/asar; tcc816
-  https://github.com/alekmaul/tcc; wla-dx https://github.com/vhelin/wla-dx;
+  https://sdcc.sourceforge.net; RGBDS https://github.com/gbdev/rgbds; SGDK
+  https://github.com/Stephane-D/SGDK; asar https://github.com/RPGHacker/asar;
+  tcc816 https://github.com/alekmaul/tcc; wla-dx https://github.com/vhelin/wla-dx;
   dasm https://github.com/dasm-assembler/dasm; armips
   https://github.com/Kingcom/armips; the decomp compilers and tools from
   https://github.com/decompals (mips-gcc-2.7.2, mips-binutils-2.6,
