@@ -4,15 +4,15 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 -
 the `romdev-mcp` bin is kept as an alias.)
 
-## 0.150.0 (unreleased)
+## 0.150.0 - 2026-10-11
 
 ### Breaking changes
 
-- **wasmcart ^0.32 (ABI v4).** The `wasmcart` dependency moves from ^0.24 to
-  ^0.32. Carts built against an ABI older than v4 are refused at load: rebuild
-  them against wasmcart 0.32's headers. A cart must also export `wc_alloc` and
+- **wasmcart ^0.34 (ABI v4).** The `wasmcart` dependency moves from ^0.24 to
+  ^0.34.2. Carts built against an ABI older than v4 are refused at load: rebuild
+  them against wasmcart 0.32 or later. A cart must also export `wc_alloc` and
   `wc_free` for any host-to-cart write (GL strings such as `glGetString`,
-  WebGPU messages, text payloads); carts built with the 0.32 SDK do.
+  WebGPU messages, text payloads); carts built with the 0.32 or later SDK do.
 - **wasmcart buttons map by position.** `input({a:true})` on a wasmcart now
   presses the east face button (`WC_BTN_B`), as `a` does on every libretro
   core, and `b` presses south (`WC_BTN_A`). Update wasmcart input scripts, or
