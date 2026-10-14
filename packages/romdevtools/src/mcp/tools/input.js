@@ -416,7 +416,7 @@ export function registerInputTools(server, z, sessionKey) {
       dx: z.number().int().optional().describe("op=wheel: raw horizontal delta in 1/120 of a notch (the WHEEL_DELTA convention). Use `notchesX` unless you are asserting exact ABI values."),
       dy: z.number().int().optional().describe("op=wheel: raw vertical delta in 1/120 of a notch, positive UP. Use `notches` unless you are asserting exact ABI values."),
       // set
-      ports: z.array(port).min(1).max(2).optional().describe("op=set: per-port input. [{a:true,right:true}] holds A+Right on port 0."),
+      ports: z.array(port).min(1).max(4).optional().describe("op=set: per-port input, ports 0-3 (a wasmcart cart reads four pads; a core with fewer ports ignores the rest). [{a:true,right:true}] holds A+Right on port 0."),
       // press
       timeline: z.array(z.object({
         frame: z.number().int().min(0).describe("ABSOLUTE frame number this entry starts on."),
