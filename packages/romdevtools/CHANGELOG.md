@@ -4,6 +4,13 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 -
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.150.1 - 2026-10-15
+
+- **Four controllers.** `input({op:'set'})` takes up to four ports (it stopped
+  at two), so a wasmcart cart reads all four pads.
+- **wasmcart ^0.34.3**: pads keep their slots when controllers are unplugged
+  and plugged back in a different order.
+
 ## 0.150.0 - 2026-10-11
 
 ### Breaking changes
