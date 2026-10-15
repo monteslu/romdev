@@ -18,6 +18,7 @@ import { WasmcartHost } from "../src/host/WasmcartHost.js";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WGPUCART = path.join(HERE, "fixtures", "wgpucart.wasc");
 const DUALGPU = path.join(HERE, "fixtures", "dualgpu.wasc");
+const FXSTATS = path.join(HERE, "fixtures", "fxstats.wasc");
 
 function pixel(f, x, y) {
   const i = y * f.pitch + x * 4;
@@ -118,6 +119,38 @@ test("wasmcart webgpu: a long burst yields to the event loop, and overlapping bu
   } finally {
     host.destroy();
   }
+});
+
+test("wasmcart webgpu: a buffer map a frame asks for is answered before the next frame of the same burst", async () => {
+  // A browser or a native player answers a cart's mapAsync between frames: a
+  // result requested in frame N is there at frame N + 1. A bare event-loop
+  // turn between stepped frames does not wait for the GPU work the map waits
+  // on, so a burst handed results over a varying number of frames late.
+  // fixtures/fxstats.wasc (cartwheel-engine's fx_pipeline sample) reads five
+  // GPU particle systems' alive counts back every frame and publishes them:
+  // one 90-frame burst must see what 90 one-frame steps with the GPU idle
+  // between them see.
+  const run = async (burst) => {
+    const host = new WasmcartHost();
+    await host.loadMedia({ platform: "wasmcart", path: FXSTATS, deterministicSeed: 1, deterministicStepMs: 1000 / 60 });
+    try {
+      if (burst) assert.equal(await host.stepFrames(90), 90);
+      else for (let i = 0; i < 90; i++) {
+        await host.stepFrames(1);
+        await host.cart.getGpuDevice().queue.onSubmittedWorkDone();
+        await new Promise(resolve => setTimeout(resolve, 5));
+      }
+      const v = (name) => { const r = host.readDebugValue(name); return r.value ?? r.values?.[0]; };
+      const o = { tick: v("fxp.tick") };
+      for (const sys of ["Rain", "Fountain", "Smoke", "Debris", "Swirl"]) o[sys] = [v(`fxp.${sys}.alive`), v(`fxp.${sys}.gpu_alive`)];
+      return o;
+    } finally {
+      await host.destroy();
+    }
+  };
+  const stepped = await run(false), burst = await run(true);
+  assert.ok(stepped.Rain[1] > 0, "the GPU counts arrived");
+  assert.deepEqual(burst, stepped, "one burst reads the GPU counts the frames it ran asked for, not stale ones");
 });
 
 // The MCP tool layer, not the cores: input press / timeline / navigate step a

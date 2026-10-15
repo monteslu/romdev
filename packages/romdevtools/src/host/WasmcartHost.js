@@ -770,16 +770,23 @@ export class WasmcartHost {
     if (!this.cart) return n;
     let r = null;
     for (let i = 0; i < n; i++) {
-      // An event-loop turn between every two frames, as a browser or a native
-      // player gives a WebGPU cart. Asynchronous results (buffer maps, error
-      // scopes) then arrive before the next frame on this host too, so one
-      // step call of N frames matches N one-frame calls; callers used to step
-      // one frame per call to get that, thousands of calls per run. It also
-      // frees what the cart released: Dawn objects go only after V8 collects
-      // their JS wrappers AND a later turn runs the native finalizer, and a
-      // long synchronous burst grew VRAM about 0.9 MiB per frame. Input timing is unchanged: ports are set before the burst
-      // and each frame still reads them.
+      // Between every two frames: the GPU work the last frame submitted, then
+      // an event-loop turn, as a browser or a native player gives a WebGPU
+      // cart. Asynchronous results (buffer maps, error scopes) then arrive
+      // before the next frame on this host too, so one step call of N frames
+      // matches N one-frame calls; callers used to step one frame per call to
+      // get that, thousands of calls per run. A bare turn was not enough: a
+      // map is answered only once the GPU has finished the work before it, so
+      // a frame with more GPU work than one turn's worth read results a
+      // varying number of frames old (a per-frame stats readback, dozens of
+      // frames late). The turn also frees what the cart released: Dawn
+      // objects go only after V8 collects their JS wrappers AND a later turn
+      // runs the native finalizer, and a long synchronous burst grew VRAM
+      // about 0.9 MiB per frame. Input timing is unchanged: ports are set
+      // before the burst and each frame still reads them.
       if (i > 0) {
+        const device = this.cart.getGpuDevice?.();
+        if (device) await device.queue.onSubmittedWorkDone().catch(() => {});
         await new Promise(resolve => setImmediate(resolve));
         if (!this.cart) return n;
       }
