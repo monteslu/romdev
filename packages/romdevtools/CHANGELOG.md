@@ -4,6 +4,13 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 -
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.150.2 - 2026-10-15
+
+- **WebGPU carts read GPU results on time when stepped.** Between stepped
+  frames the host now waits for the GPU work a frame submitted before the next
+  one runs, as a browser does between animation frames. Buffer reads a cart
+  maps (GPU particle counts, readbacks) arrived a varying number of frames late.
+
 ## 0.150.1 - 2026-10-15
 
 - **Four controllers.** `input({op:'set'})` takes up to four ports (it stopped
