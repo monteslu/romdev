@@ -4,8 +4,13 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 -
 the `romdev-mcp` bin is kept as an alias.)
 
-## 0.150.2 - 2026-10-15
+## 0.150.2 - 2026-10-16
 
+- **A closed WebGPU cart frees its memory.** wasmcart ^0.34.4 (native-dawn
+  ^0.1.6): every WebGPU cart the server loaded stayed in memory after it was
+  closed, about 240 MB a load, with its GPU device and Dawn threads, so a long
+  session that loaded WebGPU carts over and over ran the machine out of memory.
+  GL carts were not affected.
 - **WebGPU carts read GPU results on time when stepped.** Between stepped
   frames the host now waits for the GPU work a frame submitted before the next
   one runs, as a browser does between animation frames. Buffer reads a cart
