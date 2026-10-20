@@ -4,6 +4,16 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 -
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.151.0 - 2026-10-20
+
+- **wasmcart ^0.35.1.** Carts can prefetch assets: `wc_asset_prefetch`
+  fetches an asset in the background, so the read that follows does not stall
+  a frame (wasmcart SPEC.md, "Asset prefetch"; a cart that never calls it is
+  unaffected).
+- **Runtime code generation takes bigger modules.** A cart can link one
+  generated module of up to 256 MiB (it was 4 MiB), so a static recompiler's
+  guest code is no longer refused.
+
 ## 0.150.2 - 2026-10-16
 
 - **A closed WebGPU cart frees its memory.** wasmcart ^0.34.4 (native-dawn
