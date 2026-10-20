@@ -4,6 +4,19 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 -
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.151.1 - 2026-10-20
+
+- **wasmcart ^0.36.1**, which ships wasmcart's test cart
+  (`node_modules/wasmcart/testcart/testcart.wasc`): every pad with all 21
+  button bits, sticks and triggers, every pointer slot, the wheel and keyboard,
+  a note per face button with L/R channel panning, and a save checked byte for
+  byte at every start. Load it to see what `input` or a real controller
+  delivers; the wasmcart guide says how.
+- **The playtest window sends Guide and the back paddles to a wasmcart cart as
+  their own buttons.** Guide arrived as Select, so on a wasmcart cart the
+  Guide button pressed Select, and the paddles never arrived. A libretro core
+  still gets Guide as Select.
+
 ## 0.151.0 - 2026-10-20
 
 - **wasmcart ^0.35.1.** Carts can prefetch assets: `wc_asset_prefetch`

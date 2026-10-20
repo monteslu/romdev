@@ -222,6 +222,8 @@ const RETROPAD_TO_WASMCART = {
   south: "A", east: "B", west: "X", north: "Y",
   l: "L", r: "R", l3: "L3", r3: "R3",
   start: "START", select: "SELECT", up: "UP", down: "DOWN", left: "LEFT", right: "RIGHT",
+  // wasmcart-only buttons (no RetroPad equivalent); the playtest window sends them
+  guide: "GUIDE", paddle1: "PADDLE1", paddle2: "PADDLE2", paddle3: "PADDLE3", paddle4: "PADDLE4",
 };
 
 // libretro RETRO_DEVICE_ID_JOYPAD bit indices (kept for callers that pass a bitmask).

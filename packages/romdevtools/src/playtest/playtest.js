@@ -1154,6 +1154,9 @@ export async function playtest(args) {
     let quit = false;
     const isC64 = h.status?.platform === "c64";
     const isN64 = h.status?.platform === "n64";
+    // A wasmcart pad has Guide and the four paddles as buttons of their own
+    // (WC_BTN_GUIDE, WC_BTN_PADDLE1-4); on a libretro core Guide stays Select.
+    const isWasmcart = h.status?.platform === "wasmcart";
     function readControllerInto(port, inst, slot) {
       if (!inst) return;
       const btn = inst.buttons || {};
@@ -1163,7 +1166,11 @@ export async function playtest(args) {
       }
       const buttonMap = isN64 ? SDL_BUTTON_TO_LIBRETRO_BIT_N64 : SDL_BUTTON_TO_LIBRETRO_BIT;
       for (const [sdlName, bit] of Object.entries(buttonMap)) {
+        if (isWasmcart && sdlName === "guide") continue;
         if (btn[sdlName]) port[bitToName(bit)] = true;
+      }
+      if (isWasmcart) {
+        for (const name of ["guide", "paddle1", "paddle2", "paddle3", "paddle4"]) if (btn[name]) port[name] = true;
       }
       const axes = inst.axes || {};
       const lx = axes.leftStickX ?? 0;
