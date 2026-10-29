@@ -94,8 +94,10 @@ share one process without drawing into each other's contexts.
 ## Browser / bytes-only use
 
 Everything the index exports is browser-bundleable (enforced by a gate
-test: no top-level `node:` imports, no pngjs in the static closure). The
-browser contract is "the caller does the I/O":
+test: no top-level `node:` imports, no pngjs in the static closure), and the
+2D cores' glue is linked for `node,web,worker`, so the same `.js` + `.wasm`
+pair loads in a page or a Web Worker. The browser contract is "the caller
+does the I/O":
 
 ```js
 import { LibretroHost } from "romdev-core-host";

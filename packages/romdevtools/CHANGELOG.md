@@ -4,6 +4,19 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 -
 the `romdev-mcp` bin is kept as an alias.)
 
+## Unreleased
+
+- **The 2D cores and the CLI toolchains load in a browser or Web Worker.**
+  They were linked with `-s ENVIRONMENT=node`, so their glue began with
+  `await import("module")` and failed outside Node before the wasm loaded,
+  although they use nothing but MEMFS. The 14 2D core recipes (fceumm, fake08,
+  bluemsx, bsnes, geargrafx, gametank, gambatte, genesis_plus_gx, handy, mgba,
+  prosystem, snes9x, stella2014, vice) and `EM_CLI_FLAGS` (sdcc + sdas*/sdld,
+  mcpp, rgbds, cc65, asar, dasm, sjasm, tcc816, wla-dx) now link with
+  `node,web,worker`. Under Node nothing changes, and the `.wasm` files are the
+  same; only the JS glue differs. `verify-wasm.mjs` refuses to publish those
+  glue files if they come out node-only again.
+
 ## 0.151.1 - 2026-10-20
 
 - **wasmcart ^0.36.1**, which ships wasmcart's test cart
