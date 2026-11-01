@@ -96,6 +96,30 @@ test("wasmcart webgpu: gpuPower picks the GPU and the status names it; wgpu:fals
     /this cart is a WebGPU cart, but this host cannot provide WebGPU: the embedder disabled it/);
 });
 
+test("wasmcart webgpu: a cart gets core WebGPU where the adapter has it; wgpuFeatureLevel forces compatibility mode", async () => {
+  // wasmcart's default; this machine's GPUs (Vulkan) all offer core
+  const host = new WasmcartHost();
+  const status = await host.loadMedia({ platform: "wasmcart", path: DUALGPU, gpuPower: "low-power" });
+  try {
+    assert.equal(status.gpu, "webgpu");
+    assert.equal(status.gpuAdapter.featureLevel, "core");
+  } finally {
+    host.destroy();
+  }
+  const compat = new WasmcartHost();
+  const cs = await compat.loadMedia({ platform: "wasmcart", path: DUALGPU, gpuPower: "low-power", wgpuFeatureLevel: "compatibility" });
+  try {
+    assert.equal(cs.gpu, "webgpu");
+    assert.equal(cs.gpuAdapter.featureLevel, "compatibility");
+    await compat.stepFrames(2);
+    await new Promise(resolve => setImmediate(resolve));
+    await compat.stepFrames(1);
+    assert.deepEqual(pixel(compat.getFramebuffer(), 64, 48), [0, 255, 0], "green on WebGPU in compatibility mode too");
+  } finally {
+    compat.destroy();
+  }
+});
+
 test("wasmcart webgpu: a long burst yields to the event loop, and overlapping bursts run in order", async () => {
   const host = new WasmcartHost();
   await host.loadMedia({ platform: "wasmcart", path: WGPUCART });

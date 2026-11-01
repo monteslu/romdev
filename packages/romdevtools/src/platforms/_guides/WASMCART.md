@@ -32,6 +32,7 @@ A cart that imports WebGPU (wasmcart's optional `gpu_api` 2 tier: `webgpu.h` fro
 - A WebGPU cart's own async results (a compute readback, an error scope) arrive between tool calls; step again if a value it waits for has not landed.
 - Frames are not bit-identical across GPUs or backends. Compare named debug state (`wasm({op:'debugState'})`), not frame hashes, across machines.
 - A WebGPU-only cart on a host without WebGPU is refused at load. A cart importing both GPU APIs runs on whichever the host has; `loadMedia({..., wgpu:false})` makes the load act as a host without WebGPU, so you can compare both renderers on one server.
+- A WebGPU cart gets a core device where the GPU has one, else compatibility mode, and `status.gpuAdapter.featureLevel` says which. A core device does not enforce compatibility mode's limits, and every cart that does not request core must run within them: test with `loadMedia({..., wgpuFeatureLevel: "compatibility"})`.
 - On a machine with two GPUs, `gpuPower:'low-power'` puts the cart on the integrated GPU and `'high-performance'` on the discrete one (unset: the server's `WASMCART_WGPU_POWER`, else the driver default). The result's `gpuAdapter` names the GPU it got; assert on it if your work must stay off a GPU. Set at load time.
 - `playtest()` works on a WebGPU cart (the window draws each read-back frame).
 

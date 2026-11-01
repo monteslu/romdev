@@ -315,7 +315,7 @@ export class WasmcartHost {
    * in-memory cart zip. Mirrors LibretroHost.loadMedia's post-conditions:
    * status.loaded + a first framebuffer so screenshot works immediately.
    */
-  async loadMedia({ platform, path: mediaPath, bytes, glBackend, deterministic, presentWindow, gpuPower, wgpu, beforeSettle } = {}) {
+  async loadMedia({ platform, path: mediaPath, bytes, glBackend, deterministic, presentWindow, gpuPower, wgpu, wgpuFeatureLevel, beforeSettle } = {}) {
     const source = bytes ?? mediaPath;
     if (!source) throw new Error("WasmcartHost.loadMedia: provide `path` or `bytes`.");
 
@@ -468,11 +468,14 @@ export class WasmcartHost {
     // _sramCache's comment for why this is a memory cache, not a `<path>.sav`.
     const cacheKey = typeof mediaPath === "string" && mediaPath ? path.resolve(mediaPath) : null;
     const savedData = cacheKey ? WasmcartHost._sramCache.get(cacheKey) : undefined;
+    // A WebGPU cart gets wasmcart's default: a core device where the GPU has
+    // one, else compatibility mode. wgpuFeatureLevel forces one.
+    const featureLevel = wgpu === false ? null : wgpuFeatureLevel;
     await this.cart.load(source, {
       glBackend: glBackend ?? glFactory,
       ...(deterministic ? { deterministic } : {}),
       ...(savedData ? { saveData: savedData } : {}),
-      ...(gpuPower ? { adapterOptions: { powerPreference: gpuPower } } : {}),
+      ...(gpuPower || featureLevel ? { adapterOptions: { ...(gpuPower ? { powerPreference: gpuPower } : {}), ...(featureLevel ? { featureLevel } : {}) } } : {}),
       ...(wgpu === false ? { wgpu: false } : {}),
     });
     if (glBackend && this.cart.usesGL) this._gl = glBackend;

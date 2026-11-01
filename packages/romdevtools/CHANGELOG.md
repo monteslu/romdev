@@ -4,6 +4,19 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 -
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.152.0 - 2026-11-01
+
+- **wasmcart ^0.37.0.** A WebGPU cart gets a core device where the GPU has one, so
+  an HDR scene can multisample and a depth texture can be read directly, else
+  compatibility mode, as on every wasmcart host. `status.gpuAdapter.featureLevel`
+  says which.
+- **`loadMedia` takes `wgpuFeatureLevel`** (`core` or `compatibility`) to force a
+  level. A core device does not enforce compatibility mode's limits, and every cart
+  that does not request core must run within them, so test a cart with
+  `wgpuFeatureLevel: "compatibility"`.
+- wasmcart's integer texture fix: an R32UI texture no longer reads four times its
+  bytes from cart memory.
+
 ## 0.151.1 - 2026-10-20
 
 - **wasmcart ^0.36.1**, which ships wasmcart's test cart
