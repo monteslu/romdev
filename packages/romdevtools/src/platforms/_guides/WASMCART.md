@@ -13,7 +13,7 @@ loadMedia({platform:'wasmcart', path:'/proj/game.wasc'})   // a .wasc package or
 - A cart whose input or clock pointer is zero or misaligned is not written through; the load result and `catalog({op:'status'})` report `abiWarnings`, and `wasm({op:'conformance'})` fails the cart (`input-span-overlap`).
 - `deterministicSeed` with `deterministicStepMs` (a whole number such as 16) steps a virtual clock by a fixed step, so a run can be compared frame for frame with a native build that uses a fixed frame time.
 - Every GL cart gets its own GL context. Setting `ROMDEV_SHARED_GL=1` in the server's environment restores the older shared context.
-- `pack({target:'wasc'})` builds a `.wasc` from a `.wasm` and its assets.
+- `pack({target:'wasc'})` builds a `.wasc` from a `.wasm` and its assets. The manifest's `version` is `version` if given (semver, else an error), else the source's git checkout: at a clean `v1.4.2` tag `1.4.2`, anywhere else `1.4.2-dev.g<commit>` (`0.0.0-dev.g<commit>` before the first tag); outside git a source manifest's own version, else `0.1.0`. Same rule as `wasmcart-pack` and cartwheel's build.
 
 ## Input
 

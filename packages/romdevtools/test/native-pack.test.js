@@ -105,3 +105,51 @@ test("pack wasc: the same inputs pack to the same bytes (fixed entry time, sorte
   assert.equal(bytes.readUInt16LE(10), 0, "entry time is the fixed 00:00:00");
   assert.equal(bytes.readUInt16LE(12), 0x21, "entry date is the fixed 1980-01-01");
 });
+
+// ---- the cart's version: `version`, else the source's git checkout (same rule
+// as wasmcart-pack and cartwheel's build), else the source manifest's, else 0.1.0
+
+import { execFileSync } from "node:child_process";
+
+function git(dir, ...a) {
+  return execFileSync("git", ["-C", dir, "-c", "user.email=t@example.com", "-c", "user.name=t",
+    "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", ...a], { encoding: "utf8" }).trim();
+}
+function packedVersion(out) {
+  return JSON.parse(Buffer.from(unzipSync(readFileSync(out))["manifest.json"]).toString()).version;
+}
+
+test("pack wasc: version from git, `version` wins, non-semver refused", () => {
+  const src = explode(HELLO_WASC, "wasc-version");      // a source dir whose manifest has its own version
+  const out = path.join(os.tmpdir(), "romdev-pack-version.wasc");
+  const bare = path.join(os.tmpdir(), "romdev-pack-version-bare.wasc");
+  const placeholder = JSON.parse(readFileSync(path.join(src, "manifest.json"), "utf8")).version;
+
+  // outside git: the manifest's own version; a bare wasm gets 0.1.0
+  packWasc({ source: src, outputPath: out });
+  assert.equal(packedVersion(out), placeholder);
+  packWasc({ wasm: path.join(src, "cart.wasm"), outputPath: bare });
+  assert.equal(packedVersion(bare), "0.1.0");
+
+  git(src, "init", "-q");
+  git(src, "add", ".");
+  git(src, "commit", "-q", "-m", "one");
+  const sha = git(src, "rev-parse", "--short=7", "HEAD");
+  packWasc({ source: src, outputPath: out });
+  assert.equal(packedVersion(out), `0.0.0-dev.g${sha}`, "untagged");
+
+  git(src, "tag", "v2.3.4");
+  packWasc({ source: src, outputPath: out });
+  assert.equal(packedVersion(out), "2.3.4", "clean at the tag, over the manifest's placeholder");
+  packWasc({ wasm: path.join(src, "cart.wasm"), outputPath: bare });
+  assert.equal(packedVersion(bare), "2.3.4", "a bare wasm in the checkout too");
+
+  writeFileSync(path.join(src, "manifest.json"), readFileSync(path.join(src, "manifest.json"), "utf8") + "\n");
+  packWasc({ source: src, outputPath: out });
+  assert.equal(packedVersion(out), `2.3.4-dev.g${sha}`, "a tracked change makes it a dev build");
+
+  packWasc({ source: src, outputPath: out, version: "5.0.0-rc.1" });
+  assert.equal(packedVersion(out), "5.0.0-rc.1", "`version` wins");
+  assert.throws(() => packWasc({ source: src, outputPath: out, version: "1.0" }), /is not semver/);
+  rmSync(src, { recursive: true, force: true });
+});

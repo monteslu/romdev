@@ -13,6 +13,7 @@ import { readFileSync, readdirSync, statSync, writeFileSync, existsSync } from "
 import path from "node:path";
 import { zipSync } from "fflate";
 import { jsonContent, safeTool } from "../util.js";
+import { resolveCartVersion } from "./cart-version.js";
 
 /**
  * Zip entries carry a fixed timestamp so the same inputs always pack to the
@@ -42,10 +43,24 @@ function collectDir(dir, baseDir = dir, out = {}) {
  * @param {string} a.outputPath  where to write the .wasc.
  * @param {string} [a.name]     manifest name (generated-manifest case).
  * @param {number} [a.players]  manifest players count (generated-manifest case).
+ * @param {string} [a.version]  the cart's version (semver). Without it, the version of
+ *   the git checkout holding `source` (else the wasm's dir, else `assets`): the tag at a
+ *   clean v<semver> tag, else <last tag>-dev.g<commit>; outside git a source manifest's
+ *   own version, else 0.1.0. Same rule as wasmcart-pack and cartwheel's build.
  */
-export function packWasc({ source, wasm, assets, outputPath, name, players } = {}) {
+export function packWasc({ source, wasm, assets, outputPath, name, players, version } = {}) {
   if (!outputPath) throw new Error("pack(wasmcart): `outputPath` is required.");
   let files;
+  /** The version: `version`, else git, else the source manifest's (a placeholder), else 0.1.0. */
+  const cartVersion = (fallback) => {
+    const v = resolveCartVersion({
+      set: version,
+      dirs: [source, wasm && path.dirname(path.resolve(wasm)), assets],
+      fallback,
+    });
+    if (v.error) throw new Error(`pack(wasmcart): ${v.error}`);
+    return v.version;
+  };
 
   if (source) {
     if (!existsSync(source) || !statSync(source).isDirectory()) {
@@ -56,14 +71,25 @@ export function packWasc({ source, wasm, assets, outputPath, name, players } = {
       // No manifest in the dir - synthesize one pointing at the single .wasm present.
       const wasmEntry = Object.keys(files).find((f) => f.endsWith(".wasm"));
       if (!wasmEntry) throw new Error("pack(wasmcart): source dir has no manifest.json and no .wasm to derive one.");
-      const manifest = { name: name || path.basename(outputPath, ".wasc"), version: "1.0.0", entry: wasmEntry };
+      const manifest = { name: name || path.basename(outputPath, ".wasc"), version: cartVersion(null), entry: wasmEntry };
       if (players) manifest.players = players;
+      files["manifest.json"] = new Uint8Array(Buffer.from(JSON.stringify(manifest, null, 2)));
+    } else {
+      // The dir's own manifest is kept, except its version: a committed "1.0.0" is a
+      // placeholder whenever `version` or git can say better.
+      let manifest;
+      try {
+        manifest = JSON.parse(Buffer.from(files["manifest.json"]).toString("utf8"));
+      } catch (e) {
+        throw new Error(`pack(wasmcart): manifest.json in '${source}' is not valid JSON: ${e.message}`);
+      }
+      manifest.version = cartVersion(manifest.version ?? null);
       files["manifest.json"] = new Uint8Array(Buffer.from(JSON.stringify(manifest, null, 2)));
     }
   } else if (wasm) {
     if (!existsSync(wasm)) throw new Error(`pack(wasmcart): wasm '${wasm}' not found.`);
     files = { "cart.wasm": new Uint8Array(readFileSync(wasm)) };
-    const manifest = { name: name || path.basename(outputPath, ".wasc"), version: "1.0.0", entry: "cart.wasm" };
+    const manifest = { name: name || path.basename(outputPath, ".wasc"), version: cartVersion(null), entry: "cart.wasm" };
     if (players) manifest.players = players;
     if (assets) {
       if (!existsSync(assets) || !statSync(assets).isDirectory()) throw new Error(`pack(wasmcart): assets '${assets}' is not a directory.`);
@@ -116,7 +142,7 @@ export function registerNativePackTools(server, z) {
     "for wasmcart/jsgame - a ZIP, NOT a compiler). `target`:\n" +
     "• 'wasc' (wasmcart) - pass `source` (a dev dir: manifest.json + cart.wasm + assets/) OR " +
     "`wasm` (a single cart .wasm; a minimal manifest is generated, with optional `assets` dir). " +
-    "Writes a .wasc. NOTE: romdev does NOT compile WASM - bring your own (any language → wasm).\n" +
+    "Writes a .wasc whose manifest `version` is `version`, else the source's git version (clean v<semver> tag = that release, else <tag>-dev.g<commit>). NOTE: romdev does NOT compile WASM - bring your own (any language → wasm).\n" +
     "• 'jsgame' (jsgame) - pass `source` (the game dir; must have package.json 'main', index.html, " +
     "or main.js). Writes a .jsgame. Pure JS, no build needed beyond the zip.",
     {
@@ -127,6 +153,7 @@ export function registerNativePackTools(server, z) {
       outputPath: z.string().describe("Absolute path to write the archive (.wasc / .jsgame)."),
       name: z.string().optional().describe("target=wasc: manifest game name (default derived from outputPath)."),
       players: z.number().int().min(1).max(4).optional().describe("target=wasc: manifest players count."),
+      version: z.string().optional().describe("target=wasc: the cart's manifest version (semver, e.g. 1.2.0). Default: from the git checkout holding the source: the tag at a clean v<semver> tag, else <last tag>-dev.g<commit>; outside git a source manifest's version, else 0.1.0. Not semver = error."),
     },
     safeTool(async (args) => {
       if (args.target === "wasc") {

@@ -4,6 +4,17 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 -
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.153.0 - 2026-11-07
+
+- **`pack({target:'wasc'})` writes the cart's real version.** Every packed manifest
+  said `1.0.0`, and a source dir's own manifest was copied with whatever version it
+  committed. The tool takes `version` (semver; anything else is an error), and without
+  it reads the git checkout holding the source: at a clean `v<semver>` tag the tag,
+  anywhere else `<last tag>-dev.g<commit>` (`0.0.0-dev.g<commit>` before the first
+  tag); outside git a source manifest's own version, else `0.1.0`. The same rule as
+  `wasmcart-pack` 0.39.0 and cartwheel's build, so a cart says the same version
+  whichever packed it.
+
 ## 0.152.0 - 2026-11-01
 
 - **wasmcart ^0.37.0.** A WebGPU cart gets a core device where the GPU has one, so
