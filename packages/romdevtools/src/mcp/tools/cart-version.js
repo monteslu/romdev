@@ -1,4 +1,4 @@
-// Copied from wasmcart's src/cartVersion.js (wasmcart 0.39.0, which exports it
+// Copied from wasmcart's src/cartVersion.js (wasmcart 0.39.1, which exports it
 // as resolveCartVersion); once romdev's wasmcart pin includes it, import it from
 // there instead. Keep the two the same: a cart packed by romdev and one packed by
 // wasmcart-pack must say the same version.
@@ -15,7 +15,7 @@
 //
 // A git checkout's version: at a v<semver> tag with no changes to tracked
 // files, the tag without its v (a tag build is the release by construction);
-// otherwise the highest v<semver> tag reachable from HEAD plus -dev.g<commit>
+// otherwise the nearest v<semver> tag behind HEAD plus -dev.g<commit>
 // (0.0.0-dev.g<commit> before the first tag), so a dev build is never taken
 // for a release.
 //
@@ -60,10 +60,13 @@ export function gitVersion(dir) {
   const exact = (git('tag', '--points-at', 'HEAD', '--list', 'v[0-9]*') || '').split('\n').map(semverTag).filter(Boolean);
   const dirty = git('status', '--porcelain', '--untracked-files=no');
   if (exact.length && dirty === '') return exact.sort(compareSemver).at(-1);
-  // the highest v<semver> tag reachable from HEAD. Not `git describe`: it
-  // returns the nearest tag matching a glob, and a nearer v-tag that is not
-  // semver (v1.4) would hide the real one.
-  const last = (git('tag', '--merged', 'HEAD', '--list', 'v[0-9]*') || '').split('\n').map(semverTag).filter(Boolean).sort(compareSemver).at(-1);
+  // The NEAREST v<semver> tag behind HEAD (git describe), not the highest: a
+  // fork keeps its upstream's tags (v2.1.20221123) beside its own (v0.1.0),
+  // and its builds belong to its own line. v-tags that are not semver (v1.4)
+  // are excluded, so they can never hide the real one.
+  const tags = (git('tag', '--merged', 'HEAD', '--list', 'v[0-9]*') || '').split('\n').filter(Boolean);
+  const exclude = tags.filter((t) => !semverTag(t)).flatMap((t) => ['--exclude', t]);
+  const last = tags.some(semverTag) ? semverTag(git('describe', '--tags', '--abbrev=0', '--match', 'v[0-9]*', ...exclude)) : null;
   return `${last || '0.0.0'}-dev.g${sha}`;
 }
 
