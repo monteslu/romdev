@@ -13,7 +13,9 @@
 // frame. `variants` runs A/B settings interleaved over `rounds` in one hold.
 //
 // Isolation: the run holds the server's exclusive gate (mcp/exclusive-gate.js)
-// so no other session's call runs between its frames, and reports what it
+// so no other session's call runs between its frames (with host runners every
+// session has its own process, so none can: the gate is then the process's
+// own), and reports what it
 // could not stop (a playtest window, calls still in flight, other processes
 // on the GPU, system load).
 //
@@ -293,9 +295,9 @@ export async function measureFrameTiming({ host, sessionKey, args, env = {} }) {
     delete result._clock; delete result._busy;
 
     const reasons = [];
-    const live = env.liveHosts?.(sessionKey) ?? null;
+    const live = (await env.liveHosts?.(sessionKey)) ?? null;
     const play = env.playtest?.() ?? null;
-    if (!exclusive) reasons.push(args.exclusive === false ? "run with exclusive:false: other sessions' calls ran between frames" : "no exclusive gate on this server");
+    if (!exclusive && live?.isolation !== "process") reasons.push(args.exclusive === false ? "run with exclusive:false: other sessions' calls ran between frames" : "no exclusive gate on this server");
     if (gate?.stillInflight) reasons.push(`${gate.stillInflight} call(s) from other sessions were still running when the drain timed out`);
     if (play?.windowOpen) reasons.push("a playtest window is open: its frames run on their own timer between ours");
     if (live?.otherActiveBursts) reasons.push(`${live.otherActiveBursts} other WebGPU host(s) were mid-step`);
@@ -329,6 +331,8 @@ export async function measureFrameTiming({ host, sessionKey, args, env = {} }) {
         reasons,
         ...(gate ? { waitedForGateMs: gate.waitedMs, drainMs: gate.drainMs, otherCallsHeld: gate.heldCalls() } : {}),
         ...(live ? { otherLiveHosts: live.otherLiveHosts } : {}),
+        ...(live?.otherBusySessions != null ? { otherBusySessions: live.otherBusySessions } : {}),
+        ...(live?.isolation ? { hostIsolation: live.isolation } : {}),
         playtestWindowOpen: play?.windowOpen ?? null,
         otherProcessesGpuMs: otherGpuMs,
         thisProcessGpuMs: ourGpuMs,

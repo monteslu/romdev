@@ -29,9 +29,12 @@ import { floodWarning } from "../observer/request-stats.js";
  * as an MCP session).
  *
  * @param {string} sessionKey  per-agent session id (randomUUID); scopes the host
+ * @param {{wrap?: (server: object, sessionKey: string) => void}} [opts]
+ *   wrap: patch the capture's `.tool()` before registration (the server uses
+ *   it to run handlers in the session's host runner, src/mcp/host-runners.js)
  * @returns {Map<string, {name:string, description:string, handler:Function, inputSchema:any, shape:any}>}
  */
-export function buildToolRegistry(sessionKey) {
+export function buildToolRegistry(sessionKey, opts = {}) {
   /** @type {Map<string, any>} */
   const tools = new Map();
 
@@ -62,6 +65,7 @@ export function buildToolRegistry(sessionKey) {
   // Same wrap the MCP server gets: clean errors + strict schema stamped onto
   // _registeredTools[name].inputSchema.
   withClearToolErrors(capture, z);
+  if (typeof opts.wrap === "function") opts.wrap(capture, sessionKey);
   registerTools(capture, z, sessionKey);
 
   // After registration, _registeredTools[name].inputSchema holds the strict

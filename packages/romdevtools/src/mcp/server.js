@@ -85,15 +85,17 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { localhostHostValidation } from "@modelcontextprotocol/sdk/server/middleware/hostHeaderValidation.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { registerTools } from "./tools/index.js";
+import { registerTools, setSessionStatusSource, setServerHealthSource } from "./tools/index.js";
+import { createHostRunnerPool, hostWorkersEnabled, installHostForwarding } from "./host-runners.js";
+import { setRemoteExclusiveStatus } from "./exclusive-gate.js";
 import { stopAllPlaytest, stopPlaytestForSession, isPlaytestRunning } from "./tools/playtest.js";
-import { clearHost, reapIdleHosts, setHostProtectedPredicate } from "./state.js";
+import { clearHost, reapIdleHosts, setHostProtectedPredicate, setRemoteHostView } from "./state.js";
 import { resolveSessionKey, SESSION_META_KEY, SESSION_ARG, rememberMinted, sessionHandleNote } from "./session-key.js";
 import { AGENT_META_KEY, setSessionAgent } from "./agent-identity.js";
 import { createMcpHandler, isLegacyRequest, McpServer as McpServerV2 } from "@modelcontextprotocol/server";
 import { toNodeHandler, toWebRequest } from "@modelcontextprotocol/node";
 import { withV1ToolApi } from "./v2-adapter.js";
-import { pushCartLine } from "./cart-log.js";
+import { installCartLogFilter } from "./cart-log.js";
 import { log } from "./log.js";
 import { attachObserver } from "../observer/server.js";
 import { installObserverMiddleware } from "../observer/tool-wrap.js";
@@ -136,6 +138,11 @@ async function loadInstructions() {
   return body ? `${mcpPreamble}\n\n${body}` : mcpPreamble;
 }
 
+// Host runners (src/mcp/host-runners.js): each session's host in its own
+// process. null = every host in this process (ROMDEV_HOST_WORKERS=0).
+/** @type {null | ReturnType<typeof createHostRunnerPool>} */
+let pool = null;
+
 function buildMcpServer(instructions, sessionKey) {
   const server = new McpServer(
     {
@@ -152,6 +159,7 @@ function buildMcpServer(instructions, sessionKey) {
   // invocation. Must install BEFORE registerTools() so the wrapping
   // catches every registration.
   installObserverMiddleware(server, sessionKey);
+  if (pool) installHostForwarding(server, sessionKey, pool);
   registerTools(server, z, sessionKey);
   return server;
 }
@@ -168,39 +176,6 @@ function cliArg(name) {
   return undefined;
 }
 
-/**
- * Cart stdout/stderr is DEBUG output, not server output. wasmcart's CartHost
- * writes every wc_log line and every cart printf straight to process.stderr
- * prefixed `[cart] `, so a driven cart emits a line or two PER FRAME. One day
- * of gate runs put 58 MB of per-frame telemetry into the server log, which
- * buried the actual server events -- including, on 2026-08-19, the fact that
- * the process had been OOM-killed: the log simply stopped mid-boot with no
- * marker, because nothing server-level had been written for hours.
- *
- * The cart lines still matter WHILE DEBUGGING a cart, so they are kept in a
- * per-process ring buffer (readable via catalog({op:'status'})) and can be
- * restored to the log wholesale with ROMDEV_LOG_CART=1. What they must not do
- * is drown the log by default.
- */
-function installCartLogFilter() {
-  if (process.env.ROMDEV_LOG_CART === "1") return; // opt back in, unfiltered
-  const realWrite = process.stderr.write.bind(process.stderr);
-  process.stderr.write = (chunk, ...rest) => {
-    try {
-      const text = typeof chunk === "string" ? chunk : chunk?.toString?.("utf8") ?? "";
-      if (text.startsWith("[cart] ")) {
-        for (const line of text.split("\n")) pushCartLine(line);
-        // Swallow: tell the caller we wrote it. A callback-style write still
-        // needs its callback, or a writer awaiting drain would hang.
-        const cb = rest.find((a) => typeof a === "function");
-        if (cb) cb();
-        return true;
-      }
-    } catch { /* fall through to a real write */ }
-    return realWrite(chunk, ...rest);
-  };
-}
-
 async function main() {
   installCartLogFilter();
 
@@ -212,6 +187,21 @@ async function main() {
   resolveXauthority({ log });
 
   const instructions = await loadInstructions();
+
+  if (hostWorkersEnabled()) {
+    pool = createHostRunnerPool();
+    setRemoteHostView(pool.view);
+    setSessionStatusSource((key) => pool.sessionStatus(key));
+    setServerHealthSource(() => ({
+      pids: pool.pids(),
+      extra: {
+        hostRunners: pool.info(),
+        playtestWindowsOpen: pool.openPlaytestWindows(),
+        ...(pool.crashes().length ? { hostRunnerDeaths: pool.crashes() } : {}),
+      },
+    }));
+    setRemoteExclusiveStatus(() => pool.timingStatus());
+  }
   const host = cliArg("host") ?? process.env.HOST ?? "127.0.0.1";
   // Precedence: --port flag > PORT env > default 7331.
   const portRaw = cliArg("port") ?? process.env.PORT ?? 7331;
@@ -337,7 +327,7 @@ async function main() {
     transport.onclose = () => {
       // Close THIS session's playtest window (if any) - one agent disconnecting
       // tears down only its own window/host; other agents' games keep running.
-      try { stopPlaytestForSession(sessionKey); } catch {}
+      if (!pool) { try { stopPlaytestForSession(sessionKey); } catch {} }
       try { clearHost(sessionKey); } catch {}
       try { observer.sessionDisconnected(sessionKey); } catch {}
       if (transport.sessionId) {
@@ -428,6 +418,7 @@ async function main() {
       );
       const wrapped = withV1ToolApi(server, { sessionParam: true, sessionNote });
       installObserverMiddleware(wrapped, sessionKey);
+      if (pool) installHostForwarding(wrapped, sessionKey, pool);
       registerTools(wrapped, z, sessionKey);
       return server;
     },
@@ -576,7 +567,10 @@ async function main() {
   // agents that prefer the Agent Skills standard) use romdev with near-zero
   // always-on context - the skill metadata is ~100 tokens until invoked.
   const agentsBody = await loadAgentsBody();
-  mountHttpToolRoutes(app, { agentsBody, version: PKG_VERSION, idleMs: SESSION_IDLE_MS });
+  mountHttpToolRoutes(app, {
+    agentsBody, version: PKG_VERSION, idleMs: SESSION_IDLE_MS,
+    ...(pool ? { wrapRegistry: (server, key) => installHostForwarding(server, key, pool) } : {}),
+  });
 
   // JSON-RPC-shaped error handler. Without this, body-parser failures
   // (e.g. PayloadTooLargeError) return HTML, which MCP clients can't parse.
@@ -639,6 +633,9 @@ async function main() {
     // matching "shutting down" line was KILLED (OOM, SIGKILL), not stopped --
     // which is otherwise indistinguishable from a truncated log.
     log.info(`romdev: server up pid=${process.pid} v${PKG_VERSION}`);
+    log.info(pool
+      ? "romdev: host isolation on: each session's host runs in its own process (ROMDEV_HOST_WORKERS=0 turns it off)"
+      : "romdev: host isolation off: every session's host runs in the server process");
     // A STALE DISTRIBUTED SKILL IS WORSE THAN NO SKILL: an agent reading a
     // confidently wrong document stops, where an agent with no document asks.
     // Reported once at startup so the mismatch is visible without anyone
@@ -695,6 +692,7 @@ async function main() {
     // clean exit tears them down anyway, but closing them explicitly here avoids
     // a flash of dead windows and frees SDL before we drop the event loop.
     try { stopAllPlaytest(); } catch {}
+    if (pool) { try { await pool.shutdownAll(); } catch {} }
     for (const t of transports.values()) {
       try { await t.close(); } catch {}
     }
@@ -707,7 +705,7 @@ async function main() {
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   // Last-resort: on ANY exit path (including ones that bypass `shutdown`),
   // make sure the in-process window is torn down. exit handlers must be sync.
-  process.on("exit", () => { try { stopAllPlaytest(); } catch {} });
+  process.on("exit", () => { try { stopAllPlaytest(); } catch {} try { pool?.killAll(); } catch {} });
 
   // Idle-session reaper. MCP transports don't time themselves out, and a
   // client that restarts/crashes/abandons its tab never sends a clean
@@ -742,7 +740,7 @@ async function main() {
   // is what stops a suite run from stacking 20+ live cores. (Two OOM kills,
   // 2026-08-19.) Playtest sessions are exempt: a human may be mid-game.
   setHostProtectedPredicate((key) => {
-    try { return isPlaytestRunning(key); } catch { return false; }
+    try { return pool ? pool.isProtected(key) : isPlaytestRunning(key); } catch { return false; }
   });
   const hostReaper = setInterval(() => {
     try {

@@ -150,8 +150,46 @@ export function getHost(sessionKey) {
   return host;
 }
 
+// --- Hosts in runner processes ----------------------------------------------
+// With host isolation on (src/mcp/host-runners.js, the default for the
+// server), every session's host lives in its own child process and the maps
+// above stay empty in the server process. The server installs the pool's view
+// here so the few front-side readers (livestream labels, the HTTP session
+// reminder, catalog health, the reapers) see the hosts where they really are.
+/** @type {null | {getHostOrNull: Function, peekSession: Function, otherLiveHosts: Function, hostLifetimeStats: Function, reapIdleHosts: Function, clearHost: Function, liveHostCount: Function}} */
+let remoteView = null;
+/** Install (or with null, remove) the host runner pool's view. */
+export function setRemoteHostView(view) { remoteView = view ?? null; }
+
+// In a host runner process: how to ask the server about other sessions.
+/** @type {null | ((what: string) => Promise<any>)} */
+let serverQuery = null;
+/** Set by the host runner process (src/mcp/host-runner-child.js). */
+export function setServerQuery(fn) { serverQuery = typeof fn === "function" ? fn : null; }
+
+/**
+ * Other sessions' live hosts and busy sessions, wherever they run: the
+ * runner process asks the server, the server (or an in-process server) counts
+ * its own maps. For a timing run's contention report.
+ * @param {string} sessionKey
+ * @returns {Promise<{otherLiveHosts: number, otherBusySessions?: number}>}
+ */
+export async function otherSessionsInfo(sessionKey) {
+  if (serverQuery) {
+    const v = await serverQuery("liveHosts");
+    if (v) return v;
+  }
+  return { otherLiveHosts: otherLiveHosts(sessionKey) };
+}
+
+/** This session's host without stamping activity (status reports). */
+export function getHostOrNullNoTouch(sessionKey) {
+  return hosts.get(sessionKey) ?? null;
+}
+
 /** @param {string} sessionKey */
 export function getHostOrNull(sessionKey) {
+  if (remoteView) return remoteView.getHostOrNull(sessionKey);
   const host = hosts.get(sessionKey) ?? null;
   if (host) touchHost(sessionKey);
   return host;
@@ -236,6 +274,7 @@ function evictHost(sessionKey) {
  * @returns {string[]}
  */
 export function reapIdleHosts(now = Date.now()) {
+  if (remoteView) return remoteView.reapIdleHosts(now);
   const evicted = [];
   for (const key of [...hosts.keys()]) {
     if (isProtected(key)) continue;
@@ -278,6 +317,7 @@ function enforceHostCap(incomingKey) {
  * @param {string} sessionKey
  */
 export function peekSession(sessionKey) {
+  if (remoteView) return remoteView.peekSession(sessionKey);
   const host = hosts.get(sessionKey);
   const lm = lastMedia.get(sessionKey);
   const seen = lastUsed.get(sessionKey);
@@ -292,6 +332,7 @@ export function peekSession(sessionKey) {
 
 /** Live hosts other than this session's (both slots), for a timing run's contention report. */
 export function otherLiveHosts(sessionKey) {
+  if (remoteView) return remoteView.otherLiveHosts(sessionKey);
   let n = 0;
   for (const k of hosts.keys()) if (k !== sessionKey) n++;
   for (const k of hostsB.keys()) if (k !== sessionKey) n++;
@@ -300,6 +341,7 @@ export function otherLiveHosts(sessionKey) {
 
 /** Live host counts + config, for catalog({op:'status'}). */
 export function hostLifetimeStats() {
+  if (remoteView) return remoteView.hostLifetimeStats();
   return {
     liveHosts: hosts.size,
     liveHostsSlotB: hostsB.size,
@@ -383,6 +425,8 @@ export function installHost(sessionKey, hostInstance) {
 
 /** @param {string} sessionKey */
 export function clearHost(sessionKey) {
+  // With host runners the session's whole runner process goes.
+  if (remoteView) { remoteView.clearHost(sessionKey); return; }
   const existing = hosts.get(sessionKey);
   // Full teardown, not just unloadMedia: this is a session ending, so the core
   // and its WASM heap must go, not merely the ROM.
@@ -452,6 +496,7 @@ export function installHostB(sessionKey, host) {
 
 /** Test-only: number of live hosts (both slots). */
 export function _liveHostCount() {
+  if (remoteView) return remoteView.liveHostCount();
   return hosts.size + hostsB.size;
 }
 

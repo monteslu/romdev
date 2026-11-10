@@ -32,3 +32,28 @@ export function pushCartLine(line) {
 export function recentCartLog() {
   return ring.slice();
 }
+
+/**
+ * Keep `[cart] ` lines out of this process's stderr and in the ring above.
+ * The server calls it at start, and so does every host runner process (each
+ * session's cart then has its own ring, read by that session's status).
+ * ROMDEV_LOG_CART=1 leaves stderr unfiltered.
+ */
+export function installCartLogFilter() {
+  if (process.env.ROMDEV_LOG_CART === "1") return; // opt back in, unfiltered
+  const realWrite = process.stderr.write.bind(process.stderr);
+  process.stderr.write = (chunk, ...rest) => {
+    try {
+      const text = typeof chunk === "string" ? chunk : chunk?.toString?.("utf8") ?? "";
+      if (text.startsWith("[cart] ")) {
+        for (const line of text.split("\n")) pushCartLine(line);
+        // Swallow: tell the caller we wrote it. A callback-style write still
+        // needs its callback, or a writer awaiting drain would hang.
+        const cb = rest.find((a) => typeof a === "function");
+        if (cb) cb();
+        return true;
+      }
+    } catch { /* fall through to a real write */ }
+    return realWrite(chunk, ...rest);
+  };
+}

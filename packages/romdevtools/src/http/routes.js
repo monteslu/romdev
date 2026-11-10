@@ -46,6 +46,7 @@ export let _httpSessionsByAgent = () => ({});
  * @param {string} [opts.agentsBody]  the channel-neutral AGENTS.md body (for the skill doc)
  * @param {string} [opts.version]     package version (for OpenAPI info)
  * @param {number} [opts.idleMs]      session idle timeout (default 30m)
+ * @param {(server: object, sessionKey: string) => void} [opts.wrapRegistry]  passed to buildToolRegistry
  */
 export function mountHttpToolRoutes(app, opts = {}) {
   const version = opts.version ?? "0.0.0";
@@ -107,7 +108,7 @@ export function mountHttpToolRoutes(app, opts = {}) {
         if (!victim) break;
         dropSession(victim, "evicted at session cap");
       }
-      s = { registry: buildToolRegistry(sessionKey), lastSeen: Date.now(), sticky, created: true };
+      s = { registry: buildToolRegistry(sessionKey, { wrap: opts.wrapRegistry }), lastSeen: Date.now(), sticky, created: true };
       sessions.set(sessionKey, s);
       log.debug(`[http] session ${sessionKey.slice(0, 8)} created (${sessions.size} active)`);
       // Surface sticky sessions in /livestream (like the MCP path does on init).

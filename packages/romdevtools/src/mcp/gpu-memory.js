@@ -31,7 +31,7 @@ import { readdirSync, readFileSync } from "node:fs";
 const CATEGORIES = ["gtt", "vram", "cpu"];
 
 /**
- * GPU memory this process currently holds, in MB, by category.
+ * GPU memory a process (default: this one) currently holds, in MB, by category.
  *
  * A driver reports the SAME allocation on every DRM fd the process holds (we
  * routinely hold 3), so summing across fds would triple-count. The maximum
@@ -39,10 +39,10 @@ const CATEGORIES = ["gtt", "vram", "cpu"];
  *
  * @returns {{gttMb?: number, vramMb?: number, driver?: string} | null}
  */
-export function gpuMemory() {
+export function gpuMemory(pid = "self") {
   let fds;
   try {
-    fds = readdirSync("/proc/self/fdinfo");
+    fds = readdirSync(`/proc/${pid}/fdinfo`);
   } catch {
     return null; // not Linux, or no procfs
   }
@@ -54,7 +54,7 @@ export function gpuMemory() {
   for (const fd of fds) {
     let text;
     try {
-      text = readFileSync(`/proc/self/fdinfo/${fd}`, "utf8");
+      text = readFileSync(`/proc/${pid}/fdinfo/${fd}`, "utf8");
     } catch {
       continue; // fd closed between readdir and read - normal, skip it
     }

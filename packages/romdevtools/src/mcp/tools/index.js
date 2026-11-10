@@ -276,6 +276,77 @@ const CATEGORIES = [
 ];
 
 /**
+ * The host-scoped half of catalog({op:'status'}): everything that reads this
+ * session's own host, window, autoplay, bezel, snapshots and cart log. Plain
+ * data. With host runners it is computed in the session's runner process
+ * (host-runner-child.js) and the server merges it with the server-wide half.
+ * @param {string} sessionKey
+ */
+export function sessionStatusPart(sessionKey) {
+  const host = getHostOrNull(sessionKey);
+  return {
+    base: host
+      ? { ...host.getStatus() }
+      : { loaded: false, hint: "no host yet; call loadMedia (in category 'run') to load a ROM" },
+    caps: hostCapabilities(host),
+    // Human co-drive signals: an agent re-grounding mid-session needs to
+    // know a human is playing in a playtest window BEFORE it fights them
+    // for input/stepping (pause, or use a second session).
+    human: getPlaytestHumanStatus(sessionKey),
+    autoSnap: autoSnapshotStatus(sessionKey),
+    activeBezel: activeBezelStatus(sessionKey),
+    play: playStatus(sessionKey),
+    cartLog: recentCartLog().slice(-40),
+  };
+}
+
+/** @type {null | ((sessionKey: string) => Promise<object|null>)} */
+let sessionStatusSource = null;
+/**
+ * Where the server gets a session's host-scoped status from when its hosts
+ * run in runner processes (null: compute it here). The source returns null
+ * for a session with no runner, which is then computed here (no host).
+ */
+export function setSessionStatusSource(fn) { sessionStatusSource = typeof fn === "function" ? fn : null; }
+
+/** @type {null | (() => {pids: number[], extra: object})} */
+let serverHealthSource = null;
+/** Runner pids (their GPU work and memory count as the server's) and extra health rows. */
+export function setServerHealthSource(fn) { serverHealthSource = typeof fn === "function" ? fn : null; }
+
+function rssMbOfPid(pid) {
+  try {
+    const m = /^VmRSS:\s*(\d+)\s*kB/m.exec(readFileSync(`/proc/${pid}/status`, "utf8"));
+    return m ? Number(m[1]) / 1024 : 0;
+  } catch { return 0; }
+}
+
+/** GPU time per device summed over this process and its host runners. */
+function gpuWorkAll(pids) {
+  const out = {};
+  for (const pid of ["self", ...pids]) {
+    const u = drmUsage(pid);
+    if (!u) continue;
+    for (const [k, v] of Object.entries(u)) out[k] = (out[k] ?? 0) + v.gfxNs;
+  }
+  return Object.keys(out).length ? Object.fromEntries(Object.entries(out).map(([k, ns]) => [k, Math.round(ns / 1e6)])) : null;
+}
+
+/** GPU memory over this process and its host runners (each process's peak, summed). */
+function gpuMemoryAll(pids) {
+  const mine = gpuMemory();
+  if (!pids.length) return mine;
+  let out = mine ? { ...mine } : null;
+  for (const pid of pids) {
+    const g = gpuMemory(pid);
+    if (!g) continue;
+    out ??= { driver: g.driver };
+    for (const k of ["gttMb", "vramMb"]) if (g[k] !== undefined) out[k] = (out[k] ?? 0) + g[k];
+  }
+  return out;
+}
+
+/**
  * @param {import("@modelcontextprotocol/sdk/server/mcp.js").McpServer} server
  * @param {any} z zod (passed in to avoid duplicate-package issues)
  * @param {string} sessionKey opaque per-McpServer identifier used to scope
@@ -313,15 +384,12 @@ export function registerTools(server, z, sessionKey) {
     },
     safeTool(async ({ op = "categories" }) => {
       if (op === "status") {
-        const host = getHostOrNull(sessionKey);
         const cats = disclosure.listCategories();
-        const base = host
-          ? { ...host.getStatus() }
-          : { loaded: false, hint: "no host yet; call loadMedia (in category 'run') to load a ROM" };
-        // Human co-drive signals: an agent re-grounding mid-session needs to
-        // know a human is playing in a playtest window BEFORE it fights them
-        // for input/stepping (pause, or use a second session).
-        const human = getPlaytestHumanStatus(sessionKey);
+        // The host-scoped half comes from wherever the session's host runs.
+        const part = (sessionStatusSource ? await sessionStatusSource(sessionKey) : null) ?? sessionStatusPart(sessionKey);
+        const { base, human } = part;
+        const health = serverHealthSource ? serverHealthSource() : null;
+        const pids = health?.pids ?? [];
         // Process identity + age, so a session can DETECT a server restart.
         //
         // A restart between two consecutive calls seconds apart silently
@@ -330,8 +398,8 @@ export function registerTools(server, z, sessionKey) {
         // session notice the event itself, log it, or tell "the server restarted"
         // apart from "I never loaded a ROM". A pid that changed or an uptime
         // that went backwards is proof, and costs nothing to report.
-        const autoSnap = autoSnapshotStatus(sessionKey);
-        const activeBezel = activeBezelStatus(sessionKey);
+        const autoSnap = part.autoSnap ?? null;
+        const activeBezel = part.activeBezel ?? null;
         const uptimeSeconds = Math.round(process.uptime());
         const startedAt = new Date(Date.now() - uptimeSeconds * 1000).toISOString();
         return jsonContent({
@@ -347,13 +415,15 @@ export function registerTools(server, z, sessionKey) {
           // twice on 2026-08-19 with no such visibility.)
           serverHealth: {
             requestTelemetry: requestStats.snapshot(),
-            rssMb: Math.round(process.memoryUsage().rss / 1048576),
+            // The whole server: this process plus every host runner process.
+            rssMb: Math.round(process.memoryUsage().rss / 1048576 + pids.reduce((a, p) => a + rssMbOfPid(p), 0)),
+            ...(health ? { frontRssMb: Math.round(process.memoryUsage().rss / 1048576) } : {}),
             ...hostLifetimeStats(),
             // Which GPU the server is pinned to, and the GPU engine time this
             // process has used on each device so far (the kernel's count, from
             // its DRM file descriptors): proof the work stays on the pin.
             gpuPin: (() => { const p = gpuPinInfo(); return p.pinned ? { pci: p.pci, vendorId: p.vendorId, deviceId: p.deviceId, power: p.power, source: p.source } : { pinned: false, reason: p.reason }; })(),
-            gpuWorkByDeviceMs: (() => { const u = drmUsage(); return u ? Object.fromEntries(Object.entries(u).map(([k, v]) => [k, Math.round(v.gfxNs / 1e6)])) : null; })(),
+            gpuWorkByDeviceMs: gpuWorkAll(pids),
             // A frame({op:'timing'}) run holding the server (other sessions' calls wait).
             timingRun: exclusiveStatus(),
             // HTTP sessions each hold a ~20 MB tool registry until shutdown,
@@ -369,13 +439,16 @@ export function registerTools(server, z, sessionKey) {
               const byAgent = _httpSessionsByAgent();
               return Object.keys(byAgent).length ? { sessionsByAgent: byAgent } : {};
             })(),
+            // Host runner processes (one per session): what each holds and is
+            // doing, so a busy server can be told apart from a hung host.
+            ...(health?.extra ?? {}),
             // GPU memory this process holds. Reported because NOTHING ELSE
             // SHOWS IT: GTT is system RAM mapped for the GPU, so ps/top/rssMb
             // all attribute it to the GPU rather than to us. A 26.69 GB leak
             // (2026-08-20) was invisible in every ordinary tool and only
             // surfaced in DRM fdinfo.
             ...(() => {
-              const gpu = gpuMemory();
+              const gpu = gpuMemoryAll(pids);
               if (!gpu) return {};
               const warn = gpuMemoryWarning(gpu);
               return { gpu, ...(warn ? { gpuMemoryWarning: warn } : {}) };
@@ -385,10 +458,7 @@ export function registerTools(server, z, sessionKey) {
           // was 58 MB/day of per-frame telemetry) but a cart being debugged
           // still needs it, so the last lines live in a ring buffer and
           // surface here. ROMDEV_LOG_CART=1 restores the full echo.
-          ...(() => {
-            const lines = recentCartLog();
-            return lines.length ? { recentCartLog: lines.slice(-40) } : {};
-          })(),
+          ...(part.cartLog?.length ? { recentCartLog: part.cartLog } : {}),
           // A session re-grounding after a restart needs to know a recovery point
           // exists BEFORE it decides to re-drive from scratch.
           ...(autoSnap ? { autoSnapshot: autoSnap } : {}),
@@ -403,9 +473,10 @@ export function registerTools(server, z, sessionKey) {
           // Which debug ops the loaded core + installed toolchain implement, so
           // an agent picks a working trace strategy up front instead of probing
           // by failure (~4 dead calls/session).
-          ...hostCapabilities(host),
+          ...(part.caps ?? hostCapabilities(null)),
           playtestWindowOpen: human.windowOpen,
-          ...(playStatus(sessionKey) ? { play: playStatus(sessionKey) } : {}),
+          ...(part.play ? { play: part.play } : {}),
+          ...(part.hostBusy ? { hostBusy: part.hostBusy } : {}),
           ...(human.windowOpen
             ? {
                 humanInputActive: human.humanInputActive,

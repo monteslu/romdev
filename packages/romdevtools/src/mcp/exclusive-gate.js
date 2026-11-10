@@ -77,6 +77,7 @@ export async function acquireExclusive(sessionKey, { drainMs = 10000 } = {}) {
   const release = new Promise((r) => { done = r; });
   const me = { session: sessionKey, since: Date.now(), held: 0, release, done };
   holder = me;
+  try { holderListener?.(true); } catch { /* status only */ }
   const waitedMs = Date.now() - t0;
   const d0 = Date.now();
   while (othersInflight(sessionKey) > 0 && Date.now() - d0 < drainMs) {
@@ -92,12 +93,25 @@ export async function acquireExclusive(sessionKey, { drainMs = 10000 } = {}) {
     heldCalls: () => me.held,
     release() {
       if (holder === me) holder = null;
+      try { holderListener?.(false); } catch { /* status only */ }
       me.done();
     },
   };
 }
 
+// A host runner process (one session per process) reports its timing runs to
+// the server, which has no gate of its own to read them from.
+/** @type {null | ((active: boolean) => void)} */
+let holderListener = null;
+/** @param {null | ((active: boolean) => void)} fn */
+export function setHolderListener(fn) { holderListener = typeof fn === "function" ? fn : null; }
+/** @type {null | (() => object|null)} */
+let remoteStatus = null;
+/** The server's view of timing runs in host runner processes. */
+export function setRemoteExclusiveStatus(fn) { remoteStatus = typeof fn === "function" ? fn : null; }
+
 /** Who holds the gate, for catalog status. */
 export function exclusiveStatus() {
+  if (!holder && remoteStatus) return remoteStatus();
   return holder ? { session: holder.session, sinceMs: Date.now() - holder.since, callsWaiting: holder.held } : null;
 }
