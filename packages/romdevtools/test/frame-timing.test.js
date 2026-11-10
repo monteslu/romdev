@@ -161,12 +161,32 @@ test("timing on GL: a TIME_ELAPSED query per frame, rising with extra GPU work",
     assert.equal(base.gpuMs.measure, "span");
     assert.ok(base.gpuMs.mean > 0);
     assert.equal(base.gpu.glRenderer, load.glRenderer);
-    const undo = addToFrame(sk, glHeavy(4, 64));
-    const heavy = await call(reg, sk, "frame", { op: "timing", frames: 60, warmup: 10, window: 60 });
-    undo();
-    assert.ok(heavy.gpuMs.mean > base.gpuMs.mean + 0.5 && heavy.gpuMs.mean > 2 * base.gpuMs.mean,
-      `4 extra full-screen 64-iteration shader passes a frame: GPU ${base.gpuMs.mean} -> ${heavy.gpuMs.mean} ms`);
-    t.diagnostic(`GL gpu ms: base ${base.gpuMs.mean}, +4 heavy passes ${heavy.gpuMs.mean}`);
+    // The rise is judged against the base, not against a fixed millisecond
+    // count: a GPU's speed and clock (an idle 890M downclocks and reads a
+    // 64-iteration pass at 0.45 ms, a busy one at 0.74, a desktop card far
+    // less) decide the absolute cost, so an absolute threshold measures the
+    // GPU, not the timer. The extra work is scaled up (4x the shader
+    // iterations a round, up to 4096) until its cost is both well above the
+    // query's resolution (0.2 ms) and a multiple of the base (3x); a timer
+    // that did not see GPU work passes no round. Where more than one round
+    // ran, the cost must have grown with the work.
+    const rounds = [];
+    let heavy = null;
+    for (let iters = 64; iters <= 4096 && !heavy; iters *= 4) {
+      const undo = addToFrame(sk, glHeavy(4, iters));
+      const h = await call(reg, sk, "frame", { op: "timing", frames: 60, warmup: 10, window: 60 });
+      undo();
+      rounds.push({ iters, gpuMs: h.gpuMs.mean });
+      if (h.gpuMs.mean >= base.gpuMs.mean + 0.2 && h.gpuMs.mean >= 3 * base.gpuMs.mean) heavy = h;
+    }
+    const tried = rounds.map((r) => `${r.iters} iterations: ${r.gpuMs} ms`).join(", ");
+    assert.ok(heavy, `4 extra full-screen shader passes a frame never raised the GPU time by 0.2 ms and 3x over the base ${base.gpuMs.mean} ms (${tried})`);
+    for (let i = 1; i < rounds.length; i++) assert.ok(rounds[i].gpuMs > rounds[i - 1].gpuMs, `more work costs more: ${tried}`);
+    // the control: the same criterion on a second run of the cart alone must NOT be met
+    const again = await call(reg, sk, "frame", { op: "timing", frames: 60, warmup: 10, window: 60 });
+    assert.ok(!(again.gpuMs.mean >= base.gpuMs.mean + 0.2 && again.gpuMs.mean >= 3 * base.gpuMs.mean),
+      `the cart alone, measured twice, must not read as extra work: ${base.gpuMs.mean} then ${again.gpuMs.mean} ms`);
+    t.diagnostic(`GL gpu ms: base ${base.gpuMs.mean} (again ${again.gpuMs.mean}); +4 heavy passes at ${tried}`);
   } finally {
     clearHost(sk);
   }

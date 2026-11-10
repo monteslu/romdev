@@ -3,6 +3,33 @@ import { jsonContent, safeTool } from "../util.js";
 import { getInputLayoutCore } from "./input-layout.js";
 import { humanCoDriveWarning } from "./playtest.js";
 import { attachObserverFrame } from "./watch-memory.js";
+import { keyScancodes, keyName } from "../../host/wasmcart-keys.js";
+import { readFields, parseStopWhen, stepUntil } from "./step-fields.js";
+
+/**
+ * The keyboard half of a pad set: `keys` (SDL scancode names or numbers) on a
+ * wasmcart host. Returns the fields to add to the host's setInput call and to
+ * the result. A non-wasmcart host refuses keys (the C64 has pressKey/typeText),
+ * and keys on a cart that never asked for the keyboard are reported, not
+ * silently dropped: a binding that "never fires" because the cart lacks
+ * WC_FLAG_KEYBOARD must read as a fact about the cart.
+ */
+function keysFor(host, keys, op) {
+  const wasmcart = host?.kind === "wasmcart" || typeof host?.setKeys === "function";
+  if (keys != null && !Array.isArray(keys)) throw new Error(`input({op:'${op}'}): \`keys\` must be an array of key names (['space', 'w']) or scancode numbers.`);
+  if (!wasmcart) {
+    if (keys && keys.length) throw new Error(`input({op:'${op}'}): \`keys\` drive a wasmcart cart's keyboard; this ${host?.kind || host?.status?.platform || "host"} has no keyboard here (C64: pressKey / typeText).`);
+    return { input: {}, report: {} };
+  }
+  let codes;
+  try { codes = keyScancodes(keys ?? []); } catch (e) { throw new Error(`input({op:'${op}'}): ${e.message}`); }
+  const wanted = typeof host.keyboardWanted === "function" ? host.keyboardWanted() : null;
+  const report = codes.length ? { keys: codes.map(keyName), scancodes: codes, keyboard: wanted } : {};
+  if (codes.length && wanted === false) {
+    report.note = "the cart did not set WC_FLAG_KEYBOARD: a real host sends it no keys either, so these keys reach nothing. Pads still work.";
+  }
+  return { input: { keys: codes }, report };
+}
 
 // Spreadable co-drive conflict marker for every input-driving op: while a
 // human is actively playing in this session's playtest window, their input
@@ -108,7 +135,7 @@ const KNOWN_BUTTONS = new Set([
 // ── *Core functions for the `input` tool ──
 
 /** op:'set' - set held controller state (persists until changed). */
-function inputSetCore({ ports }, sessionKey) {
+function inputSetCore({ ports, keys }, sessionKey) {
       // REJECT a malformed port object before touching the host.
       //
       // This used to only warn, and only on keys whose value was literally
@@ -162,7 +189,9 @@ function inputSetCore({ ports }, sessionKey) {
           "Rejected rather than partially applied - a press that silently doesn't happen turns into a false negative about the game.",
         );
       }
-      getHost(sessionKey).setInput({ ports });
+      const host = getHost(sessionKey);
+      const kb = keysFor(host, keys, "set");
+      host.setInput({ ports, ...kb.input });
       const requested = ports.map((p) => Object.keys(p).filter((k) => p[k] === true && KNOWN_BUTTONS.has(k)));
       // axes are input too: echo them, or an axis-only set reads as requested:[[]]
       const requestedAxes = ports.map((p) => (p.axes && typeof p.axes === "object" ? p.axes : null));
@@ -170,6 +199,7 @@ function inputSetCore({ ports }, sessionKey) {
         inputSet: true,
         requested,
         ...(requestedAxes.some(Boolean) ? { requestedAxes } : {}),
+        ...kb.report,
         ...coDriveFields(sessionKey),
       };
 }
@@ -203,18 +233,48 @@ async function inputPressCore({ button, frames = 2, port: p = 0 }, sessionKey) {
       };
 }
 
-/** op:'sequence' - scripted frame-by-frame inputs (ports shape per step). */
-async function inputSequenceCore({ steps }, sessionKey) {
+/**
+ * op:'sequence' - scripted frame-by-frame inputs (ports shape per step).
+ * Each step may hold `keys` (on the step or inside its `input`); a step that
+ * names none releases them, as it releases the buttons it does not name.
+ * `fields` are read after the last frame run; `stopWhen` ends the sequence
+ * early (the step it stopped in, and the frames run, are reported).
+ */
+async function inputSequenceCore({ steps, fields, stopWhen }, sessionKey) {
       const host = getHost(sessionKey);
-      let total = 0;
-      for (const step of steps) {
-        host.setInput(step.input);
+      if (!Array.isArray(steps) || !steps.length) throw new Error("input({op:'sequence'}): `steps` must be a non-empty array of {input:{ports:[...], keys?:[...]}, frames}.");
+      const sw = parseStopWhen(stopWhen, "input({op:'sequence'})");
+      const names = fields == null ? [] : fields;
+      if (!Array.isArray(names) || names.some((n) => typeof n !== "string")) throw new Error("input({op:'sequence'}): `fields` must be an array of debug field names (['cue.arrow', 'game.done']).");
+      let total = 0, stopped = null, keyReport = null;
+      for (let i = 0; i < steps.length; i++) {
+        const step = steps[i];
+        if (!step || typeof step !== "object") throw new Error(`input({op:'sequence'}): step ${i} is not an object.`);
+        const frames = step.frames;
+        if (!Number.isInteger(frames) || frames < 0) throw new Error(`input({op:'sequence'}): step ${i}: \`frames\` must be a whole number (0 or more).`);
+        const input = step.input && typeof step.input === "object" ? step.input : {};
+        const keys = step.keys ?? input.keys;
+        const kb = keysFor(host, keys, "sequence");
+        // a sequence that used keys says whether the cart takes a keyboard (a client on an older
+        // server, whose schema drops `keys`, sees no `keyboard` field and knows its keys went nowhere)
+        if (kb.report.keyboard !== undefined && keyReport?.keyboard !== false) keyReport = { keyboard: kb.report.keyboard, ...(kb.report.note ? { note: kb.report.note } : {}) };
+        host.setInput({ ...input, ...kb.input });
+        if (!frames) continue;
         // await: a WebGPU cart steps asynchronously (an event-loop turn per
         // frame), so the next step's input must wait for this burst to end
-        await host.stepFrames(step.frames);
-        total += step.frames;
+        const r = await stepUntil(host, frames, sw);
+        total += r.framesRun;
+        if (r.stopped) { stopped = { ...r.stopped, step: i, frameCount: host.status.frameCount }; break; }
       }
-      return { stepsRun: steps.length, framesRun: total, frameCount: host.status.frameCount, ...coDriveFields(sessionKey) };
+      return {
+        stepsRun: stopped ? stopped.step + 1 : steps.length,
+        framesRun: total,
+        frameCount: host.status.frameCount,
+        ...(sw ? { stopped: stopped ?? false } : {}),
+        ...(names.length ? { fields: readFields(host, names) } : {}),
+        ...(keyReport ?? {}),
+        ...coDriveFields(sessionKey),
+      };
 }
 
 /** op:'navigate' - drive menus by advancing on SCREEN CHANGE; reports consumed per step. */
@@ -389,7 +449,8 @@ export function registerInputTools(server, z, sessionKey) {
     "'press': press one named `button` for `frames` then release (port 0 default). Runs ONE released frame " +
     "first so edge-triggered handlers (START pause, menu confirm) always see a fresh newpress even if the " +
     "button was already held by a prior set.\n" +
-    "'sequence': scripted frame-by-frame `steps:[{input:{ports}, frames}]` for replays/tests.\n" +
+    "'sequence': scripted frame-by-frame `steps:[{input:{ports, keys?}, frames}]` for replays/tests and bots: `fields` returns named debug fields after the last frame and `stopWhen:{field, equals}` ends the range early, so a bot looks at the cart in the SAME request that moved it (one request per decision, never a step then a read).\n" +
+    "WASMCART KEYBOARD: `keys:['space','w']` (SDL scancode names, or scancode numbers) on 'set' and on each 'sequence' step holds those keys while the step holds, delivered as a real host's keyboard (key down/up events with modifiers, the held mask every frame); a step or set without `keys` releases them, as it releases unnamed buttons. The result says `keyboard:false` when the cart never asked for a keyboard.\n" +
     "'navigate': walk a menu by advancing on SCREEN CHANGE - `steps:[{button, holdFrames?, maxWaitFrames?, " +
     "settleFrames?}]`; reports `consumed` per step (false = the screen never reacted: wrong screen / press dropped / " +
     "game polls on a specific frame).\n" +
@@ -431,7 +492,10 @@ export function registerInputTools(server, z, sessionKey) {
       frames: z.number().int().min(1).max(600).default(2).describe("op=press: frames to hold the button. op=pressKey: frames to hold the C64 key (default 4)."),
       port: z.number().int().min(0).max(1).default(0).describe("op=press: which port (default 0)."),
       // sequence
-      steps: z.array(z.any()).optional().describe("op=sequence: [{input:{ports:[...]}, frames}]. op=navigate: [{button, holdFrames?, maxWaitFrames?, settleFrames?}]. (Two distinct step shapes by op.)"),
+      steps: z.array(z.any()).optional().describe("op=sequence: [{input:{ports:[...], keys?:['space']}, frames}] (keys: wasmcart only; `keys` may also sit on the step itself). op=navigate: [{button, holdFrames?, maxWaitFrames?, settleFrames?}]. (Two distinct step shapes by op.)"),
+      keys: z.array(z.union([z.string(), z.number().int().min(0).max(255)])).optional().describe("op=set (wasmcart): keyboard keys held from the next frame on, SDL scancode names ('space', 'w', 'return', 'left', 'lshift', 'f1', ...) or USB HID scancode numbers; omitted = no key held. Released by the next set/sequence step that does not name them."),
+      fields: z.array(z.string()).optional().describe("op=sequence: debug field names (wasm({op:'debugState'}) names, e.g. ['cue.arrow', 'game.done']) read from the cart after the last frame run, returned as `fields:{name: value}` (a number, an array, or a bytes field's text). One request per decision for a bot: the step and the look together."),
+      stopWhen: z.object({ field: z.string(), equals: z.any().optional(), atLeast: z.number().optional(), atMost: z.number().optional(), index: z.number().int().min(0).optional(), every: z.number().int().min(1).optional() }).optional().describe("op=sequence: end the sequence as soon as a debug field meets the condition ({field:'game.done', equals:1}; or atLeast / atMost; `index` picks an element of an array field; `every` = frames between checks, default 1). The result's `stopped` is {field, value, step, frameCount} or false, and framesRun counts the frames actually run."),
       // layout
       platform: z.string().optional().describe("op=layout: platform id (nes, gb, snes, genesis, ...)."),
       // C64 keyboard

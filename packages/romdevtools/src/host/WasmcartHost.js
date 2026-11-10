@@ -23,6 +23,7 @@ import { RETRO_PIXEL_FORMAT_XRGB8888, ROMDEV_PIXEL_FORMAT_RGBA8888 } from "romde
 import { installTimestampFeature, TIMESTAMP_ADAPTER_OPTION, WgpuFrameTimer } from "./gpu-timing/wgpu-timer.js";
 import { GlFrameTimer } from "./gpu-timing/gl-timer.js";
 import { postDebugCommand, takeDebugReply } from "./debug-channel.js";
+import { keyScancodes, modifiersOf } from "./wasmcart-keys.js";
 
 // ── Headless GL for GL carts ─────────────────────────────────────────────────
 // wasmcart takes glBackend as a FACTORY invoked only when the cart's wasm
@@ -251,6 +252,9 @@ export class WasmcartHost {
     // and idle so carts that check pad.connected see a controller before the
     // first setInput - the same contract as a libretro port.
     this._inputPorts = [this._padFromInput({})];
+    // The keyboard keys held (USB HID scancodes), applied to the cart as
+    // key down/up events the way a host's SDL loop delivers them: see setKeys.
+    this._keysHeld = new Set();
     this.status = {
       loaded: false,
       platform: null,
@@ -323,6 +327,7 @@ export class WasmcartHost {
     if (!source) throw new Error("WasmcartHost.loadMedia: provide `path` or `bytes`.");
 
     this.cart = new CartHost();
+    this._keysHeld = new Set(); // a fresh cart starts with no key down
     // Deterministic replay (wasmcart 0.5.0+): {seed, stepMs?}. Feature-detect
     // via the constructor field - an older CartHost would silently ignore the
     // option and hand back a non-deterministic run the caller believes is seeded.
@@ -669,6 +674,49 @@ export class WasmcartHost {
       const w = input.wheel;
       this.cart.wheel(w.dx | 0, w.dy | 0);
     }
+    /* The keyboard: `keys` names (or scancodes) held from the next frame on.
+     * The same rule as buttons: a pad set that names no keys releases them
+     * all, so a sequence step without `keys` holds none. A pointer-only or
+     * wheel-only call leaves the keys alone (it is not a pad set). */
+    if (input && (Array.isArray(input.keys) || input.ports || !(input.pointer || input.wheel))) {
+      this.setKeys(input.keys ?? []);
+    }
+  }
+
+  /**
+   * Hold exactly these keys (names such as 'space', 'w', 'left', 'lshift', or
+   * USB HID scancodes) from the next frame on. Delivered to the cart as a real
+   * host delivers a keyboard: a key down event (with the modifier bits of the
+   * keys then held) for each key newly down, a key up for each released,
+   * and the 256-bit held mask written before every wc_render. CartHost queues
+   * the events and writes the mask on the next runFrame, so a change made
+   * between frames is seen by the next frame exactly, never a frame late.
+   * Returns the scancodes now held.
+   */
+  setKeys(keys) {
+    const want = keyScancodes(keys);
+    const wantSet = new Set(want);
+    const mods = modifiersOf(want);
+    if (this.cart && typeof this.cart.keyDown === "function") {
+      // every event carries the modifier bits of the keys held after this change
+      for (const c of this._keysHeld) if (!wantSet.has(c)) this.cart.keyUp(c, mods);
+      for (const c of want) if (!this._keysHeld.has(c)) this.cart.keyDown(c, mods);
+    }
+    this._keysHeld = wantSet;
+    return want;
+  }
+
+  /** The scancodes held now. */
+  keysHeld() { return [...this._keysHeld].sort((a, b) => a - b); }
+
+  /**
+   * Whether the loaded cart asked for the keyboard (WC_FLAG_KEYBOARD): null
+   * before a load. A cart that did not opt in never sees a key: its mask is
+   * not written and its events are not called, exactly as on a real host.
+   */
+  keyboardWanted() {
+    if (!this.cart?.info) return null;
+    return !!this.cart.info.wantsKeyboard;
   }
 
   /** Advance n frames, driving CartHost.runFrame with the current input. Each

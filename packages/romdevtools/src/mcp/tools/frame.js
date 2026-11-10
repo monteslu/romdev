@@ -26,6 +26,7 @@ import { readS32RecompileLayout } from "../../analysis/recompile/native/s32-cart
 import { S32CartHost } from "../../host/S32CartHost.js";
 import { installHost } from "../state.js";
 import { readFileSync as readFileSyncCycles } from "node:fs";
+import { readFields, parseStopWhen, stepUntil } from "./step-fields.js";
 
 /** Default profile groups for a native Genesis cart (object files -> subsystem). */
 const GENESIS_NATIVE_GROUPS = {
@@ -398,7 +399,11 @@ export function compositeSideBySide(a, b, gap = 4) {
 }
 
 export function registerFrameTools(server, z, sessionKey) {
-  async function doStep({ frames, slot }) {
+  async function doStep({ frames, slot, fields, stopWhen }) {
+      // fields / stopWhen: the look in the same request as the step (step-fields.js)
+      const sw = parseStopWhen(stopWhen, "frame({op:'step'})");
+      const names = fields == null ? [] : fields;
+      if (!Array.isArray(names) || names.some((n) => typeof n !== "string")) throw new Error("frame({op:'step'}): `fields` must be an array of debug field names (['cue.arrow', 'game.done']).");
       // slot:'b' advances the COMPARISON host on its own. findDiverge steps both
       // slots in lockstep from wherever they stand, which is the wrong tool when
       // the two sides only diverge deep into a run: you need to warm each side to
@@ -408,7 +413,12 @@ export function registerFrameTools(server, z, sessionKey) {
       const host = slotB ? getHostB(sessionKey) : getHost(sessionKey);
       // await: native-runtime hosts (jsgame) have an async stepFrames that yields for
       // the game's async work; awaiting a sync LibretroHost return is a harmless no-op.
-      const n = await host.stepFrames(frames);
+      const stepped = await stepUntil(host, frames, sw);
+      const n = stepped.framesRun;
+      const look = {
+        ...(sw ? { stopped: stepped.stopped ? { ...stepped.stopped, frameCount: host.status.frameCount } : false } : {}),
+        ...(names.length ? { fields: readFields(host, names) } : {}),
+      };
       // Slot B is comparison scratch: it drives no presentation, owns no bezel,
       // and must never touch the livestream, the auto-snapshot timeline, or the
       // playtest co-drive check. Advance it and report, nothing else.
@@ -416,6 +426,7 @@ export function registerFrameTools(server, z, sessionKey) {
         return jsonContent({
           slot: "b",
           framesRun: n,
+          ...look,
           frameCount: host.status.frameCount,
           framebuffer: { width: host.status.fbWidth, height: host.status.fbHeight },
         });
@@ -445,6 +456,7 @@ export function registerFrameTools(server, z, sessionKey) {
         framesRun: n,
         frameCount: host.status.frameCount,
         framebuffer: { width: host.status.fbWidth, height: host.status.fbHeight },
+        ...look,
         ...(coDrive ? { humanCoDriveWarning: coDrive } : {}),
         ...(busy ? { wgpuStep: { ...lb, note: `this WebGPU step spent ${lb.turnWaitMs} ms of ${lb.wallMs} between its frames running other sessions' work on this shared server (the cart's frames took ${lb.inFramesMs} ms, the GPU ${lb.gpuWaitMs} ms): the server is busy, the cart is not slow. frame({op:'timing'}) measures with the server held.` } } : {}),
       }), host, `step ×${n}`);
@@ -1134,7 +1146,8 @@ export function registerFrameTools(server, z, sessionKey) {
       cartOrigin: z.array(z.number().int().min(0)).length(2).optional().describe("op=verifyRecompile: [x,y] of the reference picture inside the cart framebuffer (e.g. [48,24] for a Game Gear cart rendering the full 256x192 raster). Default: the section's screen.origin, else centred."),
       cartButtonMap: z.record(z.string(), z.string()).optional().describe("op=verifyRecompile/findDiverge/fuzzRecompile: rename buttons for the CART side only, for a legacy cart that reads wasmcart pad bits by name instead of position (e.g. {a:'b', b:'a'}). A section with buttons:'byName' implies exactly that swap."),
       regions: z.record(z.string(), z.object({ offset: z.number().int().min(0), length: z.number().int().min(1), ref: z.string(), refOffset: z.number().int().min(0).optional(), transform: z.enum(["swap16", "lowbyte16", "highbyte16"]).optional(), mask: z.number().int().min(0).max(255).optional(), compare: z.boolean().optional() })).optional().describe("op=verifyRecompile/findDiverge: cart linear-memory spans to byte-compare against reference memory regions, {name:{offset,length,ref:'<region>',refOffset?,transform?,mask?}}. Merged over the cart's romdev.recompile section (same name = caller wins); the only source for a cart without the section. transform applies to the reference bytes (lowbyte16 = keep the low byte of each u16 word, e.g. gpgx's SMS CRAM); mask ANDs both sides; compare:false marks a DIAGNOSTIC region (reported with '(diag)', never in stateIdentical, the verdict or findDiverge)."),
-      fields: z.record(z.string(), z.object({ offset: z.number().int().min(0), size: z.number().int().optional(), signed: z.boolean().optional(), mask: z.number().int().min(0).optional(), ref: z.union([z.string(), z.object({ cpu: z.string().optional(), region: z.string().optional(), offset: z.number().int().min(0).optional(), size: z.number().int().optional() })]).optional() })).optional().describe("op=verifyRecompile/findDiverge: scalar cart fields (little-endian, size 1/2/4 at `offset`) compared with the reference: ref 'cpu:<path>' reads cpu({op:'read'}) (e.g. 'cpu:pc', 'cpu:registers.A', 'cpu:coreInternal.count'), or '<region>+<offset>' / {region, offset} reads a reference memory region (e.g. genesis_m68k+5208 for Musashi's pc). mask ANDs both values."),
+      stopWhen: z.object({ field: z.string(), equals: z.any().optional(), atLeast: z.number().optional(), atMost: z.number().optional(), index: z.number().int().min(0).optional(), every: z.number().int().min(1).optional() }).optional().describe("op=step: stop the step as soon as a debug field meets the condition ({field:'game.done', equals:1}; or atLeast / atMost; `index` picks an element of an array field; `every` = frames between checks, default 1). The result's `stopped` is {field, value, frameCount} or false, and framesRun counts the frames actually run."),
+      fields: z.union([z.array(z.string()), z.record(z.string(), z.object({ offset: z.number().int().min(0), size: z.number().int().optional(), signed: z.boolean().optional(), mask: z.number().int().min(0).optional(), ref: z.union([z.string(), z.object({ cpu: z.string().optional(), region: z.string().optional(), offset: z.number().int().min(0).optional(), size: z.number().int().optional() })]).optional() }))]).optional().describe("op=step: an ARRAY of debug field names (wasm({op:'debugState'}) names) read from the cart after the last frame, returned as `fields:{name: value}` (one request steps and looks). op=verifyRecompile/findDiverge: an object of scalar cart fields (little-endian, size 1/2/4 at `offset`) compared with the reference: ref 'cpu:<path>' reads cpu({op:'read'}) (e.g. 'cpu:pc', 'cpu:registers.A', 'cpu:coreInternal.count'), or '<region>+<offset>' / {region, offset} reads a reference memory region (e.g. genesis_m68k+5208 for Musashi's pc). mask ANDs both values."),
       probe: z.record(z.string(), z.object({ offset: z.number().int().min(0), size: z.number().int().optional() })).optional().describe("op=verifyRecompile/fuzzRecompile: cart-only probe fields reported per frame; a nonzero `trapped` fails the verdict (fuzzRecompile: is the trap it looks for)."),
       warmupFrames: z.number().int().min(0).max(1000).optional().describe("op=verifyRecompile/findDiverge: frames the cart runs inside its FIRST wc_render beyond the one the host counts (overrides the section's warmupFrames)."),
       vramZero: z.array(z.string()).optional().describe("op=verifyRecompile: region names the VRAM-zero control wipes (default: regions named *vram*/*chr*/*nametable*)."),
