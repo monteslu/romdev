@@ -290,6 +290,14 @@ export function peekSession(sessionKey) {
   };
 }
 
+/** Live hosts other than this session's (both slots), for a timing run's contention report. */
+export function otherLiveHosts(sessionKey) {
+  let n = 0;
+  for (const k of hosts.keys()) if (k !== sessionKey) n++;
+  for (const k of hostsB.keys()) if (k !== sessionKey) n++;
+  return n;
+}
+
 /** Live host counts + config, for catalog({op:'status'}). */
 export function hostLifetimeStats() {
   return {

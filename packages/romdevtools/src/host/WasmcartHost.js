@@ -20,6 +20,9 @@ import { CartHost, BUTTON, noteGlCurrent as _noteGlCurrent } from "wasmcart";
 import { framebufferToRgba } from "romdev-core-host/framebuffer.js";
 import { framebufferToScreenshot } from "romdev-core-host/framebuffer-png.js";
 import { RETRO_PIXEL_FORMAT_XRGB8888, ROMDEV_PIXEL_FORMAT_RGBA8888 } from "romdev-core-host/retroConstants.js";
+import { installTimestampFeature, TIMESTAMP_ADAPTER_OPTION, WgpuFrameTimer } from "./gpu-timing/wgpu-timer.js";
+import { GlFrameTimer } from "./gpu-timing/gl-timer.js";
+import { postDebugCommand, takeDebugReply } from "./debug-channel.js";
 
 // ── Headless GL for GL carts ─────────────────────────────────────────────────
 // wasmcart takes glBackend as a FACTORY invoked only when the cart's wasm
@@ -315,7 +318,7 @@ export class WasmcartHost {
    * in-memory cart zip. Mirrors LibretroHost.loadMedia's post-conditions:
    * status.loaded + a first framebuffer so screenshot works immediately.
    */
-  async loadMedia({ platform, path: mediaPath, bytes, glBackend, deterministic, presentWindow, gpuPower, wgpu, wgpuFeatureLevel, beforeSettle } = {}) {
+  async loadMedia({ platform, path: mediaPath, bytes, glBackend, deterministic, presentWindow, gpuPower, wgpu, wgpuFeatureLevel, gpuTiming, preferredSize, firstCommand, beforeSettle } = {}) {
     const source = bytes ?? mediaPath;
     if (!source) throw new Error("WasmcartHost.loadMedia: provide `path` or `bytes`.");
 
@@ -471,12 +474,24 @@ export class WasmcartHost {
     // A WebGPU cart gets wasmcart's default: a core device where the GPU has
     // one, else compatibility mode. wgpuFeatureLevel forces one.
     const featureLevel = wgpu === false ? null : wgpuFeatureLevel;
+    // gpuTiming: the WebGPU device gets the timestamp-query feature (where the
+    // adapter has it), so frame({op:'timing'}) can time the GPU and a cart's
+    // own pass timers can run. Asked for at load because a device's features
+    // are fixed when it is made. Off by default: the device is then wasmcart's
+    // floor, the same one a browser host gives.
+    this._wantTimestamps = !!gpuTiming && wgpu !== false;
+    if (this._wantTimestamps) await installTimestampFeature();
+    this._stopTiming();
     await this.cart.load(source, {
       glBackend: glBackend ?? glFactory,
       ...(deterministic ? { deterministic } : {}),
       ...(savedData ? { saveData: savedData } : {}),
-      ...(gpuPower || featureLevel ? { adapterOptions: { ...(gpuPower ? { powerPreference: gpuPower } : {}), ...(featureLevel ? { featureLevel } : {}) } } : {}),
+      ...(gpuPower || featureLevel || this._wantTimestamps ? { adapterOptions: { ...(gpuPower ? { powerPreference: gpuPower } : {}), ...(featureLevel ? { featureLevel } : {}), ...(this._wantTimestamps ? { [TIMESTAMP_ADAPTER_OPTION]: true } : {}) } } : {}),
       ...(wgpu === false ? { wgpu: false } : {}),
+      // the host's preferred size (wc_host_info_t preferred_width/height): a
+      // cart that sizes itself from it renders at that size (cartwheel's auto
+      // render scale, outside deterministic runs)
+      ...(preferredSize ? { preferredWidth: preferredSize.width | 0, preferredHeight: preferredSize.height | 0 } : {}),
     });
     if (glBackend && this.cart.usesGL) this._gl = glBackend;
     this._guardHostWrites();
@@ -488,6 +503,10 @@ export class WasmcartHost {
     // owns, and their frames come back by an async GPU readback.
     this.status.gpu = this.cart.usesWgpu ? "webgpu" : this.cart.usesGL ? "gl" : null;
     this.status.gpuAdapter = this.cart.usesWgpu ? this.cart.getGpuAdapterInfo() : null;
+    if (this.status.gpuAdapter) this.status.gpuAdapter.timestampQuery = !!this.cart.getGpuDevice?.()?.features?.has?.("timestamp-query");
+    // The GL renderer string names the GPU a GL cart really runs on.
+    this.status.glRenderer = null;
+    if (this._gl && this.cart.usesGL) { try { this.status.glRenderer = String(this._gl.getParameter(this._gl.RENDERER)); } catch { /* no context */ } }
     // Deterministic clock: romdev steps frames, so frame N should be reproducible.
     // Feature-detect - setFixedStep is a newer CartHost addition; older published
     // versions fall back to wall-clock (still works, just non-deterministic timing).
@@ -515,9 +534,19 @@ export class WasmcartHost {
     // A caller that must observe the settle frame itself (the instruction
     // differ traces power-on) arms its hooks here, after wc_init.
     if (typeof beforeSettle === "function") beforeSettle(this);
+    // firstCommand: a debug-channel request posted before the settle frame, so
+    // the cart answers it in its first frame: how a test switch the game reads
+    // from frame 1 on (cartwheel's `env NAME=value`) reaches it in time.
+    let firstSeq = null;
+    this.status.firstCommandReply = undefined;
+    if (firstCommand) firstSeq = postDebugCommand(this, firstCommand);
     // Settle a first frame so width/height and a framebuffer exist (carts often
     // finalize their resolution during the first render).
     await this.stepFrames(1);
+    if (firstSeq != null) {
+      const reply = takeDebugReply(this, firstSeq);
+      this.status.firstCommandReply = reply === undefined ? { error: "the cart did not answer in its first frame" } : reply;
+    }
     this.status.fbWidth = this.state.lastFrame?.width || 0;
     this.status.fbHeight = this.state.lastFrame?.height || 0;
     // A cart's display IS its framebuffer (square pixels, no CRT stretch) -
@@ -676,22 +705,32 @@ export class WasmcartHost {
     for (let i = 0; i < n; i++) {
       r = this.cart.runFrame(this._inputPorts);
       this.status.frameCount++;
-      if (r?.audio && r.audio.length) {
-        // Copy out (the buffer is a subarray into WASM memory that moves next
-        // frame) and normalize Float32 [-1,1] → Int16 so the ring is uniform.
-        const a = r.audio;
-        if (a instanceof Float32Array) {
-          const i16 = new Int16Array(a.length);
-          for (let k = 0; k < a.length; k++) {
-            const s = a[k] < -1 ? -1 : a[k] > 1 ? 1 : a[k];
-            i16[k] = s < 0 ? s * 0x8000 : s * 0x7fff;
-          }
-          this.state.audioRing.push(i16);
-        } else {
-          this.state.audioRing.push(new Int16Array(a)); // Int16 copy
-        }
-      }
+      this._pushAudio(r);
     }
+    this._afterCpuBurst(r);
+    return n;
+  }
+
+  /** Copy a frame's audio into state.audioRing (Int16; Float32 is converted). */
+  _pushAudio(r) {
+    if (!(r?.audio && r.audio.length)) return;
+    // Copy out (the buffer is a subarray into WASM memory that moves next
+    // frame) and normalize Float32 [-1,1] → Int16 so the ring is uniform.
+    const a = r.audio;
+    if (a instanceof Float32Array) {
+      const i16 = new Int16Array(a.length);
+      for (let k = 0; k < a.length; k++) {
+        const s = a[k] < -1 ? -1 : a[k] > 1 ? 1 : a[k];
+        i16[k] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      }
+      this.state.audioRing.push(i16);
+    } else {
+      this.state.audioRing.push(new Int16Array(a)); // Int16 copy
+    }
+  }
+
+  /** After a burst of 2D or GL frames: the last frame's pixels and size. */
+  _afterCpuBurst(r) {
     if (r) {
       // Copy the framebuffer view out (CartHost returns a subarray into WASM memory,
       // which can move on the next frame). pitch = width*4 (no row padding).
@@ -743,7 +782,6 @@ export class WasmcartHost {
         this.status.displayAspect = h > 0 ? w / h : 0;
       }
     }
-    return n;
   }
 
   /**
@@ -773,7 +811,20 @@ export class WasmcartHost {
 
   async _wgpuBurst(n) {
     if (!this.cart) return n;
+    WasmcartHost.activeBursts++;
+    try { return await this._wgpuBurstInner(n); } finally { WasmcartHost.activeBursts--; }
+  }
+
+  async _wgpuBurstInner(n) {
+    if (!this.cart) return n;
     let r = null;
+    // Where the burst's time went (lastBurst, shown on frame({op:'step'})):
+    // inside the cart's frames, waiting for the GPU's work, and waiting for the
+    // event-loop turns between frames. On a shared server those turns run
+    // whatever other sessions queued (their frames, a GL burst, a build), so a
+    // long turnWaitMs is the server's load, not this cart.
+    const b = { frames: 0, inFramesMs: 0, gpuWaitMs: 0, turnWaitMs: 0, t0: performance.now() };
+    this.lastBurst = null;
     for (let i = 0; i < n; i++) {
       // Between every two frames: the GPU work the last frame submitted, then
       // an event-loop turn, as a browser or a native player gives a WebGPU
@@ -791,27 +842,29 @@ export class WasmcartHost {
       // before the burst and each frame still reads them.
       if (i > 0) {
         const device = this.cart.getGpuDevice?.();
+        let t = performance.now();
         if (device) await device.queue.onSubmittedWorkDone().catch(() => {});
+        b.gpuWaitMs += performance.now() - t;
+        t = performance.now();
         await new Promise(resolve => setImmediate(resolve));
+        b.turnWaitMs += performance.now() - t;
         if (!this.cart) return n;
       }
+      const t = performance.now();
       r = this.cart.runFrame(this._inputPorts);
+      b.inFramesMs += performance.now() - t;
+      b.frames++;
       this.status.frameCount++;
-      if (r?.audio && r.audio.length) {
-        const a = r.audio;
-        if (a instanceof Float32Array) {
-          const i16 = new Int16Array(a.length);
-          for (let k = 0; k < a.length; k++) {
-            const s = a[k] < -1 ? -1 : a[k] > 1 ? 1 : a[k];
-            i16[k] = s < 0 ? s * 0x8000 : s * 0x7fff;
-          }
-          this.state.audioRing.push(i16);
-        } else {
-          this.state.audioRing.push(new Int16Array(a));
-        }
-      }
+      this._pushAudio(r);
     }
     if (r) this.state.lastAudio = r.audio || null;
+    const round = (x) => Math.round(x * 10) / 10;
+    this.lastBurst = { frames: b.frames, wallMs: round(performance.now() - b.t0), inFramesMs: round(b.inFramesMs), gpuWaitMs: round(b.gpuWaitMs), turnWaitMs: round(b.turnWaitMs) };
+    return this._wgpuReadback(n);
+  }
+
+  /** Read the last WebGPU frame back into state.lastFrame; resolves to n. */
+  _wgpuReadback(n) {
     const seq = (this._wgpuReadSeq = (this._wgpuReadSeq || 0) + 1);
     return this.cart.readGpuFrame().then(f => {
       // An older read landing after a newer one must not overwrite it.
@@ -1407,6 +1460,153 @@ export class WasmcartHost {
     };
   }
 
+  // ── Frame timing (frame({op:'timing'}), host/gpu-timing/measure.js) ─────────
+  //
+  // The host-kind contract: timingInfo() says what can be measured,
+  // timingBegin() prepares, timedFrame() runs ONE frame on the current input
+  // and returns its numbers, timingEnd() leaves the host as a step would.
+
+  /** WebGPU bursts running right now across every WasmcartHost (contention). */
+  static activeBursts = 0;
+
+  _glTimerFor() {
+    if (!this._gl) return { available: false, reason: "this GL cart has no host GL context (a caller-supplied backend)" };
+    if (!this._glTimer || this._glTimer.gl !== this._gl) {
+      if (this._glCtx) _claimCurrent(this._glCtx);
+      else if (this._gl === _offscreenGl) _claimCurrent(_offscreenCtx);
+      this._glTimer = new GlFrameTimer(this._gl);
+      this._glTimer.wrap();
+    }
+    return this._glTimer;
+  }
+
+  /** What frame timing can measure on this cart. */
+  timingInfo() {
+    if (!this.cart) throw new Error("no cart loaded - loadMedia first");
+    const api = this.cart.usesWgpu ? "webgpu" : this.cart.usesGL ? "gl" : "2d";
+    let gpu;
+    if (api === "webgpu") {
+      const dev = this.cart.getGpuDevice?.();
+      gpu = dev?.features?.has?.("timestamp-query")
+        ? { available: true, measure: "busy", method: "timestamp queries around every render and compute pass the cart encodes (the host adds them; passes the cart times itself are read from its own queries)" }
+        : { available: false, reason: this._wantTimestamps
+          ? "loaded with gpuTiming:true, but this WebGPU adapter has no timestamp-query feature"
+          : "the cart's WebGPU device has no timestamp-query feature: load the cart with loadMedia({gpuTiming:true}) (a device's features are fixed when it is made)" };
+    } else if (api === "gl") {
+      const t = this._glTimerFor();
+      gpu = t.available
+        ? { available: true, measure: "span", method: "a GL_TIME_ELAPSED query (EXT_disjoint_timer_query_webgl2) around the whole frame on the cart's own context" }
+        : { available: false, reason: t.reason };
+    } else {
+      gpu = { available: false, reason: "a 2D cart draws on the CPU into its framebuffer: there is no GPU work to time" };
+    }
+    return {
+      host: "wasmcart", api,
+      cpu: "time inside CartHost.runFrame: the cart's wc_render plus the host's per-frame clock and input writes",
+      wall: api === "2d" ? "the frame's runFrame" : "frame start until the GPU finished the frame (GL: glFinish; WebGPU: onSubmittedWorkDone), so CPU and GPU run back to back, without the overlap a pipelined player gets",
+      gpu,
+      adapter: this.cart.usesWgpu ? this.cart.getGpuAdapterInfo?.() ?? null : null,
+      glRenderer: this.status.glRenderer ?? null,
+      size: { width: this.status.fbWidth, height: this.status.fbHeight },
+    };
+  }
+
+  async timingBegin() {
+    if (!this.cart) throw new Error("no cart loaded - loadMedia first");
+    if (this.status.paused) throw new Error("the cart is paused (host({op:'resume'}) first): a paused cart runs no frames");
+    if (this.cart.usesWgpu) {
+      // wait for a step burst still running on this host
+      if (this._wgpuPending) await this._wgpuTail;
+      const dev = this.cart.getGpuDevice();
+      if (dev?.features?.has?.("timestamp-query")) {
+        if (!this._wgpuTimer || this._wgpuTimer.device !== dev) {
+          const { globals } = await import("webgpu-node");
+          this._wgpuTimer = new WgpuFrameTimer(dev, globals);
+        }
+      }
+    } else if (this.cart.usesGL) {
+      this._glTimerFor();
+    }
+    this._timingR = null;
+  }
+
+  /**
+   * Run one frame on the current input and time it.
+   * @returns {Promise<{wallMs:number, cpuMs:number, gpuMs:number|null, gpuSpanMs:number|null, passes?:number, cartTimedPasses?:number, gpuNote?:string}>}
+   */
+  async timedFrame() {
+    const cart = this.cart;
+    if (!cart) throw new Error("no cart loaded - loadMedia first");
+    if (this.status.paused) throw new Error("the cart was paused during the timing run");
+    const wg = cart.usesWgpu, gl = !wg && cart.usesGL && this._gl;
+    if (gl) {
+      if (this._glCtx) _claimCurrent(this._glCtx);
+      else if (this._gl === _offscreenGl) _claimCurrent(_offscreenCtx);
+    }
+    const glT = gl && this._glTimer?.available ? this._glTimer : null;
+    const wgT = wg && this._wgpuTimer?.available ? this._wgpuTimer : null;
+    if (wg) WasmcartHost.activeBursts++;
+    try {
+      const t0 = performance.now();
+      glT?.beginFrame();
+      wgT?.beginFrame();
+      const r = cart.runFrame(this._inputPorts);
+      const cpuMs = performance.now() - t0;
+      this.status.frameCount++;
+      this._pushAudio(r);
+      this._timingR = r;
+      if (wg) {
+        const p = wgT ? wgT.endFrame() : null;
+        const device = cart.getGpuDevice?.();
+        if (device) await device.queue.onSubmittedWorkDone().catch(() => {});
+        const wallMs = performance.now() - t0;
+        const g = p ? await p.catch((e) => ({ error: e.message })) : null;
+        // An event-loop turn between frames, as a step burst gives: the cart's
+        // own async results (buffer maps, error scopes) arrive before its next frame.
+        await new Promise((res) => setImmediate(res));
+        return {
+          wallMs, cpuMs, gpuMs: g?.busyMs ?? null, gpuSpanMs: g?.spanMs ?? null,
+          passes: g?.passes ?? null, cartTimedPasses: g?.cartTimed ?? null,
+          ...(g?.error ? { gpuNote: `timestamp readback failed: ${g.error}` }
+            : g?.overflow ? { gpuNote: "more passes than the host's 1024 query pairs: the rest were not timed" }
+            : g?.lost ? { gpuNote: "more cart-timed stamps than the host's resolve buffer holds: some passes not timed" } : {}),
+        };
+      }
+      if (gl) {
+        glT?.endFrame();
+        this._gl.finish();
+        const wallMs = performance.now() - t0;
+        const g = glT ? glT.readFrame() : null;
+        return {
+          wallMs, cpuMs, gpuMs: g?.gpuMs ?? null, gpuSpanMs: g?.gpuMs ?? null,
+          ...(g?.disjoint ? { gpuNote: "GPU timer disjoint this frame (clock change or reset): no GPU time" } : g?.incomplete ? { gpuNote: "the cart ran its own TIME_ELAPSED query: its interval is not in this frame's GPU time" } : {}),
+        };
+      }
+      return { wallMs: performance.now() - t0, cpuMs, gpuMs: null, gpuSpanMs: null };
+    } finally {
+      if (wg) WasmcartHost.activeBursts--;
+    }
+  }
+
+  /** Leave the host as a step of the same frames would: last frame readable. */
+  async timingEnd() {
+    const r = this._timingR;
+    this._timingR = null;
+    if (!this.cart || !r) return;
+    if (this.cart.usesWgpu) {
+      this.state.lastAudio = r.audio || null;
+      await this._wgpuReadback(1);
+    } else {
+      this._afterCpuBurst(r);
+    }
+  }
+
+  _stopTiming() {
+    try { this._wgpuTimer?.detach(); } catch { /* device gone */ }
+    this._wgpuTimer = null;
+    this._glTimer = null;
+  }
+
   cheatsSupported() { return false; }
 
   reset() {
@@ -1418,6 +1618,7 @@ export class WasmcartHost {
     // The last chance to write SRAM out before this cart's heap goes away -
     // must run BEFORE cart.destroy(), which frees the memory getSaveData() reads.
     this._persistSaveData();
+    this._stopTiming();
     if (this.cart) { try { this.cart.destroy(); } catch { /* ignore */ } }
     this.cart = null;
     this.state.lastFrame = null;

@@ -35,6 +35,8 @@ import { registerRomIdTools } from "./rom-id.js";
 import { registerDiffRomsTools } from "./diff-roms.js";
 import { registerFreeSpaceTools } from "./free-space.js";
 import { requestStats } from "../../observer/request-stats.js";
+import { gpuPinInfo, drmUsage } from "../../host/gpu-pin.js";
+import { exclusiveStatus } from "../exclusive-gate.js";
 import { registerReinjectTools } from "./reinject.js";
 import { registerSpliceChrTools } from "./splice-chr.js";
 import { registerCartPartsTools } from "./cart-parts.js";
@@ -347,6 +349,13 @@ export function registerTools(server, z, sessionKey) {
             requestTelemetry: requestStats.snapshot(),
             rssMb: Math.round(process.memoryUsage().rss / 1048576),
             ...hostLifetimeStats(),
+            // Which GPU the server is pinned to, and the GPU engine time this
+            // process has used on each device so far (the kernel's count, from
+            // its DRM file descriptors): proof the work stays on the pin.
+            gpuPin: (() => { const p = gpuPinInfo(); return p.pinned ? { pci: p.pci, vendorId: p.vendorId, deviceId: p.deviceId, power: p.power, source: p.source } : { pinned: false, reason: p.reason }; })(),
+            gpuWorkByDeviceMs: (() => { const u = drmUsage(); return u ? Object.fromEntries(Object.entries(u).map(([k, v]) => [k, Math.round(v.gfxNs / 1e6)])) : null; })(),
+            // A frame({op:'timing'}) run holding the server (other sessions' calls wait).
+            timingRun: exclusiveStatus(),
             // HTTP sessions each hold a ~20 MB tool registry until shutdown,
             // eviction at the cap, or 30 idle minutes -- this is the count
             // the livestream session list shows.

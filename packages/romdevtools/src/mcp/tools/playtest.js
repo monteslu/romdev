@@ -125,6 +125,14 @@ export function getPlaytestHumanStatus(sessionKey) {
   };
 }
 
+/** How many sessions have a playtest window open right now (a timing run
+ *  reports them: their frames run on a timer between its frames). */
+export function openPlaytestWindows() {
+  let n = 0;
+  for (const k of [...sessions.keys()]) if (reconcileSession(k)) n++;
+  return n;
+}
+
 /**
  * The warning attached to frame({op:'step'/'stepAndShot'}) and input(set/press/
  * sequence/navigate) responses while a human is co-driving this session's

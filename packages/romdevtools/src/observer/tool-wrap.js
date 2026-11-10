@@ -9,6 +9,7 @@ import { observer, extractImages, summarizeForLog, pushObserverFrame } from "./b
 import { noteToolCall } from "../mcp/autoplay.js";
 import { getHostOrNull } from "../mcp/state.js";
 import { floodWarning } from "./request-stats.js";
+import { enterCall } from "../mcp/exclusive-gate.js";
 
 const INSTALLED = Symbol.for("romdev.observer-installed");
 
@@ -45,10 +46,14 @@ export function installObserverMiddleware(server, sessionKey) {
       try { noteToolCall(sessionKey, name, args); } catch { /* never blocks a call */ }
       let result;
       let thrown;
+      // A timing run elsewhere holds other sessions' calls here (mcp/exclusive-gate.js).
+      const leave = await enterCall(sessionKey, name);
       try {
         result = await handler(args, extra);
       } catch (err) {
         thrown = err;
+      } finally {
+        leave();
       }
       const durationMs = Date.now() - startedAt;
 

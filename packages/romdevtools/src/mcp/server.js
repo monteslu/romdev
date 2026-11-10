@@ -16,6 +16,11 @@
 // wrappers and code a module tiered past are not freed early; a module's code
 // still goes with the module. Measured: RSS stayed flat (1.4-2.1 GB) over 200
 // WebGPU/GL cart loads, where code GC crashed the server by load 76.
+// The GPU pin (ROMDEV_GPU or $XDG_CONFIG_HOME/romdev/gpu) goes into the
+// environment first, so the re-exec'd child and every GPU library after it
+// see it (src/host/gpu-pin.js).
+import { applyGpuPin } from "../host/gpu-pin.js";
+applyGpuPin({ log: (m) => console.error(m) });
 const reexecFlags = ["--experimental-vm-modules"];
 if (process.versions.v8.startsWith("13.6.")) reexecFlags.push("--no-wasm-code-gc");
 const missingFlags = reexecFlags.filter((f) => !process.execArgv.some((a) => a.includes(f.slice(2))));

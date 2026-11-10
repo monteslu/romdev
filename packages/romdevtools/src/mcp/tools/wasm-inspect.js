@@ -10,6 +10,7 @@
 
 import { getHost } from "../state.js";
 import { jsonContent, safeTool, parseHexBytes } from "../util.js";
+import { runDebugCommand } from "../../host/debug-channel.js";
 
 const INLINE_HEX_LIMIT = 4096;
 
@@ -105,31 +106,11 @@ export function registerWasmInspectTools(server, z, sessionKey) {
 
       if (op === "command") {
         if (text == null) throw new Error("wasm({op:'command'}): pass `text` (try 'help').");
-        const fields = host.readDebugState?.() ?? [];
-        const f = (n) => fields.find((x) => x.name === n);
-        const missing = ["dbg.cmd", "dbg.cmd_seq", "dbg.reply", "dbg.reply_seq", "dbg.reply_len"].filter((n) => !f(n));
-        if (missing.length) {
-          throw new Error(`wasm({op:'command'}): this cart has no debug channel (missing ${missing.join(", ")} in its debug table). The cart has to be built with its debug channel enabled.`);
+        try {
+          return jsonContent(await runDebugCommand(host, text, maxFrames));
+        } catch (e) {
+          throw new Error(`wasm({op:'command'}): ${e.message}`);
         }
-        const cmd = f("dbg.cmd");
-        const bytes = Buffer.from(text + "\0", "utf8");
-        if (bytes.length > cmd.len) throw new Error(`wasm({op:'command'}): request is ${bytes.length} bytes; the cart's dbg.cmd holds ${cmd.len}.`);
-        const seq = ((host.readDebugValue("dbg.cmd_seq").value >>> 0) + 1) >>> 0;
-        host.writeMemory(cmd.valuePtr, new Uint8Array(bytes));
-        host.writeDebugValue("dbg.cmd_seq", seq);
-        let frames = 0;
-        while ((host.readDebugValue("dbg.reply_seq").value >>> 0) !== seq && frames < maxFrames) {
-          await host.stepFrames(1);
-          frames++;
-        }
-        if ((host.readDebugValue("dbg.reply_seq").value >>> 0) !== seq) {
-          throw new Error(`wasm({op:'command'}): no reply after ${frames} frames (is the cart paused by the host, or not processing its debug channel?).`);
-        }
-        const len = host.readDebugValue("dbg.reply_len").value >>> 0;
-        const reply = Buffer.from(host.readMemory(f("dbg.reply").valuePtr, Math.min(len, f("dbg.reply").len))).toString("utf8");
-        let parsed;
-        try { parsed = JSON.parse(reply); } catch { parsed = undefined; }
-        return jsonContent(parsed !== undefined ? { framesRun: frames, reply: parsed } : { framesRun: frames, reply });
       }
 
       if (op === "conformance") {

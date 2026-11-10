@@ -16,6 +16,7 @@
 
 import { z } from "zod";
 import { registerTools } from "../mcp/tools/index.js";
+import { enterCall } from "../mcp/exclusive-gate.js";
 import { withClearToolErrors } from "../mcp/util.js";
 import { observer, summarizeForLog, extractImages, pushObserverFrame } from "../observer/bus.js";
 import { noteToolCall } from "../mcp/autoplay.js";
@@ -91,6 +92,12 @@ export function buildToolRegistry(sessionKey) {
  * @returns {Promise<{ok:true, result:any}|{ok:false, error:string}>}
  */
 export async function runTool(tool, args, sessionKey) {
+  // A timing run elsewhere holds other sessions' calls here (mcp/exclusive-gate.js).
+  const leave = await enterCall(sessionKey ?? "http", tool.name);
+  try { return await runToolInner(tool, args, sessionKey); } finally { leave(); }
+}
+
+async function runToolInner(tool, args, sessionKey) {
   const a = args ?? {};
   const startedAt = Date.now();
   // A real-time host({op:'play'}) run on this session ends when the agent

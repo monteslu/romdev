@@ -12,7 +12,12 @@ import { imageContent, jsonContent, safeTool } from "../util.js";
 import { decodeOAM, decodePpuRegs, ppuRegsPopulated } from "../../platforms/snes/ppu.js";
 import { stepInstructionCore, stepInstructionsCore, attachObserverFrame } from "./watch-memory.js";
 import { getRenderingContextCore } from "./rendering-context.js";
-import { humanCoDriveWarning } from "./playtest.js";
+import { humanCoDriveWarning, openPlaytestWindows } from "./playtest.js";
+import { measureFrameTiming } from "../../host/gpu-timing/measure.js";
+import { withLibretroTiming } from "../../host/gpu-timing/libretro-timing.js";
+import { acquireExclusive } from "../exclusive-gate.js";
+import { otherLiveHosts } from "../state.js";
+import { WasmcartHost } from "../../host/WasmcartHost.js";
 import { runVerifyRecompile, runRecompileDiverge, runInstructionDiverge, runFuzzRecompile } from "./verify-recompile-op.js";
 import { traceInstructionsCore } from "./trace-instructions.js";
 import { measureCycles, mapBeside, annotateFunction } from "../../host/s32-cycles.js";
@@ -58,6 +63,23 @@ async function runS32Cycles(sessionKey, args) {
   }
   const r = await measureCycles({ host, from, to, input: args.input, profile: !!args.profile, map, groups, top: args.top, series: !!args.series, perFrame: !!args.perFrame });
   return { cart: cartPath, ...r };
+}
+
+/** frame({op:'timing'}): per-frame wall, CPU and GPU time over a span (host/gpu-timing/measure.js). */
+async function runFrameTiming(sessionKey, args) {
+  let host = getHost(sessionKey);
+  // a libretro core gets the timing contract here (wall, CPU, and GPU on a HW-render core)
+  if (typeof host?._runCore === "function" && typeof host.timedFrame !== "function") host = withLibretroTiming(host);
+  if (!host?.status?.loaded) throw new Error("frame({op:'timing'}): nothing is loaded in this session - loadMedia first (a WebGPU cart: loadMedia({..., gpuTiming:true}) so its device can time the GPU)");
+  return measureFrameTiming({
+    host, sessionKey,
+    args: { ...args, frames: args.frames === 1 ? 300 : args.frames, fields: args.debugFields },
+    env: {
+      acquireExclusive,
+      liveHosts: (k) => ({ otherLiveHosts: otherLiveHosts(k), otherActiveBursts: WasmcartHost.activeBursts }),
+      playtest: () => ({ windowOpen: openPlaytestWindows() > 0, windows: openPlaytestWindows() }),
+    },
+  });
 }
 
 // Normalize each platform's render-context into a CONSERVATIVE renderEnabled
@@ -403,12 +425,17 @@ export function registerFrameTools(server, z, sessionKey) {
       // actively playing in the playtest window means this step raced their
       // real-time loop. Field only appears when the conflict is real.
       const coDrive = humanCoDriveWarning(sessionKey);
+      // A WebGPU step yields between its frames, and on a shared server other
+      // sessions' work runs in those turns: say so when it dominated the call.
+      const lb = host.cart?.usesWgpu ? host.lastBurst : null;
+      const busy = lb && lb.turnWaitMs > 1000 && lb.turnWaitMs > lb.inFramesMs + lb.gpuWaitMs;
       // Livestream: the post-step frame (throttled to 1/2s per tool by the bus).
       return attachObserverFrame(jsonContent({
         framesRun: n,
         frameCount: host.status.frameCount,
         framebuffer: { width: host.status.fbWidth, height: host.status.fbHeight },
         ...(coDrive ? { humanCoDriveWarning: coDrive } : {}),
+        ...(busy ? { wgpuStep: { ...lb, note: `this WebGPU step spent ${lb.turnWaitMs} ms of ${lb.wallMs} between its frames running other sessions' work on this shared server (the cart's frames took ${lb.inFramesMs} ms, the GPU ${lb.gpuWaitMs} ms): the server is busy, the cart is not slow. frame({op:'timing'}) measures with the server held.` } } : {}),
       }), host, `step ×${n}`);
   }
 
@@ -1031,11 +1058,11 @@ export function registerFrameTools(server, z, sessionKey) {
     "IMAGE CONTRACT (screenshot/stepAndShot): the image goes to `path` (default, returns {path}) OR inline:true - " +
     "you MUST pass one. Keeps PNGs out of context unless asked.",
     {
-      op: z.enum(["step", "screenshot", "stepAndShot", "sideBySide", "compareRam", "findDiverge", "compareRender", "portStatus", "stepInstruction", "stepInstructions", "traceInstructions", "verify", "verifyRecompile", "fuzzRecompile", "cycles"]).describe("cycles = sync32 only: CPU cycles per frame over a frame span on an input schedule (min/mean/p95/max, frames over the 2.5M ABI floor and the 252/315 MHz budgets, worst frames), with profile:true a pc-sampling profile that sums to the same cycles (vblank wait excluded) attributed per function/object/group from the build's linker map; fuzzRecompile = seeded random play on a recompiled cart, first trap per seed; traceInstructions = the free-running instruction stream over N frames; step frames; capture a screenshot; step+capture in one call; capture both hosts side-by-side (A|B); compareRam = diff slot-A vs slot-B work-RAM (the logic-port oracle); findDiverge = find the first frame+byte where the two slots split (root-cause finder; with `cart` it runs the recompile per-frame state differ); compareRender = diff the decoded rendering state of the two slots (the presentation oracle); portStatus = ONE fused 'state of your port' verdict + next action (the capstone); single-step one CPU instruction; stepInstructions = bulk single-step N instructions into one ordered trace; verify the game is actually rendering/alive (no vision needed); verifyRecompile = verify a recompiled wasmcart against its reference core (scores, state compare, controls, verdict)."),
+      op: z.enum(["step", "screenshot", "stepAndShot", "sideBySide", "compareRam", "findDiverge", "compareRender", "portStatus", "stepInstruction", "stepInstructions", "traceInstructions", "verify", "verifyRecompile", "fuzzRecompile", "cycles", "timing"]).describe("timing = per-frame WALL, CPU and GPU time over a span of frames in ONE call (min/mean/p50/p95/p99/max, N-frame windows, the worst frame), with a warmup, an input schedule, setup debug commands (e.g. 'quality low'), cart counters (debugFields) and the cart's own pass timers (passTimers) read over the same frames, A/B variants interleaved over rounds; reports the GPU it ran on (pinned PCI device, adapter/renderer, per-device GPU work measured by the kernel, clock) and contention (it holds the server exclusively while it runs); wasmcart GL and WebGPU carts get GPU time (load a WebGPU cart with gpuTiming:true), other hosts wall + CPU with GPU 'unavailable' and the reason; cycles = sync32 only: CPU cycles per frame over a frame span on an input schedule (min/mean/p95/max, frames over the 2.5M ABI floor and the 252/315 MHz budgets, worst frames), with profile:true a pc-sampling profile that sums to the same cycles (vblank wait excluded) attributed per function/object/group from the build's linker map; fuzzRecompile = seeded random play on a recompiled cart, first trap per seed; traceInstructions = the free-running instruction stream over N frames; step frames; capture a screenshot; step+capture in one call; capture both hosts side-by-side (A|B); compareRam = diff slot-A vs slot-B work-RAM (the logic-port oracle); findDiverge = find the first frame+byte where the two slots split (root-cause finder; with `cart` it runs the recompile per-frame state differ); compareRender = diff the decoded rendering state of the two slots (the presentation oracle); portStatus = ONE fused 'state of your port' verdict + next action (the capstone); single-step one CPU instruction; stepInstructions = bulk single-step N instructions into one ordered trace; verify the game is actually rendering/alive (no vision needed); verifyRecompile = verify a recompiled wasmcart against its reference core (scores, state compare, controls, verdict)."),
       count: z.number().int().min(1).max(1_000_000).optional().describe("op=stepInstructions/step: stepInstructions = how many CPU instructions to single-step into the trace (default 16, max 4096); step = accepted as an alias for `frames`, since the unit is fixed by the op."),
       withRegisters: z.boolean().default(false).describe("op=stepInstructions: include the CPU register file at each step (heavier payload; omit if you only need pc/width/bytes for boundary+immediate-width analysis)."),
       stepFormat: z.enum(["full", "compact"]).default("full").describe("op=stepInstructions: 'full' = per-step objects (pc/flow/width/nextPc); 'compact' = one string per step (`$PC flow->$target`) + a `pcRanges` loop-map with hit counts (~90% fewer tokens for triage)."),
-      frames: z.number().int().min(1).max(1_000_000).default(1).describe("op=step/stepAndShot/sideBySide/compareRam/compareRender/traceInstructions/fuzzRecompile: frames to advance (traceInstructions: frames traced, max 600; fuzzRecompile: frames per seed, 1 = the default 3600) (1-1,000,000). For the slot-A/B compare ops, BOTH hosts step the same amount. 36000 (10 min) usually completes in <1s - don't be conservative."),
+      frames: z.number().int().min(1).max(1_000_000).default(1).describe("op=step/stepAndShot/sideBySide/compareRam/compareRender/traceInstructions/fuzzRecompile/timing: frames to advance (traceInstructions: frames traced, max 600; fuzzRecompile: frames per seed, 1 = the default 3600; timing: frames measured, warmup not counted, 1 = the default 300) (1-1,000,000). For the slot-A/B compare ops, BOTH hosts step the same amount. 36000 (10 min) usually completes in <1s - don't be conservative."),
       slot: z.enum(["a", "b"]).default("a").describe("op=step/traceInstructions: which host to advance (or trace). 'a' (default) = the session's primary host. 'b' = the comparison host loaded via loadMedia({slot:'b'}) - use it to WARM each side to a chosen frame before frame({op:'findDiverge'}), which is required when the two sides only split deep into a run (compare from frame 60, not from power-on). Slot-B steps drive no presentation, no bezel, no livestream and no auto-snapshot."),
       region: z.string().optional().describe("op=compareRam/findDiverge/portStatus: memory region to diff across the two slots (default 'system_ram', the portable work-RAM). Both hosts must expose it."),
       regionB: z.string().optional().describe("op=findDiverge: slot-B region if different. wasmcart requires 'linear_memory' plus offsetB and compareLength locating the recompiled machine's RAM."),
@@ -1056,7 +1083,17 @@ export function registerFrameTools(server, z, sessionKey) {
       map: z.string().optional().describe("op=cycles: path of the GNU ld map for profile attribution (default <cart>.map)."),
       groups: z.record(z.string(), z.array(z.string())).optional().describe("op=cycles: profile groups, name -> object-file names or '/regex/' (a native Genesis cart gets 68000/VDP/Z80/YM2612/PSG/mix/host groups by default)."),
       top: z.number().int().min(1).max(200).optional().describe("op=cycles: how many functions to list (default 25)."),
-      series: z.boolean().optional().describe("op=cycles: include every frame's cycle count."),
+      series: z.boolean().optional().describe("op=cycles/timing: include every frame's value (cycles; timing: wall/cpu/gpu ms and debugFields per frame)."),
+      warmup: z.number().int().min(0).max(100000).optional().describe("op=timing: frames run first and NOT measured (shader compiles, uploads, a cart's own timers settling). Default 0. cartwheel's pass timers need about 16 after their first request."),
+      window: z.number().int().min(1).max(100000).optional().describe("op=timing: frames per window (default 120); each window reports its mean wall/cpu/gpu, debugFields and a pass-timer reply, and gpuMs.overWindows gives the median and mean of the window means."),
+      commands: z.array(z.string()).optional().describe("op=timing: debug commands run before the warmup over the cart's debug channel, each answered before the next (e.g. ['quality low', 'map 23', 'pipeline']). Their frames are not measured."),
+      debugFields: z.array(z.string()).optional().describe("op=timing: numeric debug fields (wasm({op:'debugState'}) names) read after EVERY measured frame: per-window and whole-span min/mean/max/last, so a gate can fail when the scene did not really draw (creeps alive, draws, triangles, skipped)."),
+      passTimers: z.union([z.boolean(), z.string()]).optional().describe("op=timing: the cart's own per-pass GPU timers: true = cartwheel's 'pipeline' command, or the command text. Posted on the last frame of each window and read after that frame (no extra frame). The reply is the cart's own numbers (cartwheel: each pass's 16-frame average), shown per window and in passTimers[]."),
+      variants: z.array(z.object({ name: z.string().optional(), commands: z.array(z.string()).optional() })).optional().describe("op=timing: A/B in one hold of the server: each round runs every variant's commands, its warmup and its frames, in turn, for rounds rounds. Each variant reports its stats over all rounds plus each round's means."),
+      rounds: z.number().int().min(1).max(50).optional().describe("op=timing with variants: rounds (default 3)."),
+      exclusive: z.boolean().optional().describe("op=timing: hold the server so no other session's tool call runs between the measured frames (default true; other sessions' calls wait, catalog still answers). false measures under whatever else is running and reports it as noisy."),
+      maxSeconds: z.number().min(1).max(1800).optional().describe("op=timing: wall-clock budget (default 240 s); the run stops there and says so (truncated) rather than holding the server."),
+      drainSeconds: z.number().min(0).max(600).optional().describe("op=timing: how long to wait for other sessions' calls already running to finish before measuring (default 10 s); any still running after it are reported in contention."),
       annotate: z.string().optional().describe("op=cycles: a function name from the cart's map: per-instruction cycles per frame over from..to, with its Thumb-2 disassembly (hottest `top` instructions)."),
       perFrame: z.boolean().optional().describe("op=cycles with profile:true: split EVERY frame by subsystem group (min/mean/p95/max per group, the worst frame's split; with series:true the per-frame group series)."),
       atFrames: z.array(z.number().int().min(1)).min(1).max(64).optional().describe("op=verifyRecompile: REFERENCE frames (frames stepped after loadMedia on the reference core) to score, ascending. Pick late frames with real, moving pictures: a title screen proves little. Omitted (without auto:false): auto mode chooses them."),
@@ -1069,7 +1106,7 @@ export function registerFrameTools(server, z, sessionKey) {
         audioWindow: z.number().int().min(30).max(36000).optional().describe("audio frames compared at most (default 600)"),
         budgetSec: z.number().min(5).max(7200).optional().describe("wall-clock cap on the exploration in seconds (default 300)"),
       }).strict()]).optional().describe("op=verifyRecompile: AUTO MODE (see the op description): romdev picks input, atFrames and the audio window from the reference core, then verifies. true = defaults; an object tunes {seed, horizon, candidates, sampleEvery, frames, audioWindow, budgetSec}. Implied when atFrames is omitted; auto:false restores the 'pass atFrames' error. Combine with input to keep your schedule. The result's auto block reports what was chosen and a reproduce call."),
-      input: z.union([z.string(), z.array(z.object({ frame: z.number().int().min(0), buttons: z.union([z.string(), z.array(z.string()), z.record(z.string(), z.boolean())]), hold: z.number().int().min(1).optional() }))]).optional().describe("op=verifyRecompile/findDiverge/fuzzRecompile/cycles: ONE input schedule (op=cycles: frames counted since loadMedia) applied to both sides, in REFERENCE frames: 'frame:buttons:hold,...' (e.g. '700:start:10,900:right+b:15') or [{frame, buttons:'a+right'|['a']|{a:true}, hold}]. libretro names (a,b,x,y,l,r,start,select,up,down,left,right) or spatial names (south,east,west,north); prefix 'p2.' (p1-p4) for another controller ('900:p2.start:10'); the cart gets each press at frame+offset, by physical position."),
+      input: z.union([z.string(), z.array(z.object({ frame: z.number().int().min(0), buttons: z.union([z.string(), z.array(z.string()), z.record(z.string(), z.boolean())]), hold: z.number().int().min(1).optional() }))]).optional().describe("op=verifyRecompile/findDiverge/fuzzRecompile/cycles/timing: ONE input schedule (op=cycles: frames counted since loadMedia; op=timing: frames counted from the call's first frame, warmup included) applied to both sides, in REFERENCE frames: 'frame:buttons:hold,...' (e.g. '700:start:10,900:right+b:15') or [{frame, buttons:'a+right'|['a']|{a:true}, hold}]. libretro names (a,b,x,y,l,r,start,select,up,down,left,right) or spatial names (south,east,west,north); prefix 'p2.' (p1-p4) for another controller ('900:p2.start:10'); the cart gets each press at frame+offset, by physical position."),
       wrongInput: z.union([z.string(), z.array(z.object({ frame: z.number().int().min(0), buttons: z.union([z.string(), z.array(z.string()), z.record(z.string(), z.boolean())]), hold: z.number().int().min(1).optional() }))]).optional().describe("op=verifyRecompile: schedule for the wrong-input control (default: withhold ALL input; if the picture still matches, a perturbed script with the start/select presses kept and every other press replaced). The control must FAIL."),
       cartFrameOffset: z.union([z.number().int().min(-10000).max(10000), z.literal("auto")]).optional().describe("op=verifyRecompile/findDiverge: override the computed alignment (cart frame = reference frame + offset). Default: reference settle frames - wasmcart settle frame (1) - the cart's warmupFrames, unless the cart's section says frameAlignment:'search'. 'auto' (or that section flag) FINDS the offset: a fresh cart and reference are run to searchFrame, every cart offset within +-searchWindow of the computed one is scored against that one reference picture, and the sharp peak wins (refused, naming the best candidates, when the peak is flat or below the bar). Each scored frame then refines it by up to +-2 when its own sweep peaks sharply elsewhere (row.refinedBy). Cost: one extra cart run to searchFrame+offset+window and 2*window+1 picture scores."),
       searchFrame: z.number().int().min(1).optional().describe("op=verifyRecompile/findDiverge: reference frame the offset search runs at (default: the first of atFrames; for findDiverge max(startFrame, 600)). Pick a frame whose picture moves, before the first input press if the game's timeline depends on when input arrives."),
@@ -1156,6 +1193,7 @@ export function registerFrameTools(server, z, sessionKey) {
         case "traceInstructions": return await traceInstructionsCore(sessionKey, { frames: args.frames, slot: args.slot, maxEntries: args.maxEntries, fromPc: args.fromPc, outputPath: args.path, head: args.head });
         case "verify":          return await doVerify(args);
         case "cycles":          return jsonContent(await runS32Cycles(sessionKey, args));
+        case "timing":          return jsonContent(await runFrameTiming(sessionKey, args));
         default: throw new Error(`frame: unknown op '${args.op}'`);
       }
     }),

@@ -75,7 +75,7 @@ All 38 tools are registered at session start; call any by name. Each is a verb w
 | `build` | `output`: rom, romWithDebug, run, project, reassemble |
 | `loadMedia` | load a ROM, disk, tape, program or cart (`path` or `base64`; `slot:'b'`, `core`, `firmware`, `cheats`, `coreOptions`, `useActiveBezel`, wasmcart options) |
 | `host` | `op`: unload, shutdown, reset (`hard:true` power-cycles), pause, resume, play, stop |
-| `frame` | `op`: step, screenshot, stepAndShot, sideBySide, compareRam, findDiverge, compareRender, portStatus, stepInstruction, stepInstructions, traceInstructions, verify, verifyRecompile, fuzzRecompile, cycles |
+| `frame` | `op`: step, screenshot, stepAndShot, sideBySide, compareRam, findDiverge, compareRender, portStatus, stepInstruction, stepInstructions, traceInstructions, verify, verifyRecompile, fuzzRecompile, cycles, timing |
 | `input` | `op`: set, press, sequence, timeline, navigate, layout, pressKey, typeText, joyport, pointer, wheel |
 | `state` | `op`: save, load, list, export, dump, diff, exportSram, importSram, exportDisk, importDisk, putDiskFile, autoSnapshot, recoverSnapshot |
 | `memory` | `op`: read, write, readCart, regions, snapshot, diff, diffRuns, classify, search, searchUnknown, searchNext, provenance |
@@ -193,7 +193,51 @@ Every recompiled cart carries a `licence` entry naming the emulator code it cont
 
 ## wasmcart, WebGPU and jsgame
 
-`loadMedia({platform:'wasmcart', path})` runs a WebAssembly cart. Carts must target wasmcart ABI v4 or later (older ones are refused). Buttons map by position (`a` is east). GL carts get their own GL context; WebGPU carts load the same way (`gpuPower`, `wgpu:false`, `deterministicStepMs` are load options). Load GL carts with `presentWindow:true` before opening a playtest window. `wasm({op})` inspects a cart (conformance, named debug state, events, a `command` request/reply channel). `pack({target:'wasc'|'jsgame'})` builds the archive. Details: `platform({op:'doc', platform:'guide', name:'wasmcart'})`.
+`loadMedia({platform:'wasmcart', path})` runs a WebAssembly cart. Carts must target wasmcart ABI v4 or later (older ones are refused). Buttons map by position (`a` is east). GL carts get their own GL context; WebGPU carts load the same way (`gpuPower`, `wgpu:false`, `deterministicStepMs`, `gpuTiming` are load options). Load GL carts with `presentWindow:true` before opening a playtest window. `wasm({op})` inspects a cart (conformance, named debug state, events, a `command` request/reply channel). `pack({target:'wasc'|'jsgame'})` builds the archive. Details: `platform({op:'doc', platform:'guide', name:'wasmcart'})`.
+
+## Frame and GPU timing
+
+`frame({op:'timing'})` runs a span of frames in ONE call and times every frame: wall time, CPU time in the frame call and GPU time, as min/mean/p50/p95/p99/max, per window of frames, and the worst frame. Use it for perf gates instead of a native harness.
+
+```text
+loadMedia({platform:'wasmcart', path:'build/cart-wgpu/carts/game.wasc', gpuTiming:true})   // WebGPU: gpuTiming at load
+frame({op:'timing', frames:600, warmup:60, window:120,
+       commands:['quality high', 'pipeline'],          // setup over the debug channel, not timed
+       input:'0:start:2,200:right+a:120',               // frames count from this call's first frame
+       debugFields:['game.enemies', 'render.skipped'],   // read after every frame
+       passTimers:true})                                  // cartwheel's 'pipeline' reply per window
+```
+
+The result, in brief (`gpuMs` has the same shape as `wallMs`):
+
+```text
+{ api:'webgpu', size:{width:1920, height:1080},
+  gpu:{ pin:{pci:'0000:69:00.0', ...}, adapter:{...} | glRenderer:'...', workByDeviceMs:{'0000:69:00.0':812.4, ...},
+        onPinnedGpu:true, clockMhz:{min, mean, max}, busyPercent:{mean, max} },
+  wallMs:{n, min, mean, p50, p95, p99, max}, cpuMs:{...},
+  gpuMs:{..., measure:'busy', spanMs:{...}, overWindows:{windowFrames, median, mean, worstWindow},
+         worstFrame:{frame, gpuMs, wallMs}, passesPerFrame, gpuToWallRatio},
+  windows:[{from, to, wallMs, cpuMs, gpuMs, gpuMaxMs, fields:{...}, passTimers:{totalGpuMs, passes:{scene:{gpuMs}, ...}}}],
+  fields:{'game.enemies':{min, mean, max, last}}, passTimers:[...],
+  contention:{exclusive:true, noisy:false, reasons:[], otherCallsHeld, otherLiveHosts, otherProcessesGpuMs, loadavg1, ...} }
+```
+
+What each number is:
+
+- **wallMs**: frame start until the GPU finished the frame (GL waits with glFinish, WebGPU with onSubmittedWorkDone). CPU and GPU run back to back, with none of the overlap a pipelined player gets, so this is an upper bound on a player's frame time.
+- **cpuMs**: time inside the frame call (wasmcart: the cart's `wc_render` plus the host's per-frame writes; libretro: `retro_run` plus romdev's per-frame work).
+- **gpuMs** on WebGPU (`measure:'busy'`): the union of every render and compute pass's timestamps, which the host adds to the cart's passes itself. Copies and uploads outside a pass are not timed (WebGPU has no timestamps for them). `spanMs` is first pass begin to last pass end. The cart must be loaded with `gpuTiming:true`: a device's timestamp-query feature is fixed when it is made. Without it, gpuMs says `available:false` with that reason.
+- **gpuMs** on GL (`measure:'span'`): one GL_TIME_ELAPSED query around the frame on the cart's own context. It includes time the GPU waited for the CPU inside the frame.
+- **gpuToWallRatio** near 1 on a CPU-bound frame would mean the timer is echoing wall time; a real reading is usually well below 1.
+- Other hosts: a libretro core that renders through GL on romdev's context (N64, PS1, Dreamcast) gets GL GPU time the same way. Software-rendered cores, 2D carts and proxied cores get wall and CPU time, with `gpuMs:{available:false, reason}`.
+
+Per-pass time comes from the cart. `passTimers:true` posts cartwheel's `pipeline` command on the last frame of each window (it rides on a frame that runs anyway) and reports each pass's GPU ms, the cart's own 16-frame averages. On WebGPU this needs `gpuTiming:true` and cartwheel-engine v0.45.0 or later. cartwheel carts do not time GL passes (the engine leaves GL timer queries off in a cart), so on GL use the host's whole-frame gpuMs.
+
+`variants:[{name:'low', commands:['quality low']}, {name:'high', commands:['quality high']}], rounds:3` runs an A/B in one call: each round runs every variant's commands, warmup and frames in turn, and each variant reports its stats plus each round's means. A debug command whose reply is an error (a preset name the cart does not have) stops the run with that error.
+
+**Isolation.** A timing run holds the server: tool calls from other sessions wait until it ends (`catalog` still answers, and `catalog({op:'status'})` shows `timingRun`). Before measuring it waits up to `drainSeconds` (10) for calls already running elsewhere. Two timing runs never overlap. Anything it could not stop goes in `contention.reasons` and sets `noisy:true`: a playtest window, calls still running after the drain, other processes using the same GPU (`otherProcessesGpuMs`, read from the kernel), high system load, or GPU work on a device other than the pin. Re-run a noisy measurement before you trust it. `maxSeconds` (240) bounds a run; a cut-short run says `truncated`.
+
+**The GPU.** romdev renders on the GPU named by `ROMDEV_GPU` (a PCI address) or `$XDG_CONFIG_HOME/romdev/gpu`, set before any GPU library loads (Mesa's Vulkan device select for WebGPU, DRI_PRIME for GL). `catalog({op:'status'})` reports `serverHealth.gpuPin` and `gpuWorkByDeviceMs`. Every timing result has `gpu.workByDeviceMs`, the GPU time the kernel counted per device during the run, and `onPinnedGpu`. Check these numbers, not an adapter's architecture string: two GPUs of one family report the same architecture. An integrated GPU's clock follows its load, so read `clockMhz` beside every GPU time.
 
 ## If a human is watching, open playtest early
 
