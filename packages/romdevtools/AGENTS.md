@@ -27,9 +27,9 @@ You drive the work. The human directs: they may want a game, a disassembly, a ro
 | `platform({op:'doc', platform:'guide', name:'debugging'})` | Per-platform inspector coverage, memory/state tools, symbol-aware reads, input mapping, save states. |
 | `platform({op:'doc', platform:'guide', name:'assets'})` | Art, tilemaps, sprite capture, audio formats, cross-platform moves. |
 | `platform({op:'doc', platform:'guide', name:'music'})` | Where to get music and how to turn it into platform data. |
-| `platform({op:'doc', platform:'guide', name:'wasmcart'})` | wasmcart carts: ABI, input, WebGPU, `presentWindow`, the `wasm` tool. |
+| `platform({op:'doc', platform:'guide', name:'wasmcart'})` | wasmcart carts: ABI, input, WebGPU, `presentWindow`, the timing load options, the `wasm` tool. |
 | `platform({op:'doc', platform:'guide', name:'bezels'})` | Active Bezels (`.ab` companions that composite over a game). |
-| `platform({op:'doc', platform:'guide', name:'sessions'})` | Sessions, eviction, many agents on one server, the playtest window, the livestream, feedback. |
+| `platform({op:'doc', platform:'guide', name:'sessions'})` | Sessions, eviction, each session's host process, many agents on one server, the playtest window, the livestream, feedback. |
 
 `platform({op:'docs', platform})` lists what a platform ships; `platform({op:'docs', platform:'guide'})` lists the guides.
 
@@ -57,7 +57,7 @@ This guide cannot hold 19 platforms of detail. Read `platform({op:'doc', platfor
 | sync32 | an open RP2350-based console (Cortex-M33, `.s32`) | C carts against a function-pointer ABI, WASM toolchain, memory/cpu/palette inspection, five genre examples, cycle profiling. No PPU, OAM or tilemap. |
 | 3D consoles | Nintendo 64, PlayStation, Dreamcast | Build and run examples (GPU-rendered cores), disassembly, Rizin/Ghidra analysis, memory tools; N64 breakpoints and single-step; matching decompilation projects. |
 | Fantasy console | PICO-8 (FAKE-08) | `build` packages a `.p8` from Lua; `disasm({target:'source'})` reads the cart's Lua; `memory({region:'system_ram'})` is its 64 KB. CPU and tile inspectors do not apply. |
-| Native runtimes | wasmcart, jsgame | Load, step, screenshot, input, `frame({op:'verify'})`, the `wasm` tool, `pack`. |
+| Native runtimes | wasmcart, jsgame | Load, step, screenshot, input, `frame({op:'verify'})`, `frame({op:'timing'|'flash'|'record'})`, the `wasm` tool, `pack`. |
 
 Genre examples (`shmup`, `platformer`, `puzzle`, `sports`, `racing`) ship for every classic platform except the Atari 2600, which has four (no `puzzle`: the TIA has no tilemap for a match-3 board), and for sync32, GameTank, PICO-8, N64, PlayStation and Dreamcast. The platformer side-scrolls with a hardware camera everywhere except NES and the Atari 2600, which are single-screen. Classic platforms also ship a music demo (`music_demo`) on the de-facto engine (FamiTone2, hUGEDriver, an SPC700 driver, XGM2, maxmod, PSG trackers, a SID sequencer, `lynx_snd_play`, TIA; PC Engine and MSX as `music_sfx`, plus `sprite_move`/`catch_game` projects).
 
@@ -212,7 +212,7 @@ The result, in brief (`gpuMs` has the same shape as `wallMs`):
 
 ```text
 { api:'webgpu', size:{width:1920, height:1080},
-  gpu:{ pin:{pci:'0000:69:00.0', ...}, adapter:{...} | glRenderer:'...', workByDeviceMs:{'0000:69:00.0':812.4, ...},
+  gpu:{ pin:{pci:'0000:03:00.0', ...}, adapter:{...} | glRenderer:'...', workByDeviceMs:{'0000:03:00.0':812.4, ...},
         onPinnedGpu:true, clockMhz:{min, mean, max}, busyPercent:{mean, max} },
   wallMs:{n, min, mean, p50, p95, p99, max}, cpuMs:{...},
   gpuMs:{..., measure:'busy', spanMs:{...}, overWindows:{windowFrames, median, mean, worstWindow},

@@ -4,6 +4,58 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 -
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.154.0 - 2026-11-10
+
+- **`frame({op:'timing'})` times a span of frames in one call.** Wall time, CPU time
+  in the frame call and GPU time for every frame of a range, as min/mean/p50/p95/p99/max,
+  per window of frames (with the median over windows) and the worst frame, after a
+  warmup and on an input schedule. Setup debug commands run first, numeric debug
+  fields are read after every frame, and the cart's own pass timers (`passTimers`,
+  cartwheel's `pipeline`) are read over the same frames; `variants` run an A/B in one
+  call over `rounds`. GPU time comes from WebGPU timestamp queries (load the cart with
+  `gpuTiming:true`) or a GL timer query around each frame; libretro cores that render
+  through GL (N64, PlayStation, Dreamcast) get it too, and every other host reports
+  wall and CPU with `gpuMs:{available:false, reason}`. The result says which GPU did
+  the work (`gpu.workByDeviceMs` from the kernel, `onPinnedGpu`, the adapter or GL
+  renderer, clock and busy time) and what else was running (`contention`: other
+  sessions' calls and their GPU time, a playtest window, system load; `noisy:true`
+  when any of it could have moved the numbers).
+- **`loadMedia` takes `gpuTiming`, `preferredSize` and `firstCommand`** (wasmcart
+  carts): a WebGPU device with the timestamp-query feature; the host's preferred size,
+  written before `wc_init` so a cart that sizes itself from the host renders at that
+  size; a debug-channel request answered in the cart's first frame
+  (`firstCommandReply`). A GL load reports `glRenderer`.
+- **One GPU for everything: `ROMDEV_GPU`.** `ROMDEV_GPU=<PCI address>` (or one line in
+  `$XDG_CONFIG_HOME/romdev/gpu`) is applied before any GPU library loads, so WebGPU
+  (Mesa's Vulkan device select), GL (DRI_PRIME) and wasmcart's adapter choice all land
+  on that GPU. `catalog({op:'status'})` reports `serverHealth.gpuPin` and
+  `gpuWorkByDeviceMs`, the GPU time the server and its host processes have used on
+  each device.
+- **Each session's host runs in its own process.** The server process keeps the front
+  (HTTP, MCP, sessions, schemas, the observer, `catalog`, eviction); each session's
+  tool calls run in a child process that holds its host. A long call in one session no
+  longer stalls the others or the server, a WebGPU step no longer runs other sessions'
+  work between its frames, and a native crash or a heap exhausted in one cart fails
+  only that session: the call in flight gets an error naming how the process died and
+  the `loadMedia({...})` to re-run, and the next call starts a fresh process. A host
+  that stops answering inside one call is killed after 10 minutes
+  (`ROMDEV_RUNNER_WEDGE_MS`). `ROMDEV_HOST_WORKERS=0` or `--no-host-workers` runs
+  every host in the server process as before. `catalog({op:'status'})` adds `hostBusy`
+  (a call of yours still running), `serverHealth.hostIsolation`, `hostRunners` (one row
+  per host process), `playtestWindowsOpen`, `hostRunnerDeaths` and `frontRssMb`
+  (`rssMb` now sums every process); `recentCartLog` is the session's own host's
+  output; a WebGPU `frame({op:'step'})` that spent most of its time waiting on other
+  sessions says so in `wgpuStep`.
+- **`frame({op:'flash'})` checks a range of frames for photosensitive flashing in one
+  call** (WCAG 2.3.1 and the Harding thresholds: at most 3 general and 3 red flashes a
+  second over a sixth of the screen, small lights switching together, no regular
+  flicker above 3 Hz), with the worst second located by frame and screen position and
+  an 8 Hz strobe control over the same frames that must fail (`checkOk` is the gate:
+  the run passes and the control fails). **`frame({op:'record'})`** writes the same
+  ranged capture to one CW_FRAME_DUMP file at a requested size. Both take a warmup,
+  setup commands, an input schedule or `steps`, `commandsAt` for a mid-range command,
+  and run on any host with frames.
+
 ## 0.153.0 - 2026-11-07
 
 - **`pack({target:'wasc'})` writes the cart's real version.** Every packed manifest

@@ -15,7 +15,17 @@ The emulator (loaded ROM, save-state slots, scroll position) lives per session, 
 
 ## Eviction
 
-A loaded ROM is a live WASM core holding real memory, so the server bounds how many it keeps: a host unused for about 10 minutes is torn down, and when too many are live the largest holder's oldest idle one goes. Your session, tools and on-disk states are unaffected. You see a "No ROM loaded" error that names the exact `loadMedia({...})` call to re-run (and, if a playtest window was open, an auto-checkpoint with the last ~15 s of play). An open playtest window is never evicted. `catalog({op:'status'})` reports `serverHealth {rssMb, liveHosts, maxHosts, hostIdleMs}`; `liveHosts == maxHosts` under heavy load is normal.
+A loaded ROM is a live WASM core holding real memory, so the server bounds how many it keeps: a host unused for about 10 minutes is torn down, and when too many are live the largest holder's oldest idle one goes. Your session, tools and on-disk states are unaffected. You see a "No ROM loaded" error that names the exact `loadMedia({...})` call to re-run (and, if a playtest window was open, an auto-checkpoint with the last ~15 s of play). An open playtest window is never evicted. `catalog({op:'status'})` reports `serverHealth {rssMb, liveHosts, maxHosts, hostIdleMs, hostIsolation, hostRunners, maxHostRunners}`; `liveHosts == maxHosts` under heavy load is normal.
+
+## Each session's host runs in its own process
+
+The server process keeps the front: HTTP, MCP, session identity, schemas, the observer, `catalog` and eviction. Each session's tool calls run in one child process of its own, which holds that session's host. So a long call in one session (a GL cart's frames, a slow debug command, a timing run) never delays another session or the server, and a WebGPU step no longer runs other sessions' work between its frames.
+
+- A host process that dies (a native crash in a cart, a heap exhausted) fails only that session's calls in flight, with an error naming the call and how the process died; the next call starts a fresh process, and the "No ROM loaded" hint still names the last `loadMedia({...})`.
+- A host that stops answering inside one call (a cart that never returns from a frame) is killed after 10 minutes (`ROMDEV_RUNNER_WEDGE_MS`), and the call fails the same way.
+- `catalog({op:'status'})` shows `hostBusy {calls:[{call, forMs}]}` while a call of yours is still running (the rest of the status then comes from the host's last report, `statusFromLastReport:true`). `serverHealth.hostRunners` has one row per host process (session, pid, rssMb, hostLive, platform, gpuApi, playtestWindowOpen, busy, idleSeconds, lastCall), `playtestWindowsOpen` counts windows across sessions, `hostRunnerDeaths` lists processes that died and how, and `frontRssMb` is the server process alone (`rssMb` sums every process). `recentCartLog` is your own host's cart output.
+- Eviction above is unchanged. A process whose host was evicted ends after the session idle time (`ROMDEV_RUNNER_IDLE_MS`, 30 minutes), and at most `ROMDEV_MAX_HOST_RUNNERS` processes run at once (the host cap plus 6).
+- `ROMDEV_HOST_WORKERS=0` (or `--no-host-workers`) runs every host in the server process instead; `serverHealth.hostIsolation` is `'process'` only with host processes.
 
 ## Running many sessions: say who you are
 

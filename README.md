@@ -20,6 +20,7 @@ romdev exposes 38 tools over MCP and plain HTTP. Each tool is a verb with an ope
 - **Static recompilation.** `disasm({target:'recompile', emit:'wasmcart'})` recompiles a whole NES, SNES (including its coprocessor carts), Game Boy, Game Boy Color, GBA, Master System, Game Gear or Genesis ROM into a wasmcart. `frame({op:'verifyRecompile'})` checks the result against the reference emulator core frame by frame (pixels, memory, audio, must-fail controls); `findDiverge`, `fuzzRecompile` and `traceInstructions` locate differences down to the instruction. A Genesis ROM can also be built as a native cart for the sync32 console.
 - **Matching decompilation.** `decomp({op})` drives a splat-based N64 or PlayStation decomp project: generate candidate C with m2c, compile it with the project's original compiler, compare per instruction, search with the permuter, and integrate with a full-ROM byte check. Everything runs as JavaScript and WebAssembly in process; no Python, make or host compiler. IDO, SGI's compiler, is proprietary and not distributed; build it once with `packages/romdevtools/scripts/build-ido.sh` from this repository or point `ROMDEV_IDO_DIR` at your own build. KMC gcc 2.7.2, EGCS 1.1.2, PS1 gcc 2.6.3 and mips-linux-gnu gcc 14 ship as WebAssembly.
 - **Native runtimes.** wasmcart (`.wasc`, WebAssembly games written in any language, with GL and WebGPU rendering) and jsgame (JavaScript canvas and WebGL games) run through the same load, step, screenshot and input loop, with cart introspection through `wasm({op})`.
+- **Measuring.** `frame({op:'timing'})` reports per-frame wall, CPU and GPU time over a span of frames in one call (WebGPU timestamp queries, GL timer queries, the cart's own pass timers, A/B variants, and the contention and the GPU that did the work). `frame({op:'flash'})` checks a range of frames for photosensitive flashing with a strobe control that must fail; `frame({op:'record'})` captures the range to one file.
 - **Active Bezels.** `.ab` companion packages that read a game's memory every frame and draw a composite scene (maps, HUDs). romdev returns the composite and the raw core frame for the same frame so a bezel can be checked against the game.
 - **A human in the loop.** `playtest()` opens an SDL window with gamepad support on the running game while the agent keeps working; `host({op:'play'})` shows a session on the `/livestream` page.
 
@@ -119,7 +120,7 @@ The WebAssembly binaries are build outputs shipped through npm; this repository 
 npx romdevtools      # MCP on http://127.0.0.1:7331/mcp
 ```
 
-The first run downloads the packages; later runs start from the npm cache. `PORT` and `HOST` change the bind address. `http://127.0.0.1:7331/livestream` shows tool calls and running sessions live for a human watching.
+The first run downloads the packages; later runs start from the npm cache. `PORT` and `HOST` change the bind address; `ROMDEV_GPU=<PCI address>` keeps all GPU work on one GPU on a machine with two. Each session's emulator runs in its own process (`ROMDEV_HOST_WORKERS=0` turns that off). `http://127.0.0.1:7331/livestream` shows tool calls and running sessions live for a human watching.
 
 ### Claude Code
 
