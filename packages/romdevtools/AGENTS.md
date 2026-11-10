@@ -75,7 +75,7 @@ All 38 tools are registered at session start; call any by name. Each is a verb w
 | `build` | `output`: rom, romWithDebug, run, project, reassemble |
 | `loadMedia` | load a ROM, disk, tape, program or cart (`path` or `base64`; `slot:'b'`, `core`, `firmware`, `cheats`, `coreOptions`, `useActiveBezel`, wasmcart options) |
 | `host` | `op`: unload, shutdown, reset (`hard:true` power-cycles), pause, resume, play, stop |
-| `frame` | `op`: step, screenshot, stepAndShot, sideBySide, compareRam, findDiverge, compareRender, portStatus, stepInstruction, stepInstructions, traceInstructions, verify, verifyRecompile, fuzzRecompile, cycles, timing |
+| `frame` | `op`: step, screenshot, stepAndShot, sideBySide, compareRam, findDiverge, compareRender, portStatus, stepInstruction, stepInstructions, traceInstructions, verify, verifyRecompile, fuzzRecompile, cycles, timing, flash (photosensitive flash check over a range, one call), record (a range of frames to one file) |
 | `input` | `op`: set, press, sequence, timeline, navigate, layout, pressKey, typeText, joyport, pointer, wheel |
 | `state` | `op`: save, load, list, export, dump, diff, exportSram, importSram, exportDisk, importDisk, putDiskFile, autoSnapshot, recoverSnapshot |
 | `memory` | `op`: read, write, readCart, regions, snapshot, diff, diffRuns, classify, search, searchUnknown, searchNext, provenance |
@@ -240,6 +240,46 @@ Setting a scene up without environment variables: `commands` run over the debug 
 **Isolation.** Each session's host runs in its own process (see Sessions), so no other session's call can run between a timing run's frames, and other sessions keep working during it (`catalog({op:'status'})` shows `timingRun`). What other sessions do to the shared GPU is measured instead: their GPU time during the run is `otherProcessesGpuMs`, and `contention` also gives `otherLiveHosts`, `otherBusySessions` and `hostIsolation:'process'`. On a server started with `ROMDEV_HOST_WORKERS=0` (every host in one process) a timing run holds the server instead: other sessions' calls wait until it ends, it first waits up to `drainSeconds` (10) for calls already running, and two timing runs never overlap. Anything it could not stop goes in `contention.reasons` and sets `noisy:true`: a playtest window, calls still running after the drain, other processes using the same GPU (`otherProcessesGpuMs`, read from the kernel), high system load, or GPU work on a device other than the pin. Re-run a noisy measurement before you trust it. `maxSeconds` (240) bounds a run; a cut-short run says `truncated`.
 
 **The GPU.** romdev renders on the GPU named by `ROMDEV_GPU` (a PCI address) or `$XDG_CONFIG_HOME/romdev/gpu`, set before any GPU library loads (Mesa's Vulkan device select for WebGPU, DRI_PRIME for GL). `catalog({op:'status'})` reports `serverHealth.gpuPin` and `gpuWorkByDeviceMs`. Every timing result has `gpu.workByDeviceMs`, the GPU time the kernel counted per device during the run, and `onPinnedGpu`. Check these numbers, not an adapter's architecture string: two GPUs of one family report the same architecture. An integrated GPU's clock follows its load, so read `clockMhz` beside every GPU time.
+
+## Flash check and ranged frame capture
+
+`frame({op:'flash'})` checks a stretch of play for photosensitive flashing in ONE call: it steps `frames` frames on the host's fixed clock, box-filters every frame down in linear light, and applies the WCAG 2.2 success criterion 2.3.1 limits and the Harding test's thresholds as the frames come. Never take a frame per request for this: a run of 1800 frames is one call.
+
+```text
+loadMedia({platform:'wasmcart', path:'build/cart/carts/game.wasc', wgpu:false})   // GL; wgpu:true (default) for WebGPU
+frame({op:'flash', frames:1800, warmup:2,
+       commands:['level 3', 'boss'],                 // setup over the debug channel first (not checked)
+       input:'0:start:2,120:right+a:600',            // frames count from this call's first frame, warmup included
+       path:'/abs/out/run.cwfd'})                    // optional: keep the checked frames
+```
+
+What it measures, on the filtered frames (default: the integer factor nearest a 240-pixel-wide picture, so 1920x1080 becomes 240x135; `downscale:N` or `size:{width,height}` to choose):
+
+- **regions**: a flash is a pair of opposing changes of relative luminance of 0.1 or more (the darker side below 0.8). Every block a sixth by a sixth of the screen counts its own; at most 3 in any one second. **regionsRed**: the same for saturated red, at most 3.
+- **fields**: small lights switching together: a quarter of a 10-degree field (a third by a third of the screen) making the same change within 3 frames, net of pixels going the other way (a moving picture does not count). At most 3 a second, and 3 red.
+- **flicker**: regular flicker above 3 Hz (a spectral peak 3.5 to 30 Hz holding most of a 2-second window's change, at the same rate two windows running) with an amplitude of 0.02 or more fails.
+- **rise**: the hardest two-frame rise of a sixth of the screen; reported, and bounded only with `flash:{maxRise}` (for a moment that must swell rather than snap).
+- **motion**: a run whose frames hardly change proves nothing and fails as such.
+
+The **control** runs every time: the same frames with an 8 Hz full-screen strobe laid over them (white mixed in at 0.7) must fail. If it passes, the verdict says the check proves nothing. `control:{hz, mix}` changes it; `control:false` skips it.
+
+```text
+{ op:'flash', verdict:'ok'|'FAIL'|'CONTROL PASSED (...)'|'INCOMPLETE: ...', pass:true, checkOk:true, problems:[],
+  summary:'1800 frames 240x135: flashes in a second 1 (red 0), fields 0 (red 0); flicker none; ...',
+  frames:{captured:1800, warmup:2, firstFrame:<host frame of the first checked frame>, inputPresses},
+  size:{source:[1920,1080], analysed:[240,135], factor:8, filter:'box, linear light'},
+  bounds:{maxFlashes:3, flickerAmp:0.02, maxRise:null, minMotion:0.0005, fps:60},
+  result:{ regions:{flashes, at, where:{x,y}}, regionsRed, fields, fieldsRed, flicker:{amp, hz, at, where}, rise:{amount, at, where}, motion,
+           worstSecond:{measure, from, to, seconds, hostFrame, regions, regionsRed, fields, fieldsRed} },
+  control:{ failsAsItMust:true, problems:[...], summary },
+  timing:{totalMs, stepMs, readAndFilterMs, analyseMs} }
+```
+
+Input over the range: `input` (a press schedule, as for timing) or `steps` (input({op:'sequence'}) steps: `[{input:{ports:[{a:true, axes:{lx:1}}]}, frames}]`, each held for its frames, the last to the end); with neither, the pad an earlier input sequence left held stays held. `commandsAt:[{frame, command}]` posts a debug command before a frame of the call and has it answered in that frame (a boss phase at frame 500 of the range) without splitting the range.
+
+`at`/`from` are frame indexes in the checked range (0 = the first checked frame); `worstSecond.hostFrame` is the host's frame count there. `pass` is the run alone; `checkOk` is the gate: the run passes AND the control fails. Bounds: `flash:{maxFlashes, flickerAmp, maxRise, minMotion, fps}`. The measures are the same as cartwheel's tools/lib/flash.mjs, so a romdev verdict and one from a native frame dump of the same frames agree.
+
+`frame({op:'record', frames, path})` is the same ranged capture with no analysis: every frame into one file in cartwheel's CW_FRAME_DUMP layout (16-byte header `"CWFD"`, u32 width, u32 height, u32 0; then RGB bytes a frame, top row first), with the same `warmup`, `commands`, `input`, `downscale`/`size`. Both work on any host with frames: wasmcart GL and WebGPU carts, libretro cores. A frame size that changes mid-range stops the call with the frame where it changed. `maxSeconds` (900) bounds a call.
 
 ## If a human is watching, open playtest early
 

@@ -43,7 +43,7 @@ function fallbackInfo(host) {
   };
 }
 
-function applyButtons(host, names) {
+export function applyButtons(host, names) {
   const ports = [{}];
   for (const n of names) {
     const [p, b] = splitPortButton(n);
@@ -54,7 +54,7 @@ function applyButtons(host, names) {
 }
 
 /** The buttons a schedule holds on frame f (relative to the run's first frame). */
-function wantAt(schedule, f) {
+export function wantAt(schedule, f) {
   const set = new Set();
   for (const p of schedule) if (p.frame <= f && f < p.frame + p.hold) for (const n of p.buttons) set.add(n);
   return [...set].sort();
