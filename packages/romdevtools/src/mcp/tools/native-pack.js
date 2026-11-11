@@ -13,7 +13,7 @@ import { readFileSync, readdirSync, statSync, writeFileSync, existsSync } from "
 import path from "node:path";
 import { zipSync } from "fflate";
 import { jsonContent, safeTool } from "../util.js";
-import { resolveCartVersion } from "./cart-version.js";
+import { resolveCartVersion } from "wasmcart";
 
 /**
  * Zip entries carry a fixed timestamp so the same inputs always pack to the
@@ -43,12 +43,14 @@ function collectDir(dir, baseDir = dir, out = {}) {
  * @param {string} a.outputPath  where to write the .wasc.
  * @param {string} [a.name]     manifest name (generated-manifest case).
  * @param {number} [a.players]  manifest players count (generated-manifest case).
+ * @param {string} [a.title]    manifest display name as people read it ("Tux Racer"; `name` stays the short id).
+ *   Hosts may cut it after 64 characters; a longer one is packed with a warning in the result.
  * @param {string} [a.version]  the cart's version (semver). Without it, the version of
  *   the git checkout holding `source` (else the wasm's dir, else `assets`): the tag at a
  *   clean v<semver> tag, else <last tag>-dev.g<commit>; outside git a source manifest's
  *   own version, else 0.1.0. Same rule as wasmcart-pack and cartwheel's build.
  */
-export function packWasc({ source, wasm, assets, outputPath, name, players, version } = {}) {
+export function packWasc({ source, wasm, assets, outputPath, name, players, version, title } = {}) {
   if (!outputPath) throw new Error("pack(wasmcart): `outputPath` is required.");
   let files;
   /** The version: `version`, else git, else the source manifest's (a placeholder), else 0.1.0. */
@@ -73,6 +75,7 @@ export function packWasc({ source, wasm, assets, outputPath, name, players, vers
       if (!wasmEntry) throw new Error("pack(wasmcart): source dir has no manifest.json and no .wasm to derive one.");
       const manifest = { name: name || path.basename(outputPath, ".wasc"), version: cartVersion(null), entry: wasmEntry };
       if (players) manifest.players = players;
+      if (title !== undefined) manifest.title = title;
       files["manifest.json"] = new Uint8Array(Buffer.from(JSON.stringify(manifest, null, 2)));
     } else {
       // The dir's own manifest is kept, except its version: a committed "1.0.0" is a
@@ -84,6 +87,7 @@ export function packWasc({ source, wasm, assets, outputPath, name, players, vers
         throw new Error(`pack(wasmcart): manifest.json in '${source}' is not valid JSON: ${e.message}`);
       }
       manifest.version = cartVersion(manifest.version ?? null);
+      if (title !== undefined) manifest.title = title;
       files["manifest.json"] = new Uint8Array(Buffer.from(JSON.stringify(manifest, null, 2)));
     }
   } else if (wasm) {
@@ -91,6 +95,7 @@ export function packWasc({ source, wasm, assets, outputPath, name, players, vers
     files = { "cart.wasm": new Uint8Array(readFileSync(wasm)) };
     const manifest = { name: name || path.basename(outputPath, ".wasc"), version: cartVersion(null), entry: "cart.wasm" };
     if (players) manifest.players = players;
+    if (title !== undefined) manifest.title = title;
     if (assets) {
       if (!existsSync(assets) || !statSync(assets).isDirectory()) throw new Error(`pack(wasmcart): assets '${assets}' is not a directory.`);
       manifest.assets = "assets/";
@@ -104,7 +109,9 @@ export function packWasc({ source, wasm, assets, outputPath, name, players, vers
 
   const zipped = zipSync(files, { level: 6, mtime: FIXED_ZIP_TIME });
   writeFileSync(outputPath, zipped);
-  return { outputPath, entries: Object.keys(files).length, bytes: zipped.length };
+  const out = { outputPath, entries: Object.keys(files).length, bytes: zipped.length };
+  if (title !== undefined && title.length > 64) out.warning = `title is ${title.length} characters; hosts may cut it after 64`;
+  return out;
 }
 
 /**
@@ -153,6 +160,7 @@ export function registerNativePackTools(server, z) {
       outputPath: z.string().describe("Absolute path to write the archive (.wasc / .jsgame)."),
       name: z.string().optional().describe("target=wasc: manifest game name (default derived from outputPath)."),
       players: z.number().int().min(1).max(4).optional().describe("target=wasc: manifest players count."),
+      title: z.string().optional().describe("target=wasc: the game's display name as people read it (manifest `title`, e.g. \"Tux Racer\"; `name` stays the short id). For a launcher list, a frontend game name and a window title; a host without it falls back to `name`. Over 64 characters packs with a warning. Replaces a source manifest's own title when given."),
       version: z.string().optional().describe("target=wasc: the cart's manifest version (semver, e.g. 1.2.0). Default: from the git checkout holding the source: the tag at a clean v<semver> tag, else <last tag>-dev.g<commit>; outside git a source manifest's version, else 0.1.0. Not semver = error."),
     },
     safeTool(async (args) => {

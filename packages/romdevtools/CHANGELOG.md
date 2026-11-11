@@ -4,6 +4,47 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 -
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.155.0 - 2026-11-11
+
+**The first npm release since 0.150.2.** 0.151.0 through 0.154.0 were tagged but
+never published, so everything in the 0.151.0 to 0.154.0 sections below ships in
+this version too (frame timing, flash checks and frame recording, per-session host
+runners, `ROMDEV_GPU`, the wasmcart test cart and the rest).
+
+- **Keyboard keys for wasmcart carts.** `input({op:'set', keys:['space', 'w']})` and
+  each step of `input({op:'sequence'})` take `keys` (SDL scancode names, or USB HID
+  scancode numbers), held from the next frame while the step holds. They reach the
+  cart through its keyboard ABI as a real host delivers them: `wc_kb_on_down` and
+  `wc_kb_on_up` once per change with the held modifiers, and the 256-bit held mask
+  written before every frame, so a cart's keyboard bindings can be driven. A call
+  that names no keys releases them all; a pointer or wheel call leaves them held.
+- **`fields` and `stopWhen` on `input({op:'sequence'})` and `frame({op:'step'})`.**
+  A bot looks once per decision: `fields` names debug fields read after the last
+  frame (the cart's own typed value, never the capped listing), and `stopWhen`
+  (`equals`, `atLeast` or `atMost`, with `index` for an array element and `every`)
+  ends the range the frame a field reaches a value, reporting `stopped` and
+  `framesRun`. An unknown field name is an error, never an empty value.
+- **`pack({target:'wasc'})` takes `title`**, the manifest's new display name
+  (wasmcart 0.41.0: "Tux Racer", for a launcher's list, a frontend's game name and a
+  window title; `name` stays the short id). A title over 64 characters packs with a
+  warning. The pack tool's cart-version rule (the nearest `v<semver>` tag behind the
+  commit, else `<tag>-dev.g<commit>`) now comes straight from wasmcart's own
+  `resolveCartVersion` instead of a copy, so the two cannot drift.
+- **The GL frame-timing test is GPU-independent.** It judges the rise against the
+  base and the query's resolution instead of a fixed number of milliseconds, so it
+  passes on any GPU, not only the one it was tuned on.
+- **Dependencies: wasmcart ^0.41.1 (was ^0.37.0) and webgl-node ^1.7.0 (was
+  ^1.5.1).** For 0.x a caret matches one minor only, so the old pin could not see
+  anything from 0.38.0 on. wasmcart 0.38.0 to 0.41.1 add the optional manifest fields
+  `title`, `description`, `author` and `art` (a host never refuses or changes a cart
+  over them), `wasmcart art` to copy a cart's launcher art out and git versions for
+  packed carts; no ABI or SPEC change a cart must adapt to. webgl-node 1.7.0 adds the
+  compressed-texture extensions (S3TC, BPTC, RGTC, ASTC where the driver has them,
+  ETC2 always) and `compressedTexImage2D/3D`. A GL cart that used to fall back to an
+  uncompressed texture because the extension was missing now gets the compressed
+  one, so GL texture memory and rendered pixels can differ slightly from 0.154.0 for
+  such carts; re-baseline any pixel hash taken from one.
+
 ## 0.154.0 - 2026-11-10
 
 - **`frame({op:'timing'})` times a span of frames in one call.** Wall time, CPU time

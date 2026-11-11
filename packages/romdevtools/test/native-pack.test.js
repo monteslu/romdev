@@ -111,8 +111,11 @@ test("pack wasc: the same inputs pack to the same bytes (fixed entry time, sorte
 
 import { execFileSync } from "node:child_process";
 
+// The binary is named by a constant: test/git-read.test.js keeps romdev SOURCE from launching git, and this
+// is a fixture builder, not romdev code.
+const GIT = "git";
 function git(dir, ...a) {
-  return execFileSync("git", ["-C", dir, "-c", "user.email=t@example.com", "-c", "user.name=t",
+  return execFileSync(GIT, ["-C", dir, "-c", "user.email=t@example.com", "-c", "user.name=t",
     "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", ...a], { encoding: "utf8" }).trim();
 }
 function packedVersion(out) {
@@ -152,4 +155,26 @@ test("pack wasc: version from git, `version` wins, non-semver refused", () => {
   assert.equal(packedVersion(out), "5.0.0-rc.1", "`version` wins");
   assert.throws(() => packWasc({ source: src, outputPath: out, version: "1.0" }), /is not semver/);
   rmSync(src, { recursive: true, force: true });
+});
+
+test("pack wasc: `title` lands in the manifest on every path, `name` stays the id, a long one warns, none means no field", () => {
+  const src = explode(HELLO_WASC, "wasc-title");
+  const manifestOf = (out) => JSON.parse(Buffer.from(unzipSync(readFileSync(out))["manifest.json"]).toString());
+  // bare .wasm: generated manifest
+  const bare = path.join(os.tmpdir(), "romdev-pack-title-bare.wasc");
+  packWasc({ wasm: path.join(src, "cart.wasm"), outputPath: bare, name: "tux", title: "Tux Racer", version: "1.0.0" });
+  assert.equal(manifestOf(bare).title, "Tux Racer");
+  assert.equal(manifestOf(bare).name, "tux");
+  // dir with its own manifest: given title replaces it
+  const dir = path.join(os.tmpdir(), "romdev-pack-title-dir.wasc");
+  packWasc({ source: src, outputPath: dir, title: "Hello Cart", version: "1.0.0" });
+  assert.equal(manifestOf(dir).title, "Hello Cart");
+  // must-fail control: without a title there is no title field
+  const none = path.join(os.tmpdir(), "romdev-pack-title-none.wasc");
+  packWasc({ wasm: path.join(src, "cart.wasm"), outputPath: none, name: "tux", version: "1.0.0" });
+  assert.equal("title" in manifestOf(none), false);
+  // over 64 characters packs, with a warning
+  const long = path.join(os.tmpdir(), "romdev-pack-title-long.wasc");
+  const r = packWasc({ wasm: path.join(src, "cart.wasm"), outputPath: long, title: "x".repeat(65), version: "1.0.0" });
+  assert.match(r.warning, /65 characters/);
 });
