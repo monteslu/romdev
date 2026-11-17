@@ -10,7 +10,8 @@
 // preambles here, not in AGENTS.md. The tool reference is generated from the live
 // registry (descriptions + JSON-Schema params), so it never drifts from the code.
 
-import { toolJsonSchema } from "./tool-registry.js";
+import { readFile } from "node:fs/promises";
+import { toolJsonSchema, buildToolRegistry } from "./tool-registry.js";
 import { decompSkillSection } from "../decomp/skill-sync.js";
 
 /**
@@ -195,12 +196,34 @@ export function skillToolReference(registry) {
   return lines.join("\n");
 }
 
-// The skill document the running server serves (routes.js registers it), so
-// decomp({op:'skill', action:'write'}) writes exactly what
-// GET /skills/romdev/SKILL.md returns instead of a second, thinner document.
-let skillDocSource = null;
-export function setSkillDocSource(fn) { skillDocSource = fn; }
-export function currentSkillDoc(opts) {
-  if (!skillDocSource) throw new Error("no skill document source: the HTTP tool surface is not mounted in this process");
-  return skillDocSource(opts);
+/** The platforms whose capability entry offers matching decompilation. */
+export function decompPlatformsOf(capabilities) {
+  return Object.keys(capabilities).filter((p) => capabilities[p]?.ops?.decompile || capabilities[p]?.decomp);
+}
+
+/**
+ * The one skill document, built from this package's own files and registry, so
+ * any process can build it: GET /skills/romdev/SKILL.md serves it and
+ * decomp({op:'skill', action:'write'}) writes it (that call runs in a host
+ * runner process, where the HTTP routes do not exist). The written copy adds
+ * only its `generated` stamp.
+ */
+export async function liveSkillDoc({ generatedAt } = {}) {
+  const [{ CAPABILITIES }, { DECOMP_OPS }] = await Promise.all([
+    import("../cores/capabilities.js"),
+    import("../mcp/tools/decomp.js"),
+  ]);
+  const root = new URL("../../", import.meta.url);
+  const [agentsBody, pkg] = await Promise.all([
+    readFile(new URL("AGENTS.md", root), "utf8"),
+    readFile(new URL("package.json", root), "utf8"),
+  ]);
+  return buildSkillDoc({
+    registry: buildToolRegistry("__meta__"),
+    agentsBody,
+    version: JSON.parse(pkg).version,
+    decompPlatforms: decompPlatformsOf(CAPABILITIES),
+    decompOps: [...DECOMP_OPS],
+    generatedAt,
+  });
 }

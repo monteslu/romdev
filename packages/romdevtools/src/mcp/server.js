@@ -569,9 +569,8 @@ async function main() {
   // same localhost trust, per-agent dynamic sessions. Lets MCP-wary users (or
   // agents that prefer the Agent Skills standard) use romdev with near-zero
   // always-on context - the skill metadata is ~100 tokens until invoked.
-  const agentsBody = await loadAgentsBody();
   mountHttpToolRoutes(app, {
-    agentsBody, version: PKG_VERSION, idleMs: SESSION_IDLE_MS,
+    version: PKG_VERSION, idleMs: SESSION_IDLE_MS,
     ...(pool ? { wrapRegistry: (server, key) => installHostForwarding(server, key, pool) } : {}),
   });
 

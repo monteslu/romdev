@@ -18,9 +18,7 @@
 // (the app already mounts localhostHostValidation()).
 
 import { buildToolRegistry, runTool, toolJsonSchema } from "./tool-registry.js";
-import { buildSkillDoc, setSkillDocSource } from "./skill-doc.js";
-import { CAPABILITIES } from "../cores/capabilities.js";
-import { DECOMP_OPS } from "../mcp/tools/decomp.js";
+import { liveSkillDoc } from "./skill-doc.js";
 import { schemaForTarget, filterableTargets } from "./schema-subset.js";
 import { swaggerHtml, swaggerAsset } from "./swagger.js";
 import { observer } from "../observer/bus.js";
@@ -45,7 +43,6 @@ export let _httpSessionsByAgent = () => ({});
  * Mount the HTTP tool surface on an Express app.
  * @param {import('express').Express} app
  * @param {object} [opts]
- * @param {string} [opts.agentsBody]  the channel-neutral AGENTS.md body (for the skill doc)
  * @param {string} [opts.version]     package version (for OpenAPI info)
  * @param {number} [opts.idleMs]      session idle timeout (default 30m)
  * @param {(server: object, sessionKey: string) => void} [opts.wrapRegistry]  passed to buildToolRegistry
@@ -287,19 +284,13 @@ export function mountHttpToolRoutes(app, opts = {}) {
   //   /romdev/SKILL.md         - alias: the <name>/SKILL.md tail
   //   /romdev-skill.md         - alias: flat form (older refs)
   // ONE skill document: served here, and written to disk by
-  // decomp({op:'skill', action:'write'}) through currentSkillDoc().
-  const decompPlatforms = Object.keys(CAPABILITIES).filter((p) => CAPABILITIES[p]?.ops?.decompile || CAPABILITIES[p]?.decomp);
-  const skillDoc = ({ generatedAt } = {}) => buildSkillDoc({
-    registry: metaRegistry,
-    agentsBody: opts.agentsBody ?? "",
-    version,
-    decompPlatforms,
-    decompOps: [...DECOMP_OPS],
-    generatedAt,
-  });
-  setSkillDocSource(skillDoc);
-  const serveSkill = (req, res) => {
-    res.type("text/markdown").send(skillDoc());
+  // decomp({op:'skill', action:'write'}), both through liveSkillDoc().
+  const serveSkill = async (req, res) => {
+    try {
+      res.type("text/markdown").send(await liveSkillDoc());
+    } catch (e) {
+      res.status(500).type("text/plain").send(`could not build the skill document: ${e?.message ?? e}`);
+    }
   };
   app.get("/skills/romdev/SKILL.md", serveSkill);
   app.get("/romdev/SKILL.md", serveSkill);

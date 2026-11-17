@@ -261,8 +261,8 @@ export function registerDecompTools(server, z, sessionKey) {
           }
           // The same document GET /skills/romdev/SKILL.md serves: preamble, the
           // AGENTS.md body, the decomp contract and the generated tool reference.
-          const { currentSkillDoc } = await import("../../http/skill-doc.js");
-          const content = currentSkillDoc({ generatedAt: new Date().toISOString() });
+          const { liveSkillDoc } = await import("../../http/skill-doc.js");
+          const content = await liveSkillDoc({ generatedAt: new Date().toISOString() });
           return jsonContent({ ...(await SK.writeSkill(content, { targetPath: args.outputPath })), previousStatus: status });
         }
       }
