@@ -5,8 +5,10 @@ A wasmcart is a game compiled to WebAssembly against the wasmcart ABI, run by ro
 ## Loading
 
 ```js
-loadMedia({platform:'wasmcart', path:'/proj/game.wasc'})   // a .wasc package or a bare .wasm
+loadMedia({platform:'wasmcart', path:'/proj/game.wasc'})   // a .wasc package, a cart directory or a bare .wasm
 ```
+
+- A cart directory is an unpacked `.wasc` (`manifest.json`, the entry wasm, the `assets/` tree) and loads as it is, so an edit to a script or asset shows on the next `loadMedia` with no packing step. That is the edit loop for the scripted runtimes (Lua, Ruby, Python, JavaScript).
 
 - romdev requires wasmcart ABI v4 or later. Carts built against an older ABI are refused at load with the reason; rebuild them against current wasmcart headers.
 - Host-to-cart writes (GL strings, WebGPU messages, text payloads) need the cart to export `wc_alloc` and `wc_free`.

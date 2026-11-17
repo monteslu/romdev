@@ -18,6 +18,8 @@ the `romdev-mcp` bin is kept as an alias.)
   wasmcart carts and jsgame games (it named only retro platforms, so an agent
   working on a cart had no reason to load it), and its preamble gets the HTTP
   form of the run-carts-here line the MCP instructions got in 0.156.0.
+- **The wasmcart guide** says a cart directory loads as it is, the edit loop for
+  the scripted runtimes.
 - **AGENTS.md** says which tools are preloaded in clients that load tools on
   first use, and that `loadMedia` takes a cart directory and is the place for
   every look, play and behaviour check of a cart.
