@@ -4,6 +4,17 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 -
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.156.1 - 2026-11-17
+
+- **`frame({op:'stepAndShot'})` takes `crop`, `scale` and `overlayBoxes`, and
+  `frame({op:'verify'})` takes `frames`.** The tool description offered both and
+  the handlers used them, but the per-op argument check reads each parameter's
+  own description, which named only `op=screenshot` (and left `verify` off
+  `frames`), so the calls were refused before they ran. Reading a HUD right after
+  stepping took two calls instead of one. The parameter descriptions now name
+  those ops; `test/frame-capture-scope.test.js` checks the registered shape
+  (0.156.0 fails two of its three tests).
+
 ## 0.156.0 - 2026-11-17
 
 - **The core tools load up front in clients that defer MCP tools.** Claude Code
