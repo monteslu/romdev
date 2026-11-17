@@ -113,10 +113,19 @@ export function registerLifecycleTools(server, z, sessionKey) {
         // at load, where it is cheapest to act on.
         ...(host.status.abiWarnings?.length ? { abiWarnings: host.status.abiWarnings } : {}),
         capabilities: caps,
+        // The next call, named: a client that defers MCP tools (lists names,
+        // loads a schema on first use) has loadMedia up front but not frame,
+        // and a load that ends without a pointer is where an agent drifts back
+        // to a shell command to look at the cart.
+        next: "frame({op:'stepAndShot', frames:N}) to run and see it; input({op:'sequence'}) to play it; wasm({op:'debugState'}) for its named state.",
       };
+      // MCP content, as the emulator path returns: a bare object reached MCP
+      // clients as an empty result (the HTTP route passed it through as JSON,
+      // which hid this from every HTTP caller).
+      const payload = jsonContent(result);
       // Push the first frame to the /livestream observer, same as an emulator load.
-      if (!slotB) attachObserverFrame(result, host, `${platform} loaded`);
-      return result;
+      if (slotB) return payload;
+      return attachObserverFrame(payload, host, `${platform} loaded`);
     }
 
     if (core && !coresFor(platform).includes(core)) throw new Error(`loadMedia: core '${core}' is not a ${platform} core (${coresFor(platform).join(", ") || "none"})`);

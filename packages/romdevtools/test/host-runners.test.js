@@ -246,6 +246,22 @@ async function mcpSession(port) {
   };
 }
 
+test("MCP: a wasmcart loadMedia returns content naming the next call (it once came back empty over MCP)", { timeout: 180000 }, async () => {
+  const srv = await startServer();
+  try {
+    const callTool = await mcpSession(srv.port);
+    const load = await callTool("loadMedia", { platform: "wasmcart", path: HELLO });
+    assert.ok(!load.isError, JSON.stringify(load).slice(0, 300));
+    assert.ok(Array.isArray(load.content) && load.content.length > 0, `empty MCP result: ${JSON.stringify(load).slice(0, 300)}`);
+    const j = JSON.parse(load.content[0].text);
+    assert.equal(j.loaded, true);
+    assert.match(j.next, /frame\(\{op:'stepAndShot'/);
+    // The HTTP route still answers with plain JSON.
+    const http = await must(srv.port, "http-side", "loadMedia", { platform: "wasmcart", path: HELLO });
+    assert.equal(http.json.loaded, true);
+  } finally { await srv.stop(); }
+});
+
 test("host runners: the MCP transport runs tools in the runner with the same result shapes (text and images)", { timeout: 180000 }, async () => {
   const srv = await startServer();
   try {

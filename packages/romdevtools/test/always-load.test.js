@@ -46,7 +46,9 @@ async function listTools(names) {
 test("the core tools carry anthropic/alwaysLoad and the rest do not", async () => {
   const tools = await listTools(["catalog", "loadMedia", "frame", "input", "wasm", "disasm", "memory"]);
   const marked = tools.filter((t) => t._meta?.[ALWAYS_LOAD_KEY] === true).map((t) => t.name).sort();
-  assert.deepEqual(marked, ["catalog", "frame", "input", "loadMedia", "wasm"]);
+  assert.deepEqual(marked, ["catalog", "input", "loadMedia", "wasm"]);
+  // frame is deliberately deferred: ~13K tokens of definition every session.
+  assert.equal(tools.find((t) => t.name === "frame")._meta?.[ALWAYS_LOAD_KEY], undefined);
   // Control: an unmarked tool has no such key, so the check above can fail.
   const disasm = tools.find((t) => t.name === "disasm");
   assert.equal(disasm._meta?.[ALWAYS_LOAD_KEY], undefined);
