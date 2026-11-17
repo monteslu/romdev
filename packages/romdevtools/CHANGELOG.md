@@ -4,6 +4,26 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 -
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.156.0 - 2026-11-17
+
+- **The core tools load up front in clients that defer MCP tools.** Claude Code
+  lists a server's tools by name only and loads a schema on first use, so an agent
+  had to search before it could call `loadMedia`, and often ran a shell command
+  instead. `catalog`, `loadMedia`, `input` and `wasm` now carry the tools/list
+  `_meta` flag that loads a tool at session start (about 9K tokens together), on
+  both protocol eras. `frame` stays deferred: its definition alone is about 13K
+  tokens.
+- **A wasmcart `loadMedia` names the next call** (`next`: `frame({op:'stepAndShot'})`,
+  `input({op:'sequence'})`, `wasm({op:'debugState'})`).
+- **Fixed: a wasmcart `loadMedia` came back empty over MCP.** The native-runtime
+  path returned a bare object rather than tool content; the HTTP route passed it
+  through as JSON, which hid it from every HTTP caller. It now returns content, as
+  the emulator path does.
+- **The connection instructions point cart runs here in their first lines** (a
+  client shows only the first 4096 characters of them): any wasmcart cart, from any
+  SDK, runs through `loadMedia` for look, play and behaviour checks. The old line
+  saying no client needs a loading step is gone.
+
 ## 0.155.0 - 2026-11-11
 
 **The first npm release since 0.150.2.** 0.151.0 through 0.154.0 were tagged but
