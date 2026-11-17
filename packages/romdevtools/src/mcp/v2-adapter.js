@@ -34,6 +34,20 @@ import { SESSION_ARG } from "./session-key.js";
  *   passes the handle it chose for a caller that never named one).
  * @returns {object} the same server, plus a v1-style `.tool()`
  */
+/**
+ * Tools a client that defers MCP tools (lists names only, loads a schema on
+ * first use: Claude Code's tool search) should load up front instead. An agent
+ * that has to search for loadMedia before it can call it reaches for a shell
+ * command first; with these in hand, running a cart here is the obvious step.
+ * Kept to the core loop (load, step and look, drive, read the cart): every tool
+ * listed here costs every session its full definition, ~70 KB for these five,
+ * most of it frame's schema. Claude Code also cuts an up-front description at
+ * 4096 characters, so frame keeps step / screenshot / stepAndShot first.
+ */
+export const ALWAYS_LOAD = new Set(["catalog", "loadMedia", "frame", "input", "wasm"]);
+/** The tools/list `_meta` key Claude Code reads (docs: "Mark a tool to load upfront"). */
+export const ALWAYS_LOAD_KEY = "anthropic/alwaysLoad";
+
 export function withV1ToolApi(v2Server, opts = {}) {
   const { sessionParam = false, sessionNote = null } = opts;
   // Later layers (installObserverMiddleware, withClearToolErrors) wrap
@@ -75,6 +89,7 @@ export function withV1ToolApi(v2Server, opts = {}) {
 
           const config = {};
           if (description) config.description = description;
+          if (ALWAYS_LOAD.has(name)) config._meta = { [ALWAYS_LOAD_KEY]: true };
           // A raw zod shape is accepted by registerTool's legacy overload
           // (auto-wrapped in z.object). Passing an EMPTY shape is not the same
           // as passing none -- omit it so a no-arg tool stays no-arg.
