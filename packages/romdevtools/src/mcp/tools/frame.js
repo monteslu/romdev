@@ -510,9 +510,10 @@ export function registerFrameTools(server, z, sessionKey) {
     // 1-pixel-tick bar or an 8px counter stays legible, unlike a downscale),
     // then scale - so crop+integer-scale gives an enlarged detail view.
     const cropped = !!crop;
+    let cropW, cropH;
     if (cropped) {
       const c = cropPng(pngBase64, crop);
-      pngBase64 = c.base64; width = c.width; height = c.height;
+      pngBase64 = c.base64; width = cropW = c.width; height = cropH = c.height;
     }
     const scaled = scale && scale !== 1;
     if (scaled) {
@@ -537,7 +538,7 @@ export function registerFrameTools(server, z, sessionKey) {
     return {
       content: [
         imageContent(pngBase64),
-        { type: "text", text: `${bezel ? `[${frameSource}] ` : ""}framebuffer ${shot.width}x${shot.height}${cropped ? ` (cropped to ${width}x${height} at ${crop.x ?? 0},${crop.y ?? 0})` : ""}${scaled ? ` (scaled ${scale}x${cropped ? "" : ` to ${width}x${height}`})` : ""}${overlayInfo ? ` (overlay: ${overlayInfo.spritesDrawn} sprites)` : ""} - also written to ${tempPath} (use this path for ImageMagick/crops; pass outputPath for a permanent location).` },
+        { type: "text", text: `${bezel ? `[${frameSource}] ` : ""}framebuffer ${shot.width}x${shot.height}${cropped ? ` (cropped to ${cropW}x${cropH} at ${crop.x ?? 0},${crop.y ?? 0})` : ""}${scaled ? ` (scaled ${scale}x to ${width}x${height})` : ""}${overlayInfo ? ` (overlay: ${overlayInfo.spritesDrawn} sprites)` : ""} - also written to ${tempPath} (use this path for ImageMagick/crops; pass outputPath for a permanent location).` },
       ],
     };
   }

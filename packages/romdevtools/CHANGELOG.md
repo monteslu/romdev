@@ -14,6 +14,9 @@ the `romdev-mcp` bin is kept as an alias.)
   stepping took two calls instead of one. The parameter descriptions now name
   those ops; `test/frame-capture-scope.test.js` checks the registered shape
   (0.156.0 fails two of its three tests).
+- **A cropped and scaled inline shot reports the crop's own size.** The text said
+  "cropped to 160x30" for a 320x60 crop at scale 0.5; it now says "cropped to
+  320x60 ... (scaled 0.5x to 160x30)".
 
 ## 0.156.0 - 2026-11-17
 
