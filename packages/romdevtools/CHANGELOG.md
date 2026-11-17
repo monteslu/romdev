@@ -4,6 +4,24 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 -
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.156.2 - 2026-11-17
+
+- **`decomp({op:'skill', action:'write'})` writes the full skill.** It is the
+  remedy the server names when the installed skill is stale, and it wrote a second,
+  thinner document than `GET /skills/romdev/SKILL.md`: no rule against installing
+  compilers, no HTTP routes or sessions, no AGENTS.md body and no tool reference,
+  so following the remedy made the skill worse. Both now come from one builder;
+  the written copy adds only its `generated` stamp. The decomp contract and op
+  list that only the thin document had are now part of it.
+  `test/skill-one-document.test.js` checks the two are the same document.
+- **The skill sends wasmcart carts to romdev.** Its trigger description names
+  wasmcart carts and jsgame games (it named only retro platforms, so an agent
+  working on a cart had no reason to load it), and its preamble gets the HTTP
+  form of the run-carts-here line the MCP instructions got in 0.156.0.
+- **AGENTS.md** says which tools are preloaded in clients that load tools on
+  first use, and that `loadMedia` takes a cart directory and is the place for
+  every look, play and behaviour check of a cart.
+
 ## 0.156.1 - 2026-11-17
 
 - **`frame({op:'stepAndShot'})` takes `crop`, `scale` and `overlayBoxes`, and

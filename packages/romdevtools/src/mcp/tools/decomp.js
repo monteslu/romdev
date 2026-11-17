@@ -259,17 +259,10 @@ export function registerDecompTools(server, z, sessionKey) {
             return jsonContent({ ...status, serverPlatforms: platforms.length,
               preview: "pass action:'write' to regenerate the skill from the live capability manifest (the previous file is backed up first)." });
           }
-          const content = SK.generateSkill({
-            version: pkgVersion, platforms, decompPlatforms,
-            toolCount: null, ops: [...DECOMP_OPS],
-            domains: [
-              { name: "build + run", description: "compile for a platform, load media, step frames, screenshot, script controller input" },
-              { name: "inspect", description: "memory regions, CPU and sound-chip state, sprites, palettes, tilemaps" },
-              { name: "reverse-engineer", description: "value search, write/read watchpoints, disassembly, control-flow graphs, cross-references, Ghidra pseudocode, live jumptable recovery" },
-              { name: "decomp", description: "matching decompilation against the project's own compiler and build system" },
-              { name: "port engine", description: "static recompilation between consoles (6502 and Z80 sources today)" },
-            ],
-          });
+          // The same document GET /skills/romdev/SKILL.md serves: preamble, the
+          // AGENTS.md body, the decomp contract and the generated tool reference.
+          const { currentSkillDoc } = await import("../../http/skill-doc.js");
+          const content = currentSkillDoc({ generatedAt: new Date().toISOString() });
           return jsonContent({ ...(await SK.writeSkill(content, { targetPath: args.outputPath })), previousStatus: status });
         }
       }

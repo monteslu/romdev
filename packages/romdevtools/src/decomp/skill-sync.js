@@ -98,34 +98,15 @@ export async function skillStatus(server) {
 }
 
 /**
- * Generate a current skill document from the live capability manifest.
- *
- * Generated from what the server ACTUALLY reports, so the document cannot drift
- * from the implementation the way a hand-maintained one does.
+ * The matching-decompilation section of the skill: the contract that keeps a
+ * reader honest about exactness, and every `decomp` op, read from the server's
+ * own schema. Part of the one skill document (http/skill-doc.js buildSkillDoc),
+ * which both GET /skills/romdev/SKILL.md and decomp({op:'skill', action:'write'})
+ * produce.
  */
-export function generateSkill({ version, platforms, decompPlatforms = [], toolCount, domains = [], ops = [] }) {
-  const platList = platforms.join(", ");
-  return `---
-name: romdev
-description: Retro game development, ROM reverse-engineering and matching decompilation for ${platforms.length} platforms (${platList}). Use when building, running, debugging, disassembling, asset-converting, romhacking or DECOMPILING a retro game - drives bundled emulators and toolchains over HTTP.
-metadata:
-  version: "${version}"
-  generated: "${new Date().toISOString()}"
-  generatedFrom: "the live romdev capability manifest - do not hand-edit; re-run decomp({op:'skill', action:'write'}) after a server upgrade"
----
-
-romdev gives you retro game development, reverse-engineering and matching decompilation across ${platforms.length} platforms, driven over HTTP from ${toolCount ?? "~40"} tools.
-
-## Platforms
-${platList}
-
-## Prerequisite: romdev runs LOCALLY (same machine as you)
-romdev bundles compilers and emulators as WASM and runs them in-process, in the romdev SERVER (\`npx romdevtools\`, http://localhost:7331). Connection refused means it is not running. Tools take FILESYSTEM PATHS on the local disk romdev shares with you, never uploads.
-
-## Domains
-${domains.map((d) => `- **${d.name}** - ${d.description}`).join("\n")}
-
-${decompPlatforms.length ? `## Matching decompilation (\`decomp\`)
+export function decompSkillSection({ decompPlatforms = [], ops = [] }) {
+  if (!decompPlatforms.length) return "";
+  return `## Matching decompilation (\`decomp\`)
 
 Supported for: **${decompPlatforms.join(", ")}**.
 
@@ -154,9 +135,6 @@ CLAIMS that never outrank a measurement; \`replay\` re-runs the preserved
 fixture cases through this same public API.` : ""}
 
 Start with \`decomp({op:'status'})\`, then \`decomp({op:'plan'})\`.
-` : ""}
-## Getting oriented
-\`catalog({op:'categories'})\` lists every tool domain; \`catalog({op:'status'})\` reports the server version, loaded platform and health.
 `;
 }
 

@@ -11,6 +11,7 @@
 // registry (descriptions + JSON-Schema params), so it never drifts from the code.
 
 import { toolJsonSchema } from "./tool-registry.js";
+import { decompSkillSection } from "../decomp/skill-sync.js";
 
 /**
  * MCP-channel preamble - prepended to the shared AGENTS body when the server
@@ -34,6 +35,9 @@ export const skillPreamble = [
   "",
   "## HARD RULE: never install a compiler or emulator - romdev already bundles every one",
   "Every compiler/assembler/linker (cc65, sdcc, gcc, arm/m68k/mips/sh-gcc, tcc, wla, rgbds, asar, dasm) and every emulator core ships as WASM INSIDE romdev and runs in-process through these tools - `build({output:'rom'|'run'})` compiles, `loadMedia`+`frame` runs. You do NOT need, and must NOT install, a host `clang`/`gcc`/Xcode/Command-Line-Tools/devkitPro/`brew`/`apt` compiler or any emulator to build or run a ROM here. If you catch yourself about to install or invoke a host compiler/emulator - STOP. That's never the move: use the romdev `build` tool. (`platform({op:'toolchains'})` lists what's bundled for each platform.) A compiler/emulator install kicking off while using romdev is a DEFECT to report, not a step to take.",
+  "",
+  "## Running a wasmcart cart",
+  "A wasmcart cart (.wasc, a cart directory, or a cart .wasm, from any SDK: C, Rust, Lua, Ruby, Python, JavaScript, Defold, cartwheel) runs HERE: POST /tool/loadMedia {\"platform\":\"wasmcart\",\"path\":...}, then /tool/frame {\"op\":\"stepAndShot\"}, /tool/input {\"op\":\"sequence\"}, /tool/wasm {\"op\":\"debugState\"}. Prefer this over the wasmcart CLI's headless --frames/--shot, a repo's own CartHost scripts or a native build for every look, play and behaviour check: those give one frame and nothing else, while romdev gives screenshots, input, named debug state, audio and timing, and a person can watch the session live at /livestream.",
   "",
   "## Prerequisite: romdev runs LOCALLY (same machine as you)",
   "The romdev SERVER hosts all that bundled WASM in-process; start it once with `npx romdevtools` (listens on http://localhost:7331 - that single `npx` is the ONLY install, and it pulls the toolchains/cores as bundled WASM, never a host compiler). If a call gets connection-refused, the server isn't running - start it.",
@@ -61,19 +65,24 @@ export const skillPreamble = [
  * @param {{registry: Map<string,any>, agentsBody: string, version?: string}} args
  * @returns {string}
  */
-export function buildSkillDoc({ registry, agentsBody, version }) {
+export function buildSkillDoc({ registry, agentsBody, version, decompPlatforms = [], decompOps = [], generatedAt }) {
   const frontmatter = [
     "---",
     "name: romdev",
-    "description: Homebrew retro game development and ROM reverse-engineering for 19 platforms (NES, SNES, Game Boy/Color, Genesis, GBA, Atari 2600/7800, Lynx, C64, SMS, Game Gear, PC Engine, MSX, GameTank, sync32, N64, PlayStation, Dreamcast). Use when building, running, debugging, disassembling, asset-converting, or romhacking a retro game - drives bundled emulators and toolchains over HTTP. NEVER install a host compiler/emulator; romdev bundles all of them as WASM (use the build tool).",
+    "description: Homebrew retro game development and ROM reverse-engineering for 19 platforms (NES, SNES, Game Boy/Color, Genesis, GBA, Atari 2600/7800, Lynx, C64, SMS, Game Gear, PC Engine, MSX, GameTank, sync32, N64, PlayStation, Dreamcast). Also runs, plays and inspects wasmcart carts (.wasc, cart directories) and jsgame games from any SDK. Use when building, running, debugging, disassembling, asset-converting, or romhacking a retro game, or running or testing a wasmcart cart - drives bundled emulators and toolchains over HTTP. NEVER install a host compiler/emulator; romdev bundles all of them as WASM (use the build tool).",
     `metadata:`,
     `  version: "${version ?? "0.0.0"}"`,
+    ...(generatedAt ? [
+      `  generated: "${generatedAt}"`,
+      `  generatedFrom: "the running romdev server - do not hand-edit; re-run decomp({op:'skill', action:'write'}) after a server upgrade"`,
+    ] : []),
     "---",
     "",
   ].join("\n");
 
   const body = sanitizeForSkillChannel((agentsBody || "").trim());
   const reference = skillToolReference(registry);
+  const decomp = decompSkillSection({ decompPlatforms, ops: decompOps });
 
   // Update note - stamped with the running server's version. A saved skill is a
   // static snapshot (it doesn't auto-update), but this doc is GENERATED live from
@@ -95,6 +104,7 @@ export function buildSkillDoc({ registry, agentsBody, version }) {
     skillPreamble,
     "\n" + updateNote,
     body ? "\n---\n\n" + body : "",
+    decomp ? "\n---\n\n" + decomp : "",
     "\n---\n\n" + reference,
     "",
   ].join("\n");
@@ -183,4 +193,14 @@ export function skillToolReference(registry) {
     lines.push("");
   }
   return lines.join("\n");
+}
+
+// The skill document the running server serves (routes.js registers it), so
+// decomp({op:'skill', action:'write'}) writes exactly what
+// GET /skills/romdev/SKILL.md returns instead of a second, thinner document.
+let skillDocSource = null;
+export function setSkillDocSource(fn) { skillDocSource = fn; }
+export function currentSkillDoc(opts) {
+  if (!skillDocSource) throw new Error("no skill document source: the HTTP tool surface is not mounted in this process");
+  return skillDocSource(opts);
 }

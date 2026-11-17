@@ -9,7 +9,7 @@
 // staleness check exists to prevent.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { generateSkill } from "../src/decomp/skill-sync.js";
+import { decompSkillSection } from "../src/decomp/skill-sync.js";
 import { DECOMP_OPS } from "../src/mcp/tools/decomp.js";
 
 test("the op list has ONE source of truth", async () => {
@@ -22,18 +22,18 @@ test("the op list has ONE source of truth", async () => {
 });
 
 test("a generated skill names every op the server serves", () => {
-  const md = generateSkill({ version: "9.9.9", platforms: ["n64"], decompPlatforms: ["n64"], ops: [...DECOMP_OPS] });
+  const md = decompSkillSection({ decompPlatforms: ["n64"], ops: [...DECOMP_OPS] });
   for (const op of DECOMP_OPS) {
     assert.ok(md.includes(`op:'${op}'`), `the generated skill never names op:'${op}'`);
   }
 });
 
 test("the generated skill says the op list is machine-generated", () => {
-  const md = generateSkill({ version: "9.9.9", platforms: ["n64"], decompPlatforms: ["n64"], ops: ["compare", "diagnose"] });
+  const md = decompSkillSection({ decompPlatforms: ["n64"], ops: ["compare", "diagnose"] });
   assert.match(md, /generated from the server's own schema rather than maintained by hand/i);
 });
 
 test("omitting ops produces no op section rather than a half-empty one", () => {
-  const md = generateSkill({ version: "9.9.9", platforms: ["n64"], decompPlatforms: ["n64"] });
+  const md = decompSkillSection({ decompPlatforms: ["n64"] });
   assert.ok(!md.includes("### Every `decomp` op"));
 });

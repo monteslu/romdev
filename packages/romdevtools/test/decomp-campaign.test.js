@@ -20,7 +20,8 @@ import { identify, roundTrip, encodeMio0, decodeMio0Container } from "../src/dec
 
 /** The assets module, for tests that need several of its exports. */
 function require0() { return { encodeMio0, decodeMio0Container, roundTrip, identify }; }
-import { generateSkill } from "../src/decomp/skill-sync.js";
+import { buildSkillDoc } from "../src/http/skill-doc.js";
+import { buildToolRegistry } from "../src/http/tool-registry.js";
 
 // ── work classes ───────────────────────────────────────────────────────────
 
@@ -247,12 +248,11 @@ test("skill: a generated skill names every platform the server actually has", ()
   // The installed skill declared ~14 platforms and never mentioned N64 while
   // the server had full N64 support. An agent reading it correctly concludes
   // romdev cannot do the thing it is being asked to do.
-  const md = generateSkill({
-    version: "0.139.0",
-    platforms: ["nes", "snes", "genesis", "n64", "ps1", "dreamcast", "wasmcart"],
-    decompPlatforms: ["n64"], domains: [{ name: "decomp", description: "matching decompilation" }],
+  const md = buildSkillDoc({
+    registry: buildToolRegistry("__meta__"), agentsBody: "", version: "0.139.0",
+    decompPlatforms: ["n64"], decompOps: ["plan", "ledger"], generatedAt: "2026-01-01T00:00:00.000Z",
   });
-  for (const p of ["n64", "ps1", "dreamcast", "wasmcart"]) {
+  for (const p of ["N64", "PlayStation", "Dreamcast", "wasmcart"]) {
     assert.ok(md.includes(p), `the generated skill must mention ${p}`);
   }
   assert.match(md, /version: "0\.139\.0"/);

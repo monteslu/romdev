@@ -65,7 +65,7 @@ Genre examples (`shmup`, `platformer`, `puzzle`, `sports`, `racing`) ship for ev
 
 ## Tools
 
-All 38 tools are registered at session start; call any by name. Each is a verb with an operation axis. `catalog({op:'categories'})` maps them by purpose; `catalog({op:'status'})` re-orients a session (what is loaded, version, health, play and bezel state).
+All 38 tools are registered at session start; call any by name. Some clients list tools by name only and load each one's schema the first time it is called: `catalog`, `loadMedia`, `input` and `wasm` come preloaded there, and `frame` and the rest load on first use. Each is a verb with an operation axis. `catalog({op:'categories'})` maps them by purpose; `catalog({op:'status'})` re-orients a session (what is loaded, version, health, play and bezel state).
 
 | Tool | Axis and values |
 |---|---|
@@ -194,7 +194,7 @@ Every recompiled cart carries a `licence` entry naming the emulator code it cont
 
 ## wasmcart, WebGPU and jsgame
 
-`loadMedia({platform:'wasmcart', path})` runs a WebAssembly cart. Carts must target wasmcart ABI v4 or later (older ones are refused). Buttons map by position (`a` is east); the keyboard is `keys:['space', 'w']` on `input({op:'set'})` and on sequence steps, delivered through the cart's keyboard ABI as a real host delivers it. GL carts get their own GL context; WebGPU carts load the same way (`gpuPower`, `wgpu:false`, `deterministicStepMs`, `gpuTiming` are load options). Load GL carts with `presentWindow:true` before opening a playtest window. `wasm({op})` inspects a cart (conformance, named debug state, events, a `command` request/reply channel). `pack({target:'wasc'|'jsgame'})` builds the archive. Details: `platform({op:'doc', platform:'guide', name:'wasmcart'})`.
+`loadMedia({platform:'wasmcart', path})` runs a WebAssembly cart: a `.wasc`, an unpacked cart directory or a cart `.wasm`, from any SDK (C, Rust, Lua, Ruby, Python, JavaScript, Defold, cartwheel). Use it for every look, play and behaviour check in place of a CLI's headless `--frames`/`--shot` or a repo's own host scripts, which give one frame and nothing else. Carts must target wasmcart ABI v4 or later (older ones are refused). Buttons map by position (`a` is east); the keyboard is `keys:['space', 'w']` on `input({op:'set'})` and on sequence steps, delivered through the cart's keyboard ABI as a real host delivers it. GL carts get their own GL context; WebGPU carts load the same way (`gpuPower`, `wgpu:false`, `deterministicStepMs`, `gpuTiming` are load options). Load GL carts with `presentWindow:true` before opening a playtest window. `wasm({op})` inspects a cart (conformance, named debug state, events, a `command` request/reply channel). `pack({target:'wasc'|'jsgame'})` builds the archive. Details: `platform({op:'doc', platform:'guide', name:'wasmcart'})`.
 
 ## Frame and GPU timing
 

@@ -18,7 +18,9 @@
 // (the app already mounts localhostHostValidation()).
 
 import { buildToolRegistry, runTool, toolJsonSchema } from "./tool-registry.js";
-import { buildSkillDoc } from "./skill-doc.js";
+import { buildSkillDoc, setSkillDocSource } from "./skill-doc.js";
+import { CAPABILITIES } from "../cores/capabilities.js";
+import { DECOMP_OPS } from "../mcp/tools/decomp.js";
 import { schemaForTarget, filterableTargets } from "./schema-subset.js";
 import { swaggerHtml, swaggerAsset } from "./swagger.js";
 import { observer } from "../observer/bus.js";
@@ -284,13 +286,20 @@ export function mountHttpToolRoutes(app, opts = {}) {
   //   /skills/romdev/SKILL.md  - primary: full disk mirror (~/.claude/skills/romdev/SKILL.md)
   //   /romdev/SKILL.md         - alias: the <name>/SKILL.md tail
   //   /romdev-skill.md         - alias: flat form (older refs)
+  // ONE skill document: served here, and written to disk by
+  // decomp({op:'skill', action:'write'}) through currentSkillDoc().
+  const decompPlatforms = Object.keys(CAPABILITIES).filter((p) => CAPABILITIES[p]?.ops?.decompile || CAPABILITIES[p]?.decomp);
+  const skillDoc = ({ generatedAt } = {}) => buildSkillDoc({
+    registry: metaRegistry,
+    agentsBody: opts.agentsBody ?? "",
+    version,
+    decompPlatforms,
+    decompOps: [...DECOMP_OPS],
+    generatedAt,
+  });
+  setSkillDocSource(skillDoc);
   const serveSkill = (req, res) => {
-    const md = buildSkillDoc({
-      registry: metaRegistry,
-      agentsBody: opts.agentsBody ?? "",
-      version,
-    });
-    res.type("text/markdown").send(md);
+    res.type("text/markdown").send(skillDoc());
   };
   app.get("/skills/romdev/SKILL.md", serveSkill);
   app.get("/romdev/SKILL.md", serveSkill);
