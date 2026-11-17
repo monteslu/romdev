@@ -110,7 +110,7 @@ function besseli0(x) {
 }
 const sinc = (v) => (Math.abs(v) < 0.00001 ? 1 : Math.sin(v) / v);
 const kaiser = (index, b) => besseli0(b * Math.sqrt(1 - index * index));
-const M_PI = 3.14159265358979323846;
+const M_PI = Math.PI;
 const t0 = taps - 1;                       // blipper_create_filter_bank: taps--
 const len = phases * t0;
 const sincF = new Float32Array(len + phases);

@@ -2222,7 +2222,7 @@ export function sysWat(L, rom_size, idle_loop, savetype) {
  * @returns {string}
  */
 export function swiWat(L) {
-  const REGS = L.REGS, IO = L.IO, SINTAB = L.SINTAB;
+  const REGS = L.REGS, _IO = L.IO, SINTAB = L.SINTAB;
   /** @param {number} n */
   const r = (n) => `(i32.load (i32.const ${REGS + 4 * n}))`;
   /** @param {number} n @param {string} e */

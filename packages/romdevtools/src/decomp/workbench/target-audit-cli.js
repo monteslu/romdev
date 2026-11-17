@@ -25,7 +25,7 @@ function parseHex(value, name) {
   try { return pyInt(value, 0); } catch { throw new ValueError(`${name} is not a valid integer: ${strRepr(value)}`); }
 }
 
-export function targetAuditCommand(args, io, ctx) {
+export function targetAuditCommand(args, io, _ctx) {
   let audit;
   try {
     const given = [args.rom, args.rom_offset, args.va];

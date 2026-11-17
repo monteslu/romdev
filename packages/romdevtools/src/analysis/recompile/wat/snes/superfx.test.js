@@ -15,7 +15,7 @@ import { MAP_TYPE } from "./memmap.js";
 
 // ---------------------------------------------------------------- a GSU assembler
 const R = (s) => { const m = /^r(\d+)$/.exec(s); if (!m) throw new Error(`reg ${s}`); return +m[1]; };
-const ALT1 = 0x3d, ALT2 = 0x3e, ALT3 = 0x3f;
+const ALT1 = 0x3d, ALT2 = 0x3e, _ALT3 = 0x3f;
 const BR = { bra: 5, bge: 6, blt: 7, bne: 8, beq: 9, bpl: 10, bmi: 11, bcc: 12, bcs: 13, bvc: 14, bvs: 15 };
 
 /** Assemble [mnemonic, ...operands] lines ("label:" strings) at `org`. */

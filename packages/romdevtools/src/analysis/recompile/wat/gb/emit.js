@@ -1186,7 +1186,7 @@ function initWat(cgb, cramhi) {
  * LYC/mode-2/VBlank STAT sources at its start, the scanline drawn during
  * mode 3, the HBlank STAT source and one HDMA block, then the rest.
  */
-function frameWat(cgb) {
+function frameWat(_cgb) {
   const IO = IOREG;
   return `
     ;; LIBRETRO FRAME DUPES. gambatte's retro_run first checks

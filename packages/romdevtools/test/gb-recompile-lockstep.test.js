@@ -295,7 +295,7 @@ test("HuC1: RAM mode banking and reads while RAM writes are disabled", { skip, t
 // ---- the PPU: STAT mode-0 events and the mode-3 length as gambatte's PPU
 // state machine predicts it (wat/gb/ppu-shadow.js) ----
 
-const HALT_FREE_LOOP = (body) => [...body];
+const _HALT_FREE_LOOP = (body) => [...body];
 
 test("the HBlank STAT interrupt fires on line 0 right after the LCD is switched on", { skip, timeout: 120000 }, async () => {
   // di ; LCDC=0 ; STAT=$08 (mode 0) ; IE=$02 ; IF=0 ; ei ; LCDC=$91 ; inc a forever

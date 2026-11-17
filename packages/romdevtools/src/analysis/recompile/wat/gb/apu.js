@@ -107,7 +107,7 @@ const glob = (names) => names.map((n) => `  (global $${n} (mut i32) (i32.const 0
  * @param {string} p
  * @param {any} T tables
  */
-function dutyWat(p, T) {
+function dutyWat(p, _T) {
   const d = (n) => `${p}_d${n}`;
   return `
   ;; ---- ${p} DutyUnit ----

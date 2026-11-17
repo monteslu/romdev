@@ -102,7 +102,7 @@ class Parser {
       }
     }
     const e = this.exprList(true);
-    if (this.atOp(":")) { this.next(); const ann = this.expr(); let v = null; if (this.eatOp("=")) v = this.exprList(true); return { k: "AnnAssign", target: e, v, line: t.line }; }
+    if (this.atOp(":")) { this.next(); const _ann = this.expr(); let v = null; if (this.eatOp("=")) v = this.exprList(true); return { k: "AnnAssign", target: e, v, line: t.line }; }
     if (this.atOp("=")) {
       const targets = [e]; let v;
       while (this.eatOp("=")) { v = this.at("NAME", "yield") ? this.yieldExpr() : this.exprList(true); targets.push(v); }

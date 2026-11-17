@@ -104,7 +104,7 @@ export function ymWat(o) {
   const T = gpgxSoundTables().ym2612;
   const L = mdSoundLayout(o.base);
   const lines = o.pal ? 313 : 262;
-  const FRAME = lines * 3420;
+  const _FRAME = lines * 3420;
   const W = { m2: L.WIRES, c1: L.WIRES + 4, c2: L.WIRES + 8, mem: L.WIRES + 12, out: L.WIRES + 16 };
   // ST.dt_tab[8][32]: rows 0-3 from dt_tab, 4-7 negated
   const dt = [];

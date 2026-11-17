@@ -9,8 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { dumpObject, symbolTable } from "./mips-obj.js";
-import { parseSplatAsm } from "./splat-map.js";
+import { dumpObject } from "./mips-obj.js";
 import { VERIFIER_VERSION } from "./verdict.js";
 import { measurementSnapshot, storedMeasurementFreshness } from "./measurement.js";
 import { listExperiments, experimentCooldown } from "./experiment.js";

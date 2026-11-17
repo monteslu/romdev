@@ -4,7 +4,6 @@
 // Plain JS ESM + JSDoc.
 
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { comparePreTraces, instrumentPreSource, loadPreProfile, parsePreTrace, preReport } from "./pre.js";
 import { readTraceText } from "./trace-source.js";

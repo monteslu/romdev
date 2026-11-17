@@ -122,7 +122,7 @@ export function percentFormat(text, params) {
 
 // -- the formatter ----------------------------------------------------------
 
-const isLong = (s) => s.length > 2;
+const _isLong = (s) => s.length > 2;
 
 function metavarFormatter(action, defaultMetavar) {
   let result;

@@ -32,7 +32,7 @@ export const REPLAY_SCHEMA = "romdev-decomp-replay-suite-v1";
  */
 export function defaultCases({ researchRoot, workspace }) {
   const R = (p) => `${researchRoot}/parallel-candidates/${p}`;
-  const W = (p) => `${workspace}/${p}`;
+  const _W = (p) => `${workspace}/${p}`;
   return [
     {
       id: "i2-exact-with-contradictory-rodata",

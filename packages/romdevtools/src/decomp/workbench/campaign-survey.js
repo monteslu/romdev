@@ -136,7 +136,7 @@ export async function surveyCampaign(root, { budget = DEFAULT_BUDGET, base = nul
   const [stages, top, seen, capped] = walk(location, budget);
   const sweeps = documents(location, SWEEP_SCHEMA, ["generator", "base", "variant_count", "coverage"]);
   const gates = documents(location, "decomp-workbench-instrument-gate-v1", ["profile", "pass", "recorded"]);
-  const manifests = rglob(location, (n, st) => n === "manifest.json").filter((p) => p.split(path.sep).includes("campaigns"));
+  const manifests = rglob(location, (n, _st) => n === "manifest.json").filter((p) => p.split(path.sep).includes("campaigns"));
   let pinned = null;
   if (base !== null && base !== undefined) {
     const pinnedPath = String(base);

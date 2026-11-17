@@ -4,7 +4,7 @@
 // workbench's own relocation-surface tests.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { R_MIPS_26, R_MIPS_32, R_MIPS_HI16, R_MIPS_LO16, STB_GLOBAL, STB_LOCAL, STT_FUNC, buildRelocatable, words } from "./fixtures/workbench/elf-fixtures.js";
+import { R_MIPS_26, R_MIPS_32, R_MIPS_HI16, STB_GLOBAL, STB_LOCAL, STT_FUNC, buildRelocatable, words } from "./fixtures/workbench/elf-fixtures.js";
 import * as rs from "../src/decomp/workbench/reloc-surface.js";
 import { parseElf } from "../src/decomp/workbench/elf.js";
 import { JAL, LUI, NOP, MODULE_START, TU_OFFSET, sym, rel, candidateObject, shippedImage, moduleDocument } from "./fixtures/workbench/reloc-fixtures.js";

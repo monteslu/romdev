@@ -16,7 +16,7 @@ import { buildShiftDiff, movedBlocks } from "./shift-align.js";
 import { DISPLACEMENT, MATCH, POOL, POOL_LAYOUT, RELOCATION, RESIDUAL_CLASSES, buildView } from "./view.js";
 import { paretoLayers } from "./geometry.js";
 import { SequenceMatcher } from "./difflib.js";
-import { PyDict, pyInt, sorted, strip, pyCmp } from "./py.js";
+import { PyDict, pyInt, sorted, strip } from "./py.js";
 
 export const REGISTER_RE = /(?<![A-Za-z0-9_$])\$?(?:f\d+|zero|at|v[01]|a[0-3]|t\d|s\d|k[01]|gp|sp|fp|ra)\b/g;
 export const FP_REGISTER_RE = /(?<![A-Za-z0-9_$])\$?f\d+\b/g;

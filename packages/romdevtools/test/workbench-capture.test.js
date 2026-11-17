@@ -1,7 +1,7 @@
 // Phase capture, run listing and ugen replay against a synthetic toolchain:
 // two POSIX shell "phases" that consume and produce the shapes IDO's phases
 // do. No compiler and no game data. Ported from the workbench's capture tests.
-import { test, describe, before, after, beforeEach } from "node:test";
+import { test, describe, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";

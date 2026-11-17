@@ -4,6 +4,19 @@ All notable changes to `romdevtools`. Dates are release dates.
 (Published as `romdev-mcp` through 0.11.0; renamed to `romdevtools` in 0.13.0 -
 the `romdev-mcp` bin is kept as an alias.)
 
+## 0.156.3 - 2026-11-17
+
+- **wasmcart ^0.41.2.** A cart directory answers an asset named with the asset
+  prefix (`assets/main.py`) as a `.wasc` does, so an unpacked cart from any
+  runtime loads in `loadMedia` the same way its packed copy does.
+- **Lint passes.** `npm run lint` had failed on every push since at least
+  0.152.0 with 113 errors, nearly all unused imports, arguments and variables in
+  tests and scripts. Unused imports are removed, unused arguments are prefixed
+  with `_`, and variables that were written but never read are gone (an unused
+  `exact` in decomp's compare duplicated the `status` it returns). No behaviour
+  change; the full suite passes. The local `.z80build/` scratch directory is now
+  ignored by eslint.
+
 ## 0.156.2 - 2026-11-17
 
 - **`decomp({op:'skill', action:'write'})` writes the full skill.** It is the

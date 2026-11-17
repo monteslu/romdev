@@ -12,7 +12,6 @@
 // "IDENTICAL" - a diff of two failures is indistinguishable from a diff of two
 // successes. So every comparison here asserts the output is substantive FIRST
 // and refuses to report a verdict otherwise.
-import { readFileSync } from "node:fs";
 
 /** Minimum believable output before a diff means anything. */
 const MIN_LINES = 20;

@@ -62,7 +62,7 @@ const RAM_SIZES = { 0: 0, 1: 2048, 2: 8192, 3: 32768, 4: 131072, 5: 65536 };
  * @param {Uint8Array} rom
  * @param {object} [opts]
  */
-export function describe(rom, opts = {}) {
+export function describe(rom, _opts = {}) {
   if (rom.length < 0x150) throw new Error(`gb: ${rom.length} bytes is too small for a Game Boy ROM (the header ends at $014F)`);
   const warnings = [];
   const cgbFlag = rom[0x143];

@@ -23,7 +23,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
-import { accessEvidence } from "./types.js";
 
 export const TYPE_GRAPH_SCHEMA = "romdev-decomp-type-graph-v1";
 

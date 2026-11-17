@@ -3,7 +3,7 @@
 //
 // Plain JS ESM + JSDoc.
 
-import { mkdirSync, writeFileSync, realpathSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { FORMATS, countFreshSlots, diffStreams, patchStream, streamWindow } from "./streams.js";

@@ -15,7 +15,7 @@ import { gbCycles, gbControl, gbWindows, gbFixOps, GB_CYCLE_PROVENANCE, GB_ILLEG
 import { m6502Cycles, m6502Control, M6502_CYCLE_PROVENANCE } from "./m6502-metadata.js";
 import { decodeBatch as decode6502, decodeLinear as decodeLinear6502 } from "./decode-6502.js";
 import { decodeBatch as decode65816, decodeLinear as decodeLinear65816 } from "./decode-65816.js";
-import { M65816_CYCLE_PROVENANCE, modeAccesses } from "./m65816-metadata.js";
+import { M65816_CYCLE_PROVENANCE } from "./m65816-metadata.js";
 import { armCycles, armControl, armDocumented, ARM_CYCLE_PROVENANCE } from "./arm-metadata.js";
 
 // What binutils prints when a word is not a legal encoding (`@ <UNDEFINED>`)

@@ -10,7 +10,7 @@
 
 import { mismatchRanges } from "./compare.js";
 import { comparableText, relocationRows } from "./shift-align.js";
-import { ValueError, strRepr, sorted, fullmatch, reEscape } from "./py.js";
+import { ValueError, strRepr, sorted, reEscape } from "./py.js";
 
 export const PHASE_SCHEMA = "decomp-workbench-phase-v1";
 export const DEFAULT_RING = Object.freeze(["$f4", "$f6", "$f8", "$f10"]);

@@ -13,7 +13,7 @@ import { formatHelp, formatUsage } from "./argparse.js";
  * required=True): the bare word is then a usage error naming the missing
  * operation; otherwise it prints the listing and exits 0.
  */
-export function groupListingSpec(pathWords, { help, description, subcommands, required = false, dest = null }) {
+export function groupListingSpec(pathWords, { help, description, subcommands: _subcommands, required = false, dest = null }) {
   return {
     path: pathWords, help, description, arguments: [],
     subparsers: { dest: dest ?? `${pathWords.at(-1)}_command`, required },

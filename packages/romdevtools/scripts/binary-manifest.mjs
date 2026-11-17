@@ -17,7 +17,7 @@
 //   node scripts/binary-manifest.mjs --write    refresh after a real rebuild
 //   node scripts/binary-manifest.mjs            verify (exit 1 on drift)
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync, existsSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

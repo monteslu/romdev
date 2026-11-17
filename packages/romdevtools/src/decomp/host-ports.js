@@ -398,7 +398,7 @@ export async function romCompress({ inRom, elf, segmentsCsv, version, padRom, cw
   const e = elf32(elf);
   if (!e.symtab || !e.strtab) throw new Error("The elf->z64 process and compression algorithm requires a symtab and a strtab");
   const out = [];
-  let outLen = 0, offset = 0, sizeWrote = 0;
+  let offset = 0, sizeWrote = 0;
   const segmentOffsets = new Map(), rels = new Map(), romOffsetValues = new Map();
   const align = (v, n) => (v + (n - 1)) & ~(n - 1);
   const log = [];
@@ -429,7 +429,7 @@ export async function romCompress({ inRom, elf, segmentsCsv, version, padRom, cw
     if (bytes.length !== sec.size) throw new Error(`'${sec.name}': 0x${bytes.length.toString(16)} 0x${sec.size.toString(16)}`);
     if (!entry) {
       offsetEnd = sec.size + offsetStart;
-      out.push(Buffer.from(bytes)); outLen += bytes.length;
+      out.push(Buffer.from(bytes));
       sizeWrote += sec.size;
     } else {
       let comp;
@@ -451,7 +451,7 @@ export async function romCompress({ inRom, elf, segmentsCsv, version, padRom, cw
       }
       offsetEnd = offsetStart + comp.length;
       const b = Buffer.from(comp);
-      out.push(b); outLen += b.length;
+      out.push(b);
       sizeWrote += comp.length;
     }
     romOffsetValues.set(romStart, offsetStart);

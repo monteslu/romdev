@@ -10,7 +10,7 @@
 
 import { readFileSync } from "node:fs";
 import os from "node:os";
-import { ValueError, splitlines, replace, isInputError, osErrorText } from "./py.js";
+import { splitlines, replace, isInputError, osErrorText } from "./py.js";
 import { isReportedError } from "./py-extra.js";
 import { dumps } from "./pyjson.js";
 import { parseAs1ReorganizeTrace } from "./as1-reorganize.js";

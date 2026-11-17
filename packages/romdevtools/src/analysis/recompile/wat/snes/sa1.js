@@ -194,7 +194,7 @@ function sa1GlobalsWat(lay) {
  */
 function sa1FuncsWat(lay) {
   const r = sa1Regions(lay.CHIP);
-  const SRAM = lay.SRAM, MAP = r.MAP, ZERO = r.ZERO, FILL = r.FILL, CCBUF = r.CCBUF;
+  const SRAM = lay.SRAM, MAP = r.MAP, ZERO = r.ZERO, _FILL = r.FILL, _CCBUF = r.CCBUF;
   const romEnd = ROM + lay.romlen;
   const mask = lay.sram;
   const swapIn = [

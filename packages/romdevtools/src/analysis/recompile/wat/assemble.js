@@ -1170,7 +1170,7 @@ class Assembler {
    * Encode an instruction sequence until ')' (or end of tokens, or a flat
    * 'end'/'else' which the caller consumes).
    */
-  instrs(c, w, fc, isFuncBody) {
+  instrs(c, w, fc, _isFuncBody) {
     const k = c.k, v = c.v;
     for (;;) {
       const t = k[c.i];

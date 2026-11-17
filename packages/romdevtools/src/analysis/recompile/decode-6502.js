@@ -8,7 +8,6 @@
 // The 6502 needs no external decoder. It has 256 fixed-length opcodes and no
 // prefixes, so the table below IS the decoder, and it is checked against
 // da65 on a real ROM by test/m6502-decode.test.js rather than trusted.
-import { m6502Length } from "./m6502-metadata.js";
 
 // mnemonic + addressing mode per opcode. Undocumented opcodes decode as
 // `.byte`, which the recompiler turns into a trap - correct, since executing
@@ -92,7 +91,7 @@ const MODE_LEN = {
 };
 
 /** Render operands the way the rest of romdev spells them. */
-function operands(mode, b, addr, len) {
+function operands(mode, b, addr, _len) {
   const u8 = b[1], u16 = b[1] | (b[2] << 8);
   switch (mode) {
     case "imp": return "";

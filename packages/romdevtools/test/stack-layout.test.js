@@ -8,7 +8,7 @@
 // merely to manipulate register allocation."
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { frameSizeOf, stackSlots, compareStackMaps, resolveAddress, layoutReport } from "../src/decomp/layout.js";
+import { frameSizeOf, stackSlots, resolveAddress, layoutReport } from "../src/decomp/layout.js";
 
 const ins = (mnemonic, operands) => ({ mnemonic, operands });
 

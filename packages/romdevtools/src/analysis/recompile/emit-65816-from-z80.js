@@ -29,7 +29,7 @@
 //
 // Plain JS ESM + JSDoc.
 
-import { IR, ABSTRACT, COND } from "./ir.js";
+import { IR, COND } from "./ir.js";
 
 /** Direct-page slots for the emulated Z80 register file. */
 export const DP = Object.freeze({

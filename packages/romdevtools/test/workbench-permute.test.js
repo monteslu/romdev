@@ -23,7 +23,7 @@ import {
   PermuterError, TimeoutExpired, checkScratchFidelity, compileScratchBase, doctor, expandPermuterPragmas, importScratch, prepareScratch,
   renderDoctor, resolvePlan, runOwned, runPermuter, runSweep, searchFunction,
 } from "../src/decomp/workbench/permute-sweep.js";
-import { COMMAND_SPECS, permuteSweepCommand, permuteDoctorCommand } from "../src/decomp/workbench/permute-cli.js";
+import { COMMAND_SPECS } from "../src/decomp/workbench/permute-cli.js";
 import { parseArgs } from "../src/decomp/workbench/argparse.js";
 import { runCommand } from "../src/decomp/workbench/cli.js";
 import { stampRanking } from "../src/decomp/workbench/ranking.js";

@@ -244,7 +244,7 @@ export function z80InterpWat(templates) {
   live.forEach((k, i) => { sel[k] = `$i${i}`; });
   lines.push("      (br_table " + sel.join(" ") + " $idef (local.get $k)))");
   lines.push("    (call $trap) (return (local.get $budget))");
-  live.forEach((k, i) => {
+  live.forEach((k, _i) => {
     lines.push(`    ) ;; key ${k.toString(16)}`);
     lines.push(templates[k].text);
     lines.push("    (return (local.get $budget))");

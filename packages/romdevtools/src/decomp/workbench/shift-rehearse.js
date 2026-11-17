@@ -14,7 +14,7 @@
 import { readFileSync, writeFileSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { runProgramSync } from "./proc.js";
-import { ValueError, sorted, splitlines, strip, lstrip, pyInt, strRepr, osErrorText, minBy } from "./py.js";
+import { ValueError, sorted, splitlines, strip, lstrip, pyInt, strRepr, osErrorText } from "./py.js";
 import { auditSymbolMovement } from "./ldmap.js";
 import { GeneratedSpec, RegionSpec, buildWordCensus, checkImageDelta } from "./mips-refs.js";
 import { defaultPinModel } from "./pins.js";

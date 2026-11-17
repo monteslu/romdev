@@ -11,16 +11,14 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync
 import path from "node:path";
 import os from "node:os";
 import { SHN_ABS, parseElfSymbols, parseLdMap } from "../src/decomp/workbench/ldmap.js";
-import { bootGlobalsWhitelist, defaultPinModel } from "../src/decomp/workbench/pins.js";
+import { defaultPinModel } from "../src/decomp/workbench/pins.js";
 import { SHIFT_CENSUS_KEYS, SHIFT_METRICS_BY_KEY, explainKeysText } from "../src/decomp/workbench/schema.js";
-import { resolveBlobs } from "../src/decomp/workbench/shift-audit.js";
 import { CHECKSUM_RULES, MERGE_TIERS, SHADOWING_PIN, SHIFT_REHEARSE_SCHEMA, SYMBOL_RULES, SYMBOL_STALE, buildRehearsal, crossDeltaDisagreements,
   deriveAnchor, padLdScript, rehearseLines, symbolCensus, symbolExtent } from "../src/decomp/workbench/shift-rehearse.js";
 import { runCommand } from "../src/decomp/workbench/cli.js";
 import { ValueError, splitlines } from "../src/decomp/workbench/py.js";
 import { buildElf } from "./fixtures/workbench/elf-symtab.js";
-import { INSERTION_VRAM, INSERTION_ROM, CHECKSUM_PAIRS, CRC_WORDS, BLOBS, renderMap, baseWords, shiftedWords, pack, baseImage, shiftedImage, baseMap, shiftedMap,
-  rehearse, rehearseTracking, statusFor } from "./fixtures/workbench/rehearse-fixtures.js";
+import { INSERTION_VRAM, INSERTION_ROM, CHECKSUM_PAIRS, CRC_WORDS, BLOBS, renderMap, baseImage, shiftedImage, baseMap, shiftedMap, rehearse, rehearseTracking } from "./fixtures/workbench/rehearse-fixtures.js";
 
 const raisesValue = (fn, check = () => true) => assert.throws(fn, (e) => (e instanceof ValueError || e.name === "ValueError") && check(e.message));
 

@@ -518,7 +518,7 @@ export function cpuWat() {
 // memory map (genesis.c gen_init, md_cart.c, mem68k.c). romsize is the
 // power-of-two mirror size (cart.mask + 1).
 export function memWat(romimg, romsize, hw = null) {
-  const rmask = romsize - 1;
+  const _rmask = romsize - 1;
   // rom_database register banks (md_cart_init: memory_map[bank_start..bank_end])
   const inRegs = (p) => `(i32.and (i32.ge_u ${p} (i32.const ${hw ? hw.bankStart : 0})) (i32.le_u ${p} (i32.const ${hw ? hw.bankEnd : 0})))`;
   const regsR8 = hw && hw.regsR ? `
@@ -2849,7 +2849,7 @@ export function eepromWat(e) {
   const rise = `(i32.and (i32.eqz ${G("oscl")}) (i32.ne ${G("scl")} ${c(0)}))`;
   const inc9 = (then) => `(if (i32.lt_u ${G("cyc")} ${c(9)}) (then ${S("cyc", `(i32.add ${G("cyc")} ${c(1)})`)}) (else ${S("cyc", c(1))} ${then}))`;
   const arr = `(i32.add ${c(SRAMBUF)} (i32.and (i32.or ${G("dev")} ${G("word")}) ${c(0xffff)}))`;
-  const jpad = (k, f) => `${JPADS + k * 16 + f}`;
+  const _jpad = (k, f) => `${JPADS + k * 16 + f}`;
   return `
   (global $e_sda (mut i32) (i32.const 1)) (global $e_scl (mut i32) (i32.const 1))
   (global $e_osda (mut i32) (i32.const 1)) (global $e_oscl (mut i32) (i32.const 1))

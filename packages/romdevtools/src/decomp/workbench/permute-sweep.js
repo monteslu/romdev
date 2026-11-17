@@ -26,12 +26,7 @@ import { compareObjects } from "./compare.js";
 import { readElf, ElfFormatError } from "./elf.js";
 import { formatG } from "./globalcolor.js";
 import { dumps } from "./pyjson.js";
-import {
-  DOCTOR_SCHEMA, FIDELITY_DIFFERS, FIDELITY_IDENTICAL, FIDELITY_UNKNOWN, BuildRecipe, FidelityAttempt, PreserveMacroMode,
-  ScratchFidelity, SweepResult, appendCompileSteps, bestOutput, fidelityWarning, macroAttributable, objectTarget,
-  outputFraction, parseBaseScore, parsePreservedMacros, permuterArgv, recipeReport, recoverRecipe, renderSettings,
-  resolvePreserveMacroModes, retargetLabels, retargetObjcopy, shouldExtend, waitForHeadroom, isProcessError, errorText,
-} from "./permute.js";
+import { DOCTOR_SCHEMA, FIDELITY_DIFFERS, FIDELITY_IDENTICAL, FIDELITY_UNKNOWN, FidelityAttempt, PreserveMacroMode, ScratchFidelity, SweepResult, appendCompileSteps, bestOutput, fidelityWarning, macroAttributable, objectTarget, outputFraction, parseBaseScore, parsePreservedMacros, permuterArgv, recipeReport, recoverRecipe, renderSettings, resolvePreserveMacroModes, retargetLabels, retargetObjcopy, shouldExtend, waitForHeadroom, isProcessError, errorText } from "./permute.js";
 
 export const IMPORT_TOOL = "import.mjs";
 export const SEARCH_TOOL = "permuter.mjs";

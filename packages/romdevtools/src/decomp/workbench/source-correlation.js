@@ -6,7 +6,7 @@
 // Plain JS ESM + JSDoc.
 
 import path from "node:path";
-import { ValueError, splitlines, sorted, pyInt } from "./py.js";
+import { splitlines, sorted, pyInt } from "./py.js";
 import { semanticWebs } from "./allocator-analysis.js";
 import { optionalInteger } from "./globalcolor.js";
 

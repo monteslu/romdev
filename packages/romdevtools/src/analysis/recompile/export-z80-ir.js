@@ -4,13 +4,11 @@ import { open, readFile, mkdir, rename, unlink, stat } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import { runObjdump } from "../../toolchains/objdump.js";
-import { liftZ80, DOCUMENTED_Z80 } from "./lift-z80.js";
-import { z80Cycles, z80Flags, z80Control, CYCLE_PROVENANCE } from "./z80-metadata.js";
 import { smsWindows, SMS_MAPPERS } from "../sms-mapping.js";
 import { isaFor, ISAS, PLATFORM_ISA, cpuStatesFor } from "./isa.js";
 
 /** Longest Z80 instruction: DD/FD CB dd op. Bounds the decode lookahead. */
-const MAX_Z80_INSTR = 4;
+const _MAX_Z80_INSTR = 4;
 /**
  * Batched decode of ONE instruction at each requested offset.
  *

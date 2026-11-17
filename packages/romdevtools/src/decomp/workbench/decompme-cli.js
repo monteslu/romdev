@@ -53,7 +53,7 @@ export async function fetchScratchCommand(args, io, ctx) {
   return 0;
 }
 
-export async function publicMatchCheckCommand(args, io, ctx) {
+export async function publicMatchCheckCommand(args, io, _ctx) {
   let report;
   try {
     report = await publicMatchCheck({ client: seams.buildClient(args), query: args.query, address: args.address, max_score: args.max_score,

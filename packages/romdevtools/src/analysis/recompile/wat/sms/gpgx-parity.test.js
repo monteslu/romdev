@@ -141,7 +141,7 @@ test("a cart of 48KB or less has no mapper: \$FFFC-\$FFFF are plain RAM and \$80
     0x18, 0xFE];
   const r32 = await gpgxParity({ platform: "sms", rom: smsImage(main, { size: 0x8000, at: [[0x4000, [0x44]]] }), maxFrames: 5 });
   assert.equal(r32.diverged, false, divergenceText(r32));
-  const r16 = await gpgxParity({ platform: "sms", rom: smsImage(main, { size: 0x8000 }).subarray(0, 0x4000).map((b, i, a) => b), maxFrames: 5 });
+  const r16 = await gpgxParity({ platform: "sms", rom: smsImage(main, { size: 0x8000 }).subarray(0, 0x4000).map((b) => b), maxFrames: 5 });
   assert.equal(r16.diverged, false, divergenceText(r16));
 });
 

@@ -38,7 +38,7 @@ const lookup = (m, k) => { const v = typeof m.get === "function" ? m.get(k) : m[
 const contains = (coll, x) => (coll instanceof Set || (coll && typeof coll.has === "function")) ? coll.has(x) : coll.includes(x);
 const sizeOf = (m) => (m === null || m === undefined) ? 0 : typeof m.size === "number" ? m.size : Array.isArray(m) ? m.length : Object.keys(m).length;
 const arrEq = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
-const get0 = (o, k) => o[k] ?? 0;
+const _get0 = (o, k) => o[k] ?? 0;
 const trunc32 = (x) => x >>> 0;
 
 /** The mask pair a relocation field mask returns: [mask, unknownKinds]. */

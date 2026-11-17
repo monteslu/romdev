@@ -12,7 +12,7 @@
 // NO_TARGET_ASM, FUNCTION_NOT_IN_TU, STALE_CONTEXT, COMPILE_FAILED,
 // CANDIDATE_REJECTED, SEARCH_IMPORT_FAILED, JOB_NOT_FOUND, CANCELLED,
 // LOST_RUNTIME_STATE, PC_BREAK_UNSUPPORTED, UNSUPPORTED_OP).
-import { readFile, writeFile, mkdir, readdir, stat } from "node:fs/promises";
+import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import fs from "node:fs";
 import path from "node:path";
 import { jsonContent, safeTool } from "../util.js";
@@ -248,7 +248,6 @@ export function registerDecompTools(server, z, sessionKey) {
           const { CAPABILITIES } = await import("../../cores/capabilities.js");
           const pkgVersion = JSON.parse(await readFile(new URL("../../../package.json", import.meta.url), "utf8")).version;
           const platforms = Object.keys(CAPABILITIES);
-          const decompPlatforms = platforms.filter((p) => CAPABILITIES[p]?.ops?.decompile || CAPABILITIES[p]?.decomp);
           // The LIVE op list, read from this tool's own schema, so a skill that
           // omits a shipped op is detected as stale even when its version
           // number matches. Hardcoding the list here would drift the same way
@@ -1056,7 +1055,7 @@ export function registerDecompTools(server, z, sessionKey) {
  * a replay suite that tested its own logic instead of the product's would
  * confirm itself and prove nothing about what a caller experiences.
  */
-async function runReplayCase(project, kase, { ownerFor, resolveFn }) {
+async function runReplayCase(project, kase, { ownerFor, resolveFn: _resolveFn }) {
   const { readFile: rf } = await import("node:fs/promises");
 
   switch (kase.op) {

@@ -50,12 +50,12 @@ function pad(f) {
 
 const sha = (u8) => createHash("sha1").update(u8).digest("hex").slice(0, 16);
 const A = await open(args.a), B = await open(args.b);
-let audioA = 0, audioB = 0, streamFrames = 0, streamSamples = 0, streamCounts = new Map(), streamRate = 0;
+let audioA = 0, streamSamples = 0, streamCounts = new Map(), streamRate = 0;
 for (let f = 0; f < frames; f++) {
   for (const h of [A, B]) { h.setInput({ ports: [pad(f)] }); h.stepFrames(1); }
   const fa = A.state.lastFrame, fb = B.state.lastFrame;
   const da = drainAudioRing(A), db = drainAudioRing(B);
-  audioA += da.length; audioB += db.length;
+  audioA += da.length;
   const diffs = [];
   if (!fa || !fb || sha(fa.pixels) !== sha(fb.pixels)) diffs.push("framebuffer");
   if (da.length !== db.length || sha(new Uint8Array(da.buffer)) !== sha(new Uint8Array(db.buffer))) diffs.push(`audio (${da.length} vs ${db.length} samples)`);
@@ -66,7 +66,7 @@ for (let f = 0; f < frames; f++) {
   if (diffs.length) { console.log(JSON.stringify({ identical: false, frame: f + 1, differs: diffs })); process.exit(1); }
   if (args.stream) {
     const s = readRefStream(B, args.stream);
-    streamFrames++; streamSamples += s.samples.length / s.channels; streamRate = s.rate;
+    streamSamples += s.samples.length / s.channels; streamRate = s.rate;
     const n = s.samples.length / s.channels;
     streamCounts.set(n, (streamCounts.get(n) ?? 0) + 1);
   }

@@ -14,7 +14,7 @@ import path from "node:path";
 import fs from "node:fs";
 import nodeos from "node:os";
 const await_os = () => nodeos;
-import { Builtin, Klass, Instance, Tuple, Dict, Opaque, OPAQUE, call, getattr, iterate, pyStr, registerNative, setPackage, importModule, Module, PyFloatV } from "./interp.mjs";
+import { Builtin, Klass, Tuple, Dict, Opaque, OPAQUE, call, getattr, iterate, registerNative, setPackage, importModule, Module, PyFloatV } from "./interp.mjs";
 import { formatParserHelp } from "../../src/decomp/workbench/help-format.js";
 
 const SUPPRESS = "==SUPPRESS==";
@@ -172,8 +172,7 @@ const sysMod = new Module("sys"); sysMod.globals.set("platform", "linux"); sysMo
 setPackage(PKG, "decomp_workbench");
 const cli = importModule("decomp_workbench.cli");
 const buildParser = getattr(cli, "build_parser");
-let top;
-try { top = call(buildParser, []); } catch (e) { console.log("FAILED:", e.message, (e.pyStack ?? []).join(" <- ")); process.exit(1); }
+try { call(buildParser, []); } catch (e) { console.log("FAILED:", e.message, (e.pyStack ?? []).join(" <- ")); process.exit(1); }
 
 // -- print -------------------------------------------------------------------------------
 const out = {};

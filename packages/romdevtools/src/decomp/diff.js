@@ -18,7 +18,7 @@ const REG_RE = /\$?\b(zero|at|v[01]|a[0-3]|t[0-9]|s[0-8]|k[01]|gp|sp|fp|ra|f\d{1
 const BRANCH_RE = /^(b|bc1|j|jal|jr|jalr)/;
 
 /** Normalize one instruction for scoring: registers → their class, branch targets → relative. */
-export function normalizeInstruction(ins, index, symbolOffset = 0) {
+export function normalizeInstruction(ins, index, _symbolOffset = 0) {
   let ops = ins.operands;
   if (BRANCH_RE.test(ins.mnemonic) && !/^j(al)?r?$/.test(ins.mnemonic)) {
     // objdump prints branch targets as absolute offsets within the section;

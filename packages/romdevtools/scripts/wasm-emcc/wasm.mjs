@@ -155,7 +155,7 @@ function isOrigMainWrapper(m, funcIndex) {
     op = r.byte();
     if (op === 0x10) { const callee = r.uleb(); if (m.types[m.funcTypes[callee]].params.length !== 0) return false; }
     else if (op === 0x20 || op === 0x21) r.uleb();
-    else if (op === 0x0b || op === 0x0f) {}
+    else if (op === 0x0b || op === 0x0f) { /* no immediate */ }
     else return false;
   }
   return op === 0x0b;

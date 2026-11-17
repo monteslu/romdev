@@ -6,23 +6,18 @@
 // commercial projects' artifacts and are not ported.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { SHN_ABS, parseElfSymbols, parseLdMap } from "../src/decomp/workbench/ldmap.js";
 import { WhitelistEntry } from "../src/decomp/workbench/mips-refs.js";
-import { ARTIFACT_SUSPECT, AUTHENTIC_FIXED, DERIVED, ROM_OFFSET, SHADOWING_PIN, UNCLASSIFIED, PinCatalogue, bootGlobalsWhitelist, defaultPinModel,
-  parsePinText, parseWhitelistText, readPinFiles } from "../src/decomp/workbench/pins.js";
+import { SHADOWING_PIN, PinCatalogue, defaultPinModel, parsePinText } from "../src/decomp/workbench/pins.js";
 import { SHIFT_CENSUS_KEYS, SHIFT_METRICS_BY_KEY, explainKeysText } from "../src/decomp/workbench/schema.js";
-import { BLOB_OBJECT_RULES, BLOB_SOURCE_AUTO, BLOB_SOURCE_EXPLICIT, BLOB_SOURCE_NONE, CLUSTER_MINIMUM, MAP_SNIFF_BYTES, MOVABLE_FLOOR_MIN, NON_ALLOC_KIND,
-  NON_ALLOC_ROM_SOURCE, NON_ALLOC_SECTION_FAMILIES, REPEAT_MINIMUM, RESIDENCE_SCORES, TIER_RULES, ConsistencyCheck, MovableWindow, Region, ShiftAudit,
-  buildRegionTable, buildShiftAudit, checkMapImageConsistency, findMissingPinSources, movableWindow, requireParsedMap, resolveBlobs, shiftAuditLines,
-  suggestBlobs } from "../src/decomp/workbench/shift-audit.js";
+import { BLOB_OBJECT_RULES, BLOB_SOURCE_AUTO, BLOB_SOURCE_EXPLICIT, BLOB_SOURCE_NONE, CLUSTER_MINIMUM, MAP_SNIFF_BYTES, MOVABLE_FLOOR_MIN, NON_ALLOC_KIND, NON_ALLOC_ROM_SOURCE, NON_ALLOC_SECTION_FAMILIES, REPEAT_MINIMUM, RESIDENCE_SCORES, TIER_RULES, ConsistencyCheck, Region, buildRegionTable, buildShiftAudit, checkMapImageConsistency, findMissingPinSources, movableWindow, requireParsedMap, resolveBlobs, shiftAuditLines, suggestBlobs } from "../src/decomp/workbench/shift-audit.js";
 import { runCommand } from "../src/decomp/workbench/cli.js";
 import { ValueError } from "../src/decomp/workbench/py.js";
 import { buildElf } from "./fixtures/workbench/elf-symtab.js";
-import { SYNTHETIC_IMAGE, NON_ALLOC_MAP, NON_ALLOC_WITH_AT_MAP, OVERLAY_SIBLING_MAP, BLOB_INPUT_IMAGE, blobInputMap, syntheticMap, emptyPins,
-  readPinText, blobAudit, audit, tiers, hitAt, words, zeros, SYNTHETIC_MAP } from "./fixtures/workbench/shift-fixtures.js";
+import { SYNTHETIC_IMAGE, NON_ALLOC_MAP, NON_ALLOC_WITH_AT_MAP, OVERLAY_SIBLING_MAP, BLOB_INPUT_IMAGE, blobInputMap, syntheticMap, emptyPins, readPinText, blobAudit, audit, tiers, hitAt, SYNTHETIC_MAP } from "./fixtures/workbench/shift-fixtures.js";
 
 const region = (output_section, kind, { vram = 0, size, rom, rom_source = "load-address" }) => new Region({ output_section, kind, vram, size, rom, rom_source });
 const raisesValue = (fn, check = () => true) => assert.throws(fn, (e) => (e instanceof ValueError || e.name === "ValueError") && check(e.message));

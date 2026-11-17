@@ -31,7 +31,7 @@
  * @param {{cgb: boolean, IO: number, OAM: number, GPSPX: number, GPMAP: number, GPMAP2: number,
  *   GPBUF: number, GPSZ: number, GPNUM: number, GPSMAP: number}} o
  */
-export function ppuShadowWat({ cgb, IO, OAM, GPSPX, GPMAP, GPMAP2, GPBUF, GPSZ, GPNUM, GPSMAP, FB, VRAM0, VBANK, BGPAL, OBJPAL, SCR }) {
+export function ppuShadowWat({ cgb, IO, OAM, GPSPX, GPMAP: _GPMAP, GPMAP2, GPBUF, GPSZ, GPNUM, GPSMAP, FB, VRAM0, VBANK, BGPAL, OBJPAL, SCR }) {
   // the sprite list's other fields (spriteList[i].line/oampos/attrib,
   // spwordList[i]) and CGB's per-tile OAM-id table
   const SL = SCR, SO = SCR + 0x10, SA = SCR + 0x20, SW = SCR + 0x40, IDT = SCR + 0x60;
@@ -187,7 +187,7 @@ export function ppuShadowWat({ cgb, IO, OAM, GPSPX, GPMAP, GPMAP2, GPBUF, GPSZ, 
   let dispatch = "";
   for (let k = ids.length - 1; k >= 0; k--) dispatch += `(block $a${k} `;
   dispatch += `(block $bad (br_table ${sel.join(" ")} $bad (global.get $gpst))) (return)`;
-  ids.forEach((id, k) => { dispatch += `)\n        ;; state ${id}\n        ${arms.get(id)}\n        (br $run)`; });
+  ids.forEach((id, _k) => { dispatch += `)\n        ;; state ${id}\n        ${arms.get(id)}\n        (br $run)`; });
 
   return `
   ;; ---- gambatte PPU timing shadow (ppu-shadow.js) ----

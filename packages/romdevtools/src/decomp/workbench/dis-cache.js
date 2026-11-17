@@ -37,7 +37,7 @@ function sectionWords(p, section) {
   } catch { return null; }
 }
 
-function rowCountProblem(rows, { expected_words, symbol }) {
+function rowCountProblem(rows, { expected_words, symbol: _symbol }) {
   if (rows === 0) return "it parsed to no instructions at all";
   if (expected_words !== null && rows !== expected_words) return `it parsed to ${rows} row(s) for a section holding ${expected_words} instruction word(s)`;
   return null;

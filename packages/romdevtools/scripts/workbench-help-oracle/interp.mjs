@@ -36,7 +36,7 @@ export function keyOf(x) {
 }
 
 export const OPAQUE = (why) => new Opaque(why);
-const isOpaque = (v) => v instanceof Opaque;
+const _isOpaque = (v) => v instanceof Opaque;
 
 // -- repr / str -------------------------------------------------------------
 export function floatRepr(x) {
@@ -318,7 +318,7 @@ function nativeBase(cls) {
   return null;
 }
 
-let CURRENT_CLASS = [];
+let _CURRENT_CLASS = [];
 function callFunc(f, args, kwargs) {
   const d = f.def;
   const scope = new Scope(f.scope, f.mod);

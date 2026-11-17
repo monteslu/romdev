@@ -21,6 +21,7 @@ export default [
       "packages/romdev-audio-resampler/resampler.mjs",
       "**/build/**",
       "**/.romdev-build/**",
+      "**/.z80build/**",   // local Z80 toolchain scratch (git-ignored)
       "**/.claude/**",     // workflow scripts - top-level return, not project ESM
       "**/dist/**",
       // Vendored upstream SDK / lib C sources we ship but don't author.
