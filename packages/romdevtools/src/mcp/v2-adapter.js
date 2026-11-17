@@ -48,6 +48,26 @@ export const ALWAYS_LOAD = new Set(["catalog", "loadMedia", "input", "wasm"]);
 /** The tools/list `_meta` key Claude Code reads (docs: "Mark a tool to load upfront"). */
 export const ALWAYS_LOAD_KEY = "anthropic/alwaysLoad";
 
+/**
+ * Mark ALWAYS_LOAD on a server whose tools were registered through the v1 SDK
+ * (the legacy era, which is every client shipping today): its `.tool()` takes
+ * no `_meta`, so the flag goes on the registered tools after registration.
+ * Set directly rather than through RegisteredTool.update(), which would send a
+ * tools/list_changed notification for a server that is not connected yet.
+ * @param {{_registeredTools?: Record<string, any>}} server
+ * @returns {string[]} the names it marked
+ */
+export function markAlwaysLoad(server) {
+  const marked = [];
+  for (const name of ALWAYS_LOAD) {
+    const t = server._registeredTools?.[name];
+    if (!t) continue;
+    t._meta = { ...(t._meta ?? {}), [ALWAYS_LOAD_KEY]: true };
+    marked.push(name);
+  }
+  return marked;
+}
+
 export function withV1ToolApi(v2Server, opts = {}) {
   const { sessionParam = false, sessionNote = null } = opts;
   // Later layers (installObserverMiddleware, withClearToolErrors) wrap

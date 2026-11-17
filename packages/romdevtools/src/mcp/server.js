@@ -94,7 +94,7 @@ import { resolveSessionKey, SESSION_META_KEY, SESSION_ARG, rememberMinted, sessi
 import { AGENT_META_KEY, setSessionAgent } from "./agent-identity.js";
 import { createMcpHandler, isLegacyRequest, McpServer as McpServerV2 } from "@modelcontextprotocol/server";
 import { toNodeHandler, toWebRequest } from "@modelcontextprotocol/node";
-import { withV1ToolApi } from "./v2-adapter.js";
+import { withV1ToolApi, markAlwaysLoad } from "./v2-adapter.js";
 import { installCartLogFilter } from "./cart-log.js";
 import { log } from "./log.js";
 import { attachObserver } from "../observer/server.js";
@@ -161,6 +161,9 @@ function buildMcpServer(instructions, sessionKey) {
   installObserverMiddleware(server, sessionKey);
   if (pool) installHostForwarding(server, sessionKey, pool);
   registerTools(server, z, sessionKey);
+  // The modern era sets this in withV1ToolApi; the legacy SDK's .tool() takes
+  // no _meta, so mark the core tools here.
+  markAlwaysLoad(server);
   return server;
 }
 

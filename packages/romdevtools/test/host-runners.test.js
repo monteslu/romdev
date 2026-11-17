@@ -246,6 +246,28 @@ async function mcpSession(port) {
   };
 }
 
+test("MCP legacy era: the real server's tools/list marks the core tools to load up front", { timeout: 180000 }, async () => {
+  // test/always-load.test.js covers the modern-era adapter; this is the path
+  // every client shipping today takes (initialize + Mcp-Session-Id), whose
+  // SDK registers tools without _meta. The first cut set it only on the
+  // modern path and the live server sent no flag at all.
+  const srv = await startServer();
+  try {
+    const sid = await new Promise((resolve) => {
+      const data = Buffer.from(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "t", version: "1" } } }));
+      const req = http.request({ host: "127.0.0.1", port: srv.port, path: "/mcp", method: "POST", agent: false, headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "content-length": data.length } }, (res) => { res.resume(); resolve(res.headers["mcp-session-id"]); });
+      req.end(data);
+    });
+    const h = { accept: "application/json, text/event-stream", "mcp-session-id": sid };
+    await post(srv.port, "/mcp", { jsonrpc: "2.0", method: "notifications/initialized" }, h);
+    const r = await post(srv.port, "/mcp", { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }, h);
+    const tools = r.json.result.tools;
+    const marked = tools.filter((t) => t._meta?.["anthropic/alwaysLoad"] === true).map((t) => t.name).sort();
+    assert.deepEqual(marked, ["catalog", "input", "loadMedia", "wasm"]);
+    assert.ok(tools.length > 20, `only ${tools.length} tools listed`);
+  } finally { await srv.stop(); }
+});
+
 test("MCP: a wasmcart loadMedia returns content naming the next call (it once came back empty over MCP)", { timeout: 180000 }, async () => {
   const srv = await startServer();
   try {
